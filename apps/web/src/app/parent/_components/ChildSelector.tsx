@@ -15,10 +15,10 @@ export interface ChildOption {
  * preserving every other query param.
  */
 export function ChildSelector({
-  options,
+  items,
   activeStudentId,
 }: {
-  options: ChildOption[];
+  items: ChildOption[];
   activeStudentId: string;
 }) {
   const router = useRouter();
@@ -26,7 +26,7 @@ export function ChildSelector({
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
 
-  if (options.length <= 1) return null;
+  if (items.length <= 1) return null;
 
   function pick(studentId: string) {
     const params = new URLSearchParams(searchParams?.toString() ?? '');
@@ -42,7 +42,7 @@ export function ChildSelector({
       aria-label="Sélection de l'enfant"
       className="mb-4 inline-flex flex-wrap items-center gap-1.5 rounded-full bg-slate-100 p-1"
     >
-      {options.map((c) => {
+      {items.map((c) => {
         const active = c.id === activeStudentId;
         return (
           <button

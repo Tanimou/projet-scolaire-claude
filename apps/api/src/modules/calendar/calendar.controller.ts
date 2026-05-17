@@ -140,6 +140,18 @@ export class CalendarController {
     if (type) where.type = type;
     if (academicYearId) where.academicYearId = academicYearId;
 
+    // Visibility ABAC: parents only see `all`, teachers see `all + staff_only`,
+    // admins see everything. Prevents leaking staff/admin-only events through
+    // the read endpoint even though every role technically has `calendar.read`.
+    const roles = jwt.realm_access?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
+    const isStaff = isAdmin || roles.includes('teacher');
+    if (!isAdmin) {
+      where.visibility = isStaff
+        ? { in: [CalendarEventVisibility.all, CalendarEventVisibility.staff_only] }
+        : CalendarEventVisibility.all;
+    }
+
     const events = await this.prisma.calendarEvent.findMany({
       where,
       orderBy: { startsAt: 'asc' },

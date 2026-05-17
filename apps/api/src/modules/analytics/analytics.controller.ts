@@ -58,6 +58,20 @@ export class AnalyticsController {
     });
   }
 
+  /** Teacher reports payload — backs `/teacher/reports`. */
+  @Get('teacher-reports')
+  @RequiresPermission('teaching_assignments.read')
+  async teacherReports(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    const teacher = await this.teachers.ensureForUser(me);
+    const { activeAcademicYearId } = await this.ctx.forUser(me);
+    return this.analytics.teacherReports({
+      tenantId: me.tenantId,
+      teacherProfileId: teacher.id,
+      academicYearId: activeAcademicYearId ?? undefined,
+    });
+  }
+
   /** Parent dashboard payload — image 7 prescriptive */
   @Get('parent-dashboard/:studentId')
   @RequiresPermission('students.read')
