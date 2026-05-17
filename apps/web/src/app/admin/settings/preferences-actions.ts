@@ -29,6 +29,7 @@ export async function updatePreferenceAction(
     });
     revalidatePath('/admin/settings');
     revalidatePath('/teacher/settings');
+    revalidatePath('/parent/settings');
     return { ok: true };
   } catch (err) {
     if (err instanceof ApiError) return { ok: false, error: `HTTP ${err.status}` };

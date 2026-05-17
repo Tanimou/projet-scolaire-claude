@@ -1,7 +1,36 @@
 # Pilotage Scolaire — Suivi d'exécution du plan de refonte
 
 > Référence : `REDESIGN-PLAN.md` v2.0 + `ADMIN-DASHBOARD-PRODUCTION.md` (sprint production)
-> Statut au terme de cette session : **Phases R0 → R5 + stubs R6-R8 + R9-R11 partiel + sprint Admin Dashboard production-quality**
+> Statut au terme de cette session : **Phases R0 → R5 + stubs R6-R8 + R9-R11 partiel + sprint Admin Dashboard production-quality + sprint Parent Settings**
+
+---
+
+## 🆕 Sprint Parent Settings (continuous-improvement)
+
+Combler l'asymétrie entre les 3 portails : Admin et Teacher avaient `/settings`, le portail famille n'en avait pas — alors qu'il représente la plus large audience.
+
+### Livré
+- **Nouvelle page `/parent/settings`** (`apps/web/src/app/parent/settings/page.tsx`) — 5 onglets :
+  - **Mon profil** : hero bleu gradient (avatar grand format + nom + email + chips : nombre d'enfants rattachés, langue, MFA si actif) + 4 champs read-only + bandeau d'aide expliquant comment modifier nom/email
+  - **Notifications** : réutilise `<PreferencesPanel>` (déjà partagé avec admin/teacher) + bloc "Pourquoi activer les notifications" gradient violet→bleu listant les 3 bénéfices clés pour les parents
+  - **Ma famille** : liste des enfants rattachés (Avatar + classe active + cycle color + âge + date de naissance + lien rapide vers le tableau de bord enfant) + EmptyState avec CTA "Comment rattacher un enfant ?" si aucun rattachement
+  - **Affichage** : EmptyState (cohérent avec teacher/admin — thème, densité, format dates à venir)
+  - **Sécurité** : 4 champs (mot de passe / MFA / sessions / email) + bouton sombre "Ouvrir mon portail compte sécurisé" lien Keycloak account
+- **Sidebar parent** : ajout de l'item `Paramètres` (icône `Settings`) en position 15 (`apps/web/src/components/shell/sidebar-items.ts:188`)
+- **Revalidation cross-portail** : `preferences-actions.ts` revalide aussi `/parent/settings` après chaque toggle de préférence (auparavant admin + teacher seulement)
+- **Cohérence visuelle** : même `<PageHeader>` breadcrumb / titre / sous-titre que `/teacher/settings` et `/admin/settings`. Mêmes radius `rounded-2xl`, mêmes anneaux `ring-1 ring-slate-200/60`, mêmes proportions de Field grid
+
+### Justification produit
+Les parents sont la cible primaire du portail : recevoir des alertes ciblées sur la scolarité de leurs enfants, gérer un canal de communication propre, et avoir un point d'accès consolidé pour la sécurité du compte. Sans page settings, le parent n'avait :
+- aucun moyen de désactiver les notifications gênantes (ex. cours publiés tous les jours)
+- aucun lien direct vers le portail compte Keycloak pour activer MFA
+- aucune vue récapitulative des rattachements actifs
+
+### État technique
+- ✅ Réutilise `<PreferencesPanel>` (le backend `/api/v1/notifications/preferences` était prêt depuis R8.1, aucune migration nécessaire)
+- ✅ Réutilise `/api/v1/students` (déjà filtré par `StudentAccessService` pour les parents) — pas de nouvel endpoint
+- ✅ Réutilise `/api/v1/me` pour le profil
+- ✅ Frontière server/client respectée : `PreferencesPanel` est le seul client component, le reste reste server-rendered
 
 ---
 
