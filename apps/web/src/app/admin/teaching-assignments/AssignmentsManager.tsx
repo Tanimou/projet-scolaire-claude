@@ -276,7 +276,7 @@ function NewAssignmentForm({
             required
             className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm"
           >
-            {teachers.length === 0 && <option value="">— Aucun professeur dans l'école —</option>}
+            {teachers.length === 0 && <option value="">— Aucun professeur dans l&apos;école —</option>}
             {teachers.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.userProfile.lastName.toUpperCase()} {t.userProfile.firstName}

@@ -23,6 +23,9 @@ import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
 import {
   AssessmentKind,
+  CalendarEventScope,
+  CalendarEventType,
+  CalendarEventVisibility,
   ExportKind,
   ExportStatus,
   GradeStatus,
@@ -275,6 +278,7 @@ async function main() {
   // Order matters — children first, parents last
   await prisma.exportJob.deleteMany({ where: { tenantId: T } });
   await prisma.auditLog.deleteMany({ where: { tenantId: T } });
+  await prisma.calendarEvent.deleteMany({ where: { tenantId: T } });
   await prisma.gradeRevision.deleteMany({});
   await prisma.grade.deleteMany({ where: { tenantId: T } });
   await prisma.assessment.deleteMany({ where: { tenantId: T } });
@@ -1152,6 +1156,243 @@ async function main() {
   console.info('     ✓ 3 ExportJob créés');
 
   // ───────────────────────────────────────────────────────────────────────
+  // STEP 15 — Calendar events (live calendar visible across all 3 portals)
+  // Anchored on today so the demo always shows past + current + upcoming.
+  // ───────────────────────────────────────────────────────────────────────
+  console.info('  ▸ Calendrier scolaire (≈18 événements anchored sur aujourd\'hui)…');
+  const now = new Date();
+  const day = (offset: number, hours = 9): Date => {
+    const d = new Date(now);
+    d.setHours(hours, 0, 0, 0);
+    d.setDate(d.getDate() + offset);
+    return d;
+  };
+  const allDay = (offset: number): { start: Date; end: Date } => {
+    const start = day(offset, 0);
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  };
+  const span = (startOffset: number, endOffset: number): { start: Date; end: Date } => ({
+    start: day(startOffset, 0),
+    end: (() => {
+      const e = day(endOffset, 0);
+      e.setHours(23, 59, 59, 999);
+      return e;
+    })(),
+  });
+
+  const calendarSeeds: Array<{
+    title: string;
+    description: string;
+    type: CalendarEventType;
+    scope: CalendarEventScope;
+    visibility: CalendarEventVisibility;
+    starts: Date;
+    ends: Date;
+    color: string;
+  }> = [
+    // Past — feels lived-in (one short past block)
+    {
+      title: 'Conseil de classe — 2e trimestre',
+      description: 'Réunion des équipes pédagogiques pour le bilan du 2e trimestre.',
+      type: CalendarEventType.meeting,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.staff_only,
+      ...allDay(-12),
+      color: 'oklch(0.62 0.16 250)',
+    },
+    {
+      title: 'Carnaval de l\'école',
+      description: 'Défilé costumé dans la cour, goûter offert par l\'association des parents.',
+      type: CalendarEventType.ceremony,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(-7),
+      color: 'oklch(0.70 0.16 145)',
+    },
+
+    // This week / next 2 weeks
+    {
+      title: 'Période d\'évaluations communes',
+      description: 'Devoirs communs en mathématiques, français et sciences pour tous les niveaux du collège.',
+      type: CalendarEventType.exam_period,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...span(2, 6),
+      color: 'oklch(0.55 0.20 290)',
+    },
+    {
+      title: 'Réunion parents-professeurs',
+      description: 'Rencontres individuelles 17h–20h en salles dédiées. Inscription préalable obligatoire via le portail parent.',
+      type: CalendarEventType.meeting,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      starts: day(5, 17),
+      ends: day(5, 20),
+      color: 'oklch(0.62 0.16 250)',
+    },
+    {
+      title: 'Journée pédagogique',
+      description: 'Aucun cours pour les élèves. Formation des enseignants sur le numérique éducatif.',
+      type: CalendarEventType.pedagogical_day,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(9),
+      color: 'oklch(0.70 0.12 200)',
+    },
+    {
+      title: 'Sortie pédagogique — Musée d\'histoire',
+      description: 'Sortie scolaire pour les classes de 6e A et 6e B.',
+      type: CalendarEventType.custom,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(11),
+      color: 'oklch(0.60 0.16 250)',
+    },
+
+    // Coming month
+    {
+      title: 'Conseil d\'établissement',
+      description: 'Réunion trimestrielle du conseil d\'établissement.',
+      type: CalendarEventType.meeting,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.staff_only,
+      starts: day(15, 18),
+      ends: day(15, 20),
+      color: 'oklch(0.62 0.16 250)',
+    },
+    {
+      title: 'Vacances de printemps',
+      description: 'Vacances scolaires de printemps (zone B). Reprise des cours le lundi suivant.',
+      type: CalendarEventType.vacation_break,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...span(20, 33),
+      color: 'oklch(0.75 0.15 70)',
+    },
+
+    // Past — reference
+    {
+      title: 'Vacances d\'hiver',
+      description: 'Vacances scolaires d\'hiver. Établissement fermé.',
+      type: CalendarEventType.vacation_break,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...span(-45, -32),
+      color: 'oklch(0.75 0.15 70)',
+    },
+
+    // After vacances
+    {
+      title: 'Examen blanc du brevet',
+      description: 'Examen blanc du DNB pour toutes les classes de 3e — épreuves de français, mathématiques et histoire-géographie.',
+      type: CalendarEventType.exam_period,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...span(40, 41),
+      color: 'oklch(0.55 0.20 290)',
+    },
+    {
+      title: 'Cross de l\'établissement',
+      description: 'Course annuelle inter-classes au parc municipal. Tenue de sport obligatoire.',
+      type: CalendarEventType.ceremony,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(45),
+      color: 'oklch(0.70 0.16 145)',
+    },
+    {
+      title: 'Forum des métiers',
+      description: 'Forum des métiers et de l\'orientation pour les classes de 3e et de seconde.',
+      type: CalendarEventType.custom,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(52),
+      color: 'oklch(0.60 0.16 250)',
+    },
+    {
+      title: 'Fête de fin d\'année',
+      description: 'Spectacles, kermesse et remise des prix. Familles bienvenues.',
+      type: CalendarEventType.ceremony,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(60),
+      color: 'oklch(0.70 0.16 145)',
+    },
+
+    // French public holidays falling in next 3 months — approximate
+    {
+      title: 'Lundi de Pâques',
+      description: 'Jour férié — établissement fermé.',
+      type: CalendarEventType.public_holiday,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(25),
+      color: 'oklch(0.68 0.18 25)',
+    },
+    {
+      title: 'Fête du Travail',
+      description: 'Jour férié — établissement fermé.',
+      type: CalendarEventType.public_holiday,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      ...allDay(35),
+      color: 'oklch(0.68 0.18 25)',
+    },
+
+    // Internal staff-only meeting
+    {
+      title: 'Formation interne — outils numériques',
+      description: 'Atelier sur la nouvelle plateforme de pilotage. Réservé aux enseignants.',
+      type: CalendarEventType.pedagogical_day,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.staff_only,
+      starts: day(8, 14),
+      ends: day(8, 17),
+      color: 'oklch(0.70 0.12 200)',
+    },
+
+    // Reunion specific to a grade level
+    {
+      title: 'Réunion parents 6e',
+      description: 'Présentation de l\'organisation du collège pour les nouveaux 6e.',
+      type: CalendarEventType.meeting,
+      scope: CalendarEventScope.school_wide,
+      visibility: CalendarEventVisibility.all,
+      starts: day(18, 18),
+      ends: day(18, 20),
+      color: 'oklch(0.62 0.16 250)',
+    },
+  ];
+
+  let calCreated = 0;
+  for (const ev of calendarSeeds) {
+    await prisma.calendarEvent.create({
+      data: {
+        tenantId: T,
+        schoolId: S,
+        academicYearId: activeYear.id,
+        type: ev.type,
+        scope: ev.scope,
+        visibility: ev.visibility,
+        title: ev.title,
+        description: ev.description,
+        startsAt: ev.starts,
+        endsAt: ev.ends,
+        allDay:
+          ev.starts.getHours() === 0 &&
+          ev.ends.getHours() === 23 &&
+          ev.starts.getMinutes() === 0,
+        color: ev.color,
+        createdBy: userDupont.id,
+      },
+    });
+    calCreated += 1;
+  }
+  console.info(`     ✓ ${calCreated} événements de calendrier créés`);
+
+  // ───────────────────────────────────────────────────────────────────────
   // FINISH
   // ───────────────────────────────────────────────────────────────────────
   console.info('');
@@ -1159,7 +1400,7 @@ async function main() {
   console.info(`  Tenant ${tenant.slug} · École ${school.schoolCode}`);
   console.info(`  Années ${academicYears.length} · Niveaux ${allLevels.length} · Matières ${subjectsDef.length} · Classes ${classSectionsCreated.length}`);
   console.info(`  Professeurs ${TARGET_TEACHERS} · Élèves ${studentsCreated.length} · Demandes en attente ${TARGET_PENDING_GUARDIANSHIPS}`);
-  console.info(`  AuditLogs 54 · ExportJobs 3`);
+  console.info(`  AuditLogs 54 · ExportJobs 3 · Événements calendrier ${calCreated}`);
   console.info('');
   console.info('  Comptes admin : mme.dupont@voltaire.fr  /  m.lefebvre@voltaire.fr');
   console.info('  → provisionner via : pnpm prisma:seed:keycloak  (étape suivante)');
