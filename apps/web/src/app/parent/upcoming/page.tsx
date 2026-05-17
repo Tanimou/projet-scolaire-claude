@@ -117,7 +117,7 @@ export default async function ParentUpcomingPage({
       />
 
       <div className="mt-4">
-        <ChildSelector children={children} activeStudentId={activeStudentId} />
+        <ChildSelector options={children} activeStudentId={activeStudentId} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

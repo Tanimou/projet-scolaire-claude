@@ -168,7 +168,8 @@ export const teacherSidebarItems: SidebarItemConfig[] = [
 
 // Parent portal — refonte P4 a livré 6 pages fonctionnelles (children,
 // subjects, upcoming, attendance, comments, recommendations) + 3 stubs
-// (calendar, documents, communication). Toutes navigables. Les sous-pages
+// (calendar, documents, communication) + settings (notifications +
+// profil + famille + sécurité). Toutes navigables. Les sous-pages
 // utilisent `<ChildSelector />` pour basculer entre les enfants rattachés.
 export const parentSidebarItems: SidebarItemConfig[] = [
   { key: 'dashboard', icon: LayoutDashboard, label: 'Tableau de bord', href: '/parent/dashboard' },
@@ -185,6 +186,7 @@ export const parentSidebarItems: SidebarItemConfig[] = [
   { key: 'calendar', icon: Calendar, label: 'Emploi du temps', href: '/parent/calendar' },
   { key: 'documents', icon: FolderOpen, label: 'Documents', href: '/parent/documents' },
   { key: 'communication', icon: Send, label: 'Communication', href: '/parent/communication' },
+  { key: 'settings', icon: Settings, label: 'Paramètres', href: '/parent/settings' },
 ];
 
 // =============================================================================
