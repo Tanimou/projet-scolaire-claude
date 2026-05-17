@@ -1,9 +1,18 @@
-import { AlertTriangle, ArrowLeft, Megaphone, Pin } from 'lucide-react';
+import { AlertTriangle, BellRing, Inbox, Megaphone, Pin } from 'lucide-react';
 import type { Metadata } from 'next';
-import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api } from '@/lib/api-client';
+import { api, ApiError } from '@/lib/api-client';
+import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  Pagination,
+  formatDateShort,
+} from '@pilotage/ui';
+
+import { AnnouncementCard } from './AnnouncementCard';
+import { AnnouncementsFilters } from './AnnouncementsFilters';
 
 export const metadata: Metadata = { title: 'Annonces' };
 export const dynamic = 'force-dynamic';
@@ -17,110 +26,177 @@ interface AnnouncementItem {
   publishedAt: string | null;
   expiresAt: string | null;
   pinned: boolean;
+  authorRoleHint: 'admin' | 'teacher' | null;
   classSection?: { name: string } | null;
   gradeLevel?: { name: string } | null;
   cycle?: { name: string } | null;
-  student?: { firstName: string; lastName: string } | null;
+  student?: { id: string; firstName: string; lastName: string } | null;
   readAt?: string | null;
 }
 
-const PRIORITY_TONE: Record<string, string> = {
-  normal: 'bg-slate-100 text-slate-700',
-  high: 'bg-amber-100 text-amber-700',
-  urgent: 'bg-rose-100 text-rose-700',
+const SCOPE_LABEL: Record<string, string> = {
+  school_wide: "Toute l'école",
+  cycle_scope: 'Cycle',
+  grade_level_scope: 'Niveau',
+  class_section_scope: 'Classe',
+  individual_student: 'Élève',
+  individual_user: 'Personnel',
 };
 
-export default async function ParentAnnouncementsPage() {
-  const list = await api<{ data: AnnouncementItem[] }>('/api/v1/announcements', { cache: 'no-store' });
+const ROLE_LABEL: Record<string, string> = {
+  admin: "Direction de l'établissement",
+  teacher: 'Enseignant',
+};
+
+const PAGE_SIZE = 10;
+
+async function safe<T>(p: Promise<T>): Promise<T | null> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof ApiError) return null;
+    throw err;
+  }
+}
+
+function audienceLabel(a: AnnouncementItem): string | null {
+  if (a.classSection?.name) return `Classe ${a.classSection.name}`;
+  if (a.gradeLevel?.name) return a.gradeLevel.name;
+  if (a.cycle?.name) return a.cycle.name;
+  if (a.student) return `${a.student.firstName}`;
+  return null;
+}
+
+export default async function ParentAnnouncementsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    page?: string;
+    q?: string;
+    status?: string;
+    priority?: string;
+    scope?: string;
+  }>;
+}) {
+  const sp = await searchParams;
+  const page = Math.max(1, parseInt(sp.page ?? '1', 10) || 1);
+  const q = (sp.q ?? '').trim().toLowerCase();
+  const status = sp.status ?? '';
+  const priority = sp.priority ?? '';
+  const scope = sp.scope ?? '';
+
+  const resp = await safe(
+    api<{ data: AnnouncementItem[] }>('/api/v1/announcements', { cache: 'no-store' }),
+  );
+  const all = resp?.data ?? [];
+
+  // KPIs computed on the unfiltered dataset so they describe the whole inbox
+  const unreadCount = all.filter((a) => !a.readAt).length;
+  const pinnedCount = all.filter((a) => a.pinned).length;
+  const urgentCount = all.filter((a) => a.priority === 'urgent').length;
+
+  // Apply filters in memory — the API already scopes to the parent's receipts
+  let filtered = all;
+  if (q) {
+    filtered = filtered.filter(
+      (a) =>
+        a.title.toLowerCase().includes(q) || a.body.toLowerCase().includes(q),
+    );
+  }
+  if (status === 'unread') filtered = filtered.filter((a) => !a.readAt);
+  if (status === 'read') filtered = filtered.filter((a) => !!a.readAt);
+  if (priority) filtered = filtered.filter((a) => a.priority === priority);
+  if (scope) filtered = filtered.filter((a) => a.scope === scope);
+
+  // Pinned-first ordering is already enforced server-side, preserve it here
+  const total = filtered.length;
+  const startIdx = (page - 1) * PAGE_SIZE;
+  const pageRows = filtered.slice(startIdx, startIdx + PAGE_SIZE);
+
+  const hasActiveFilters = !!q || !!status || !!priority || !!scope;
 
   return (
-    <PortalShell portal="parent" contentClassName="mx-auto max-w-md px-5 pb-24 pt-6">
-      <Link
-        href="/parent/dashboard"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900"
-      >
-        <ArrowLeft className="h-4 w-4" /> Retour
-      </Link>
-      <h1 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">Annonces</h1>
-      <p className="mt-1 text-sm text-slate-600">
-        Communications de l&apos;établissement vous concernant.
-      </p>
+    <PortalShell portal="parent">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Tableau de bord', href: '/parent/dashboard' },
+          { label: 'Annonces' },
+        ]}
+        title="Annonces"
+        subtitle="Communications de l'établissement et de l'équipe pédagogique qui vous concernent"
+      />
 
-      {list.data.length === 0 ? (
-        <div className="mt-6 rounded-2xl bg-white px-6 py-12 text-center ring-1 ring-slate-200">
-          <Megaphone className="mx-auto h-10 w-10 text-slate-300" />
-          <p className="mt-3 text-sm font-semibold text-slate-700">Aucune annonce</p>
-        </div>
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <KpiCard icon={Inbox} tone="blue" label="TOTAL" value={all.length}>
+          Cette année scolaire
+        </KpiCard>
+        <KpiCard icon={BellRing} tone="rose" label="NON LUES" value={unreadCount}>
+          {unreadCount > 0 ? 'À consulter' : 'Tout est à jour'}
+        </KpiCard>
+        <KpiCard icon={AlertTriangle} tone="amber" label="URGENTES" value={urgentCount}>
+          Priorité haute
+        </KpiCard>
+        <KpiCard icon={Pin} tone="violet" label="ÉPINGLÉES" value={pinnedCount}>
+          Maintenues en tête
+        </KpiCard>
+      </div>
+
+      <div className="mt-6">
+        <AnnouncementsFilters
+          initialQ={q}
+          initialStatus={status}
+          initialPriority={priority}
+          initialScope={scope}
+        />
+      </div>
+
+      {total === 0 ? (
+        <section className="mt-6 rounded-2xl bg-white p-2 shadow-sm ring-1 ring-slate-200/60">
+          {hasActiveFilters ? (
+            <EmptyState
+              icon={Megaphone}
+              title="Aucune annonce ne correspond à vos filtres"
+              description="Essayez d'élargir votre recherche ou de retirer un filtre pour voir plus de communications."
+              tone="slate"
+            />
+          ) : (
+            <EmptyState
+              icon={Megaphone}
+              title="Aucune annonce pour le moment"
+              description="Les communications de l'école et des enseignants apparaîtront ici. Vous recevrez également une notification dès qu'une nouvelle annonce vous est destinée."
+              tone="slate"
+            />
+          )}
+        </section>
       ) : (
-        <ul className="mt-5 space-y-3">
-          {list.data.map((a) => (
-            <li
-              key={a.id}
-              className={`rounded-2xl bg-white p-4 ring-1 ${
-                !a.readAt
-                  ? 'ring-blue-300 shadow-md shadow-blue-100/40'
-                  : a.pinned
-                    ? 'ring-amber-200'
-                    : 'ring-slate-200'
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <div
-                  className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${
-                    a.priority === 'urgent'
-                      ? 'bg-rose-100 text-rose-700'
-                      : a.priority === 'high'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-blue-100 text-blue-700'
-                  }`}
-                >
-                  {a.priority === 'urgent' ? <AlertTriangle className="h-4 w-4" /> : <Megaphone className="h-4 w-4" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {a.pinned && <Pin className="h-3.5 w-3.5 text-amber-600" />}
-                    {a.priority !== 'normal' && (
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${PRIORITY_TONE[a.priority]}`}
-                      >
-                        {a.priority}
-                      </span>
-                    )}
-                    {!a.readAt && (
-                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-700">
-                        Nouveau
-                      </span>
-                    )}
-                  </div>
-                  <h3 className="mt-1 text-sm font-bold text-slate-900">{a.title}</h3>
-                  <p className="mt-1 text-sm text-slate-600 line-clamp-3 whitespace-pre-line">{a.body}</p>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
-                    {a.publishedAt && (
-                      <span>
-                        {new Date(a.publishedAt).toLocaleDateString('fr-FR', { dateStyle: 'medium' })}
-                      </span>
-                    )}
-                    {a.classSection && (
-                      <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold">
-                        Classe {a.classSection.name}
-                      </span>
-                    )}
-                    {a.gradeLevel && (
-                      <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold">
-                        {a.gradeLevel.name}
-                      </span>
-                    )}
-                    {a.student && (
-                      <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold">
-                        {a.student.firstName}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <>
+          <section className="mt-6 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {pageRows.map((a) => (
+              <AnnouncementCard
+                key={a.id}
+                id={a.id}
+                title={a.title}
+                body={a.body}
+                priority={a.priority}
+                pinned={a.pinned}
+                publishedAtLabel={a.publishedAt ? formatDateShort(a.publishedAt) : null}
+                scopeLabel={SCOPE_LABEL[a.scope] ?? a.scope}
+                audienceLabel={audienceLabel(a)}
+                authorLabel={a.authorRoleHint ? ROLE_LABEL[a.authorRoleHint] ?? null : null}
+                readAt={a.readAt ?? null}
+              />
+            ))}
+          </section>
+
+          <div className="mt-4">
+            <Pagination
+              page={page}
+              total={total}
+              pageSize={PAGE_SIZE}
+              itemLabel={{ singular: 'annonce', plural: 'annonces' }}
+            />
+          </div>
+        </>
       )}
     </PortalShell>
   );
