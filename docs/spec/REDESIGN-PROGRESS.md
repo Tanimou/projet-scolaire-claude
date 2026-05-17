@@ -1,7 +1,48 @@
 # Pilotage Scolaire — Suivi d'exécution du plan de refonte
 
 > Référence : `REDESIGN-PLAN.md` v2.0 + `ADMIN-DASHBOARD-PRODUCTION.md` (sprint production)
-> Statut au terme de cette session : **Phases R0 → R5 + stubs R6-R8 + R9-R11 partiel + sprint Admin Dashboard production-quality + sprint Parent Settings**
+> Statut au terme de cette session : **Phases R0 → R5 + stubs R6-R8 + R9-R11 partiel + sprint Admin Dashboard production-quality + sprint Parent Settings + sprint Teacher Messaging Center**
+
+---
+
+## 🆕 Sprint Teacher Messaging Center (continuous-improvement)
+
+Combler le canal manquant **enseignant → familles**. Jusqu'ici `/teacher/messages` était un stub avec 4 KPI vides et un message « en cours de développement ». Pourtant le backend `announcement` supportait déjà `authorRoleHint=teacher` et le rôle Keycloak `teacher` avait la permission `announcements.write`.
+
+### Livré
+- **Backend `apps/api/src/modules/announcements/announcements.controller.ts`** :
+  - `GET /api/v1/announcements?mine=true` — nouveau mode qui retourne les annonces dont l'auteur est l'utilisateur courant (brouillons inclus). Disponible pour admin et teacher.
+  - `GET /api/v1/announcements/:id` — autorise désormais l'auteur (`a.authorId === me.id`) à voir son propre brouillon (auparavant non-admin devait avoir un receipt → l'auteur d'un brouillon n'en avait pas).
+  - `POST /api/v1/announcements` — durcissement pour le rôle teacher :
+    - Refus de `school_wide` et `individual_user` (ces portées restent admin-only)
+    - Validation côté serveur que la `classSection` ciblée fait bien partie des affectations actives de l'enseignant (anti-spoof via UUID)
+- **Frontend `/teacher/messages` (apps/web/src/app/teacher/messages/page.tsx)** réécrit :
+  - 4 `<KpiCard>` réelles (messages publiés / brouillons / destinataires touchés / épinglés) calculées depuis l'API `?mine=true`
+  - Table paginée 12/page avec colonnes Titre+extrait / Audience / Priorité / Destinataires / Date publication / Statut / Actions
+  - Indicateurs visuels : icône pin ambre pour les annonces épinglées, `<StatusBadge>` publié/brouillon avec dot, line-clamp pour l'extrait
+  - Bandeau bas ambre qui rappelle les brouillons en attente
+  - CTA principal violet→indigo→bleu « Nouveau message »
+- **Frontend `/teacher/messages/new` (apps/web/src/app/teacher/messages/new/page.tsx + NewMessageForm.tsx)** :
+  - Récupère les affectations enseignant via `/api/v1/teachers/me/assignments`, déduplique en classes / niveaux / cycles
+  - Garde anti-erreur : si l'enseignant n'a aucune affectation, EmptyState ambre explicite
+  - Form 3 sections : Contenu (titre 200 cap + corps 10 000 cap avec compteur de caractères) / Destinataires & priorité (portée class/level/cycle uniquement) / Aperçu live coloré (chip portée + chip priorité + chip épinglé)
+  - Soumission : « Enregistrer brouillon » (publishNow=false) ou « Publier maintenant » (déclenche le fan-out NotificationsService.createMany côté API → bell + portail famille)
+- **Server actions** (`apps/web/src/app/teacher/messages/actions.ts`) : create / publish / delete avec revalidatePath
+- **Composant client** `MessageRowActions.tsx` : Publier + Supprimer inline dans le tableau
+- **Fix annexe** : caractère apostrophe non échappé dans `/teacher/reports/page.tsx:342` qui faisait planter `next build` (régression introduite dans le sprint précédent teacher-reports)
+
+### Justification produit
+Les enseignants étaient les seuls acteurs sans canal de communication structuré : ils devaient passer par l'administration pour diffuser une information à une classe (sortie, contrôle reporté, devoir, réunion). Cela créait des frictions sur des actions très fréquentes. Avec ce sprint :
+- **Réactivité** : un prof peut prévenir 30 familles en 30 secondes sans solliciter l'admin
+- **Boundary** : la portée est strictement limitée aux classes/niveaux/cycles où l'enseignant est affecté (le serveur valide à la création, pas seulement le client)
+- **Notification unifiée** : la publication déclenche le même fan-out que les annonces admin (createMany NotificationsService) → la cloche + le centre de notifications côté parent fonctionnent immédiatement
+
+### État technique
+- ✅ Typecheck monorepo (11 tâches) propre
+- ✅ Web build OK — les 2 nouvelles routes apparaissent dans le manifest (`/teacher/messages` 1.53 kB, `/teacher/messages/new` 4.13 kB)
+- ✅ API build OK (nest build)
+- ✅ Aucune migration Prisma (réutilise complètement `Announcement` + `AnnouncementReceipt` + `Notification`)
+- ✅ Aucune cassure : la sémantique admin (`mine=false` par défaut) reste inchangée, le mode `mine=true` est purement additif
 
 ---
 

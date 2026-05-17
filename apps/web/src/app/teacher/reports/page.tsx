@@ -339,7 +339,7 @@ export default async function TeacherReportsPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="text-sm font-bold text-slate-900">
-              Besoin de bulletins officiels ou d'exports Excel détaillés ?
+              Besoin de bulletins officiels ou d&apos;exports Excel détaillés ?
             </div>
             <div className="mt-0.5 text-xs text-slate-600">
               Les bulletins PDF et exports avancés sont disponibles dans le module administration.
