@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="fr" class="bg-neutral-50">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pilotage scolaire — Portail famille (mobile)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter','system-ui','sans-serif'],
+          mono: ['JetBrains Mono','ui-monospace','monospace'],
+        },
+        colors: {
+          parent: { 50:'oklch(0.97 0.02 230)', 100:'oklch(0.93 0.05 230)', 500:'oklch(0.65 0.13 230)', 600:'oklch(0.58 0.15 230)', 700:'oklch(0.48 0.15 230)' },
+          ink: { 50:'oklch(0.98 0.005 250)', 100:'oklch(0.96 0.01 250)', 200:'oklch(0.92 0.01 250)', 300:'oklch(0.85 0.01 250)', 400:'oklch(0.70 0.02 250)', 500:'oklch(0.55 0.02 250)', 700:'oklch(0.32 0.02 250)', 900:'oklch(0.15 0.02 250)' },
+          success: { 100:'oklch(0.95 0.05 160)', 500:'oklch(0.70 0.17 160)', 700:'oklch(0.55 0.17 160)' },
+          warning: { 100:'oklch(0.96 0.05 75)', 500:'oklch(0.78 0.16 75)', 700:'oklch(0.62 0.16 75)' },
+          danger:  { 100:'oklch(0.96 0.05 25)', 500:'oklch(0.60 0.22 25)', 700:'oklch(0.50 0.22 25)' },
+        }
+      }
+    }
+  }
+</script>
+<style>
+  body{font-feature-settings:"cv11","ss01","ss03";-webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+  .ring-soft{box-shadow:0 0 0 1px rgba(15,23,42,0.06)}
+  .phone-shadow{box-shadow:0 30px 60px -20px rgba(15,23,42,0.30),0 18px 40px -25px rgba(15,23,42,0.20)}
+</style>
+</head>
+<body class="font-sans text-ink-900 min-h-screen" data-portal="parent">
+
+<div class="min-h-screen grid place-items-center p-4 sm:p-10 bg-gradient-to-br from-ink-50 to-parent-50/40">
+
+  <!-- Floating context label -->
+  <div class="absolute top-6 left-6 text-xs uppercase tracking-wider text-ink-500 font-bold hidden sm:block">
+    Pilotage scolaire · Portail famille · Mockup mobile
+  </div>
+  <div class="absolute top-6 right-6 text-xs text-ink-500 hidden sm:block">
+    iPhone 14 viewport · 390 × 844
+  </div>
+
+  <!-- PHONE FRAME -->
+  <div class="phone-shadow rounded-[44px] bg-ink-900 p-3 w-full max-w-[390px]">
+    <div class="rounded-[36px] bg-white overflow-hidden ring-soft min-h-[820px] relative flex flex-col">
+
+      <!-- Status bar -->
+      <div class="flex items-center justify-between px-6 pt-3 pb-1 text-[11px] font-semibold text-ink-700">
+        <span class="num font-mono">09:24</span>
+        <div class="flex items-center gap-1">
+          <svg class="h-3 w-3" viewBox="0 0 24 24" fill="currentColor"><path d="M2 22h2v-9H2zm5 0h2v-13H7zm5 0h2V4h-2zm5 0h2V8h-2z"/></svg>
+          <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12" y2="20"/></svg>
+          <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="13" x2="23" y2="11"/><line x1="3" y1="8" x2="14" y2="8"/></svg>
+        </div>
+      </div>
+
+      <!-- Topbar -->
+      <div class="px-5 py-3 flex items-center justify-between border-b border-ink-100">
+        <button class="flex items-center gap-2.5 group">
+          <div class="h-9 w-9 rounded-full bg-blue-100 grid place-items-center font-semibold text-blue-700 text-xs">LM</div>
+          <div class="leading-tight text-left">
+            <div class="text-[10px] uppercase tracking-wider text-ink-500 font-bold">Enfant</div>
+            <div class="text-sm font-semibold flex items-center gap-1">Léa Martin <svg class="h-3.5 w-3.5 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+          </div>
+        </button>
+        <div class="flex items-center gap-2">
+          <button class="relative h-9 w-9 grid place-items-center rounded-lg hover:bg-ink-50">
+            <svg class="h-5 w-5 text-ink-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+            <span class="absolute top-1 right-1.5 h-4 w-4 rounded-full bg-warning-500 text-[9px] grid place-items-center text-white font-bold">2</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Content scroll -->
+      <div class="flex-1 overflow-auto pb-24">
+
+        <!-- Greeting -->
+        <div class="px-5 pt-4">
+          <div class="text-xs text-ink-500">Mercredi 15 mai · Trimestre 2</div>
+          <h1 class="text-2xl font-bold tracking-tight mt-1">Bonjour 👋</h1>
+          <p class="text-sm text-ink-500 mt-1">Voici comment va Léa cette semaine.</p>
+        </div>
+
+        <!-- Global average -->
+        <div class="mx-5 mt-5 rounded-2xl bg-gradient-to-br from-parent-600 to-parent-700 text-white p-5 relative overflow-hidden">
+          <div class="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-white/10"></div>
+          <div class="absolute -right-4 -bottom-12 h-24 w-24 rounded-full bg-white/5"></div>
+          <div class="relative">
+            <div class="text-[10px] uppercase tracking-wider font-bold opacity-80">Moyenne globale</div>
+            <div class="flex items-end gap-2 mt-1">
+              <div class="text-5xl font-bold num tracking-tight">13.4</div>
+              <div class="text-base opacity-70 pb-2">/ 20</div>
+            </div>
+            <div class="flex items-center justify-between mt-3">
+              <div class="inline-flex items-center gap-1 rounded-full bg-white/20 backdrop-blur px-2.5 py-1 text-xs font-semibold">
+                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg>
+                +0.6 vs T1
+              </div>
+              <div class="text-xs opacity-80 num font-mono">28 notes · 8 matières</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alerts banner -->
+        <a class="mx-5 mt-4 rounded-2xl border border-warning-500/30 bg-warning-500/5 p-4 flex items-start gap-3 hover:bg-warning-500/10 transition">
+          <div class="h-9 w-9 rounded-xl bg-warning-100 text-warning-700 grid place-items-center shrink-0">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+          </div>
+          <div class="flex-1">
+            <div class="text-sm font-semibold">2 alertes ouvertes</div>
+            <div class="text-xs text-ink-500 mt-0.5">Maths sous seuil · Anglais en baisse</div>
+            <div class="text-xs text-ink-500 mt-1.5">Recommandation: planifier un échange avec les enseignants.</div>
+          </div>
+          <svg class="h-5 w-5 text-ink-400 mt-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+        </a>
+
+        <!-- Subjects grid -->
+        <div class="px-5 mt-6">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm uppercase tracking-wider text-ink-500 font-bold">Performances par matière</h2>
+            <a class="text-xs font-semibold text-parent-700">Voir tout →</a>
+          </div>
+          <div class="grid grid-cols-2 gap-2.5">
+
+            <div class="rounded-xl border border-warning-500/30 bg-warning-500/5 p-3.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-ink-700">Mathématiques</span>
+                <span class="text-[10px] font-mono num text-ink-500">coef 4</span>
+              </div>
+              <div class="flex items-end gap-1.5 mt-1.5">
+                <div class="text-2xl font-bold num tabular-nums">8.5</div>
+                <div class="text-xs text-ink-500 pb-1">/20</div>
+              </div>
+              <div class="text-xs text-warning-700 font-semibold mt-1 inline-flex items-center gap-1">
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg> en baisse
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-ink-100 bg-white p-3.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-ink-700">Français</span>
+                <span class="text-[10px] font-mono num text-ink-500">coef 3</span>
+              </div>
+              <div class="flex items-end gap-1.5 mt-1.5">
+                <div class="text-2xl font-bold num tabular-nums">14.0</div>
+                <div class="text-xs text-ink-500 pb-1">/20</div>
+              </div>
+              <div class="text-xs text-ink-500 font-semibold mt-1 inline-flex items-center gap-1">
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14"/></svg> stable
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-warning-500/30 bg-warning-500/5 p-3.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-ink-700">Anglais</span>
+                <span class="text-[10px] font-mono num text-ink-500">coef 2</span>
+              </div>
+              <div class="flex items-end gap-1.5 mt-1.5">
+                <div class="text-2xl font-bold num tabular-nums">11.0</div>
+                <div class="text-xs text-ink-500 pb-1">/20</div>
+              </div>
+              <div class="text-xs text-warning-700 font-semibold mt-1 inline-flex items-center gap-1">
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg> en baisse
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-success-500/30 bg-success-500/5 p-3.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-ink-700">Histoire-Géo</span>
+                <span class="text-[10px] font-mono num text-ink-500">coef 3</span>
+              </div>
+              <div class="flex items-end gap-1.5 mt-1.5">
+                <div class="text-2xl font-bold num tabular-nums">15.0</div>
+                <div class="text-xs text-ink-500 pb-1">/20</div>
+              </div>
+              <div class="text-xs text-success-700 font-semibold mt-1 inline-flex items-center gap-1">
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> en hausse
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-ink-100 bg-white p-3.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-ink-700">SVT</span>
+                <span class="text-[10px] font-mono num text-ink-500">coef 2</span>
+              </div>
+              <div class="flex items-end gap-1.5 mt-1.5">
+                <div class="text-2xl font-bold num tabular-nums">12.5</div>
+                <div class="text-xs text-ink-500 pb-1">/20</div>
+              </div>
+              <div class="text-xs text-ink-500 font-semibold mt-1 inline-flex items-center gap-1">
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14"/></svg> stable
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-success-500/30 bg-success-500/5 p-3.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-ink-700">Physique</span>
+                <span class="text-[10px] font-mono num text-ink-500">coef 3</span>
+              </div>
+              <div class="flex items-end gap-1.5 mt-1.5">
+                <div class="text-2xl font-bold num tabular-nums">14.2</div>
+                <div class="text-xs text-ink-500 pb-1">/20</div>
+              </div>
+              <div class="text-xs text-success-700 font-semibold mt-1 inline-flex items-center gap-1">
+                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> en hausse
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Upcoming -->
+        <div class="px-5 mt-6">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm uppercase tracking-wider text-ink-500 font-bold">Examens à venir</h2>
+          </div>
+          <div class="rounded-2xl bg-white border border-ink-100 overflow-hidden">
+            <div class="flex items-center gap-4 px-4 py-3 border-b border-ink-100">
+              <div class="text-center w-12 shrink-0">
+                <div class="text-[10px] uppercase font-bold text-parent-700">Mer.</div>
+                <div class="text-xl font-bold num">22</div>
+                <div class="text-[10px] text-ink-500">Mai</div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Interrogation — Fonctions</div>
+                <div class="text-xs text-ink-500 mt-0.5">Maths · Mme Dupont · 60 min</div>
+              </div>
+              <svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+            </div>
+            <div class="flex items-center gap-4 px-4 py-3 border-b border-ink-100">
+              <div class="text-center w-12 shrink-0">
+                <div class="text-[10px] uppercase font-bold text-parent-700">Lun.</div>
+                <div class="text-xl font-bold num">27</div>
+                <div class="text-[10px] text-ink-500">Mai</div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Composition T2</div>
+                <div class="text-xs text-ink-500 mt-0.5">Français · Mme Lefebvre · 120 min</div>
+              </div>
+              <svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+            </div>
+            <div class="flex items-center gap-4 px-4 py-3">
+              <div class="text-center w-12 shrink-0">
+                <div class="text-[10px] uppercase font-bold text-parent-700">Ven.</div>
+                <div class="text-xl font-bold num">31</div>
+                <div class="text-[10px] text-ink-500">Mai</div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">DS Géopolitique</div>
+                <div class="text-xs text-ink-500 mt-0.5">Histoire · M. Bernard · 90 min</div>
+              </div>
+              <svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent grades -->
+        <div class="px-5 mt-6">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm uppercase tracking-wider text-ink-500 font-bold">Dernières notes</h2>
+            <a class="text-xs font-semibold text-parent-700">Historique →</a>
+          </div>
+          <div class="rounded-2xl bg-white border border-ink-100 divide-y divide-ink-100">
+            <div class="flex items-center gap-3 px-4 py-3">
+              <div class="text-xs num font-mono text-ink-500 w-10">15/05</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">DST chapitre 5</div>
+                <div class="text-xs text-ink-500 mt-0.5">Mathématiques</div>
+              </div>
+              <div class="text-right">
+                <div class="num font-mono text-base font-bold">8.5</div>
+                <div class="text-[10px] text-warning-700 font-semibold inline-flex items-center gap-0.5"><svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg>baisse</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 px-4 py-3">
+              <div class="text-xs num font-mono text-ink-500 w-10">12/05</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Récitation poésie</div>
+                <div class="text-xs text-ink-500 mt-0.5">Français</div>
+              </div>
+              <div class="text-right">
+                <div class="num font-mono text-base font-bold">14.0</div>
+                <div class="text-[10px] text-ink-500 font-semibold">stable</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 px-4 py-3">
+              <div class="text-xs num font-mono text-ink-500 w-10">10/05</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Quiz vocabulaire</div>
+                <div class="text-xs text-ink-500 mt-0.5">Anglais</div>
+              </div>
+              <div class="text-right">
+                <div class="num font-mono text-base font-bold">11.0</div>
+                <div class="text-[10px] text-warning-700 font-semibold inline-flex items-center gap-0.5"><svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg>baisse</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Announcement -->
+        <div class="px-5 mt-6">
+          <div class="rounded-2xl bg-parent-50 border border-parent-100 p-4">
+            <div class="text-[10px] uppercase tracking-wider text-parent-700 font-bold">Annonce école</div>
+            <h4 class="font-semibold mt-1 text-sm">Réunion parents-professeurs — 28 mai</h4>
+            <p class="text-xs text-ink-500 mt-1.5 leading-relaxed">De 18h à 20h, salle polyvalente. Inscription obligatoire avant le 22 mai.</p>
+            <a class="inline-flex items-center gap-1 text-xs font-semibold text-parent-700 mt-2">S'inscrire →</a>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Bottom tabs -->
+      <nav class="absolute bottom-0 inset-x-0 bg-white/95 backdrop-blur border-t border-ink-100 px-2 py-2 grid grid-cols-5 gap-1">
+        <button class="flex flex-col items-center gap-1 py-1.5 rounded-lg text-parent-700">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg>
+          <span class="text-[10px] font-bold">Accueil</span>
+        </button>
+        <button class="flex flex-col items-center gap-1 py-1.5 rounded-lg text-ink-400">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          <span class="text-[10px] font-medium">Suivi</span>
+        </button>
+        <button class="flex flex-col items-center gap-1 py-1.5 rounded-lg text-ink-400">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="text-[10px] font-medium">Cal.</span>
+        </button>
+        <button class="relative flex flex-col items-center gap-1 py-1.5 rounded-lg text-ink-400">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+          <span class="absolute top-0.5 right-3 h-3.5 w-3.5 rounded-full bg-warning-500 text-[8px] grid place-items-center text-white font-bold">2</span>
+          <span class="text-[10px] font-medium">Alertes</span>
+        </button>
+        <button class="flex flex-col items-center gap-1 py-1.5 rounded-lg text-ink-400">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span class="text-[10px] font-medium">Profil</span>
+        </button>
+      </nav>
+
+      <!-- Home indicator -->
+      <div class="absolute bottom-1 inset-x-0 grid place-items-center"><div class="h-1 w-32 rounded-full bg-ink-900/30"></div></div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

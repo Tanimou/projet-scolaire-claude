@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.7
+# ------------------------------------------------------------------------------
+# NestJS BullMQ worker — multi-stage
+# ------------------------------------------------------------------------------
+ARG NODE_VERSION=22.11.0
+ARG PNPM_VERSION=9.12.3
+
+FROM node:${NODE_VERSION}-alpine AS base
+ARG PNPM_VERSION
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH \
+    CI=true
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+RUN apk add --no-cache libc6-compat openssl tini
+WORKDIR /app
+
+FROM base AS deps
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/tsconfig/package.json packages/tsconfig/package.json
+COPY packages/eslint-config/package.json packages/eslint-config/package.json
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+
+FROM deps AS build
+COPY . .
+RUN pnpm --filter @pilotage/contracts build
+RUN pnpm --filter @pilotage/api prisma generate
+RUN pnpm --filter @pilotage/worker build
+RUN pnpm --filter @pilotage/worker deploy --prod /prod/worker
+
+FROM node:${NODE_VERSION}-alpine AS runtime
+RUN apk add --no-cache libc6-compat openssl tini && \
+    addgroup -S app && adduser -S app -G app
+WORKDIR /app
+
+COPY --from=build --chown=app:app /prod/worker ./
+
+ENV NODE_ENV=production \
+    NODE_OPTIONS="--enable-source-maps"
+
+USER app
+
+# Healthcheck via heartbeat file written by worker every 30s
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD test -f /tmp/worker-alive && test $(($(date +%s) - $(date -r /tmp/worker-alive +%s))) -lt 90 || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "dist/main.js"]

@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="fr" class="bg-neutral-50">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pilotage scolaire — Portail administrateur</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          brand: { 50:'oklch(0.97 0.02 250)', 100:'oklch(0.93 0.05 250)', 500:'oklch(0.62 0.18 250)', 600:'oklch(0.55 0.20 250)', 700:'oklch(0.48 0.20 250)', 900:'oklch(0.30 0.15 250)' },
+          ink: { 50:'oklch(0.98 0.005 250)', 100:'oklch(0.96 0.01 250)', 200:'oklch(0.92 0.01 250)', 300:'oklch(0.85 0.01 250)', 400:'oklch(0.70 0.02 250)', 500:'oklch(0.55 0.02 250)', 700:'oklch(0.32 0.02 250)', 900:'oklch(0.15 0.02 250)' },
+          success: { 100:'oklch(0.95 0.05 160)', 500:'oklch(0.70 0.17 160)', 700:'oklch(0.55 0.17 160)' },
+          warning: { 100:'oklch(0.96 0.05 75)', 500:'oklch(0.78 0.16 75)', 700:'oklch(0.62 0.16 75)' },
+          danger:  { 100:'oklch(0.96 0.05 25)', 500:'oklch(0.60 0.22 25)', 700:'oklch(0.50 0.22 25)' },
+        },
+        boxShadow: {
+          'soft': '0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.04)',
+        }
+      }
+    }
+  }
+</script>
+<style>
+  body{font-feature-settings:"cv11","ss01","ss03";-webkit-font-smoothing:antialiased}
+  .ring-soft{box-shadow:0 0 0 1px rgba(15,23,42,0.06)}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+</style>
+</head>
+<body class="font-sans text-ink-900" data-portal="admin">
+
+<div class="min-h-screen flex">
+
+  <!-- SIDEBAR -->
+  <aside class="w-64 shrink-0 border-r border-ink-200 bg-white flex flex-col">
+    <div class="h-16 px-5 flex items-center gap-2.5 border-b border-ink-200">
+      <span class="grid h-8 w-8 place-items-center rounded-lg bg-brand-600 text-white font-semibold">LV</span>
+      <div class="leading-tight">
+        <div class="font-semibold text-sm">Lycée Voltaire</div>
+        <div class="text-xs text-ink-500">2025-2026</div>
+      </div>
+    </div>
+
+    <nav class="flex-1 overflow-y-auto p-3 space-y-5">
+      <div>
+        <div class="px-2 text-[10px] uppercase tracking-wider font-bold text-ink-400 mb-1.5">Pilotage</div>
+        <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-brand-50 text-brand-700 font-semibold text-sm">
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+          Tableau de bord
+        </a>
+      </div>
+
+      <div>
+        <div class="px-2 text-[10px] uppercase tracking-wider font-bold text-ink-400 mb-1.5">École</div>
+        <div class="space-y-0.5 text-sm text-ink-700">
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Établissement</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="19" cy="13" r="2"/><circle cx="6" cy="12" r="3"/><circle cx="10" cy="20" r="2.5"/></svg> Branding</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Calendrier</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11H7v2h2zm6 0h-2v2h2zM9 7H7v2h2zm6 0h-2v2h2z"/><path d="M3 5h18v14H3z"/></svg> Échelle de notation</a>
+        </div>
+      </div>
+
+      <div>
+        <div class="px-2 text-[10px] uppercase tracking-wider font-bold text-ink-400 mb-1.5">Hiérarchie</div>
+        <div class="space-y-0.5 text-sm text-ink-700">
+          <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Cycles & niveaux</span></a>
+          <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/></svg> Classes</span><span class="text-[10px] num font-mono text-ink-400">18</span></a>
+          <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> Matières</span><span class="text-[10px] num font-mono text-ink-400">14</span></a>
+        </div>
+      </div>
+
+      <div>
+        <div class="px-2 text-[10px] uppercase tracking-wider font-bold text-ink-400 mb-1.5">Personnes</div>
+        <div class="space-y-0.5 text-sm text-ink-700">
+          <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Élèves</span><span class="text-[10px] num font-mono text-ink-400">542</span></a>
+          <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg> Professeurs</span><span class="text-[10px] num font-mono text-ink-400">28</span></a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Parents</a>
+        </div>
+      </div>
+
+      <div>
+        <div class="px-2 text-[10px] uppercase tracking-wider font-bold text-ink-400 mb-1.5">Scolarité</div>
+        <div class="space-y-0.5 text-sm text-ink-700">
+          <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Inscriptions</span><span class="px-1.5 py-0.5 rounded-full bg-warning-100 text-warning-700 text-[10px] font-bold">7</span></a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Emploi du temps</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11H7v2h2v-2zm4 0h-2v2h2v-2z"/><path d="M3 5h18v14H3z"/></svg> Évaluations</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg> Présences</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg> Annonces</a>
+        </div>
+      </div>
+
+      <div>
+        <div class="px-2 text-[10px] uppercase tracking-wider font-bold text-ink-400 mb-1.5">Personnalisation</div>
+        <div class="space-y-0.5 text-sm text-ink-700">
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Rôles & permissions</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4z"/></svg> Champs personnalisés</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Règles d'alerte</a>
+        </div>
+      </div>
+
+      <div>
+        <div class="px-2 text-[10px] uppercase tracking-wider font-bold text-ink-400 mb-1.5">Ops</div>
+        <div class="space-y-0.5 text-sm text-ink-700">
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Audit</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Imports CSV</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> Exports</a>
+          <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Paramètres</a>
+        </div>
+      </div>
+    </nav>
+
+    <div class="border-t border-ink-200 p-3">
+      <div class="flex items-center gap-2.5">
+        <div class="h-9 w-9 rounded-full bg-brand-100 grid place-items-center font-semibold text-brand-700">SD</div>
+        <div class="flex-1 leading-tight min-w-0">
+          <div class="text-sm font-semibold truncate">Sophie Durand</div>
+          <div class="text-xs text-ink-500 truncate">Administratrice</div>
+        </div>
+        <svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="flex-1 min-w-0 flex flex-col">
+
+    <!-- TOPBAR -->
+    <header class="h-16 px-6 lg:px-8 flex items-center justify-between border-b border-ink-200 bg-white">
+      <div class="flex items-center gap-4 flex-1 max-w-2xl">
+        <div class="relative flex-1">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="Rechercher un élève, une classe, un professeur…" class="w-full bg-ink-50 border border-transparent focus:bg-white focus:border-brand-200 focus:outline-none rounded-lg pl-10 pr-3 py-2 text-sm placeholder:text-ink-400" />
+          <kbd class="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono text-ink-400 px-1.5 py-0.5 rounded border border-ink-200 bg-white">⌘K</kbd>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="relative h-9 w-9 grid place-items-center rounded-lg hover:bg-ink-50" aria-label="Notifications">
+          <svg class="h-4 w-4 text-ink-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+          <span class="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-warning-500 ring-2 ring-white"></span>
+        </button>
+        <button class="h-9 w-9 grid place-items-center rounded-lg hover:bg-ink-50" aria-label="Aide">
+          <svg class="h-4 w-4 text-ink-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12" y2="17"/></svg>
+        </button>
+        <div class="h-6 w-px bg-ink-200 mx-1"></div>
+        <button class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-ink-50">
+          <div class="h-7 w-7 rounded-full bg-brand-100 grid place-items-center font-semibold text-brand-700 text-xs">SD</div>
+          <svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- CONTENT -->
+    <div class="flex-1 overflow-auto p-6 lg:p-8 space-y-6 max-w-[1600px]">
+      <!-- Page header -->
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-xs text-ink-500 mb-1">Tableau de bord · Mercredi 15 mai 2026</div>
+          <h1 class="text-2xl font-bold tracking-tight">Vue d'ensemble — Lycée Voltaire</h1>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="inline-flex items-center gap-1.5 rounded-lg border border-ink-200 px-3 py-2 text-sm font-medium hover:bg-ink-50">
+            <svg class="h-4 w-4 text-ink-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Cette semaine
+          </button>
+          <button class="inline-flex items-center gap-1.5 rounded-lg bg-ink-900 text-white px-3 py-2 text-sm font-semibold hover:bg-ink-700">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Ajouter widget
+          </button>
+        </div>
+      </div>
+
+      <!-- KPIs -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="rounded-2xl bg-white p-5 ring-soft">
+          <div class="flex items-center justify-between">
+            <div class="text-xs uppercase tracking-wider text-ink-500 font-semibold">Élèves</div>
+            <div class="h-8 w-8 rounded-lg bg-brand-50 grid place-items-center"><svg class="h-4 w-4 text-brand-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
+          </div>
+          <div class="mt-3 flex items-end gap-2">
+            <div class="text-3xl font-bold num tracking-tight">542</div>
+            <div class="inline-flex items-center gap-0.5 text-xs text-success-700 font-semibold pb-1.5"><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> +12 ce mois</div>
+          </div>
+        </div>
+        <div class="rounded-2xl bg-white p-5 ring-soft">
+          <div class="flex items-center justify-between">
+            <div class="text-xs uppercase tracking-wider text-ink-500 font-semibold">Professeurs</div>
+            <div class="h-8 w-8 rounded-lg bg-teal-50 grid place-items-center"><svg class="h-4 w-4 text-teal-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+          </div>
+          <div class="mt-3 flex items-end gap-2">
+            <div class="text-3xl font-bold num tracking-tight">28</div>
+            <div class="inline-flex items-center gap-0.5 text-xs text-success-700 font-semibold pb-1.5"><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> +1</div>
+          </div>
+        </div>
+        <div class="rounded-2xl bg-white p-5 ring-soft">
+          <div class="flex items-center justify-between">
+            <div class="text-xs uppercase tracking-wider text-ink-500 font-semibold">Classes</div>
+            <div class="h-8 w-8 rounded-lg bg-ink-100 grid place-items-center"><svg class="h-4 w-4 text-ink-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/></svg></div>
+          </div>
+          <div class="mt-3 flex items-end gap-2">
+            <div class="text-3xl font-bold num tracking-tight">18</div>
+            <div class="text-xs text-ink-500 pb-1.5">stable</div>
+          </div>
+        </div>
+        <div class="rounded-2xl bg-white p-5 ring-soft">
+          <div class="flex items-center justify-between">
+            <div class="text-xs uppercase tracking-wider text-ink-500 font-semibold">Alertes ouvertes</div>
+            <div class="h-8 w-8 rounded-lg bg-warning-100 grid place-items-center"><svg class="h-4 w-4 text-warning-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg></div>
+          </div>
+          <div class="mt-3 flex items-end gap-2">
+            <div class="text-3xl font-bold num tracking-tight">12</div>
+            <div class="inline-flex items-center gap-0.5 text-xs text-warning-700 font-semibold pb-1.5"><svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg> +3</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2-col -->
+      <div class="grid lg:grid-cols-3 gap-6">
+        <!-- Enrollment requests -->
+        <div class="lg:col-span-2 rounded-2xl bg-white p-6 ring-soft">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="font-semibold">Inscriptions à valider</h3>
+              <p class="text-xs text-ink-500 mt-0.5">7 demandes en attente — délai moyen 2j</p>
+            </div>
+            <a class="text-xs font-semibold text-brand-700 hover:underline">Voir tout →</a>
+          </div>
+          <div class="divide-y divide-ink-100">
+            <div class="flex items-center gap-4 py-3">
+              <div class="h-10 w-10 rounded-full bg-blue-100 grid place-items-center font-semibold text-blue-700 text-xs">LM</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Léa Martin <span class="text-ink-500 font-normal text-xs">— par M. Martin (parent)</span></div>
+                <div class="text-xs text-ink-500 mt-0.5">Demande rattachement · Aujourd'hui 10h18</div>
+              </div>
+              <span class="text-[10px] uppercase tracking-wider font-bold text-warning-700 bg-warning-100 px-2 py-1 rounded">Guardianship</span>
+              <button class="rounded-lg bg-success-500/10 text-success-700 px-3 py-1.5 text-xs font-semibold hover:bg-success-500/20">Approuver</button>
+              <button class="rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold hover:bg-ink-50">Détail</button>
+            </div>
+            <div class="flex items-center gap-4 py-3">
+              <div class="h-10 w-10 rounded-full bg-orange-100 grid place-items-center font-semibold text-orange-700 text-xs">TD</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Tom Dupont <span class="text-ink-500 font-normal text-xs">— par Mme Dupont (parent)</span></div>
+                <div class="text-xs text-ink-500 mt-0.5">Demande rattachement · Aujourd'hui 09h42</div>
+              </div>
+              <span class="text-[10px] uppercase tracking-wider font-bold text-warning-700 bg-warning-100 px-2 py-1 rounded">Guardianship</span>
+              <button class="rounded-lg bg-success-500/10 text-success-700 px-3 py-1.5 text-xs font-semibold hover:bg-success-500/20">Approuver</button>
+              <button class="rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold hover:bg-ink-50">Détail</button>
+            </div>
+            <div class="flex items-center gap-4 py-3">
+              <div class="h-10 w-10 rounded-full bg-violet-100 grid place-items-center font-semibold text-violet-700 text-xs">MR</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Marc Rousseau → 2nde B <span class="text-ink-500 font-normal text-xs">— par Mme Bernard (parent)</span></div>
+                <div class="text-xs text-ink-500 mt-0.5">Inscription en classe · Hier 16h05</div>
+              </div>
+              <span class="text-[10px] uppercase tracking-wider font-bold text-brand-700 bg-brand-50 px-2 py-1 rounded">Inscription</span>
+              <button class="rounded-lg bg-success-500/10 text-success-700 px-3 py-1.5 text-xs font-semibold hover:bg-success-500/20">Approuver</button>
+              <button class="rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold hover:bg-ink-50">Détail</button>
+            </div>
+            <div class="flex items-center gap-4 py-3">
+              <div class="h-10 w-10 rounded-full bg-emerald-100 grid place-items-center font-semibold text-emerald-700 text-xs">JL</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold">Juliette Leblanc <span class="text-ink-500 font-normal text-xs">— par M. Leblanc</span></div>
+                <div class="text-xs text-ink-500 mt-0.5">Demande rattachement · Hier 14h32</div>
+              </div>
+              <span class="text-[10px] uppercase tracking-wider font-bold text-warning-700 bg-warning-100 px-2 py-1 rounded">Guardianship</span>
+              <button class="rounded-lg bg-success-500/10 text-success-700 px-3 py-1.5 text-xs font-semibold hover:bg-success-500/20">Approuver</button>
+              <button class="rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold hover:bg-ink-50">Détail</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- At-risk students -->
+        <div class="rounded-2xl bg-white p-6 ring-soft">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="font-semibold">Élèves à risque</h3>
+              <p class="text-xs text-ink-500 mt-0.5">Avec alertes ouvertes</p>
+            </div>
+            <a class="text-xs font-semibold text-brand-700 hover:underline">Voir tout →</a>
+          </div>
+          <div class="space-y-3">
+            <div class="flex items-center gap-3">
+              <div class="h-9 w-9 rounded-full bg-blue-100 grid place-items-center font-semibold text-blue-700 text-xs">LM</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold truncate">Léa Martin</div>
+                <div class="text-xs text-ink-500">2nde B · Maths <span class="num font-mono">6.5/20</span></div>
+              </div>
+              <span class="h-2 w-2 rounded-full bg-danger-500"></span>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="h-9 w-9 rounded-full bg-orange-100 grid place-items-center font-semibold text-orange-700 text-xs">TB</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold truncate">Tom Bernard</div>
+                <div class="text-xs text-ink-500">Term S · Anglais <svg class="inline h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg> tendance</div>
+              </div>
+              <span class="h-2 w-2 rounded-full bg-warning-500"></span>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="h-9 w-9 rounded-full bg-violet-100 grid place-items-center font-semibold text-violet-700 text-xs">CG</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold truncate">Camille Girard</div>
+                <div class="text-xs text-ink-500">1ère ES · Hist-Géo absences</div>
+              </div>
+              <span class="h-2 w-2 rounded-full bg-warning-500"></span>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="h-9 w-9 rounded-full bg-rose-100 grid place-items-center font-semibold text-rose-700 text-xs">NS</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold truncate">Nathan Simon</div>
+                <div class="text-xs text-ink-500">2nde A · Physique <span class="num font-mono">7.8</span></div>
+              </div>
+              <span class="h-2 w-2 rounded-full bg-warning-500"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity feed + School trend -->
+      <div class="grid lg:grid-cols-5 gap-6">
+        <div class="lg:col-span-3 rounded-2xl bg-white p-6 ring-soft">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="font-semibold">Activité récente</h3>
+              <p class="text-xs text-ink-500 mt-0.5">Actions sensibles · journal d'audit</p>
+            </div>
+          </div>
+          <div class="relative">
+            <div class="absolute left-3.5 top-2 bottom-2 w-px bg-ink-200"></div>
+            <ul class="space-y-4">
+              <li class="relative pl-10">
+                <span class="absolute left-2.5 top-1.5 h-2 w-2 rounded-full bg-success-500 ring-4 ring-success-500/10"></span>
+                <div class="text-sm"><span class="font-semibold">Mme Dupont</span> a publié 28 notes — DST chapitre 5, <span class="text-ink-500">Maths 2nde B</span></div>
+                <div class="text-xs text-ink-500 mt-0.5 num font-mono">10:32:18 — IP 10.0.4.12</div>
+              </li>
+              <li class="relative pl-10">
+                <span class="absolute left-2.5 top-1.5 h-2 w-2 rounded-full bg-brand-500 ring-4 ring-brand-500/10"></span>
+                <div class="text-sm"><span class="font-semibold">M. Bernard</span> a validé l'inscription de <span class="font-semibold">Léa Martin</span> en 2nde B</div>
+                <div class="text-xs text-ink-500 mt-0.5 num font-mono">10:18:04 — IP 10.0.2.7</div>
+              </li>
+              <li class="relative pl-10">
+                <span class="absolute left-2.5 top-1.5 h-2 w-2 rounded-full bg-warning-500 ring-4 ring-warning-500/10"></span>
+                <div class="text-sm">Alerte <span class="font-mono text-xs px-1 py-0.5 rounded bg-ink-100">LOW_SUBJECT_AVG</span> sur <span class="font-semibold">Tom Bernard</span> — Anglais 8.2/20</div>
+                <div class="text-xs text-ink-500 mt-0.5 num font-mono">09:55:41 — système</div>
+              </li>
+              <li class="relative pl-10">
+                <span class="absolute left-2.5 top-1.5 h-2 w-2 rounded-full bg-ink-300 ring-4 ring-ink-100"></span>
+                <div class="text-sm"><span class="font-semibold">Vous</span> avez modifié le branding — logo et couleur principale</div>
+                <div class="text-xs text-ink-500 mt-0.5 num font-mono">09:14:22 — IP 10.0.1.4</div>
+              </li>
+              <li class="relative pl-10">
+                <span class="absolute left-2.5 top-1.5 h-2 w-2 rounded-full bg-brand-500 ring-4 ring-brand-500/10"></span>
+                <div class="text-sm"><span class="font-semibold">M. Bernard</span> a créé une nouvelle règle d'alerte custom — <span class="font-mono text-xs px-1 py-0.5 rounded bg-ink-100">ABSENCE_THRESHOLD</span></div>
+                <div class="text-xs text-ink-500 mt-0.5 num font-mono">Hier 17:02:01</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="lg:col-span-2 rounded-2xl bg-white p-6 ring-soft">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="font-semibold">Tendance école</h3>
+              <p class="text-xs text-ink-500 mt-0.5">Moyenne générale par mois</p>
+            </div>
+            <span class="inline-flex items-center gap-1 text-xs font-semibold text-success-700 bg-success-500/10 px-2 py-0.5 rounded-full">
+              <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> +0.4
+            </span>
+          </div>
+          <!-- inline sparkline-ish chart -->
+          <div class="h-40 relative">
+            <svg viewBox="0 0 320 140" class="w-full h-full">
+              <defs>
+                <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="oklch(0.62 0.18 250)" stop-opacity="0.25"/>
+                  <stop offset="100%" stop-color="oklch(0.62 0.18 250)" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <g stroke="rgba(15,23,42,0.06)" stroke-width="1">
+                <line x1="0" y1="35" x2="320" y2="35"/>
+                <line x1="0" y1="70" x2="320" y2="70"/>
+                <line x1="0" y1="105" x2="320" y2="105"/>
+              </g>
+              <path d="M0,90 L40,80 L80,82 L120,72 L160,68 L200,55 L240,60 L280,50 L320,42" fill="none" stroke="oklch(0.55 0.20 250)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M0,90 L40,80 L80,82 L120,72 L160,68 L200,55 L240,60 L280,50 L320,42 L320,140 L0,140 Z" fill="url(#g1)"/>
+              <g fill="oklch(0.55 0.20 250)">
+                <circle cx="280" cy="50" r="3.5"/>
+                <circle cx="280" cy="50" r="7" fill-opacity="0.18"/>
+              </g>
+            </svg>
+            <div class="absolute top-1 right-1 text-xs font-mono num text-ink-500">12.8</div>
+            <div class="absolute bottom-1 left-1 text-xs font-mono num text-ink-500">11.2</div>
+          </div>
+          <div class="grid grid-cols-9 mt-2 text-[10px] font-mono num text-ink-400 text-center">
+            <span>S</span><span>O</span><span>N</span><span>D</span><span>J</span><span>F</span><span>M</span><span>A</span><span>M</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

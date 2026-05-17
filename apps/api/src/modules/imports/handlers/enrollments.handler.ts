@@ -1,0 +1,138 @@
+import {
+  type AppliedEntity,
+  type ApplyContext,
+  type ImportContext,
+  type ImportHandler,
+  type RollbackContext,
+  type ValidationResult,
+} from '../handler.types';
+
+interface EnrollmentInput {
+  studentExternalRef: string;
+  className: string;
+  _studentId?: string;
+  _classSectionId?: string;
+  _academicYearId?: string;
+}
+
+/**
+ * Bulk enroll students into class sections. Uses the active academic year and resolves
+ * the target class by name. Respects max-capacity (tracked in-memory across the batch).
+ */
+export const enrollmentsHandler: ImportHandler = {
+  type: 'enrollments',
+  label: 'Inscriptions',
+  description: 'Inscrire en masse des élèves dans des classes existantes pour l\'année scolaire active.',
+  icon: 'ListChecks',
+  requiredPermission: 'enrollments.write',
+  template: {
+    headers: ['studentExternalRef', 'className'],
+    sample: [
+      ['EL-2025-001', '6eA'],
+      ['EL-2025-002', '6eA'],
+      ['EL-2025-003', '5eB'],
+    ],
+    notes: [
+      'studentExternalRef = matricule de l\'élève (doit déjà exister).',
+      'className = nom exact de la classe pour l\'année active (ex: « 6eA »).',
+      'Refuse l\'inscription si capacité dépassée ou si l\'élève est déjà inscrit dans une autre classe cette année.',
+    ],
+  },
+
+  parseRow(row) {
+    return {
+      studentExternalRef: (row.studentexternalref ?? row['student external ref'] ?? row.matricule ?? '').trim(),
+      className: (row.classname ?? row['class name'] ?? row.classe ?? '').trim(),
+    };
+  },
+
+  validateRow(parsed, ctx: ImportContext): ValidationResult {
+    const p = parsed as unknown as EnrollmentInput;
+    const errors: ValidationResult['errors'] = [];
+
+    if (!p.studentExternalRef) {
+      errors.push({ field: 'studentExternalRef', message: 'Matricule de l\'élève requis.' });
+    } else {
+      const studentId = ctx.caches.studentExternalRefs.get(p.studentExternalRef);
+      if (!studentId) {
+        errors.push({
+          field: 'studentExternalRef',
+          message: `Élève introuvable (matricule « ${p.studentExternalRef} »).`,
+        });
+      } else {
+        p._studentId = studentId;
+      }
+    }
+
+    if (!p.className) {
+      errors.push({ field: 'className', message: 'Nom de classe requis.' });
+    } else if (!ctx.caches.activeAcademicYearId) {
+      errors.push({
+        field: 'className',
+        message: 'Aucune année scolaire active : impossible d\'inscrire.',
+        hint: 'Définissez d\'abord une année active dans Admin → Années scolaires.',
+      });
+    } else {
+      const key = `${ctx.caches.activeAcademicYearId}:${p.className.toLowerCase()}`;
+      const cls = ctx.caches.classSectionsByName.get(key);
+      if (!cls) {
+        errors.push({
+          field: 'className',
+          message: `Classe « ${p.className} » introuvable pour l'année active.`,
+        });
+      } else {
+        if (cls.currentSize >= cls.maxStudents) {
+          errors.push({
+            field: 'className',
+            message: `Classe « ${p.className} » pleine (${cls.currentSize}/${cls.maxStudents}).`,
+            hint: 'Augmentez la capacité ou choisissez une autre section.',
+          });
+        }
+        p._classSectionId = cls.id;
+        p._academicYearId = cls.academicYearId;
+      }
+    }
+
+    if (errors.length) return { ok: false, errors };
+    return { ok: true, errors: [], normalized: p as unknown as Record<string, unknown> };
+  },
+
+  async applyRow(normalized, ctx: ApplyContext): Promise<AppliedEntity> {
+    const p = normalized as unknown as EnrollmentInput;
+    const studentId = p._studentId!;
+    const classSectionId = p._classSectionId!;
+    const academicYearId = p._academicYearId!;
+
+    // Double check student isn't already actively enrolled this year (race-safe inside tx).
+    const conflict = await ctx.tx.enrollment.findFirst({
+      where: { studentId, academicYearId, status: 'active', tenantId: ctx.tenantId },
+    });
+    if (conflict) {
+      throw new Error(`Élève déjà inscrit cette année (classe ${conflict.classSectionId.slice(0, 8)}…).`);
+    }
+
+    const enrollment = await ctx.tx.enrollment.create({
+      data: {
+        tenantId: ctx.tenantId,
+        studentId,
+        classSectionId,
+        academicYearId,
+        status: 'active',
+      },
+    });
+
+    // Update in-memory capacity tracker for subsequent rows in same batch.
+    for (const [key, cls] of ctx.caches.classSectionsByName.entries()) {
+      if (cls.id === classSectionId) {
+        ctx.caches.classSectionsByName.set(key, { ...cls, currentSize: cls.currentSize + 1 });
+        break;
+      }
+    }
+
+    return { id: enrollment.id, type: 'enrollment' };
+  },
+
+  async rollbackRow(entityId, ctx: RollbackContext): Promise<void> {
+    await ctx.tx.enrollment.deleteMany({ where: { id: entityId, tenantId: ctx.tenantId } });
+  },
+};

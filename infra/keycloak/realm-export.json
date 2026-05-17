@@ -1,0 +1,137 @@
+{
+  "id": "pilotage-scolaire",
+  "realm": "pilotage-scolaire",
+  "displayName": "Pilotage Scolaire",
+  "displayNameHtml": "<b>Pilotage</b> Scolaire",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "registrationEmailAsUsername": true,
+  "rememberMe": true,
+  "verifyEmail": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
+  "passwordPolicy": "length(12) and notUsername and notEmail and digits(1) and lowerCase(1) and upperCase(1) and specialChars(1) and passwordHistory(5)",
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 14400,
+  "ssoSessionMaxLifespan": 36000,
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyLookAheadWindow": 1,
+  "otpPolicyPeriod": 30,
+  "roles": {
+    "realm": [
+      { "name": "super_admin", "description": "Plateforme — accès global" },
+      { "name": "school_admin", "description": "Administrateur d'établissement" },
+      { "name": "teacher", "description": "Enseignant" },
+      { "name": "parent", "description": "Parent / tuteur légal" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "portal-admin",
+      "name": "Portail administrateur",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "change-me-portal-admin",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:3100",
+      "baseUrl": "/admin",
+      "redirectUris": ["http://localhost:3100/admin/*", "http://localhost:3100/api/auth/callback/admin", "http://localhost:3100/api/auth/callback/keycloak-admin"],
+      "webOrigins": ["http://localhost:3100"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3100/admin/login"
+      }
+    },
+    {
+      "clientId": "portal-teacher",
+      "name": "Portail professeur",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "change-me-portal-teacher",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:3100",
+      "baseUrl": "/teacher",
+      "redirectUris": ["http://localhost:3100/teacher/*", "http://localhost:3100/api/auth/callback/teacher", "http://localhost:3100/api/auth/callback/keycloak-teacher"],
+      "webOrigins": ["http://localhost:3100"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3100/teacher/login"
+      }
+    },
+    {
+      "clientId": "portal-parent",
+      "name": "Portail famille",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "change-me-portal-parent",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:3100",
+      "baseUrl": "/parent",
+      "redirectUris": ["http://localhost:3100/parent/*", "http://localhost:3100/api/auth/callback/parent", "http://localhost:3100/api/auth/callback/keycloak-parent"],
+      "webOrigins": ["http://localhost:3100"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3100/parent/login"
+      }
+    },
+    {
+      "clientId": "api-backend",
+      "name": "API NestJS",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "change-me-api-backend",
+      "bearerOnly": true
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@pilotage.local",
+      "email": "admin@pilotage.local",
+      "firstName": "Sophie",
+      "lastName": "Durand",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "Changeme123!" }],
+      "realmRoles": ["school_admin"]
+    },
+    {
+      "username": "teacher@pilotage.local",
+      "email": "teacher@pilotage.local",
+      "firstName": "Catherine",
+      "lastName": "Dupont",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "Changeme123!" }],
+      "realmRoles": ["teacher"]
+    },
+    {
+      "username": "parent@pilotage.local",
+      "email": "parent@pilotage.local",
+      "firstName": "Jean",
+      "lastName": "Martin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "Changeme123!" }],
+      "realmRoles": ["parent"]
+    }
+  ]
+}

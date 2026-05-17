@@ -1,0 +1,1238 @@
+// =============================================================================
+// Pilotage Scolaire — Prisma schema (Phase 0 — fondations)
+// Postgres 15 + RLS (configurée séparément via migration SQL)
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [uuidOssp(map: "uuid-ossp"), citext, pgTrgm(map: "pg_trgm"), pgcrypto, btreeGin(map: "btree_gin")]
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+enum TenantStatus {
+  active
+  suspended
+  archived
+}
+
+enum SchoolStatus {
+  active
+  closed
+}
+
+enum UserStatus {
+  active
+  suspended
+  deleted
+}
+
+enum Portal {
+  admin
+  teacher
+  parent
+}
+
+enum AcademicYearStatus {
+  active
+  closed
+  archived
+}
+
+enum ClassStatus {
+  active
+  closed
+}
+
+enum StudentStatus {
+  active
+  transferred
+  graduated
+  withdrawn
+}
+
+enum ImportType {
+  students
+  classes
+  subjects
+  teachers
+  parents
+  enrollments
+  grades
+  attendance
+}
+
+enum ImportStatus {
+  uploaded
+  validating
+  validated
+  applying
+  applied
+  failed
+  rolled_back
+}
+
+enum ImportMode {
+  all_or_nothing
+  skip_invalid
+}
+
+enum ImportRowStatus {
+  pending
+  valid
+  invalid
+  applied
+  skipped
+  rolled_back
+}
+
+enum CalendarEventType {
+  vacation_break
+  public_holiday
+  exam_period
+  meeting
+  ceremony
+  pedagogical_day
+  custom
+}
+
+enum CalendarEventScope {
+  school_wide
+  cycle_scope
+  grade_level_scope
+  class_section_scope
+}
+
+enum CalendarEventVisibility {
+  all
+  staff_only
+  admin_only
+}
+
+enum GuardianRelationship {
+  mother
+  father
+  legal_guardian
+  grandparent
+  sibling
+  other
+}
+
+enum GuardianshipStatus {
+  pending
+  active
+  revoked
+}
+
+enum EnrollmentStatus {
+  pending
+  active
+  transferred_in
+  transferred_out
+  graduated
+  dropped
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — teaching + assessments + grades
+// ---------------------------------------------------------------------------
+enum AssessmentKind {
+  written_test
+  oral
+  homework
+  project
+  participation
+  practical
+  other
+}
+
+enum GradeStatus {
+  draft
+  published
+  revised
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — sessions, cahier de texte, attendance, announcements
+// ---------------------------------------------------------------------------
+enum AttendanceStatus {
+  present
+  absent
+  absent_excused
+  late
+  left_early
+}
+
+enum LessonStatus {
+  draft
+  published
+}
+
+enum AnnouncementScope {
+  school_wide
+  cycle_scope
+  grade_level_scope
+  class_section_scope
+  individual_student
+  individual_user
+}
+
+enum AnnouncementPriority {
+  normal
+  high
+  urgent
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy
+// ---------------------------------------------------------------------------
+model Tenant {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String       @unique
+  status    TenantStatus @default(active)
+  plan      String       @default("standard")
+  settings  Json         @default("{}")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  schools      School[]
+  userProfiles UserProfile[]
+
+  @@map("tenant")
+}
+
+model School {
+  id         String       @id @default(uuid()) @db.Uuid
+  tenantId   String       @map("tenant_id") @db.Uuid
+  name       String
+  schoolCode String       @unique @map("school_code")
+  address    Json?
+  country    String       @db.Char(2)
+  timezone   String       @default("Europe/Paris")
+  locale     String       @default("fr-FR")
+  status     SchoolStatus @default(active)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branding        Branding?
+  academicYears   AcademicYear[]
+  cycles          Cycle[]
+  gradeLevels     GradeLevel[]
+  subjects        Subject[]
+  students        Student[]
+  guardians       Guardian[]
+  teacherProfiles TeacherProfile[]
+  importBatches   ImportBatch[]
+  calendarEvents  CalendarEvent[]
+  announcements   Announcement[]
+
+  @@index([tenantId])
+  @@map("school")
+}
+
+// ---------------------------------------------------------------------------
+// School structure
+// ---------------------------------------------------------------------------
+
+/// A school year (e.g. "2025-2026"). A school can have many; typically one is active.
+model AcademicYear {
+  id        String             @id @default(uuid()) @db.Uuid
+  tenantId  String             @map("tenant_id") @db.Uuid
+  schoolId  String             @map("school_id") @db.Uuid
+  name      String
+  startDate DateTime           @map("start_date") @db.Date
+  endDate   DateTime           @map("end_date") @db.Date
+  status    AcademicYearStatus @default(active)
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school              School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  terms               Term[]
+  classSections       ClassSection[]
+  enrollments         Enrollment[]
+  calendarEvents      CalendarEvent[]
+  teachingAssignments TeachingAssignment[]
+
+  @@unique([schoolId, name])
+  @@index([tenantId, schoolId])
+  @@map("academic_year")
+}
+
+/// A teaching period inside an academic year — trimester or semester.
+model Term {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  name           String
+  orderIndex     Int      @map("order_index")
+  startDate      DateTime @map("start_date") @db.Date
+  endDate        DateTime @map("end_date") @db.Date
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  assessments  Assessment[]
+
+  @@unique([academicYearId, orderIndex])
+  @@unique([academicYearId, name])
+  @@index([tenantId])
+  @@map("term")
+}
+
+/// Pedagogical cycle (Maternelle, Primaire, Collège, Lycée, etc.).
+model Cycle {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  schoolId   String   @map("school_id") @db.Uuid
+  code       String
+  name       String
+  orderIndex Int      @map("order_index")
+  color      String?
+  icon       String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  school         School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  gradeLevels    GradeLevel[]
+  calendarEvents CalendarEvent[]
+  announcements  Announcement[]
+
+  @@unique([schoolId, code])
+  @@index([tenantId, schoolId])
+  @@map("cycle")
+}
+
+/// A grade level inside a cycle (6e, 5e, Terminale, etc.). Ordered.
+model GradeLevel {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  schoolId   String   @map("school_id") @db.Uuid
+  cycleId    String   @map("cycle_id") @db.Uuid
+  code       String
+  name       String
+  orderIndex Int      @map("order_index")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  school         School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  cycle          Cycle                @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  classSections  ClassSection[]
+  coefficients   SubjectCoefficient[]
+  calendarEvents CalendarEvent[]
+  announcements  Announcement[]
+
+  @@unique([schoolId, code])
+  @@index([tenantId, schoolId])
+  @@index([cycleId])
+  @@map("grade_level")
+}
+
+/// A teaching subject (Mathématiques, Français, Histoire-Géo, etc.).
+model Subject {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  schoolId           String   @map("school_id") @db.Uuid
+  code               String
+  name               String
+  defaultCoefficient Decimal  @default(1.0) @map("default_coefficient") @db.Decimal(4, 2)
+  color              String?
+  icon               String?
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  school              School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  coefficients        SubjectCoefficient[]
+  teachingAssignments TeachingAssignment[]
+  alertInstances      AlertInstance[]
+
+  @@unique([schoolId, code])
+  @@index([tenantId, schoolId])
+  @@map("subject")
+}
+
+/// Coefficient override per (grade level × subject). If absent, fall back to Subject.defaultCoefficient.
+model SubjectCoefficient {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  gradeLevelId String   @map("grade_level_id") @db.Uuid
+  subjectId    String   @map("subject_id") @db.Uuid
+  coefficient  Decimal  @db.Decimal(4, 2)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  gradeLevel GradeLevel @relation(fields: [gradeLevelId], references: [id], onDelete: Cascade)
+  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([gradeLevelId, subjectId])
+  @@index([tenantId])
+  @@map("subject_coefficient")
+}
+
+/// A class section for a given academic year + grade level (e.g. "6eA" in 2025-2026).
+model ClassSection {
+  id             String      @id @default(uuid()) @db.Uuid
+  tenantId       String      @map("tenant_id") @db.Uuid
+  academicYearId String      @map("academic_year_id") @db.Uuid
+  gradeLevelId   String      @map("grade_level_id") @db.Uuid
+  name           String
+  maxStudents    Int         @default(30) @map("max_students")
+  status         ClassStatus @default(active)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  academicYear        AcademicYear         @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  gradeLevel          GradeLevel           @relation(fields: [gradeLevelId], references: [id], onDelete: Restrict)
+  enrollments         Enrollment[]
+  calendarEvents      CalendarEvent[]
+  teachingAssignments TeachingAssignment[]
+  announcements       Announcement[]
+  alertInstances      AlertInstance[]
+
+  @@unique([academicYearId, gradeLevelId, name])
+  @@index([tenantId])
+  @@map("class_section")
+}
+
+// ---------------------------------------------------------------------------
+// Students (minimal — full enrollment/guardianship wires up in Phase 3)
+// ---------------------------------------------------------------------------
+
+/// A student enrolled (or about to be) in the school.
+model Student {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  schoolId     String        @map("school_id") @db.Uuid
+  firstName    String        @map("first_name")
+  lastName     String        @map("last_name")
+  birthDate    DateTime?     @map("birth_date") @db.Date
+  externalRef  String?       @map("external_ref")
+  email        String?
+  phone        String?
+  gender       String?       @db.Char(1)
+  nationality  String?       @db.Char(2)
+  address      Json?
+  photoUrl     String?       @map("photo_url")
+  medicalNotes String?       @map("medical_notes")
+  status       StudentStatus @default(active)
+  notes        String?
+  customFields Json          @default("{}") @map("custom_fields")
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school            School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  guardianships     Guardianship[]
+  enrollments       Enrollment[]
+  grades            Grade[]
+  attendanceRecords AttendanceRecord[]
+  announcements     Announcement[]
+  alertInstances    AlertInstance[]
+
+  @@unique([schoolId, externalRef])
+  @@index([tenantId, schoolId])
+  @@index([lastName, firstName])
+  @@map("student")
+}
+
+/// A guardian (parent, legal guardian, etc.). May be linked to a UserProfile (parent portal user) or not.
+model Guardian {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  schoolId      String   @map("school_id") @db.Uuid
+  userProfileId String?  @unique @map("user_profile_id") @db.Uuid
+  firstName     String   @map("first_name")
+  lastName      String   @map("last_name")
+  email         String?  @db.Citext
+  phone         String?
+  profession    String?
+  address       Json?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school        School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userProfile   UserProfile?   @relation(fields: [userProfileId], references: [id], onDelete: SetNull)
+  guardianships Guardianship[]
+
+  @@index([tenantId, schoolId])
+  @@index([lastName, firstName])
+  @@index([email])
+  @@map("guardian")
+}
+
+/// Link Guardian ↔ Student with relationship metadata.
+model Guardianship {
+  id               String               @id @default(uuid()) @db.Uuid
+  tenantId         String               @map("tenant_id") @db.Uuid
+  guardianId       String               @map("guardian_id") @db.Uuid
+  studentId        String               @map("student_id") @db.Uuid
+  relationship     GuardianRelationship
+  isPrimaryContact Boolean              @default(false) @map("is_primary_contact")
+  canPickup        Boolean              @default(true) @map("can_pickup")
+  hasLegalCustody  Boolean              @default(true) @map("has_legal_custody")
+  status           GuardianshipStatus   @default(active)
+  approvedBy       String?              @map("approved_by") @db.Uuid
+  approvedAt       DateTime?            @map("approved_at") @db.Timestamptz(6)
+  revokedAt        DateTime?            @map("revoked_at") @db.Timestamptz(6)
+  notes            String?
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  guardian Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+  student  Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([guardianId, studentId])
+  @@index([tenantId])
+  @@index([studentId, status])
+  @@map("guardianship")
+}
+
+/// Student enrollment in a class section for a given academic year.
+model Enrollment {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  studentId      String           @map("student_id") @db.Uuid
+  classSectionId String           @map("class_section_id") @db.Uuid
+  academicYearId String           @map("academic_year_id") @db.Uuid
+  status         EnrollmentStatus @default(active)
+  enrolledAt     DateTime         @default(now()) @map("enrolled_at") @db.Timestamptz(6)
+  endedAt        DateTime?        @map("ended_at") @db.Timestamptz(6)
+  endReason      String?          @map("end_reason")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  student      Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classSection ClassSection @relation(fields: [classSectionId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+
+  // A student can have at most one active enrollment per academic year. We enforce uniqueness on
+  // (studentId, academicYearId) when status='active' via a partial unique index in migration SQL.
+  @@unique([studentId, classSectionId, academicYearId])
+  @@index([tenantId])
+  @@index([classSectionId, status])
+  @@index([academicYearId, status])
+  @@map("enrollment")
+}
+
+// ---------------------------------------------------------------------------
+// School calendar (Phase 2C) — vacations, holidays, exam periods, events
+// ---------------------------------------------------------------------------
+
+/// One calendar event. Can be a vacation block, public holiday, exam window, meeting, etc.
+/// Scope determines who's concerned: whole school, a cycle, a grade level, or a specific class.
+model CalendarEvent {
+  id             String                  @id @default(uuid()) @db.Uuid
+  tenantId       String                  @map("tenant_id") @db.Uuid
+  schoolId       String                  @map("school_id") @db.Uuid
+  academicYearId String?                 @map("academic_year_id") @db.Uuid
+  type           CalendarEventType
+  scope          CalendarEventScope      @default(school_wide)
+  visibility     CalendarEventVisibility @default(all)
+  title          String
+  description    String?
+  startsAt       DateTime                @map("starts_at") @db.Timestamptz(6)
+  endsAt         DateTime                @map("ends_at") @db.Timestamptz(6)
+  allDay         Boolean                 @default(true) @map("all_day")
+  color          String?
+  icon           String?
+  // For scoped events: which cycle/level/class is concerned (null for school_wide).
+  cycleId        String?                 @map("cycle_id") @db.Uuid
+  gradeLevelId   String?                 @map("grade_level_id") @db.Uuid
+  classSectionId String?                 @map("class_section_id") @db.Uuid
+  createdBy      String?                 @map("created_by") @db.Uuid
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school       School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicYear AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: SetNull)
+  cycle        Cycle?        @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  gradeLevel   GradeLevel?   @relation(fields: [gradeLevelId], references: [id], onDelete: Cascade)
+  classSection ClassSection? @relation(fields: [classSectionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, schoolId, startsAt])
+  @@index([schoolId, type])
+  @@index([academicYearId])
+  @@map("calendar_event")
+}
+
+// ---------------------------------------------------------------------------
+// Bulk imports (Phase 2B) — generic pipeline for any entity type
+// ---------------------------------------------------------------------------
+
+/// One bulk-import operation. Holds the raw CSV (Phase 2B keeps it inline; Phase 2C
+/// moves it to MinIO for big files). All rows live in ImportRow.
+model ImportBatch {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  schoolId     String       @map("school_id") @db.Uuid
+  type         ImportType
+  fileName     String       @map("file_name")
+  rawCsv       String?      @map("raw_csv") @db.Text
+  status       ImportStatus @default(uploaded)
+  mode         ImportMode?
+  summary      Json         @default("{}")
+  triggeredBy  String?      @map("triggered_by") @db.Uuid
+  startedAt    DateTime     @default(now()) @map("started_at") @db.Timestamptz(6)
+  validatedAt  DateTime?    @map("validated_at") @db.Timestamptz(6)
+  appliedAt    DateTime?    @map("applied_at") @db.Timestamptz(6)
+  rolledBackAt DateTime?    @map("rolled_back_at") @db.Timestamptz(6)
+  errorMessage String?      @map("error_message")
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  rows   ImportRow[]
+
+  @@index([tenantId, schoolId, createdAt])
+  @@map("import_batch")
+}
+
+/// One row of a bulk import. Tracks validation outcome, applied entity, and rollback.
+model ImportRow {
+  id                String          @id @default(uuid()) @db.Uuid
+  batchId           String          @map("batch_id") @db.Uuid
+  rowIndex          Int             @map("row_index")
+  status            ImportRowStatus @default(pending)
+  payload           Json
+  errors            Json?
+  createdEntityId   String?         @map("created_entity_id") @db.Uuid
+  createdEntityType String?         @map("created_entity_type")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, rowIndex])
+  @@index([batchId, status])
+  @@map("import_row")
+}
+
+model Branding {
+  schoolId     String  @id @map("school_id") @db.Uuid
+  logoUrl      String? @map("logo_url")
+  faviconUrl   String? @map("favicon_url")
+  displayName  String  @map("display_name")
+  primaryColor String  @default("oklch(0.62 0.18 250)") @map("primary_color")
+  accentColor  String? @map("accent_color")
+  fontFamily   String? @map("font_family")
+  emailFrom    String? @map("email_from")
+  emailReplyTo String? @map("email_reply_to")
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@map("branding")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+model UserProfile {
+  id              String     @id @default(uuid()) @db.Uuid
+  tenantId        String     @map("tenant_id") @db.Uuid
+  authProviderId  String?    @unique @map("auth_provider_id")
+  firstName       String     @map("first_name")
+  lastName        String     @map("last_name")
+  email           String     @db.Citext
+  phone           String?
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(6)
+  phoneVerifiedAt DateTime?  @map("phone_verified_at") @db.Timestamptz(6)
+  photoUrl        String?    @map("photo_url")
+  status          UserStatus @default(active)
+  locale          String     @default("fr-FR")
+  preferences     Json       @default("{}")
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userRoles               UserRole[]
+  guardian                Guardian?
+  teacherProfile          TeacherProfile?
+  exportJobs              ExportJob[]
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("user_profile")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC: Permissions / Roles
+// ---------------------------------------------------------------------------
+model Permission {
+  id           String  @id @default(uuid()) @db.Uuid
+  code         String  @unique
+  label        String
+  resourceType String  @map("resource_type")
+  action       String
+  description  String?
+
+  rolePermissions RolePermission[]
+
+  @@map("permission")
+}
+
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  schoolId    String? @map("school_id") @db.Uuid
+  name        String
+  slug        String
+  description String?
+  isSystem    Boolean @default(false) @map("is_system")
+  portal      Portal?
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@unique([schoolId, slug])
+  @@map("role")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permission")
+}
+
+model UserRole {
+  id            String    @id @default(uuid()) @db.Uuid
+  userProfileId String    @map("user_profile_id") @db.Uuid
+  roleId        String    @map("role_id") @db.Uuid
+  schoolId      String?   @map("school_id") @db.Uuid
+  grantedBy     String?   @map("granted_by") @db.Uuid
+  grantedAt     DateTime  @default(now()) @map("granted_at") @db.Timestamptz(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  userProfile UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  role        Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, roleId, schoolId])
+  @@map("user_role")
+}
+
+// ===========================================================================
+// Phase 4 — Teaching & assessment
+// ===========================================================================
+
+/// School-specific metadata for a teacher. A teacher is fundamentally a UserProfile
+/// with the realm role 'teacher'; this model carries the *educational* metadata
+/// (specialty, hire date, internal ref) and is the FK target for assignments.
+model TeacherProfile {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  schoolId      String    @map("school_id") @db.Uuid
+  userProfileId String    @unique @map("user_profile_id") @db.Uuid
+  externalRef   String?   @map("external_ref")
+  specialty     String?
+  active        Boolean   @default(true)
+  hiredAt       DateTime? @map("hired_at") @db.Date
+  notes         String?
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  userProfile         UserProfile          @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  school              School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teachingAssignments TeachingAssignment[]
+  assessments         Assessment[]
+  lessons             LessonEntry[]
+  classSessions       ClassSession[]
+
+  @@unique([schoolId, externalRef])
+  @@index([tenantId, schoolId])
+  @@map("teacher_profile")
+}
+
+/// Edge of the (Teacher × Class × Subject) triangle. One teacher can teach the
+/// same subject across multiple classes; one class can have multiple teachers
+/// for different subjects; one subject can have several teachers in the same class
+/// (rare, but supported — e.g. co-teaching). `isMainTeacher` flags the
+/// "professeur principal" of the class (one per class section).
+model TeachingAssignment {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  teacherProfileId String   @map("teacher_profile_id") @db.Uuid
+  classSectionId   String   @map("class_section_id") @db.Uuid
+  subjectId        String   @map("subject_id") @db.Uuid
+  academicYearId   String   @map("academic_year_id") @db.Uuid
+  weeklyHours      Decimal? @map("weekly_hours") @db.Decimal(4, 2)
+  isMainTeacher    Boolean  @default(false) @map("is_main_teacher")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  teacherProfile TeacherProfile @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  classSection   ClassSection   @relation(fields: [classSectionId], references: [id], onDelete: Cascade)
+  subject        Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  academicYear   AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  assessments    Assessment[]
+  lessons        LessonEntry[]
+  classSessions  ClassSession[]
+
+  @@unique([teacherProfileId, classSectionId, subjectId])
+  @@index([tenantId, classSectionId])
+  @@index([academicYearId])
+  @@index([subjectId])
+  @@map("teaching_assignment")
+}
+
+/// An assessment (DST, DM, oral interrogation…) owned by a (teacher × class ×
+/// subject) tuple. Multi-grade: one assessment → one Grade per student of the class.
+/// Coefficient defaults to the subject-level coefficient (resolved against the
+/// class's GradeLevel) unless explicitly overridden here.
+model Assessment {
+  id                   String         @id @default(uuid()) @db.Uuid
+  tenantId             String         @map("tenant_id") @db.Uuid
+  teachingAssignmentId String         @map("teaching_assignment_id") @db.Uuid
+  teacherProfileId     String         @map("teacher_profile_id") @db.Uuid
+  termId               String?        @map("term_id") @db.Uuid
+  title                String
+  description          String?
+  kind                 AssessmentKind @default(written_test)
+  scheduledAt          DateTime?      @map("scheduled_at") @db.Timestamptz(6)
+  conductedAt          DateTime?      @map("conducted_at") @db.Timestamptz(6)
+  maxScore             Decimal        @default(20.0) @map("max_score") @db.Decimal(5, 2)
+  coefficientOverride  Decimal?       @map("coefficient_override") @db.Decimal(4, 2)
+  isPublished          Boolean        @default(false) @map("is_published")
+  publishedAt          DateTime?      @map("published_at") @db.Timestamptz(6)
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  teachingAssignment TeachingAssignment @relation(fields: [teachingAssignmentId], references: [id], onDelete: Cascade)
+  teacherProfile     TeacherProfile     @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  term               Term?              @relation(fields: [termId], references: [id], onDelete: SetNull)
+  grades             Grade[]
+
+  @@index([tenantId])
+  @@index([teachingAssignmentId, scheduledAt])
+  @@index([termId])
+  @@map("assessment")
+}
+
+/// One grade per (assessment × student). `value` is null when `isAbsent`.
+/// Status workflow: draft → published → revised (each revision saved to
+/// GradeRevision for audit).
+model Grade {
+  id           String      @id @default(uuid()) @db.Uuid
+  tenantId     String      @map("tenant_id") @db.Uuid
+  assessmentId String      @map("assessment_id") @db.Uuid
+  studentId    String      @map("student_id") @db.Uuid
+  value        Decimal?    @db.Decimal(5, 2)
+  isAbsent     Boolean     @default(false) @map("is_absent")
+  comment      String?
+  status       GradeStatus @default(draft)
+  enteredBy    String      @map("entered_by") @db.Uuid
+  enteredAt    DateTime    @default(now()) @map("entered_at") @db.Timestamptz(6)
+  publishedAt  DateTime?   @map("published_at") @db.Timestamptz(6)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  assessment Assessment      @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student    Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  revisions  GradeRevision[]
+
+  @@unique([assessmentId, studentId])
+  @@index([tenantId])
+  @@index([studentId, status])
+  @@map("grade")
+}
+
+/// Append-only audit log of grade modifications after publication.
+model GradeRevision {
+  id            String   @id @default(uuid()) @db.Uuid
+  gradeId       String   @map("grade_id") @db.Uuid
+  previousValue Decimal? @map("previous_value") @db.Decimal(5, 2)
+  newValue      Decimal? @map("new_value") @db.Decimal(5, 2)
+  reason        String
+  revisedBy     String   @map("revised_by") @db.Uuid
+  revisedAt     DateTime @default(now()) @map("revised_at") @db.Timestamptz(6)
+
+  grade Grade @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+
+  @@index([gradeId, revisedAt])
+  @@map("grade_revision")
+}
+
+// ===========================================================================
+// Phase 5 — Class sessions, cahier de texte, attendance, announcements
+// ===========================================================================
+
+/// A single class-time slot (a "session"). A session is the *unit* under which
+/// attendance is taken and a lesson entry is written.
+model ClassSession {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  teachingAssignmentId String   @map("teaching_assignment_id") @db.Uuid
+  teacherProfileId     String   @map("teacher_profile_id") @db.Uuid
+  date                 DateTime @db.Date
+  startTime            String?  @map("start_time")
+  endTime              String?  @map("end_time")
+  topic                String?
+  cancelled            Boolean  @default(false)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  teachingAssignment TeachingAssignment @relation(fields: [teachingAssignmentId], references: [id], onDelete: Cascade)
+  teacherProfile     TeacherProfile     @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  attendanceRecords  AttendanceRecord[]
+  lessonEntry        LessonEntry?
+
+  @@index([tenantId])
+  @@index([teachingAssignmentId, date])
+  @@map("class_session")
+}
+
+/// "Cahier de texte" entry — what was taught + homework given. Linked to a
+/// session when applicable, but can also exist standalone (for catch-up).
+model LessonEntry {
+  id                   String       @id @default(uuid()) @db.Uuid
+  tenantId             String       @map("tenant_id") @db.Uuid
+  teachingAssignmentId String       @map("teaching_assignment_id") @db.Uuid
+  teacherProfileId     String       @map("teacher_profile_id") @db.Uuid
+  classSessionId       String?      @unique @map("class_session_id") @db.Uuid
+  date                 DateTime     @db.Date
+  title                String
+  content              String       @db.Text
+  homework             String?      @db.Text
+  homeworkDueAt        DateTime?    @map("homework_due_at") @db.Date
+  status               LessonStatus @default(published)
+  attachments          Json         @default("[]")
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  teachingAssignment TeachingAssignment @relation(fields: [teachingAssignmentId], references: [id], onDelete: Cascade)
+  teacherProfile     TeacherProfile     @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  classSession       ClassSession?      @relation(fields: [classSessionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([teachingAssignmentId, date])
+  @@map("lesson_entry")
+}
+
+model AttendanceRecord {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  classSessionId String           @map("class_session_id") @db.Uuid
+  studentId      String           @map("student_id") @db.Uuid
+  status         AttendanceStatus
+  arrivedAt      String?          @map("arrived_at")
+  comment        String?
+  recordedBy     String           @map("recorded_by") @db.Uuid
+  recordedAt     DateTime         @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  justifiedAt    DateTime?        @map("justified_at") @db.Timestamptz(6)
+  justifiedBy    String?          @map("justified_by") @db.Uuid
+  justification  String?
+
+  classSession ClassSession @relation(fields: [classSessionId], references: [id], onDelete: Cascade)
+  student      Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classSessionId, studentId])
+  @@index([tenantId])
+  @@index([studentId, recordedAt])
+  @@map("attendance_record")
+}
+
+/// A communication broadcast by school staff. Scope determines targeting:
+/// school-wide, cycle, level, class, individual student (= her guardians), or
+/// individual user. Recipients are computed at publish time and stored in
+/// AnnouncementReceipt for read-tracking.
+model Announcement {
+  id             String               @id @default(uuid()) @db.Uuid
+  tenantId       String               @map("tenant_id") @db.Uuid
+  schoolId       String               @map("school_id") @db.Uuid
+  title          String
+  body           String               @db.Text
+  scope          AnnouncementScope
+  priority       AnnouncementPriority @default(normal)
+  cycleId        String?              @map("cycle_id") @db.Uuid
+  gradeLevelId   String?              @map("grade_level_id") @db.Uuid
+  classSectionId String?              @map("class_section_id") @db.Uuid
+  studentId      String?              @map("student_id") @db.Uuid
+  userProfileId  String?              @map("user_profile_id") @db.Uuid
+  publishedAt    DateTime?            @map("published_at") @db.Timestamptz(6)
+  expiresAt      DateTime?            @map("expires_at") @db.Timestamptz(6)
+  pinned         Boolean              @default(false)
+  authorId       String               @map("author_id") @db.Uuid
+  authorRoleHint String?              @map("author_role_hint")
+  attachments    Json                 @default("[]")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school       School                @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  cycle        Cycle?                @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  gradeLevel   GradeLevel?           @relation(fields: [gradeLevelId], references: [id], onDelete: SetNull)
+  classSection ClassSection?         @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
+  student      Student?              @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  recipients   AnnouncementReceipt[]
+
+  @@index([tenantId, schoolId, publishedAt])
+  @@index([scope])
+  @@map("announcement")
+}
+
+model AnnouncementReceipt {
+  id             String    @id @default(uuid()) @db.Uuid
+  announcementId String    @map("announcement_id") @db.Uuid
+  userProfileId  String    @map("user_profile_id") @db.Uuid
+  readAt         DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userProfileId])
+  @@index([userProfileId, readAt])
+  @@map("announcement_receipt")
+}
+
+// ---------------------------------------------------------------------------
+// Audit append-only (RLS + REVOKE configurés en migration SQL)
+// ---------------------------------------------------------------------------
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  actorId      String?  @map("actor_id") @db.Uuid
+  actorRole    String?  @map("actor_role")
+  portal       String?
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id") @db.Uuid
+  before       Json?
+  after        Json?
+  ipAddress    String?  @map("ip_address") @db.Inet
+  userAgent    String?  @map("user_agent")
+  hash         String?
+  prevHash     String?  @map("prev_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([tenantId, createdAt])
+  @@map("audit_log")
+}
+
+// ---------------------------------------------------------------------------
+// Document exports (XLSX/PDF) — minimal model for the admin dashboard.
+// The async worker (BullMQ) that *generates* these files is planned for R7;
+// this table is the persistence layer so the "Exports récents" panel can
+// surface real rows. `status='succeeded'` is the only state used by R7
+// stub seed data — the worker will populate other states later.
+// ---------------------------------------------------------------------------
+enum ExportKind {
+  grades_xlsx
+  report_card_pdf
+  enrollment_xlsx
+  attendance_xlsx
+  audit_csv
+}
+
+enum ExportStatus {
+  pending
+  running
+  succeeded
+  failed
+}
+
+model ExportJob {
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  schoolId        String?       @map("school_id") @db.Uuid
+  requestedBy     String        @map("requested_by") @db.Uuid
+  kind            ExportKind
+  parameters      Json          @default("{}")
+  status          ExportStatus  @default(pending)
+  fileName        String        @map("file_name")
+  fileUrl         String?       @map("file_url")
+  fileSizeBytes   Int?          @map("file_size_bytes")
+  errorMessage    String?       @map("error_message")
+  startedAt       DateTime?     @map("started_at") @db.Timestamptz(6)
+  finishedAt      DateTime?     @map("finished_at") @db.Timestamptz(6)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  requester UserProfile @relation(fields: [requestedBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, schoolId, createdAt])
+  @@map("export_job")
+}
+
+// ---------------------------------------------------------------------------
+// Outbox event pattern
+// ---------------------------------------------------------------------------
+enum OutboxStatus {
+  pending
+  sent
+  failed
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  aggregateType String       @map("aggregate_type")
+  aggregateId   String       @map("aggregate_id") @db.Uuid
+  type          String
+  payload       Json
+  status        OutboxStatus @default(pending)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  sentAt        DateTime?    @map("sent_at") @db.Timestamptz(6)
+  attempts      Int          @default(0)
+  lastError     String?      @map("last_error")
+
+  @@index([status, createdAt])
+  @@map("outbox_event")
+}
+
+// ---------------------------------------------------------------------------
+// Alert engine (R6) — rule config + materialised instances
+// ---------------------------------------------------------------------------
+
+enum AlertRuleCode {
+  LOW_SUBJECT_AVG
+  NEGATIVE_TREND
+  REPEATED_FAILURE
+  MISSING_ASSESSMENT
+  HIGH_ABSENCE
+  TEACHER_COMMENT_FLAG
+  BEHAVIOR_ALERT
+}
+
+enum AlertSeverity {
+  low
+  medium
+  high
+}
+
+enum AlertStatus {
+  open
+  acknowledged
+  resolved
+  dismissed
+}
+
+/// One row per (tenant, code). Disabled by default at install — admins
+/// activate what's relevant. `parameters` stores rule-specific thresholds
+/// (e.g. { "threshold": 10 } for LOW_SUBJECT_AVG).
+model AlertRule {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  schoolId    String?       @map("school_id") @db.Uuid
+  code        AlertRuleCode
+  enabled     Boolean       @default(false)
+  severity    AlertSeverity @default(medium)
+  parameters  Json          @default("{}")
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  instances AlertInstance[]
+
+  @@unique([tenantId, schoolId, code])
+  @@index([tenantId, enabled])
+  @@map("alert_rule")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (R8) — unified in-app notification stream
+// ---------------------------------------------------------------------------
+
+enum NotificationKind {
+  announcement
+  alert
+  grade_published
+  enrollment_status
+  lesson_published
+  system
+}
+
+enum NotificationSeverity {
+  info
+  success
+  warning
+  danger
+}
+
+/// Per-user opt-in/out per notification kind, per channel. Default (missing
+/// row) is "in-app on, email off, push off". Rows are written only when the
+/// user diverges from defaults.
+model NotificationPreference {
+  id            String           @id @default(uuid()) @db.Uuid
+  tenantId      String           @map("tenant_id") @db.Uuid
+  userProfileId String           @map("user_profile_id") @db.Uuid
+  kind          NotificationKind
+  inAppEnabled  Boolean          @default(true) @map("in_app_enabled")
+  emailEnabled  Boolean          @default(false) @map("email_enabled")
+  pushEnabled   Boolean          @default(false) @map("push_enabled")
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  userProfile UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, kind])
+  @@index([tenantId])
+  @@map("notification_preference")
+}
+
+/// One row per recipient × event. The dispatcher fans out a source event to
+/// every interested user (e.g. one announcement → N notifications, one for
+/// each guardian/teacher in scope). Read state is per-recipient.
+model Notification {
+  id            String               @id @default(uuid()) @db.Uuid
+  tenantId      String               @map("tenant_id") @db.Uuid
+  userProfileId String               @map("user_profile_id") @db.Uuid
+  kind          NotificationKind
+  severity      NotificationSeverity @default(info)
+  title         String
+  body          String?
+  /// Optional in-app link (e.g. "/parent/recommendations?studentId=...")
+  link          String?
+  /// Optional FK identifiers for deep linking + dedup
+  sourceType    String?              @map("source_type")
+  sourceId      String?              @map("source_id") @db.Uuid
+  /// When this notification was first read by the recipient
+  readAt        DateTime?            @map("read_at") @db.Timestamptz(6)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  userProfile UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userProfileId, readAt, createdAt])
+  @@index([tenantId, kind, createdAt])
+  @@map("notification")
+}
+
+/// Materialised alert. The evaluator deduplicates by (rule, student,
+/// subjectId | null) within a 7-day window so the same condition doesn't
+/// spam the parent every 15 minutes.
+model AlertInstance {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  schoolId       String?        @map("school_id") @db.Uuid
+  ruleId         String         @map("rule_id") @db.Uuid
+  code           AlertRuleCode
+  severity       AlertSeverity
+  status         AlertStatus    @default(open)
+  studentId      String         @map("student_id") @db.Uuid
+  subjectId      String?        @map("subject_id") @db.Uuid
+  classSectionId String?        @map("class_section_id") @db.Uuid
+  title          String
+  body           String
+  /// Optional recommendation surfaced to parents
+  recommendation String?
+  /// Raw context the rule recorded (kept for audit/debug — not displayed)
+  context        Json           @default("{}")
+  detectedAt     DateTime       @default(now()) @map("detected_at") @db.Timestamptz(6)
+  acknowledgedAt DateTime?      @map("acknowledged_at") @db.Timestamptz(6)
+  acknowledgedBy String?        @map("acknowledged_by") @db.Uuid
+  resolvedAt     DateTime?      @map("resolved_at") @db.Timestamptz(6)
+  resolvedBy     String?        @map("resolved_by") @db.Uuid
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  rule         AlertRule    @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  student      Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject      Subject?     @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  classSection ClassSection? @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, severity, detectedAt])
+  @@index([studentId, status, detectedAt])
+  @@map("alert_instance")
+}

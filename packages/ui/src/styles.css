@@ -1,0 +1,9 @@
+/* @pilotage/ui — shared component styles
+   Tailwind v4 utilities are expected to be available in the consuming app.
+   This file is for any non-utility resets / @layer overrides. */
+
+@layer base {
+  :where(:focus-visible) {
+    outline: none;
+  }
+}

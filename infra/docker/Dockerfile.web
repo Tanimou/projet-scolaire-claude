@@ -1,0 +1,69 @@
+# syntax=docker/dockerfile:1.7
+# ------------------------------------------------------------------------------
+# Next.js Web — multi-stage build (standalone output)
+# ------------------------------------------------------------------------------
+ARG NODE_VERSION=22.11.0
+ARG PNPM_VERSION=9.12.3
+
+FROM node:${NODE_VERSION}-alpine AS base
+ARG PNPM_VERSION
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH \
+    CI=true
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+RUN apk add --no-cache libc6-compat curl tini
+WORKDIR /app
+
+# ---------- deps ----------
+FROM base AS deps
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY packages/ui/package.json packages/ui/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/design-tokens/package.json packages/design-tokens/package.json
+COPY packages/i18n/package.json packages/i18n/package.json
+COPY packages/tsconfig/package.json packages/tsconfig/package.json
+COPY packages/eslint-config/package.json packages/eslint-config/package.json
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+
+# ---------- build ----------
+FROM deps AS build
+COPY . .
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_KEYCLOAK_URL
+ARG NEXT_PUBLIC_KEYCLOAK_REALM
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
+    NEXT_PUBLIC_KEYCLOAK_URL=${NEXT_PUBLIC_KEYCLOAK_URL} \
+    NEXT_PUBLIC_KEYCLOAK_REALM=${NEXT_PUBLIC_KEYCLOAK_REALM}
+RUN pnpm --filter @pilotage/contracts build && \
+    pnpm --filter @pilotage/design-tokens build && \
+    pnpm --filter @pilotage/i18n build && \
+    pnpm --filter @pilotage/ui build && \
+    pnpm --filter @pilotage/web build
+
+# ---------- runtime (standalone) ----------
+FROM node:${NODE_VERSION}-alpine AS runtime
+RUN apk add --no-cache libc6-compat curl tini && \
+    addgroup -S app && adduser -S app -G app
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    NEXT_TELEMETRY_DISABLED=1
+
+# Next.js standalone output
+COPY --from=build --chown=app:app /app/apps/web/.next/standalone ./
+COPY --from=build --chown=app:app /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build --chown=app:app /app/apps/web/public ./apps/web/public
+
+USER app
+EXPOSE 3000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD curl -fsS http://localhost:3000/api/healthz || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "apps/web/server.js"]

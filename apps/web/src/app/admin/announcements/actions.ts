@@ -1,0 +1,47 @@
+'use server';
+
+import { revalidatePath } from 'next/cache';
+
+import { api, ApiError, isNextNavigationSignal } from '@/lib/api-client';
+
+type Result<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
+
+function toError(err: unknown): Result<never> {
+  if (isNextNavigationSignal(err)) throw err;
+  if (err instanceof ApiError) {
+    const body = err.body as { message?: string | string[] } | null;
+    const msg = Array.isArray(body?.message) ? body!.message.join(' · ') : (body?.message ?? `HTTP ${err.status}`);
+    return { ok: false, error: msg };
+  }
+  return { ok: false, error: (err as Error).message };
+}
+
+export async function createAnnouncement(payload: Record<string, unknown>): Promise<Result<{ id: string }>> {
+  try {
+    const data = await api<{ id: string }>('/api/v1/announcements', { method: 'POST', body: payload });
+    revalidatePath('/admin/announcements');
+    return { ok: true, data };
+  } catch (err) {
+    return toError(err);
+  }
+}
+
+export async function publishAnnouncement(id: string): Promise<Result> {
+  try {
+    const data = await api(`/api/v1/announcements/${id}/publish`, { method: 'POST' });
+    revalidatePath('/admin/announcements');
+    return { ok: true, data };
+  } catch (err) {
+    return toError(err);
+  }
+}
+
+export async function deleteAnnouncement(id: string): Promise<Result> {
+  try {
+    const data = await api(`/api/v1/announcements/${id}`, { method: 'DELETE' });
+    revalidatePath('/admin/announcements');
+    return { ok: true, data };
+  } catch (err) {
+    return toError(err);
+  }
+}

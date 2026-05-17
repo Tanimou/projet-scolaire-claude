@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="fr" class="bg-neutral-50">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pilotage scolaire — Le suivi scolaire qui rapproche école et famille</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          brand: {
+            50:  'oklch(0.97 0.02 250)',
+            100: 'oklch(0.93 0.05 250)',
+            500: 'oklch(0.62 0.18 250)',
+            600: 'oklch(0.55 0.20 250)',
+            700: 'oklch(0.48 0.20 250)',
+            900: 'oklch(0.30 0.15 250)',
+          },
+          ink: {
+            50:  'oklch(0.98 0.005 250)',
+            100: 'oklch(0.96 0.01 250)',
+            200: 'oklch(0.92 0.01 250)',
+            500: 'oklch(0.55 0.02 250)',
+            700: 'oklch(0.32 0.02 250)',
+            900: 'oklch(0.15 0.02 250)',
+          },
+          success: { 500: 'oklch(0.70 0.17 160)' },
+          warning: { 500: 'oklch(0.78 0.16 75)' },
+          danger:  { 500: 'oklch(0.60 0.22 25)' },
+        },
+        boxShadow: {
+          'soft': '0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.04)',
+          'softer': '0 1px 0 rgba(15,23,42,0.04)',
+        }
+      }
+    }
+  }
+</script>
+<style>
+  body { font-feature-settings: "cv11", "ss01", "ss03"; -webkit-font-smoothing: antialiased; }
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(15,23,42,0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(15,23,42,0.04) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .ring-soft { box-shadow: 0 0 0 1px rgba(15,23,42,0.06); }
+</style>
+</head>
+<body class="font-sans text-ink-900 antialiased">
+
+<!-- TOP NAV -->
+<header class="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-ink-200/70">
+  <div class="mx-auto max-w-7xl px-6 lg:px-10 h-16 flex items-center justify-between">
+    <a href="/" class="flex items-center gap-2.5 font-semibold tracking-tight">
+      <span class="grid h-8 w-8 place-items-center rounded-lg bg-brand-600 text-white text-base">P</span>
+      <span>Pilotage <span class="text-ink-500">scolaire</span></span>
+    </a>
+    <nav class="hidden md:flex items-center gap-8 text-sm text-ink-700">
+      <a href="#produit" class="hover:text-ink-900">Produit</a>
+      <a href="#comment" class="hover:text-ink-900">Comment ça marche</a>
+      <a href="#securite" class="hover:text-ink-900">Sécurité</a>
+      <a href="#aide" class="hover:text-ink-900">Aide</a>
+    </nav>
+    <div class="flex items-center gap-2">
+      <details class="relative">
+        <summary class="list-none cursor-pointer inline-flex items-center gap-1.5 rounded-lg border border-ink-200 px-3.5 py-2 text-sm font-medium hover:bg-ink-50">
+          Connexion
+          <svg class="h-4 w-4 text-ink-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+        <div class="absolute right-0 mt-2 w-56 rounded-xl bg-white border border-ink-200 shadow-soft p-1.5">
+          <a href="/parent/login" class="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-ink-50">
+            <span class="h-2 w-2 rounded-full bg-blue-400"></span>
+            <div class="text-sm font-medium">Portail famille</div>
+          </a>
+          <a href="/teacher/login" class="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-ink-50">
+            <span class="h-2 w-2 rounded-full bg-teal-500"></span>
+            <div class="text-sm font-medium">Portail professeur</div>
+          </a>
+          <a href="/admin/login" class="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-ink-50">
+            <span class="h-2 w-2 rounded-full bg-brand-600"></span>
+            <div class="text-sm font-medium">Portail administrateur</div>
+          </a>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="relative overflow-hidden">
+  <div class="absolute inset-0 grid-bg [mask-image:radial-gradient(circle_at_center,black,transparent_70%)] opacity-70"></div>
+  <div class="relative mx-auto max-w-7xl px-6 lg:px-10 pt-20 pb-24 lg:pt-28 lg:pb-32">
+    <div class="grid lg:grid-cols-12 gap-12 items-center">
+      <div class="lg:col-span-7 space-y-7">
+        <span class="inline-flex items-center gap-2 rounded-full bg-brand-50 text-brand-700 px-3 py-1 text-xs font-semibold tracking-wide ring-1 ring-brand-100">
+          <span class="h-1.5 w-1.5 rounded-full bg-brand-600 animate-pulse"></span>
+          Nouvelle plateforme · Rentrée 2026
+        </span>
+        <h1 class="text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05]">
+          Le suivi scolaire qui <span class="text-brand-700">rapproche</span><br />
+          école et famille.
+        </h1>
+        <p class="text-lg lg:text-xl text-ink-500 max-w-2xl leading-relaxed">
+          Notes, tendances, alertes explicables, recommandations d'action — pour chaque enfant,
+          en temps réel. Conçu pour les parents pressés, les professeurs exigeants et les administrations rigoureuses.
+        </p>
+        <div class="flex flex-wrap gap-3 pt-2">
+          <a href="/parent/register" class="inline-flex items-center gap-2 rounded-xl bg-ink-900 text-white px-5 py-3 text-sm font-semibold hover:bg-ink-700 transition">
+            Créer un compte famille
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+          </a>
+          <a href="#comment" class="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-semibold border border-ink-200 hover:bg-ink-50">
+            Découvrir
+          </a>
+        </div>
+        <div class="flex items-center gap-6 pt-6 text-xs text-ink-500">
+          <span class="inline-flex items-center gap-2"><svg class="h-4 w-4 text-success-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Conforme RGPD</span>
+          <span class="inline-flex items-center gap-2"><svg class="h-4 w-4 text-success-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> WCAG 2.2 AA</span>
+          <span class="inline-flex items-center gap-2"><svg class="h-4 w-4 text-success-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Hébergement souverain</span>
+        </div>
+      </div>
+
+      <!-- Phone mockup -->
+      <div class="lg:col-span-5 relative">
+        <div class="absolute -top-8 -left-6 h-40 w-40 rounded-full bg-brand-100 blur-3xl"></div>
+        <div class="absolute -bottom-12 -right-8 h-56 w-56 rounded-full bg-teal-100 blur-3xl"></div>
+        <div class="relative mx-auto w-[320px] rounded-[44px] bg-ink-900 p-3 shadow-2xl">
+          <div class="rounded-[36px] bg-white overflow-hidden ring-soft">
+            <div class="px-5 py-4 flex items-center justify-between border-b border-ink-100">
+              <div class="flex items-center gap-2 text-xs"><span class="h-7 w-7 rounded-full bg-brand-100 grid place-items-center font-semibold text-brand-700">L</span><span class="font-semibold">Léa Martin <span class="text-ink-500">▾</span></span></div>
+              <div class="flex items-center gap-2.5 text-ink-500">
+                <span class="relative"><svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span class="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-warning-500 text-[9px] grid place-items-center text-white font-bold">2</span></span>
+                <span class="h-5 w-5 rounded-full bg-ink-100"></span>
+              </div>
+            </div>
+            <div class="p-5 space-y-4">
+              <div>
+                <div class="text-xs uppercase tracking-wider text-ink-500 font-semibold">Moyenne globale</div>
+                <div class="flex items-end gap-3 mt-1">
+                  <div class="text-4xl font-bold tracking-tight font-mono tabular-nums">13.4</div>
+                  <div class="text-base text-ink-500 pb-1.5">/ 20</div>
+                  <div class="ml-auto inline-flex items-center gap-1 rounded-full bg-success-500/10 text-success-500 px-2 py-0.5 text-xs font-semibold">
+                    <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> +0.6
+                  </div>
+                </div>
+                <div class="text-xs text-ink-500 mt-1">vs trimestre précédent</div>
+              </div>
+
+              <div class="rounded-2xl border border-warning-500/30 bg-warning-500/5 p-3">
+                <div class="flex items-start gap-2.5">
+                  <svg class="h-5 w-5 text-warning-500 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  <div>
+                    <div class="text-sm font-semibold">2 alertes ouvertes</div>
+                    <div class="text-xs text-ink-500 mt-0.5">Maths sous seuil · Anglais en baisse</div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div class="text-xs uppercase tracking-wider text-ink-500 font-semibold mb-2">Par matière</div>
+                <div class="grid grid-cols-3 gap-2">
+                  <div class="rounded-xl border border-ink-100 p-2.5">
+                    <div class="text-[10px] text-ink-500 font-medium">Maths</div>
+                    <div class="text-base font-bold font-mono tabular-nums">8.5</div>
+                    <div class="text-[10px] text-warning-500 font-semibold flex items-center gap-0.5"><svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg>baisse</div>
+                  </div>
+                  <div class="rounded-xl border border-ink-100 p-2.5">
+                    <div class="text-[10px] text-ink-500 font-medium">Français</div>
+                    <div class="text-base font-bold font-mono tabular-nums">14.0</div>
+                    <div class="text-[10px] text-ink-500 font-semibold">stable</div>
+                  </div>
+                  <div class="rounded-xl border border-ink-100 p-2.5">
+                    <div class="text-[10px] text-ink-500 font-medium">Hist.</div>
+                    <div class="text-base font-bold font-mono tabular-nums">15.0</div>
+                    <div class="text-[10px] text-success-500 font-semibold flex items-center gap-0.5"><svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg>hausse</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="border-t border-ink-100 px-2 py-2 flex justify-around text-[10px] text-ink-500">
+              <div class="text-brand-600 font-semibold">🏠 Accueil</div>
+              <div>📊 Suivi</div>
+              <div>📅 Cal.</div>
+              <div>🔔 Alertes</div>
+              <div>👤 Profil</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- THREE PORTALS -->
+<section id="produit" class="relative bg-white border-y border-ink-200/70">
+  <div class="mx-auto max-w-7xl px-6 lg:px-10 py-20 lg:py-24">
+    <div class="max-w-2xl">
+      <div class="text-xs uppercase tracking-wider text-brand-700 font-bold">Trois espaces, un seul objectif</div>
+      <h2 class="text-3xl lg:text-4xl font-bold tracking-tight mt-2">Chaque acteur trouve son portail.</h2>
+      <p class="text-ink-500 mt-3">Les données circulent en temps réel; l'expérience est adaptée à chaque rôle.</p>
+    </div>
+
+    <div class="mt-12 grid lg:grid-cols-3 gap-6">
+      <!-- ADMIN -->
+      <a href="/admin/login" class="group relative rounded-2xl border border-ink-200 bg-white p-7 shadow-softer hover:shadow-soft hover:-translate-y-0.5 transition">
+        <div class="absolute top-0 left-0 right-0 h-1 rounded-t-2xl bg-brand-600"></div>
+        <div class="flex items-center gap-3">
+          <div class="grid h-12 w-12 place-items-center rounded-xl bg-brand-50 ring-1 ring-brand-100">
+            <svg class="h-6 w-6 text-brand-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-brand-700 font-bold">Portail admin</div>
+            <div class="text-lg font-semibold mt-0.5">Administrateur</div>
+          </div>
+        </div>
+        <p class="text-sm text-ink-500 mt-4 leading-relaxed">Configurez l'établissement, validez les inscriptions, customisez les règles d'alerte et l'identité visuelle.</p>
+        <ul class="text-sm text-ink-700 mt-5 space-y-2">
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-brand-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Hiérarchie complète</li>
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-brand-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> White-label & custom fields</li>
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-brand-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Audit append-only</li>
+        </ul>
+        <div class="mt-6 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-700 group-hover:gap-2.5 transition-all">
+          Accéder <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+
+      <!-- TEACHER -->
+      <a href="/teacher/login" class="group relative rounded-2xl border border-ink-200 bg-white p-7 shadow-softer hover:shadow-soft hover:-translate-y-0.5 transition">
+        <div class="absolute top-0 left-0 right-0 h-1 rounded-t-2xl bg-teal-600"></div>
+        <div class="flex items-center gap-3">
+          <div class="grid h-12 w-12 place-items-center rounded-xl bg-teal-50 ring-1 ring-teal-100">
+            <svg class="h-6 w-6 text-teal-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-teal-700 font-bold">Portail enseignant</div>
+            <div class="text-lg font-semibold mt-0.5">Professeur</div>
+          </div>
+        </div>
+        <p class="text-sm text-ink-500 mt-4 leading-relaxed">Planifiez vos évaluations, saisissez vos notes, gérez présences et cahier de texte — sans friction.</p>
+        <ul class="text-sm text-ink-700 mt-5 space-y-2">
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-teal-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Grille de saisie clavier</li>
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-teal-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Cahier de texte & ressources</li>
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-teal-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Élèves à risque automatiques</li>
+        </ul>
+        <div class="mt-6 inline-flex items-center gap-1.5 text-sm font-semibold text-teal-700 group-hover:gap-2.5 transition-all">
+          Accéder <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+
+      <!-- PARENT -->
+      <a href="/parent/login" class="group relative rounded-2xl border border-ink-200 bg-white p-7 shadow-softer hover:shadow-soft hover:-translate-y-0.5 transition">
+        <div class="absolute top-0 left-0 right-0 h-1 rounded-t-2xl bg-blue-500"></div>
+        <div class="flex items-center gap-3">
+          <div class="grid h-12 w-12 place-items-center rounded-xl bg-blue-50 ring-1 ring-blue-100">
+            <svg class="h-6 w-6 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-blue-700 font-bold">Portail famille</div>
+            <div class="text-lg font-semibold mt-0.5">Parent</div>
+          </div>
+        </div>
+        <p class="text-sm text-ink-500 mt-4 leading-relaxed">Suivez l'évolution scolaire de votre enfant. Recevez des alertes claires avec une action recommandée.</p>
+        <ul class="text-sm text-ink-700 mt-5 space-y-2">
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Dashboard mobile temps réel</li>
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Alertes explicables, jamais alarmistes</li>
+          <li class="flex items-center gap-2"><svg class="h-4 w-4 text-blue-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> App installable (PWA)</li>
+        </ul>
+        <div class="mt-6 inline-flex items-center gap-1.5 text-sm font-semibold text-blue-700 group-hover:gap-2.5 transition-all">
+          Accéder <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="comment" class="mx-auto max-w-7xl px-6 lg:px-10 py-24">
+  <div class="max-w-2xl">
+    <div class="text-xs uppercase tracking-wider text-brand-700 font-bold">Comment ça marche</div>
+    <h2 class="text-3xl lg:text-4xl font-bold tracking-tight mt-2">Trois rôles. Un seul flux de données. Aucune confusion.</h2>
+  </div>
+  <div class="mt-12 grid md:grid-cols-3 gap-8">
+    <div>
+      <div class="font-mono text-xs text-ink-500 tabular-nums">01 — Admin</div>
+      <h3 class="font-semibold text-lg mt-2">L'établissement se configure.</h3>
+      <p class="text-sm text-ink-500 mt-2 leading-relaxed">Hiérarchie scolaire, matières, coefficients, calendrier, branding, règles d'alerte. Le tout en quelques minutes.</p>
+    </div>
+    <div>
+      <div class="font-mono text-xs text-ink-500 tabular-nums">02 — Professeur</div>
+      <h3 class="font-semibold text-lg mt-2">Les notes sont saisies et publiées.</h3>
+      <p class="text-sm text-ink-500 mt-2 leading-relaxed">Grille clavier-friendly, brouillon, publication, révision historisée. Présences et cahier de texte intégrés.</p>
+    </div>
+    <div>
+      <div class="font-mono text-xs text-ink-500 tabular-nums">03 — Parent</div>
+      <h3 class="font-semibold text-lg mt-2">L'information arrive, en clair.</h3>
+      <p class="text-sm text-ink-500 mt-2 leading-relaxed">Moyennes, tendances, alertes — avec une recommandation d'action concrète. Pas de jargon, pas de panique.</p>
+    </div>
+  </div>
+</section>
+
+<!-- SECURITY -->
+<section id="securite" class="bg-ink-900 text-white">
+  <div class="mx-auto max-w-7xl px-6 lg:px-10 py-20 lg:py-24">
+    <div class="grid lg:grid-cols-2 gap-12 items-center">
+      <div>
+        <div class="text-xs uppercase tracking-wider text-brand-100 font-bold">Sécurité & confidentialité</div>
+        <h2 class="text-3xl lg:text-4xl font-bold tracking-tight mt-2">Les données scolaires de votre enfant méritent un soin particulier.</h2>
+        <p class="text-ink-500 mt-4 leading-relaxed text-base lg:text-lg">
+          Authentification à deux facteurs pour les professeurs et administrateurs.
+          Chiffrement en transit et au repos. Audit append-only. Aucune comparaison nominative entre élèves.
+        </p>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div class="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <svg class="h-6 w-6 text-brand-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <div class="font-semibold mt-3">MFA obligatoire</div>
+          <div class="text-xs text-ink-500 mt-1">Admin & enseignants</div>
+        </div>
+        <div class="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <svg class="h-6 w-6 text-brand-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2v20M5 9l7-7 7 7"/></svg>
+          <div class="font-semibold mt-3">Hébergement souverain</div>
+          <div class="text-xs text-ink-500 mt-1">UE par défaut</div>
+        </div>
+        <div class="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <svg class="h-6 w-6 text-brand-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <div class="font-semibold mt-3">RGPD enfants</div>
+          <div class="text-xs text-ink-500 mt-1">Minimisation des données</div>
+        </div>
+        <div class="rounded-2xl border border-white/10 bg-white/5 p-5">
+          <svg class="h-6 w-6 text-brand-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <div class="font-semibold mt-3">Audit append-only</div>
+          <div class="text-xs text-ink-500 mt-1">Traçabilité complète</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="bg-white">
+  <div class="mx-auto max-w-7xl px-6 lg:px-10 py-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+    <div class="flex items-center gap-2.5 font-semibold tracking-tight">
+      <span class="grid h-8 w-8 place-items-center rounded-lg bg-brand-600 text-white">P</span>
+      <span>Pilotage scolaire</span>
+    </div>
+    <nav class="flex flex-wrap gap-6 text-sm text-ink-500">
+      <a href="/legal/privacy">Confidentialité</a>
+      <a href="/legal/terms">CGU</a>
+      <a href="/legal/cookies">Cookies</a>
+      <a href="/aide">Aide</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <div class="text-xs text-ink-500">© 2026 Pilotage scolaire</div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "@pilotage/tsconfig",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "files": ["base.json", "nextjs.json", "node.json", "react-library.json"]
+}

@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="fr" class="bg-neutral-50">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pilotage scolaire — Portail professeur</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter','system-ui','sans-serif'],
+          mono: ['JetBrains Mono','ui-monospace','monospace'],
+        },
+        colors: {
+          teacher: { 50:'oklch(0.96 0.02 180)', 100:'oklch(0.92 0.04 180)', 500:'oklch(0.62 0.12 180)', 600:'oklch(0.55 0.13 180)', 700:'oklch(0.45 0.13 180)' },
+          ink: { 50:'oklch(0.98 0.005 250)', 100:'oklch(0.96 0.01 250)', 200:'oklch(0.92 0.01 250)', 300:'oklch(0.85 0.01 250)', 400:'oklch(0.70 0.02 250)', 500:'oklch(0.55 0.02 250)', 700:'oklch(0.32 0.02 250)', 900:'oklch(0.15 0.02 250)' },
+          success: { 500:'oklch(0.70 0.17 160)', 700:'oklch(0.55 0.17 160)' },
+          warning: { 100:'oklch(0.96 0.05 75)', 500:'oklch(0.78 0.16 75)', 700:'oklch(0.62 0.16 75)' },
+          danger:  { 500:'oklch(0.60 0.22 25)', 700:'oklch(0.50 0.22 25)' },
+        }
+      }
+    }
+  }
+</script>
+<style>
+  body{font-feature-settings:"cv11","ss01","ss03";-webkit-font-smoothing:antialiased}
+  .ring-soft{box-shadow:0 0 0 1px rgba(15,23,42,0.06)}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+</style>
+</head>
+<body class="font-sans text-ink-900" data-portal="teacher">
+
+<div class="min-h-screen flex">
+  <!-- SIDEBAR DESKTOP -->
+  <aside class="w-60 shrink-0 border-r border-ink-200 bg-white flex flex-col">
+    <div class="h-16 px-5 flex items-center gap-2.5 border-b border-ink-200">
+      <span class="grid h-8 w-8 place-items-center rounded-lg bg-teacher-600 text-white font-semibold">P</span>
+      <div class="leading-tight">
+        <div class="font-semibold text-sm">Pilotage scolaire</div>
+        <div class="text-xs text-teacher-700 font-semibold">Espace enseignant</div>
+      </div>
+    </div>
+    <nav class="flex-1 overflow-y-auto p-3 space-y-1 text-sm">
+      <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-teacher-50 text-teacher-700 font-semibold">
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+        Tableau de bord
+      </a>
+      <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/></svg>Mes classes</span><span class="text-[10px] font-mono num text-ink-400">5</span></a>
+      <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Évaluations</span><span class="text-[10px] px-1.5 py-0.5 rounded-full bg-warning-100 text-warning-700 font-bold">3</span></a>
+      <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Présences</a>
+      <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>Cahier de texte</a>
+      <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Emploi du temps</a>
+      <a class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><span class="flex items-center gap-2.5"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>Élèves à risque</span><span class="text-[10px] font-mono num text-warning-700">3</span></a>
+      <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>Annonces</a>
+      <a class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-ink-50 text-ink-700"><svg class="h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>Messages</a>
+    </nav>
+    <div class="border-t border-ink-200 p-3">
+      <div class="flex items-center gap-2.5">
+        <div class="h-9 w-9 rounded-full bg-teacher-100 grid place-items-center font-semibold text-teacher-700 text-xs">CD</div>
+        <div class="flex-1 leading-tight min-w-0">
+          <div class="text-sm font-semibold truncate">Catherine Dupont</div>
+          <div class="text-xs text-ink-500 truncate">Maths · Sciences</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="flex-1 min-w-0 flex flex-col">
+
+    <!-- TOPBAR -->
+    <header class="h-16 px-6 lg:px-8 flex items-center justify-between border-b border-ink-200 bg-white">
+      <div class="relative max-w-md flex-1">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-ink-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="w-full bg-ink-50 border border-transparent focus:bg-white focus:border-teacher-200 focus:outline-none rounded-lg pl-10 pr-3 py-2 text-sm placeholder:text-ink-400" placeholder="Rechercher un élève, une évaluation…"/>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="relative h-9 w-9 grid place-items-center rounded-lg hover:bg-ink-50">
+          <svg class="h-4 w-4 text-ink-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+          <span class="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-warning-500 ring-2 ring-white"></span>
+        </button>
+        <div class="h-6 w-px bg-ink-200 mx-1"></div>
+        <div class="h-7 w-7 rounded-full bg-teacher-100 grid place-items-center font-semibold text-teacher-700 text-xs">CD</div>
+      </div>
+    </header>
+
+    <!-- CONTENT -->
+    <div class="flex-1 overflow-auto p-6 lg:p-8 space-y-6 max-w-[1400px]">
+      <div>
+        <div class="text-xs text-ink-500 mb-1">Mercredi 15 mai 2026</div>
+        <h1 class="text-2xl font-bold tracking-tight">Bonjour, Catherine 👋</h1>
+        <p class="text-ink-500 mt-1 text-sm">Voici votre journée et ce qui demande votre attention.</p>
+      </div>
+
+      <!-- 2-col layout -->
+      <div class="grid lg:grid-cols-5 gap-6">
+        <!-- LEFT: Today's classes -->
+        <div class="lg:col-span-3 space-y-6">
+          <div class="rounded-2xl bg-white p-6 ring-soft">
+            <div class="flex items-center justify-between mb-5">
+              <div>
+                <h3 class="font-semibold">Mes cours aujourd'hui</h3>
+                <p class="text-xs text-ink-500 mt-0.5">4 sessions · 3h30 d'enseignement</p>
+              </div>
+              <button class="inline-flex items-center gap-1.5 rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-medium hover:bg-ink-50">
+                <svg class="h-3.5 w-3.5 text-ink-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                Voir semaine
+              </button>
+            </div>
+
+            <div class="relative pl-12">
+              <div class="absolute left-5 top-2 bottom-2 w-px bg-ink-100"></div>
+
+              <div class="relative mb-5">
+                <span class="absolute -left-12 top-1 inline-flex items-center justify-center h-8 w-10 rounded-lg bg-teacher-50 text-teacher-700 text-xs font-mono font-bold">08:00</span>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <div class="text-sm font-semibold">Maths — 2nde B</div>
+                    <div class="text-xs text-ink-500 mt-0.5">Salle 12 · 60 min · 28 élèves</div>
+                  </div>
+                  <span class="rounded-full bg-success-500/10 text-success-700 px-2 py-0.5 text-[10px] font-bold">✓ Présences faites</span>
+                </div>
+              </div>
+
+              <div class="relative mb-5">
+                <span class="absolute -left-12 top-1 inline-flex items-center justify-center h-8 w-10 rounded-lg bg-teacher-50 text-teacher-700 text-xs font-mono font-bold">10:00</span>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <div class="text-sm font-semibold">Physique — Term S</div>
+                    <div class="text-xs text-ink-500 mt-0.5">Laboratoire 1 · 90 min · 22 élèves</div>
+                  </div>
+                  <button class="rounded-lg bg-teacher-600 text-white px-3 py-1.5 text-xs font-semibold hover:bg-teacher-700">Prendre présences →</button>
+                </div>
+              </div>
+
+              <div class="relative mb-5">
+                <span class="absolute -left-12 top-1 inline-flex items-center justify-center h-8 w-10 rounded-lg bg-teacher-50 text-teacher-700 text-xs font-mono font-bold">14:00</span>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <div class="text-sm font-semibold">Maths — 2nde B</div>
+                    <div class="text-xs text-ink-500 mt-0.5">Salle 12 · 60 min · DST chapitre 5</div>
+                  </div>
+                  <button class="rounded-lg border border-ink-200 px-3 py-1.5 text-xs font-semibold hover:bg-ink-50">Cahier de texte</button>
+                </div>
+              </div>
+
+              <div class="relative">
+                <span class="absolute -left-12 top-1 inline-flex items-center justify-center h-8 w-10 rounded-lg bg-ink-100 text-ink-500 text-xs font-mono font-bold">15:30</span>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <div class="text-sm font-semibold">Maths — 1ère ES</div>
+                    <div class="text-xs text-ink-500 mt-0.5">Salle 8 · 60 min · 26 élèves</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- My classes summary -->
+          <div class="rounded-2xl bg-white p-6 ring-soft">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="font-semibold">Mes classes</h3>
+                <p class="text-xs text-ink-500 mt-0.5">5 classes · 2 matières</p>
+              </div>
+              <a class="text-xs font-semibold text-teacher-700 hover:underline">Voir tout →</a>
+            </div>
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div class="rounded-xl border border-ink-100 p-4 hover:bg-ink-50 cursor-pointer transition">
+                <div class="flex items-start justify-between">
+                  <div>
+                    <div class="text-sm font-semibold">2nde B — Maths</div>
+                    <div class="text-xs text-ink-500 mt-0.5">28 élèves</div>
+                  </div>
+                  <span class="h-2 w-2 rounded-full bg-warning-500"></span>
+                </div>
+                <div class="mt-3 flex items-end justify-between">
+                  <div class="num font-mono text-lg font-bold">12.4</div>
+                  <div class="text-xs text-warning-700 font-semibold">3 à risque</div>
+                </div>
+              </div>
+              <div class="rounded-xl border border-ink-100 p-4 hover:bg-ink-50 cursor-pointer transition">
+                <div class="flex items-start justify-between">
+                  <div>
+                    <div class="text-sm font-semibold">Term S — Physique</div>
+                    <div class="text-xs text-ink-500 mt-0.5">22 élèves</div>
+                  </div>
+                  <span class="h-2 w-2 rounded-full bg-warning-500"></span>
+                </div>
+                <div class="mt-3 flex items-end justify-between">
+                  <div class="num font-mono text-lg font-bold">11.8</div>
+                  <div class="text-xs text-warning-700 font-semibold">1 à risque</div>
+                </div>
+              </div>
+              <div class="rounded-xl border border-ink-100 p-4 hover:bg-ink-50 cursor-pointer transition">
+                <div class="flex items-start justify-between">
+                  <div>
+                    <div class="text-sm font-semibold">1ère ES — Maths</div>
+                    <div class="text-xs text-ink-500 mt-0.5">26 élèves</div>
+                  </div>
+                  <span class="h-2 w-2 rounded-full bg-success-500"></span>
+                </div>
+                <div class="mt-3 flex items-end justify-between">
+                  <div class="num font-mono text-lg font-bold">13.2</div>
+                  <div class="text-xs text-ink-500">stable</div>
+                </div>
+              </div>
+              <div class="rounded-xl border border-ink-100 p-4 hover:bg-ink-50 cursor-pointer transition">
+                <div class="flex items-start justify-between">
+                  <div>
+                    <div class="text-sm font-semibold">2nde A — Maths</div>
+                    <div class="text-xs text-ink-500 mt-0.5">30 élèves</div>
+                  </div>
+                  <span class="h-2 w-2 rounded-full bg-success-500"></span>
+                </div>
+                <div class="mt-3 flex items-end justify-between">
+                  <div class="num font-mono text-lg font-bold">12.9</div>
+                  <div class="text-xs text-success-700 font-semibold">↑ hausse</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Todo + At risk -->
+        <div class="lg:col-span-2 space-y-6">
+          <div class="rounded-2xl bg-white p-6 ring-soft">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="font-semibold">À faire</h3>
+                <p class="text-xs text-ink-500 mt-0.5">Tâches en attente</p>
+              </div>
+              <span class="text-xs font-mono num text-ink-400">5</span>
+            </div>
+            <ul class="space-y-2.5 text-sm">
+              <li class="flex items-start gap-3 p-2.5 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-5 w-5 rounded-md border-2 border-ink-300 shrink-0 mt-0.5"></div>
+                <div class="flex-1">
+                  <div class="font-semibold">Publier 3 grilles de notes</div>
+                  <div class="text-xs text-ink-500 mt-0.5">DST Maths 2nde B · saisi à 89%</div>
+                </div>
+                <span class="text-[10px] uppercase tracking-wider font-bold text-warning-700 bg-warning-100 px-2 py-1 rounded">Urgent</span>
+              </li>
+              <li class="flex items-start gap-3 p-2.5 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-5 w-5 rounded-md border-2 border-ink-300 shrink-0 mt-0.5"></div>
+                <div class="flex-1">
+                  <div class="font-semibold">Remplir le cahier de texte</div>
+                  <div class="text-xs text-ink-500 mt-0.5">2 cours sans contenu (hier, ce matin)</div>
+                </div>
+              </li>
+              <li class="flex items-start gap-3 p-2.5 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-5 w-5 rounded-md border-2 border-ink-300 shrink-0 mt-0.5"></div>
+                <div class="flex-1">
+                  <div class="font-semibold">Justifier 5 absences</div>
+                  <div class="text-xs text-ink-500 mt-0.5">2nde B et Term S</div>
+                </div>
+              </li>
+              <li class="flex items-start gap-3 p-2.5 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-5 w-5 rounded-md border-2 border-ink-300 shrink-0 mt-0.5"></div>
+                <div class="flex-1">
+                  <div class="font-semibold">Planifier composition T2</div>
+                  <div class="text-xs text-ink-500 mt-0.5">Avant vendredi pour 2nde B</div>
+                </div>
+              </li>
+              <li class="flex items-start gap-3 p-2.5 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-5 w-5 rounded-md bg-success-500 grid place-items-center shrink-0 mt-0.5"><svg class="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6 9 17l-5-5"/></svg></div>
+                <div class="flex-1 line-through text-ink-400">
+                  <div class="font-semibold">Préparer interro fonctions</div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="rounded-2xl bg-white p-6 ring-soft">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h3 class="font-semibold">Élèves à risque</h3>
+                <p class="text-xs text-ink-500 mt-0.5">Sur mes classes</p>
+              </div>
+              <a class="text-xs font-semibold text-teacher-700 hover:underline">Voir →</a>
+            </div>
+            <div class="space-y-3">
+              <div class="flex items-start gap-3 p-2 -m-2 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-9 w-9 rounded-full bg-orange-100 grid place-items-center font-semibold text-orange-700 text-xs shrink-0">TB</div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-semibold">Tom Bernard</div>
+                  <div class="text-xs text-ink-500 mt-0.5">2nde B · <span class="font-mono num">8.2</span> Anglais · tendance ↓</div>
+                  <div class="text-xs text-warning-700 mt-1 inline-flex items-center gap-1">
+                    <span class="font-mono text-[10px] px-1 py-0.5 rounded bg-warning-100">NEGATIVE_TREND</span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-start gap-3 p-2 -m-2 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-9 w-9 rounded-full bg-blue-100 grid place-items-center font-semibold text-blue-700 text-xs shrink-0">LM</div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-semibold">Léa Martin</div>
+                  <div class="text-xs text-ink-500 mt-0.5">Term S · <span class="font-mono num">6.5</span> Physique · sous seuil</div>
+                  <div class="text-xs text-danger-700 mt-1 inline-flex items-center gap-1">
+                    <span class="font-mono text-[10px] px-1 py-0.5 rounded bg-danger-500/10">LOW_SUBJECT_AVG</span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-start gap-3 p-2 -m-2 rounded-lg hover:bg-ink-50 cursor-pointer">
+                <div class="h-9 w-9 rounded-full bg-violet-100 grid place-items-center font-semibold text-violet-700 text-xs shrink-0">CG</div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-semibold">Camille Girard</div>
+                  <div class="text-xs text-ink-500 mt-0.5">1ère ES · 4 absences ce mois</div>
+                  <div class="text-xs text-warning-700 mt-1 inline-flex items-center gap-1">
+                    <span class="font-mono text-[10px] px-1 py-0.5 rounded bg-warning-100">ABSENCE_THRESHOLD</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Announcement -->
+          <div class="rounded-2xl bg-gradient-to-br from-teacher-50 to-white border border-teacher-100 p-6">
+            <div class="flex items-center gap-2 text-teacher-700 text-xs font-bold uppercase tracking-wider">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+              Annonce administration
+            </div>
+            <h4 class="font-semibold mt-2">Conseil de classe Term S — 22 mai 18h</h4>
+            <p class="text-sm text-ink-500 mt-1.5 leading-relaxed">Merci de remettre vos appréciations avant le 19 mai 18h via le portail.</p>
+            <a class="inline-flex items-center gap-1 text-xs font-semibold text-teacher-700 mt-3 hover:underline">En savoir plus →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

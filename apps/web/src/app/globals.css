@@ -1,0 +1,202 @@
+@import 'tailwindcss';
+@import '@pilotage/design-tokens/tokens.css';
+
+/* =============================================================================
+   Tailwind v4 — explicitly scan workspace packages so classes used in
+   @pilotage/ui components (Sidebar, KpiCard, etc.) get extracted.
+   Without these directives the dark-navy sidebar `bg-[color:var(--surface-sidebar)]`
+   never makes it into the generated stylesheet.
+   ========================================================================== */
+@source '../../../../packages/ui/src/**/*.{ts,tsx}';
+
+/* =============================================================================
+   Tailwind v4 — theme tokens mapped from design-tokens CSS variables (v2)
+   ========================================================================== */
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Courier New', monospace;
+
+  /* Brand neutral */
+  --color-brand-50:  oklch(0.97 0.02 250);
+  --color-brand-100: oklch(0.93 0.05 250);
+  --color-brand-500: oklch(0.62 0.18 250);
+  --color-brand-600: oklch(0.55 0.20 250);
+  --color-brand-700: oklch(0.48 0.20 250);
+  --color-brand-900: oklch(0.30 0.15 250);
+
+  /* Ink (text) — kept */
+  --color-ink-50:   oklch(0.98 0.005 250);
+  --color-ink-100:  oklch(0.96 0.01 250);
+  --color-ink-200:  oklch(0.92 0.01 250);
+  --color-ink-300:  oklch(0.85 0.01 250);
+  --color-ink-400:  oklch(0.70 0.02 250);
+  --color-ink-500:  oklch(0.55 0.02 250);
+  --color-ink-700:  oklch(0.32 0.02 250);
+  --color-ink-900:  oklch(0.15 0.02 250);
+
+  /* Sidebar (dark navy) */
+  --color-sidebar-bg:        oklch(0.17 0.05 260);
+  --color-sidebar-hover:     oklch(0.22 0.07 260);
+  --color-sidebar-active:    oklch(0.40 0.16 260);
+  --color-sidebar-divider:   oklch(0.26 0.05 260);
+  --color-sidebar-text:      oklch(0.96 0.01 250);
+  --color-sidebar-muted:     oklch(0.70 0.02 250);
+  --color-sidebar-faint:     oklch(0.55 0.03 250);
+
+  /* Semantic palettes (full ramps) */
+  --color-success-50:  oklch(0.96 0.04 160);
+  --color-success-100: oklch(0.92 0.07 160);
+  --color-success-500: oklch(0.65 0.16 160);
+  --color-success-600: oklch(0.58 0.17 160);
+  --color-success-700: oklch(0.50 0.17 160);
+
+  --color-warning-50:  oklch(0.97 0.04 75);
+  --color-warning-100: oklch(0.94 0.07 75);
+  --color-warning-500: oklch(0.72 0.17 75);
+  --color-warning-600: oklch(0.62 0.17 75);
+  --color-warning-700: oklch(0.55 0.17 75);
+
+  --color-danger-50:  oklch(0.96 0.03 25);
+  --color-danger-100: oklch(0.92 0.06 25);
+  --color-danger-500: oklch(0.62 0.21 25);
+  --color-danger-600: oklch(0.55 0.22 25);
+  --color-danger-700: oklch(0.48 0.22 25);
+
+  --color-info-50:  oklch(0.96 0.03 220);
+  --color-info-100: oklch(0.92 0.06 220);
+  --color-info-500: oklch(0.65 0.15 220);
+  --color-info-600: oklch(0.58 0.16 220);
+  --color-info-700: oklch(0.50 0.16 220);
+
+  /* Portal accents */
+  --color-admin-50:   oklch(0.97 0.04 260);
+  --color-admin-100:  oklch(0.92 0.06 260);
+  --color-admin-500:  oklch(0.55 0.20 260);
+  --color-admin-600:  oklch(0.48 0.22 260);
+  --color-admin-700:  oklch(0.42 0.20 260);
+
+  --color-teacher-50:  oklch(0.96 0.04 165);
+  --color-teacher-100: oklch(0.92 0.07 165);
+  --color-teacher-500: oklch(0.62 0.15 165);
+  --color-teacher-600: oklch(0.55 0.17 165);
+  --color-teacher-700: oklch(0.48 0.17 165);
+
+  --color-parent-50:   oklch(0.97 0.04 240);
+  --color-parent-100:  oklch(0.93 0.07 240);
+  --color-parent-500:  oklch(0.60 0.16 240);
+  --color-parent-600:  oklch(0.52 0.18 240);
+  --color-parent-700:  oklch(0.46 0.18 240);
+
+  /* Subject colors (stable cross-portal — §1.8) */
+  --color-subject-math:         oklch(0.55 0.20 280);
+  --color-subject-math-tonal:   oklch(0.95 0.05 280);
+  --color-subject-hist-geo:     oklch(0.62 0.15 240);
+  --color-subject-hist-geo-tonal: oklch(0.95 0.05 240);
+  --color-subject-hist:         oklch(0.58 0.17 230);
+  --color-subject-hist-tonal:   oklch(0.95 0.05 230);
+  --color-subject-geo:          oklch(0.70 0.16 60);
+  --color-subject-geo-tonal:    oklch(0.95 0.07 60);
+  --color-subject-phys-chim:    oklch(0.65 0.14 175);
+  --color-subject-phys-chim-tonal: oklch(0.95 0.05 175);
+  --color-subject-svt:          oklch(0.63 0.16 145);
+  --color-subject-svt-tonal:    oklch(0.95 0.06 145);
+  --color-subject-fr:           oklch(0.70 0.18 45);
+  --color-subject-fr-tonal:     oklch(0.95 0.07 45);
+  --color-subject-eng:          oklch(0.65 0.20 0);
+  --color-subject-eng-tonal:    oklch(0.95 0.06 0);
+  --color-subject-esp:          oklch(0.78 0.15 90);
+  --color-subject-esp-tonal:    oklch(0.96 0.07 90);
+  --color-subject-all:          oklch(0.55 0.10 60);
+  --color-subject-all-tonal:    oklch(0.94 0.05 60);
+  --color-subject-eps:          oklch(0.72 0.18 130);
+  --color-subject-eps-tonal:    oklch(0.96 0.06 130);
+  --color-subject-art:          oklch(0.65 0.22 330);
+  --color-subject-art-tonal:    oklch(0.95 0.07 330);
+  --color-subject-mus:          oklch(0.60 0.20 300);
+  --color-subject-mus-tonal:    oklch(0.95 0.06 300);
+  --color-subject-tech:         oklch(0.55 0.05 250);
+  --color-subject-tech-tonal:   oklch(0.95 0.02 250);
+  --color-subject-philo:        oklch(0.45 0.08 50);
+  --color-subject-philo-tonal:  oklch(0.93 0.04 50);
+}
+
+/* =============================================================================
+   Base styles
+   ========================================================================== */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--surface-page);
+    color: var(--ink-strong);
+    font-family: var(--font-sans);
+  }
+
+  /* Tabular numerals on monospaced contexts */
+  .num,
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  /* Focus ring (WCAG) */
+  :where(:focus-visible) {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* =============================================================================
+   Reusable patterns
+   ========================================================================== */
+.ring-soft {
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+.grid-bg {
+  background-image:
+    linear-gradient(to right, rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Sparkline svg fill helper */
+.sparkline-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.sparkline-area {
+  fill: currentColor;
+  fill-opacity: 0.12;
+}
+
+/* Card pattern (consistent across portals) */
+.card-surface {
+  background-color: var(--surface-card);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--elev-card);
+}

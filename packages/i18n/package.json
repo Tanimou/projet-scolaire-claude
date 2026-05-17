@@ -1,0 +1,23 @@
+{
+  "name": "@pilotage/i18n",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./messages/fr": "./src/messages/fr.json",
+    "./messages/en": "./src/messages/en.json"
+  },
+  "scripts": {
+    "build": "echo 'no build needed'",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@pilotage/eslint-config": "workspace:*",
+    "@pilotage/tsconfig": "workspace:*",
+    "typescript": "^5.6.3"
+  }
+}

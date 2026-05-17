@@ -1,0 +1,378 @@
+# =============================================================================
+# Pilotage Scolaire — docker-compose (dev local complet)
+# =============================================================================
+# Lancement:
+#   docker compose up -d
+#   docker compose up -d --build           # rebuild images
+#   docker compose --profile prod up -d    # mode prod (avec nginx)
+#   docker compose --profile obs up -d     # avec stack observabilité
+#   docker compose down -v                 # tout supprimer (volumes inclus)
+# =============================================================================
+
+name: pilotage-scolaire
+
+x-app-env: &app-env
+  NODE_ENV: development
+  DATABASE_URL: postgresql://pilotage:pilotage@postgres:5432/pilotage?schema=public
+  REDIS_URL: redis://redis:6379
+  KEYCLOAK_URL: http://keycloak:8080
+  KEYCLOAK_REALM: pilotage-scolaire
+  KEYCLOAK_ADMIN_CLIENT_ID: portal-admin
+  KEYCLOAK_TEACHER_CLIENT_ID: portal-teacher
+  KEYCLOAK_PARENT_CLIENT_ID: portal-parent
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: us-east-1
+  S3_BUCKET: pilotage
+  S3_ACCESS_KEY: minio
+  S3_SECRET_KEY: miniominio
+  MAIL_HOST: maildev
+  MAIL_PORT: "1025"
+  MAIL_FROM: "Pilotage scolaire <no-reply@pilotage.local>"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  LOG_LEVEL: debug
+
+networks:
+  pilotage:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  keycloak_data:
+
+services:
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL 15 + extensions
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: pilotage_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pilotage
+      POSTGRES_PASSWORD: pilotage
+      POSTGRES_DB: pilotage
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pilotage -d pilotage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Redis 7 (cache + BullMQ)
+  # -------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: pilotage_redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Keycloak 26 (auth — 1 realm, 3 clients)
+  # -------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: pilotage_keycloak
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY: edge
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q 'UP'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # MinIO (S3 compatible — exports PDF, logos, attachments)
+  # -------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: pilotage_minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniominio
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [pilotage]
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: pilotage_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minio miniominio &&
+        (mc mb -p local/pilotage 2>/dev/null || true) &&
+        (mc mb -p local/pilotage-public 2>/dev/null || true) &&
+        mc anonymous set download local/pilotage-public &&
+        echo '✓ MinIO bootstrap complete'
+      "
+    networks: [pilotage]
+    restart: "no"
+
+  # -------------------------------------------------------------------------
+  # Maildev (SMTP catcher pour dev)
+  # -------------------------------------------------------------------------
+  maildev:
+    image: maildev/maildev:2.1.0
+    container_name: pilotage_maildev
+    restart: unless-stopped
+    ports:
+      - "${MAILDEV_SMTP_PORT:-1025}:1025"
+      - "${MAILDEV_WEB_PORT:-1080}:1080"
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Jaeger / OTLP (traces dev) — opt-in via `--profile obs`
+  # The default dev stack doesn't need Jaeger; activate explicitly when you
+  # want OTLP traces collected.
+  # -------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: pilotage_jaeger
+    profiles: ["obs"]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"   # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Prisma migrator (one-shot avant API) — opt-in via `--profile app`
+  # In local dev you run `pnpm prisma:migrate:dev` directly from the host.
+  # -------------------------------------------------------------------------
+  migrator:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.api
+      target: build
+    container_name: pilotage_migrator
+    profiles: ["app"]
+    environment:
+      <<: *app-env
+    command: ["pnpm", "--filter", "@pilotage/api", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [pilotage]
+    restart: "no"
+
+  # -------------------------------------------------------------------------
+  # API (NestJS) — opt-in via `--profile app`
+  # Default dev uses `pnpm dev` from the host; this container is only useful
+  # for a fully containerized stack (CI, prod).
+  # -------------------------------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.api
+    container_name: pilotage_api
+    profiles: ["app"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      PORT: "4000"
+    ports:
+      - "${API_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Worker (NestJS BullMQ) — opt-in via `--profile app`
+  # -------------------------------------------------------------------------
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.worker
+    container_name: pilotage_worker
+    profiles: ["app"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Web (Next.js) — opt-in via `--profile app`
+  # -------------------------------------------------------------------------
+  web:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}
+        NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
+        NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
+    container_name: pilotage_web
+    profiles: ["app"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      PORT: "3000"
+      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}
+      NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
+      NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Seed (one-shot, dev only)
+  # -------------------------------------------------------------------------
+  seed:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.api
+      target: build
+    container_name: pilotage_seed
+    profiles: ["seed"]
+    environment:
+      <<: *app-env
+    command: ["pnpm", "--filter", "@pilotage/api", "prisma", "db", "seed"]
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [pilotage]
+    restart: "no"
+
+  # -------------------------------------------------------------------------
+  # Nginx reverse proxy (profile prod uniquement)
+  # -------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: pilotage_nginx
+    profiles: ["prod"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks: [pilotage]
+
+  # -------------------------------------------------------------------------
+  # Observability stack (profile obs uniquement) — Phase 4+
+  # -------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: pilotage_prometheus
+    profiles: ["obs"]
+    restart: unless-stopped
+    ports: ["9090:9090"]
+    volumes:
+      - ./grafana/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks: [pilotage]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: pilotage_grafana
+    profiles: ["obs"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports: ["3001:3000"]
+    volumes:
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks: [pilotage]
+
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: pilotage_loki
+    profiles: ["obs"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["3100:3100"]
+    networks: [pilotage]

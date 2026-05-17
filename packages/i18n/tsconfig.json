@@ -1,0 +1,7 @@
+{
+  "extends": "@pilotage/tsconfig/base.json",
+  "compilerOptions": {
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"]
+}
