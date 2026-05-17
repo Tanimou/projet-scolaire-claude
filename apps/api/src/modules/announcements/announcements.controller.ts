@@ -77,20 +77,24 @@ export class AnnouncementsController {
 
   /**
    * Lists announcements:
-   *   - staff (admin/teacher) see ALL announcements of the school (including drafts they authored)
-   *   - parents see ONLY those targeted at them (via AnnouncementReceipt) AND published
+   *   - staff admins see ALL announcements of the school (including drafts authored by others)
+   *   - teachers with `mine=true` see their OWN authored announcements (drafts + published)
+   *   - everyone else (and teachers without `mine`) see ONLY those targeted at them (via AnnouncementReceipt) AND published
    */
   @Get()
   @RequiresPermission('announcements.read')
   async list(
     @CurrentJwt() jwt: KeycloakJwtPayload,
     @Query('onlyUnread') onlyUnread?: string,
+    @Query('mine') mine?: string,
   ) {
     const me = await this.users.ensureUser(jwt);
     const roles = jwt.realm_access?.roles ?? [];
-    const isStaff = roles.includes('super_admin') || roles.includes('school_admin');
+    const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
+    const isTeacher = roles.includes('teacher');
+    const onlyMine = mine === 'true';
 
-    if (isStaff) {
+    if (isAdmin && !onlyMine) {
       const data = await this.prisma.announcement.findMany({
         where: { tenantId: me.tenantId },
         orderBy: [{ pinned: 'desc' }, { publishedAt: 'desc' }, { createdAt: 'desc' }],
@@ -105,7 +109,24 @@ export class AnnouncementsController {
       return { data };
     }
 
-    // For non-staff (parents, teachers) — only published & targeted at them
+    // `mine=true` — author-scoped view (used by teacher messaging center).
+    // Returns the user's own announcements (drafts + published) with recipient counts.
+    if (onlyMine && (isAdmin || isTeacher)) {
+      const data = await this.prisma.announcement.findMany({
+        where: { tenantId: me.tenantId, authorId: me.id },
+        orderBy: [{ pinned: 'desc' }, { publishedAt: 'desc' }, { createdAt: 'desc' }],
+        include: {
+          cycle: { select: { name: true } },
+          gradeLevel: { select: { name: true } },
+          classSection: { select: { name: true } },
+          student: { select: { id: true, firstName: true, lastName: true } },
+          _count: { select: { recipients: true } },
+        },
+      });
+      return { data };
+    }
+
+    // For non-staff (parents, teachers without mine=true) — only published & targeted at them
     const receipts = await this.prisma.announcementReceipt.findMany({
       where: {
         userProfileId: me.id,
@@ -168,7 +189,10 @@ export class AnnouncementsController {
     if (!a || a.tenantId !== me.tenantId) throw new NotFoundException();
 
     const roles = jwt.realm_access?.roles ?? [];
-    if (!roles.includes('super_admin') && !roles.includes('school_admin')) {
+    const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
+    const isAuthor = a.authorId === me.id;
+
+    if (!isAdmin && !isAuthor) {
       // Must have a receipt for this user
       const receipt = await this.prisma.announcementReceipt.findUnique({
         where: { announcementId_userProfileId: { announcementId: id, userProfileId: me.id } },
@@ -192,14 +216,44 @@ export class AnnouncementsController {
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
     const roles = jwt.realm_access?.roles ?? [];
-    const authorRoleHint = roles.includes('school_admin')
-      ? 'admin'
-      : roles.includes('teacher')
-        ? 'teacher'
-        : null;
+    const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
+    const isTeacher = roles.includes('teacher');
+    const authorRoleHint = isAdmin ? 'admin' : isTeacher ? 'teacher' : null;
 
     // Validate scope payload
     this.validateScope(body);
+
+    // Teachers can only broadcast to scopes that are part of their teaching footprint.
+    // School-wide and individual_user are admin-only (those reach across the whole
+    // organisation or arbitrary staff/parents and would bypass the teaching boundary).
+    if (!isAdmin && isTeacher) {
+      if (body.scope === 'school_wide' || body.scope === 'individual_user') {
+        throw new BadRequestException(
+          "Cette portée est réservée à l'administration. Choisissez une classe, un niveau ou un cycle où vous enseignez.",
+        );
+      }
+      // For scope=class_section_scope, ensure the class is in the teacher's assignments
+      if (body.scope === 'class_section_scope' && body.classSectionId) {
+        const teacher = await this.prisma.teacherProfile.findFirst({
+          where: { userProfileId: me.id },
+          select: { id: true },
+        });
+        if (!teacher) throw new BadRequestException("Profil enseignant introuvable.");
+        const assignment = await this.prisma.teachingAssignment.findFirst({
+          where: {
+            tenantId: me.tenantId,
+            teacherProfileId: teacher.id,
+            classSectionId: body.classSectionId,
+          },
+          select: { id: true },
+        });
+        if (!assignment) {
+          throw new BadRequestException(
+            "Vous ne pouvez diffuser une annonce qu'aux classes que vous enseignez.",
+          );
+        }
+      }
+    }
 
     const now = new Date();
     const created = await this.prisma.announcement.create({
