@@ -174,6 +174,71 @@ export interface TeacherDashboardResponse {
   }>;
 }
 
+/**
+ * Payload backing `/teacher/reports` — performance synthesis the teacher needs
+ * before sharing bulletins or running parent meetings. All values are computed
+ * over the active academic year's published grades only.
+ */
+export interface TeacherReportsResponse {
+  /** Active academic year context (or null if the school has none). */
+  academicYear: { id: string; name: string } | null;
+  /** Terms of the active academic year (ordered). */
+  terms: Array<{ id: string; name: string; orderIndex: number }>;
+  /** Top KPI cards. */
+  kpis: {
+    /** Overall average across all published grades, weighted equally per grade, on /20. */
+    overallAverage: number | null;
+    /** Signed delta vs previous term (in points /20), or null if not computable. */
+    trendDelta: number | null;
+    /** Total published assessments in the active year. */
+    publishedAssessments: number;
+    /** Total published grades (non-absent) in the active year. */
+    publishedGrades: number;
+    /** Overall pass rate (>= 10/20) over published, non-absent grades. */
+    passRate: number | null;
+  };
+  /** One row per (class section x subject) — the teacher's assignments. */
+  classes: Array<{
+    assignmentId: string;
+    classSectionId: string;
+    classSectionName: string;
+    gradeLevelName: string | null;
+    subjectId: string;
+    subjectCode: string;
+    subjectName: string;
+    subjectColor: string | null;
+    studentCount: number;
+    /** Average of all published, non-absent grades for this assignment, normalised to /20. */
+    average: number | null;
+    /** Number of published assessments for this assignment in the active year. */
+    publishedAssessments: number;
+    /** Per-term averages (ordered like `terms`). */
+    perTerm: Array<{ termId: string; termName: string; average: number | null }>;
+    /** Sparkline of last 10 published assessment averages (chronological). */
+    sparkline: Array<{ x: string; y: number }>;
+    /** Pass rate (>= 10/20) over published, non-absent grades. */
+    passRate: number | null;
+    /** Distribution: low (<10), mid (10-14), high (>=14) — counts. */
+    distribution: { low: number; mid: number; high: number };
+  }>;
+  /** Last 10 published assessments by the teacher, with quick stats. */
+  recentAssessments: Array<{
+    id: string;
+    title: string;
+    kind: string;
+    classSectionName: string;
+    subjectCode: string;
+    subjectName: string;
+    subjectColor: string | null;
+    publishedAt: string | null;
+    average: number | null;
+    gradedCount: number;
+    absentCount: number;
+    maxScore: number;
+  }>;
+}
+
+
 export interface StudentSubjectPerf {
   subjectId: string;
   subjectCode: string;
@@ -1760,4 +1825,277 @@ export class AnalyticsService {
       },
     };
   }
+
+  /**
+   * Teacher reports payload — backs `/teacher/reports`.
+   *
+   * Aggregates the teacher's published grades over the active academic year:
+   * per-class averages, term-by-term breakdown, distribution buckets, last
+   * published assessments. All computations exclude absent grades and only
+   * consider `status='published'` grades.
+   */
+  async teacherReports(opts: {
+    tenantId: string;
+    teacherProfileId: string;
+    academicYearId?: string;
+  }): Promise<TeacherReportsResponse> {
+    const { tenantId, teacherProfileId, academicYearId } = opts;
+
+    const academicYear = academicYearId
+      ? await this.prisma.academicYear.findUnique({
+          where: { id: academicYearId },
+          select: { id: true, name: true },
+        })
+      : null;
+
+    const terms = academicYearId
+      ? await this.prisma.term.findMany({
+          where: { tenantId, academicYearId },
+          orderBy: { orderIndex: 'asc' },
+          select: { id: true, name: true, orderIndex: true },
+        })
+      : [];
+
+    const assignments = await this.prisma.teachingAssignment.findMany({
+      where: {
+        tenantId,
+        teacherProfileId,
+        ...(academicYearId ? { academicYearId } : {}),
+      },
+      include: {
+        subject: { select: { id: true, code: true, name: true, color: true } },
+        classSection: {
+          select: {
+            id: true,
+            name: true,
+            gradeLevel: { select: { name: true } },
+            _count: { select: { enrollments: { where: { status: 'active' } } } },
+          },
+        },
+      },
+    });
+
+    const assignmentIds = assignments.map((a) => a.id);
+
+    const assessments = assignmentIds.length
+      ? await this.prisma.assessment.findMany({
+          where: {
+            tenantId,
+            teachingAssignmentId: { in: assignmentIds },
+            isPublished: true,
+          },
+          orderBy: { publishedAt: 'desc' },
+          include: {
+            grades: {
+              where: { status: 'published' },
+              select: { value: true, isAbsent: true },
+            },
+            teachingAssignment: {
+              select: {
+                id: true,
+                classSection: { select: { id: true, name: true } },
+                subject: { select: { code: true, name: true, color: true } },
+              },
+            },
+          },
+        })
+      : [];
+
+    const avgNormalised = (
+      grades: Array<{ value: unknown; isAbsent: boolean }>,
+      maxScore: number,
+    ): number | null => {
+      const vals: number[] = [];
+      for (const g of grades) {
+        if (g.isAbsent) continue;
+        if (g.value === null || g.value === undefined) continue;
+        const n = typeof g.value === 'number' ? g.value : Number(g.value);
+        if (!Number.isFinite(n)) continue;
+        const norm = maxScore > 0 ? (n / maxScore) * 20 : n;
+        vals.push(norm);
+      }
+      if (vals.length === 0) return null;
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      return Math.round(mean * 10) / 10;
+    };
+
+    const round1 = (x: number) => Math.round(x * 10) / 10;
+
+    type ClassRow = TeacherReportsResponse['classes'][number];
+    const classesByAssignment = new Map<string, ClassRow>();
+    for (const a of assignments) {
+      classesByAssignment.set(a.id, {
+        assignmentId: a.id,
+        classSectionId: a.classSection.id,
+        classSectionName: a.classSection.name,
+        gradeLevelName: a.classSection.gradeLevel?.name ?? null,
+        subjectId: a.subject.id,
+        subjectCode: a.subject.code,
+        subjectName: a.subject.name,
+        subjectColor: a.subject.color,
+        studentCount: a.classSection._count?.enrollments ?? 0,
+        average: null,
+        publishedAssessments: 0,
+        perTerm: terms.map((t) => ({ termId: t.id, termName: t.name, average: null })),
+        sparkline: [],
+        passRate: null,
+        distribution: { low: 0, mid: 0, high: 0 },
+      });
+    }
+
+    interface PerAssignmentAccumulator {
+      values: number[];
+      perTerm: Map<string, number[]>;
+      sparkline: Array<{ x: string; y: number; t: number }>;
+    }
+    const accByAssignment = new Map<string, PerAssignmentAccumulator>();
+    for (const a of assignments) {
+      accByAssignment.set(a.id, {
+        values: [],
+        perTerm: new Map(),
+        sparkline: [],
+      });
+    }
+
+    const overallVals: number[] = [];
+    let overallGradeCount = 0;
+    let overallPassCount = 0;
+    let publishedAssessmentsTotal = 0;
+
+    for (const ass of assessments) {
+      const acc = accByAssignment.get(ass.teachingAssignmentId);
+      const row = classesByAssignment.get(ass.teachingAssignmentId);
+      if (!acc || !row) continue;
+      row.publishedAssessments += 1;
+      publishedAssessmentsTotal += 1;
+
+      const maxScore = Number(ass.maxScore ?? 20) || 20;
+      const assAvg = avgNormalised(ass.grades, maxScore);
+
+      for (const g of ass.grades) {
+        if (g.isAbsent) continue;
+        if (g.value === null || g.value === undefined) continue;
+        const n = typeof g.value === 'number' ? g.value : Number(g.value);
+        if (!Number.isFinite(n)) continue;
+        const norm = maxScore > 0 ? (n / maxScore) * 20 : n;
+        acc.values.push(norm);
+        overallVals.push(norm);
+        overallGradeCount += 1;
+        if (norm >= 10) overallPassCount += 1;
+        if (norm < 10) row.distribution.low += 1;
+        else if (norm < 14) row.distribution.mid += 1;
+        else row.distribution.high += 1;
+
+        if (ass.termId) {
+          const bucket = acc.perTerm.get(ass.termId) ?? [];
+          bucket.push(norm);
+          acc.perTerm.set(ass.termId, bucket);
+        }
+      }
+
+      if (assAvg !== null) {
+        const ts = (ass.publishedAt ?? ass.conductedAt ?? ass.scheduledAt ?? ass.createdAt).getTime();
+        acc.sparkline.push({ x: new Date(ts).toISOString(), y: assAvg, t: ts });
+      }
+    }
+
+    for (const [assignmentId, row] of classesByAssignment) {
+      const acc = accByAssignment.get(assignmentId);
+      if (!acc) continue;
+      if (acc.values.length) {
+        row.average = round1(acc.values.reduce((s, v) => s + v, 0) / acc.values.length);
+        const pass = acc.values.filter((v) => v >= 10).length;
+        row.passRate = Math.round((pass / acc.values.length) * 1000) / 10;
+      }
+      row.perTerm = terms.map((t) => {
+        const arr = acc.perTerm.get(t.id) ?? [];
+        return {
+          termId: t.id,
+          termName: t.name,
+          average: arr.length ? round1(arr.reduce((s, v) => s + v, 0) / arr.length) : null,
+        };
+      });
+      row.sparkline = acc.sparkline
+        .sort((a, b) => a.t - b.t)
+        .slice(-10)
+        .map(({ x, y }) => ({ x, y }));
+    }
+
+    const overallAverage = overallVals.length
+      ? round1(overallVals.reduce((s, v) => s + v, 0) / overallVals.length)
+      : null;
+    const passRate = overallGradeCount
+      ? Math.round((overallPassCount / overallGradeCount) * 1000) / 10
+      : null;
+
+    let trendDelta: number | null = null;
+    if (terms.length >= 2 && classesByAssignment.size > 0) {
+      const perTermOverall: Array<{ termId: string; values: number[] }> = terms.map((t) => ({
+        termId: t.id,
+        values: [],
+      }));
+      for (const acc of accByAssignment.values()) {
+        for (const [termId, vals] of acc.perTerm) {
+          const bucket = perTermOverall.find((p) => p.termId === termId);
+          if (bucket) bucket.values.push(...vals);
+        }
+      }
+      const termAvgs = perTermOverall.map((p) =>
+        p.values.length ? p.values.reduce((s, v) => s + v, 0) / p.values.length : null,
+      );
+      let lastIdx = -1;
+      for (let i = termAvgs.length - 1; i >= 0; i--) {
+        if (termAvgs[i] !== null) { lastIdx = i; break; }
+      }
+      if (lastIdx > 0) {
+        for (let i = lastIdx - 1; i >= 0; i--) {
+          if (termAvgs[i] !== null) {
+            trendDelta = round1((termAvgs[lastIdx] as number) - (termAvgs[i] as number));
+            break;
+          }
+        }
+      }
+    }
+
+    const recentAssessments: TeacherReportsResponse['recentAssessments'] = assessments
+      .slice(0, 10)
+      .map((ass) => {
+        const maxScore = Number(ass.maxScore ?? 20) || 20;
+        const graded = ass.grades.filter((g) => !g.isAbsent && g.value !== null && g.value !== undefined);
+        const absent = ass.grades.filter((g) => g.isAbsent).length;
+        return {
+          id: ass.id,
+          title: ass.title,
+          kind: ass.kind,
+          classSectionName: ass.teachingAssignment.classSection.name,
+          subjectCode: ass.teachingAssignment.subject.code,
+          subjectName: ass.teachingAssignment.subject.name,
+          subjectColor: ass.teachingAssignment.subject.color,
+          publishedAt: ass.publishedAt ? ass.publishedAt.toISOString() : null,
+          average: avgNormalised(ass.grades, maxScore),
+          gradedCount: graded.length,
+          absentCount: absent,
+          maxScore,
+        };
+      });
+
+    return {
+      academicYear,
+      terms,
+      kpis: {
+        overallAverage,
+        trendDelta,
+        publishedAssessments: publishedAssessmentsTotal,
+        publishedGrades: overallGradeCount,
+        passRate,
+      },
+      classes: Array.from(classesByAssignment.values()).sort(
+        (a, b) =>
+          a.classSectionName.localeCompare(b.classSectionName) ||
+          a.subjectName.localeCompare(b.subjectName),
+      ),
+      recentAssessments,
+    };
+  }
+
 }
