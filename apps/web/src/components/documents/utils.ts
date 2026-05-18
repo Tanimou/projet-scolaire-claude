@@ -73,7 +73,6 @@ export function detectKind(opts: {
 
   const ext = extOf(opts.url) || extOf(opts.label);
   if (!ext) {
-    // No extension and no MIME — if it has http(s):// treat as a link.
     if (opts.url && /^https?:\/\//i.test(opts.url)) return 'link';
     return 'file';
   }

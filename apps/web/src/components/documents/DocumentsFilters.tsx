@@ -7,12 +7,6 @@ import { SearchInput, SelectFilter } from '@pilotage/ui';
 
 import type { KindFilter, SourceFilter } from './types';
 
-const SOURCE_OPTIONS: Array<{ value: SourceFilter; label: string }> = [
-  { value: 'all', label: 'Toutes les sources' },
-  { value: 'announcement', label: 'Annonces école' },
-  { value: 'lesson', label: 'Cahier de texte' },
-];
-
 const KIND_OPTIONS: Array<{ value: KindFilter; label: string }> = [
   { value: 'all', label: 'Tous types' },
   { value: 'pdf', label: 'PDF' },
@@ -27,26 +21,53 @@ const KIND_OPTIONS: Array<{ value: KindFilter; label: string }> = [
   { value: 'file', label: 'Autres' },
 ];
 
+const SOURCE_OPTIONS_PARENT: Array<{ value: SourceFilter; label: string }> = [
+  { value: 'all', label: 'Toutes les sources' },
+  { value: 'announcement', label: 'Annonces école' },
+  { value: 'lesson', label: 'Cahier de texte' },
+];
+
+const SOURCE_OPTIONS_TEACHER: Array<{ value: SourceFilter; label: string }> = [
+  { value: 'all', label: 'Toutes les sources' },
+  { value: 'announcement', label: 'Mes messages' },
+  { value: 'lesson', label: 'Mes cours' },
+];
+
+interface ClassOption {
+  value: string;
+  label: string;
+}
+
 /**
- * URL-driven filter strip for /parent/documents. Writes `q`, `source` and
- * `kind` to ?searchParams while preserving studentId. Pagination is reset
- * whenever a filter changes (we never paginate beyond a stale page).
+ * URL-driven filter strip for the documents hub. Writes `q`, `source`,
+ * `kind` (and optionally `classId` for teacher) to ?searchParams while
+ * preserving every other key (studentId for parent). Pagination is reset
+ * on every filter change so we never paginate beyond a stale page.
  */
 export function DocumentsFilters({
+  portal,
   initialQuery,
   source,
   kind,
+  classId,
+  classes,
 }: {
+  portal: 'parent' | 'teacher';
   initialQuery: string;
   source: SourceFilter;
   kind: KindFilter;
+  classId?: string;
+  classes?: ClassOption[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
 
-  function update(name: 'q' | 'source' | 'kind', value: string) {
+  const sourceOptions =
+    portal === 'teacher' ? SOURCE_OPTIONS_TEACHER : SOURCE_OPTIONS_PARENT;
+
+  function update(name: 'q' | 'source' | 'kind' | 'classId', value: string) {
     const params = new URLSearchParams(searchParams?.toString() ?? '');
     if (value && value !== 'all') {
       params.set(name, value);
@@ -79,7 +100,7 @@ export function DocumentsFilters({
           size="sm"
           value={source}
           onChange={(next) => update('source', next)}
-          options={SOURCE_OPTIONS}
+          options={sourceOptions}
         />
       </div>
       <div className="min-w-[180px]">
@@ -90,6 +111,19 @@ export function DocumentsFilters({
           options={KIND_OPTIONS}
         />
       </div>
+      {portal === 'teacher' && classes && classes.length > 0 && (
+        <div className="min-w-[180px]">
+          <SelectFilter
+            size="sm"
+            value={classId ?? 'all'}
+            onChange={(next) => update('classId', next)}
+            options={[
+              { value: 'all', label: 'Toutes les classes' },
+              ...classes,
+            ]}
+          />
+        </div>
+      )}
     </div>
   );
 }

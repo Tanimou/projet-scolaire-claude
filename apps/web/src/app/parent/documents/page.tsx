@@ -2,6 +2,19 @@ import { CalendarDays, FileArchive, FolderOpen, Megaphone, NotebookPen, Sparkles
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
+import { DocumentRowCard } from '@/components/documents/DocumentRowCard';
+import { DocumentsFilters } from '@/components/documents/DocumentsFilters';
+import type {
+  DocumentKind,
+  DocumentRow,
+  KindFilter,
+  SourceFilter,
+} from '@/components/documents/types';
+import {
+  detectKind,
+  parseAttachments,
+  resolveLabel,
+} from '@/components/documents/utils';
 import { api, ApiError } from '@/lib/api-client';
 import {
   EmptyState,
@@ -12,16 +25,6 @@ import {
 } from '@pilotage/ui';
 
 import { ChildSelector } from '../_components/ChildSelector';
-
-import { DocumentRowCard } from './DocumentRowCard';
-import { DocumentsFilters } from './DocumentsFilters';
-import type {
-  DocumentKind,
-  DocumentRow,
-  KindFilter,
-  SourceFilter,
-} from './types';
-import { detectKind, parseAttachments, resolveLabel } from './utils';
 
 export const metadata: Metadata = { title: 'Documents' };
 export const dynamic = 'force-dynamic';
@@ -36,7 +39,7 @@ interface AnnouncementApiRow {
   id: string;
   title: string;
   publishedAt: string | null;
-  classSection?: { name: string } | null;
+  classSection?: { id?: string; name: string } | null;
   attachments?: unknown;
 }
 
@@ -113,8 +116,12 @@ function fromAnnouncement(a: AnnouncementApiRow): DocumentRow[] {
         title: a.title,
         subjectName: null,
         subjectColor: null,
+        classSectionId: a.classSection?.id ?? null,
         className: a.classSection?.name ?? null,
         teacherName: null,
+        audienceCount: null,
+        audienceLabel: null,
+        isDraft: false,
       },
     };
   });
@@ -153,8 +160,12 @@ function fromLesson(l: LessonApiRow): DocumentRow[] {
         title: l.title,
         subjectName: l.teachingAssignment.subject.name,
         subjectColor: l.teachingAssignment.subject.color,
+        classSectionId: l.teachingAssignment.classSection.id,
         className: l.teachingAssignment.classSection.name,
         teacherName: teacher ? `${teacher.firstName} ${teacher.lastName}`.trim() : null,
+        audienceCount: null,
+        audienceLabel: null,
+        isDraft: false,
       },
     };
   });
@@ -324,7 +335,12 @@ export default async function ParentDocumentsPage({
       </div>
 
       <div className="mt-6">
-        <DocumentsFilters initialQuery={query} source={source} kind={kind} />
+        <DocumentsFilters
+          portal="parent"
+          initialQuery={query}
+          source={source}
+          kind={kind}
+        />
       </div>
 
       <section className="mt-6">
@@ -362,7 +378,7 @@ export default async function ParentDocumentsPage({
                 </div>
                 <div className="space-y-3">
                   {group.rows.map((doc) => (
-                    <DocumentRowCard key={doc.id} doc={doc} />
+                    <DocumentRowCard key={doc.id} doc={doc} portal="parent" />
                   ))}
                 </div>
               </div>
