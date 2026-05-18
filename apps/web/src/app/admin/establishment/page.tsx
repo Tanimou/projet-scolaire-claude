@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { BrandingForm } from '@/app/admin/school/branding/BrandingForm';
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { fetchBranding } from '@/lib/me';
+import { fetchBranding, fetchMe } from '@/lib/me';
 import {
   KpiCard,
   PageHeader,
@@ -47,15 +47,22 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 }
 
 export default async function EstablishmentPage() {
-  const [branding, schools, years] = await Promise.all([
+  const [branding, schools, years, me] = await Promise.all([
     fetchBranding(),
     safe(api<{ data: SchoolItem[] }>('/api/v1/schools', { cache: 'no-store' })),
     safe(
       api<{ data: AcademicYearItem[] }>('/api/v1/academic-years', { cache: 'no-store' }),
     ),
+    fetchMe(),
   ]);
 
-  const school = schools?.data[0];
+  // Pick the *active* school (per user preference), not blindly the first one.
+  // Falls back to the first school if preference is unset/stale.
+  const activeSchoolId = (me?.preferences as Record<string, unknown> | undefined)
+    ?.activeSchoolId as string | undefined;
+  const school =
+    (activeSchoolId && schools?.data.find((s) => s.id === activeSchoolId)) ||
+    schools?.data[0];
   const activeYear = years?.data.find((y) => y.status === 'active') ?? years?.data[0];
 
   return (
