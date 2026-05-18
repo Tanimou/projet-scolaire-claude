@@ -112,6 +112,7 @@ export class AssessmentsController {
                 id: true,
                 name: true,
                 gradeLevel: { select: { name: true } },
+                _count: { select: { enrollments: true } },
               },
             },
             subject: { select: { id: true, name: true, color: true, code: true } },
