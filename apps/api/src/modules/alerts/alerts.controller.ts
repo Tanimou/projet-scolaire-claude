@@ -137,7 +137,7 @@ export class AlertsController {
     const allowed = await this.studentAccess.canAccessStudent(me, jwt, studentId, schoolId);
     if (!allowed) throw new ForbiddenException('Forbidden');
     return {
-      data: await this.alerts.listForStudent({ tenantId: me.tenantId, studentId, limit: 10 }),
+      data: await this.alerts.listForStudent({ tenantId: me.tenantId, studentId, limit: 50 }),
     };
   }
 }
