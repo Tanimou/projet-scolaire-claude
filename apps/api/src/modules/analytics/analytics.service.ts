@@ -385,6 +385,123 @@ export class AnalyticsService {
     };
   }
 
+  /**
+   * Parent upcoming-assessments feed — every assessment scheduled in the
+   * coming weeks for one of the parent's children. Returns soonest-first.
+   *
+   * Wider window and richer fields than what `parentDashboard` returns,
+   * so the parent's `/parent/upcoming` workspace can filter / group / search.
+   *
+   * The caller MUST have already passed `StudentAccessService.canAccessStudent`
+   * before invoking — this method trusts its inputs.
+   */
+  async parentUpcoming(opts: { tenantId: string; studentId: string }) {
+    const { tenantId, studentId } = opts;
+
+    // Resolve active enrollment → classSectionId + gradeLevelId for coef resolution.
+    const student = await this.prisma.student.findFirst({
+      where: { id: studentId, tenantId },
+      include: {
+        enrollments: {
+          where: { status: 'active' },
+          orderBy: { enrolledAt: 'desc' },
+          include: {
+            classSection: {
+              select: {
+                id: true,
+                name: true,
+                gradeLevelId: true,
+                gradeLevel: { select: { name: true } },
+              },
+            },
+            academicYear: { select: { id: true } },
+          },
+          take: 1,
+        },
+      },
+    });
+
+    const activeEnrollment = student?.enrollments[0];
+    const classSectionId = activeEnrollment?.classSectionId;
+    const gradeLevelId = activeEnrollment?.classSection.gradeLevelId;
+
+    if (!student || !classSectionId) {
+      return { data: [], classSectionName: null, gradeLevelName: null };
+    }
+
+    const now = new Date();
+    const horizon = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
+
+    const upcoming = await this.prisma.assessment.findMany({
+      where: {
+        tenantId,
+        teachingAssignment: { classSectionId },
+        scheduledAt: { gte: now, lte: horizon },
+      },
+      include: {
+        teachingAssignment: {
+          include: {
+            subject: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                color: true,
+                defaultCoefficient: true,
+              },
+            },
+            classSection: { select: { id: true, name: true } },
+          },
+        },
+        term: { select: { id: true, name: true } },
+      },
+      orderBy: { scheduledAt: 'asc' },
+      take: 50,
+    });
+
+    // Coefficient resolver — same logic as parentDashboard / grades service.
+    const subjectIds = Array.from(
+      new Set(upcoming.map((a) => a.teachingAssignment.subject.id)),
+    );
+    const subjectCoefs =
+      gradeLevelId && subjectIds.length > 0
+        ? await this.prisma.subjectCoefficient.findMany({
+            where: { gradeLevelId, subjectId: { in: subjectIds } },
+            select: { subjectId: true, coefficient: true },
+          })
+        : [];
+    const coefMap = new Map(subjectCoefs.map((c) => [c.subjectId, Number(c.coefficient)]));
+
+    return {
+      classSectionName: activeEnrollment?.classSection.name ?? null,
+      gradeLevelName: activeEnrollment?.classSection.gradeLevel?.name ?? null,
+      data: upcoming.map((a) => {
+        const subj = a.teachingAssignment.subject;
+        const overrideCoef = a.coefficientOverride;
+        const coefficient =
+          overrideCoef != null
+            ? Number(overrideCoef)
+            : (coefMap.get(subj.id) ?? Number(subj.defaultCoefficient));
+        return {
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          scheduledAt: (a.scheduledAt ?? a.createdAt).toISOString(),
+          kind: a.kind,
+          maxScore: Number(a.maxScore),
+          coefficient,
+          subjectId: subj.id,
+          subjectCode: subj.code,
+          subjectName: subj.name,
+          subjectColor: subj.color,
+          classSectionName: a.teachingAssignment.classSection.name,
+          termId: a.term?.id ?? null,
+          termName: a.term?.name ?? null,
+        };
+      }),
+    };
+  }
+
   async parentDashboard(opts: {
     tenantId: string;
     studentId: string;

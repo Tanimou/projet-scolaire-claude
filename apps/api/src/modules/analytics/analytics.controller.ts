@@ -103,6 +103,24 @@ export class AnalyticsController {
     return this.analytics.parentComments({ tenantId: me.tenantId, studentId });
   }
 
+  /**
+   * Parent upcoming-assessments feed — every assessment scheduled in the next
+   * 60 days for the child's active class, with subject/term/coefficient details.
+   * Backs the `/parent/upcoming` workspace.
+   */
+  @Get('parent-upcoming/:studentId')
+  @RequiresPermission('students.read')
+  async parentUpcoming(
+    @Param('studentId') studentId: string,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    const allowed = await this.studentAccess.canAccessStudent(me, jwt, studentId, schoolId);
+    if (!allowed) throw new ForbiddenException();
+    return this.analytics.parentUpcoming({ tenantId: me.tenantId, studentId });
+  }
+
   /** Students KPI aggregate — `/admin/students` top cards + level donut. */
   @Get('students-aggregate')
   @RequiresPermission('students.read')
