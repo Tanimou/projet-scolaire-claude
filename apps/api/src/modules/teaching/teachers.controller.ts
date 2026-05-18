@@ -159,6 +159,9 @@ export class TeachersController {
    * Distinct students currently enrolled in any class the teacher teaches
    * (active enrollments only, scoped to the active academic year). Used by
    * the teacher portal `/teacher/students` page.
+   *
+   * Each row is enriched with per-student stats restricted to the teacher's
+   * own assessments: gradesCount, lastGradeAt, avgPct.
    */
   @Get('me/students')
   @RequiresPermission('teaching_assignments.read')
@@ -166,7 +169,7 @@ export class TeachersController {
     const me = await this.users.ensureUser(jwt);
     const teacher = await this.teachers.ensureForUser(me);
     const { activeAcademicYearId } = await this.ctx.forUser(me);
-    if (!activeAcademicYearId) return { data: [], count: 0 };
+    if (!activeAcademicYearId) return { data: [], count: 0, classesSummary: [] };
 
     // 1. Collect class section ids the teacher teaches in the active year
     const assignments = await this.prisma.teachingAssignment.findMany({
@@ -178,7 +181,7 @@ export class TeachersController {
       select: { classSectionId: true, subject: { select: { id: true, code: true, name: true } } },
     });
     const classIds = [...new Set(assignments.map((a) => a.classSectionId))];
-    if (classIds.length === 0) return { data: [], count: 0 };
+    if (classIds.length === 0) return { data: [], count: 0, classesSummary: [] };
 
     // 2. Pull enrollments + students for those classes
     const enrollments = await this.prisma.enrollment.findMany({
@@ -208,6 +211,9 @@ export class TeachersController {
         externalRef: string | null;
         gender: string | null;
         classes: Array<{ id: string; name: string; gradeLevelName: string }>;
+        gradesCount: number;
+        lastGradeAt: string | null;
+        avgPct: number | null;
       }
     >();
     for (const e of enrollments) {
@@ -216,6 +222,9 @@ export class TeachersController {
         ({
           ...e.student,
           classes: [] as Array<{ id: string; name: string; gradeLevelName: string }>,
+          gradesCount: 0,
+          lastGradeAt: null,
+          avgPct: null,
         } as ReturnType<typeof byStudent.get> & object);
       cur!.classes.push({
         id: e.classSection.id,
@@ -225,7 +234,60 @@ export class TeachersController {
       byStudent.set(e.studentId, cur!);
     }
 
-    return { data: [...byStudent.values()], count: byStudent.size };
+    // 4. Enrich each student with teacher-scoped grade stats (single query)
+    const studentIds = [...byStudent.keys()];
+    if (studentIds.length > 0) {
+      const grades = await this.prisma.grade.findMany({
+        where: {
+          tenantId: me.tenantId,
+          studentId: { in: studentIds },
+          assessment: { teacherProfileId: teacher.id },
+        },
+        select: {
+          studentId: true,
+          value: true,
+          isAbsent: true,
+          updatedAt: true,
+          assessment: { select: { maxScore: true } },
+        },
+      });
+      const stats = new Map<string, { count: number; sumPct: number; numScored: number; last: Date | null }>();
+      for (const g of grades) {
+        const cur = stats.get(g.studentId) ?? { count: 0, sumPct: 0, numScored: 0, last: null };
+        cur.count += 1;
+        if (!g.isAbsent && g.value != null) {
+          const max = Number(g.assessment.maxScore);
+          const val = Number(g.value);
+          if (max > 0) {
+            cur.sumPct += (val / max) * 100;
+            cur.numScored += 1;
+          }
+        }
+        if (!cur.last || g.updatedAt > cur.last) cur.last = g.updatedAt;
+        stats.set(g.studentId, cur);
+      }
+      for (const [sid, s] of stats) {
+        const row = byStudent.get(sid);
+        if (!row) continue;
+        row.gradesCount = s.count;
+        row.lastGradeAt = s.last ? s.last.toISOString() : null;
+        row.avgPct = s.numScored > 0 ? Math.round((s.sumPct / s.numScored) * 10) / 10 : null;
+      }
+    }
+
+    // 5. Build a small classes summary so the page can populate the class filter
+    const classesSummary = [...new Map(
+      enrollments.map((e) => [
+        e.classSection.id,
+        {
+          id: e.classSection.id,
+          name: e.classSection.name,
+          gradeLevelName: e.classSection.gradeLevel.name,
+        },
+      ]),
+    ).values()].sort((a, b) => a.name.localeCompare(b.name));
+
+    return { data: [...byStudent.values()], count: byStudent.size, classesSummary };
   }
 
   /**
