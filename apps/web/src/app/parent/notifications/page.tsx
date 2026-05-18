@@ -6,10 +6,28 @@ import { NotificationCenter } from '@/components/notifications/NotificationCente
 export const metadata: Metadata = { title: 'Notifications' };
 export const dynamic = 'force-dynamic';
 
-export default async function ParentNotificationsPage() {
+export default async function ParentNotificationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    q?: string;
+    status?: string;
+    kind?: string;
+    severity?: string;
+  }>;
+}) {
+  const sp = await searchParams;
   return (
     <PortalShell portal="parent">
-      <NotificationCenter portal="parent" />
+      <NotificationCenter
+        portal="parent"
+        params={{
+          q: sp.q,
+          status: sp.status,
+          kind: sp.kind,
+          severity: sp.severity,
+        }}
+      />
     </PortalShell>
   );
 }
