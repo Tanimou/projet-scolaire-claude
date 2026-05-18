@@ -1,4 +1,4 @@
-import { Eye, FileSearch, History, ShieldCheck, UserCheck } from 'lucide-react';
+import { Download, Eye, FileSearch, History, ShieldCheck, UserCheck } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
@@ -8,27 +8,19 @@ import {
   KpiCard,
   PageHeader,
   Pagination,
-  StatusBadge,
-  formatDateLong,
+  type SelectOption,
 } from '@pilotage/ui';
+
+import { exportAuditAction } from './actions';
+import type { AuditEntry } from './AuditDetailDrawer';
+import { AuditPageFilters, humanizePortal, humanizeResourceType } from './AuditPageFilters';
+import { AuditTable } from './AuditTable';
 
 export const metadata: Metadata = { title: 'Audit' };
 export const dynamic = 'force-dynamic';
 
 interface AuditResponse {
-  data: Array<{
-    id: string;
-    createdAt: string;
-    actorId: string | null;
-    actorName: string | null;
-    actorRole: string | null;
-    portal: string | null;
-    action: string;
-    resourceType: string;
-    resourceId: string | null;
-    detail: string | null;
-    ipAddress: string | null;
-  }>;
+  data: AuditEntry[];
   total: number;
   kpis: {
     today: number;
@@ -36,6 +28,13 @@ interface AuditResponse {
     sensitiveExports: number;
     adminLogins: number;
   };
+}
+
+interface AuditFacetsResponse {
+  resourceTypes: string[];
+  portals: string[];
+  actions: string[];
+  actors: Array<{ id: string; name: string; role: string | null }>;
 }
 
 async function safe<T>(p: Promise<T>): Promise<T | null> {
@@ -49,16 +48,6 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 
 const PAGE_SIZE = 20;
 
-function pickActionTone(action: string): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
-  const a = action.toLowerCase();
-  if (a.includes('création') || a.includes('publish') || a.includes('approve') || a.includes('create'))
-    return 'success';
-  if (a.includes('suppression') || a.includes('delete') || a.includes('reject')) return 'danger';
-  if (a.includes('révision') || a.includes('update') || a.includes('mise à jour')) return 'warning';
-  if (a.includes('export')) return 'info';
-  return 'neutral';
-}
-
 export default async function AuditPage({
   searchParams,
 }: {
@@ -67,6 +56,8 @@ export default async function AuditPage({
     to?: string;
     action?: string;
     resourceType?: string;
+    portal?: string;
+    actorId?: string;
     page?: string;
   }>;
 }) {
@@ -79,15 +70,37 @@ export default async function AuditPage({
   if (sp.to) qs.set('to', sp.to);
   if (sp.action) qs.set('action', sp.action);
   if (sp.resourceType) qs.set('resourceType', sp.resourceType);
+  if (sp.portal) qs.set('portal', sp.portal);
+  if (sp.actorId) qs.set('actorId', sp.actorId);
   qs.set('limit', String(PAGE_SIZE));
   qs.set('offset', String(offset));
 
-  const resp = await safe(api<AuditResponse>(`/api/v1/analytics/audit?${qs.toString()}`, { cache: 'no-store' }));
+  const [resp, facets] = await Promise.all([
+    safe(api<AuditResponse>(`/api/v1/analytics/audit?${qs.toString()}`, { cache: 'no-store' })),
+    safe(api<AuditFacetsResponse>(`/api/v1/analytics/audit-facets`, { cache: 'no-store' })),
+  ]);
+
   const audit = resp ?? {
     data: [],
     total: 0,
     kpis: { today: 0, criticalChanges: 0, sensitiveExports: 0, adminLogins: 0 },
   };
+  const facetData = facets ?? { resourceTypes: [], portals: [], actions: [], actors: [] };
+
+  const resourceTypeOptions: SelectOption[] = facetData.resourceTypes.map((rt) => ({
+    value: rt,
+    label: humanizeResourceType(rt),
+    hint: rt,
+  }));
+  const portalOptions: SelectOption[] = facetData.portals.map((p) => ({
+    value: p,
+    label: humanizePortal(p),
+  }));
+  const actorOptions: SelectOption[] = facetData.actors.map((a) => ({
+    value: a.id,
+    label: a.name,
+    hint: a.role ?? undefined,
+  }));
 
   return (
     <PortalShell portal="admin">
@@ -98,6 +111,19 @@ export default async function AuditPage({
         ]}
         title="Journal d'audit"
         subtitle="Toutes les actions sensibles sur l'établissement, append-only et traçables"
+        actions={
+          <form action={exportAuditAction}>
+            <input type="hidden" name="from" value={sp.from ?? ''} />
+            <input type="hidden" name="to" value={sp.to ?? ''} />
+            <button
+              type="submit"
+              className="inline-flex h-9 items-center gap-2 rounded-xl bg-slate-900 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40"
+            >
+              <Download className="h-4 w-4" />
+              Exporter en CSV
+            </button>
+          </form>
+        }
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -130,60 +156,35 @@ export default async function AuditPage({
         </KpiCard>
       </div>
 
-      <section className="mt-6 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/60">
+      <div className="mt-6">
+        <AuditPageFilters
+          initialQ={sp.action ?? ''}
+          initialResourceType={sp.resourceType ?? ''}
+          initialPortal={sp.portal ?? ''}
+          initialActorId={sp.actorId ?? ''}
+          initialFrom={sp.from ?? ''}
+          initialTo={sp.to ?? ''}
+          resourceTypeOptions={resourceTypeOptions}
+          portalOptions={portalOptions}
+          actorOptions={actorOptions}
+        />
+      </div>
+
+      <section className="mt-4 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/60">
         {audit.data.length === 0 ? (
           <EmptyState
             icon={History}
             title="Aucune entrée d'audit"
-            description="Les actions sensibles seront enregistrées ici. Une fois écrites, elles sont append-only et ne peuvent pas être modifiées."
+            description={
+              sp.action || sp.from || sp.to || sp.resourceType || sp.portal || sp.actorId
+                ? "Aucune entrée ne correspond à vos filtres. Élargissez la période ou réinitialisez les filtres."
+                : "Les actions sensibles seront enregistrées ici. Une fois écrites, elles sont append-only et ne peuvent pas être modifiées."
+            }
             tone="slate"
           />
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50">
-                  <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                    <th className="px-4 py-3">Date & heure</th>
-                    <th className="px-4 py-3">Utilisateur</th>
-                    <th className="px-4 py-3">Action</th>
-                    <th className="px-4 py-3">Ressource</th>
-                    <th className="px-4 py-3">Détails</th>
-                    <th className="px-4 py-3">IP / Portail</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {audit.data.map((a) => (
-                    <tr key={a.id} className="hover:bg-slate-50/60">
-                      <td className="px-4 py-3 text-xs text-slate-500">
-                        {formatDateLong(a.createdAt)}
-                      </td>
-                      <td className="px-4 py-3 text-sm">
-                        <span className="font-bold text-slate-900">
-                          {a.actorName ?? a.actorRole ?? '—'}
-                        </span>
-                        {a.actorRole && a.actorName && (
-                          <span className="ml-1 text-[11px] text-slate-500">({a.actorRole})</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge
-                          label={a.action}
-                          tone={pickActionTone(a.action)}
-                          size="sm"
-                          withDot
-                        />
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">{a.resourceType}</td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{a.detail ?? '—'}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">
-                        {a.ipAddress ?? a.portal ?? '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <AuditTable rows={audit.data} />
             <Pagination
               page={page}
               total={audit.total}
