@@ -1,142 +1,356 @@
-import { ArrowLeft, TrendingUp } from 'lucide-react';
+import { Award, GraduationCap, Sparkles, TrendingUp } from 'lucide-react';
 import type { Metadata } from 'next';
-import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api } from '@/lib/api-client';
+import { api, ApiError } from '@/lib/api-client';
+import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  Pagination,
+  formatGrade,
+  gradeBucket,
+} from '@pilotage/ui';
+
+import { ChildSelector } from '../_components/ChildSelector';
+import { GradeRow } from './GradeRow';
+import { GradesFilters } from './GradesFilters';
+import type {
+  GradeRow as GradeRowType,
+  GradesPeriod,
+  GradesPerformance,
+  SubjectOption,
+  TermOption,
+} from './types';
 
 export const metadata: Metadata = { title: 'Notes' };
 export const dynamic = 'force-dynamic';
 
-interface Student {
+interface StudentSummary {
   id: string;
   firstName: string;
   lastName: string;
 }
 
-interface Grade {
-  id: string;
-  value: string | null;
-  isAbsent: boolean;
-  status: string;
-  comment: string | null;
-  assessment: {
-    id: string;
-    title: string;
-    kind: string;
-    scheduledAt: string | null;
-    maxScore: string;
-    coefficientOverride: string | null;
-    isPublished: boolean;
-    teachingAssignment: {
-      subject: { id: string; name: string; color: string | null };
-    };
-    term: { id: string; name: string } | null;
-  };
+async function safe<T>(p: Promise<T>): Promise<T | null> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof ApiError) return null;
+    throw err;
+  }
+}
+
+const PAGE_SIZE = 12;
+const VALID_PERIODS: GradesPeriod[] = ['all', 'month', 'term'];
+const VALID_PERF: GradesPerformance[] = ['excellent', 'satisfaisant', 'insuffisant', 'absent'];
+
+function startOfMonth(now: Date): Date {
+  const d = new Date(now.getFullYear(), now.getMonth(), 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Resolve a "current term" id from the grades themselves: pick the term that
+ * has the most recently dated assessment. Stable enough to power a "trimestre
+ * en cours" preset without an extra endpoint round-trip.
+ */
+function pickCurrentTermId(grades: GradeRowType[]): string | null {
+  let bestId: string | null = null;
+  let bestDate = 0;
+  for (const g of grades) {
+    if (!g.assessment.term) continue;
+    const d = g.assessment.scheduledAt
+      ? new Date(g.assessment.scheduledAt).getTime()
+      : g.publishedAt
+        ? new Date(g.publishedAt).getTime()
+        : 0;
+    if (d > bestDate) {
+      bestDate = d;
+      bestId = g.assessment.term.id;
+    }
+  }
+  return bestId;
 }
 
 export default async function ParentGradesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ studentId?: string }>;
+  searchParams: Promise<{
+    studentId?: string;
+    page?: string;
+    period?: string;
+    subjectId?: string;
+    termId?: string;
+    performance?: string;
+    q?: string;
+  }>;
 }) {
   const sp = await searchParams;
-  const students = await api<{ data: Student[] }>('/api/v1/students', { cache: 'no-store' });
-  const selectedId = sp.studentId ?? students.data[0]?.id;
-  const grades = selectedId
-    ? await api<{ data: Grade[] }>(`/api/v1/grades/students/${selectedId}/grades`, {
-        cache: 'no-store',
-      })
-    : { data: [] };
+  const page = Math.max(1, parseInt(sp.page ?? '1', 10) || 1);
+  const period: GradesPeriod = VALID_PERIODS.includes(sp.period as GradesPeriod)
+    ? (sp.period as GradesPeriod)
+    : 'all';
+  const performance: GradesPerformance | '' =
+    sp.performance && VALID_PERF.includes(sp.performance as GradesPerformance)
+      ? (sp.performance as GradesPerformance)
+      : '';
+  const search = (sp.q ?? '').trim().toLowerCase();
+
+  const studentsResp = await safe(
+    api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' }),
+  );
+  const children = studentsResp?.data ?? [];
+
+  if (children.length === 0) {
+    return (
+      <PortalShell portal="parent">
+        <PageHeader
+          breadcrumb={[
+            { label: 'Tableau de bord', href: '/parent/dashboard' },
+            { label: 'Notes' },
+          ]}
+          title="Notes"
+        />
+        <EmptyState
+          icon={GraduationCap}
+          title="Aucun enfant rattaché"
+          description="Les notes apparaîtront ici dès qu'un enfant sera lié à votre compte."
+          tone="amber"
+          className="mt-6"
+        />
+      </PortalShell>
+    );
+  }
+
+  const activeStudentId =
+    sp.studentId && children.find((c) => c.id === sp.studentId)
+      ? sp.studentId
+      : children[0]!.id;
+
+  const gradesResp = await safe(
+    api<{ data: GradeRowType[] }>(`/api/v1/grades/students/${activeStudentId}/grades`, {
+      cache: 'no-store',
+    }),
+  );
+  const allGrades = gradesResp?.data ?? [];
+
+  // Derive subjects + terms from the loaded set so the filters always match
+  // what the parent can actually see.
+  const subjectMap = new Map<string, SubjectOption>();
+  const termMap = new Map<string, TermOption>();
+  for (const g of allGrades) {
+    const s = g.assessment.teachingAssignment.subject;
+    if (!subjectMap.has(s.id)) subjectMap.set(s.id, { id: s.id, name: s.name, color: s.color });
+    if (g.assessment.term && !termMap.has(g.assessment.term.id)) {
+      termMap.set(g.assessment.term.id, {
+        id: g.assessment.term.id,
+        name: g.assessment.term.name,
+      });
+    }
+  }
+  const subjects = Array.from(subjectMap.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, 'fr'),
+  );
+  const terms = Array.from(termMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+
+  const activeSubjectId =
+    sp.subjectId && subjectMap.has(sp.subjectId) ? sp.subjectId : '';
+
+  // Resolve termId: explicit query → keep; period=term → pick current term;
+  // otherwise empty.
+  const explicitTermId = sp.termId && termMap.has(sp.termId) ? sp.termId : '';
+  const currentTermId = pickCurrentTermId(allGrades);
+  const effectiveTermId =
+    explicitTermId || (period === 'term' && currentTermId ? currentTermId : '');
+
+  // KPIs are stable: computed from the full set, not influenced by filters.
+  const now = new Date();
+  const monthStart = startOfMonth(now);
+
+  function valueOn20(g: GradeRowType): number | null {
+    if (g.isAbsent || g.value == null) return null;
+    const v = Number(g.value);
+    const max = Number(g.assessment.maxScore);
+    return max > 0 ? (v / max) * 20 : null;
+  }
+
+  const valuesAll = allGrades.map(valueOn20).filter((v): v is number => v != null);
+  const overallAvg =
+    valuesAll.length > 0 ? valuesAll.reduce((a, b) => a + b, 0) / valuesAll.length : null;
+
+  const valuesMonth = allGrades
+    .filter((g) => {
+      const ref = g.assessment.scheduledAt ?? g.publishedAt;
+      return ref ? new Date(ref) >= monthStart : false;
+    })
+    .map(valueOn20)
+    .filter((v): v is number => v != null);
+  const monthAvg =
+    valuesMonth.length > 0 ? valuesMonth.reduce((a, b) => a + b, 0) / valuesMonth.length : null;
+
+  const excellentCount = allGrades.filter((g) => {
+    const v = valueOn20(g);
+    return v != null && v >= 16;
+  }).length;
+  const insuffisantCount = allGrades.filter((g) => {
+    const v = valueOn20(g);
+    return v != null && v < 10;
+  }).length;
+
+  // Apply filters in pipeline order: period → term → subject → performance → search.
+  const filtered = allGrades
+    .filter((g) => {
+      if (period === 'all') return true;
+      if (period === 'month') {
+        const ref = g.assessment.scheduledAt ?? g.publishedAt;
+        return ref ? new Date(ref) >= monthStart : false;
+      }
+      // period === 'term' is enforced through effectiveTermId below
+      return true;
+    })
+    .filter((g) => (effectiveTermId ? g.assessment.term?.id === effectiveTermId : true))
+    .filter((g) => (activeSubjectId ? g.assessment.teachingAssignment.subject.id === activeSubjectId : true))
+    .filter((g) => {
+      if (!performance) return true;
+      if (performance === 'absent') return g.isAbsent;
+      const v = valueOn20(g);
+      if (v == null) return false;
+      return gradeBucket(v, 20).bucket === performance;
+    })
+    .filter((g) => {
+      if (!search) return true;
+      const hay = [
+        g.assessment.title,
+        g.assessment.teachingAssignment.subject.name,
+        g.assessment.term?.name ?? '',
+        g.comment ?? '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(search);
+    });
+
+  const total = filtered.length;
+  const pageStart = (page - 1) * PAGE_SIZE;
+  const pageRows = filtered.slice(pageStart, pageStart + PAGE_SIZE);
+
+  const activeFilterChips: string[] = [];
+  if (period === 'month') activeFilterChips.push('Ce mois-ci');
+  if (period === 'term' && currentTermId && termMap.has(currentTermId))
+    activeFilterChips.push(`Trimestre en cours (${termMap.get(currentTermId)!.name})`);
+  if (activeSubjectId && subjectMap.has(activeSubjectId))
+    activeFilterChips.push(`Matière : ${subjectMap.get(activeSubjectId)!.name}`);
+  if (explicitTermId && termMap.has(explicitTermId))
+    activeFilterChips.push(`Trimestre : ${termMap.get(explicitTermId)!.name}`);
+  if (performance) {
+    const labels: Record<GradesPerformance, string> = {
+      excellent: 'Excellent (≥ 16)',
+      satisfaisant: 'Satisfaisant (10–15)',
+      insuffisant: 'Insuffisant (< 10)',
+      absent: 'Absences uniquement',
+    };
+    activeFilterChips.push(labels[performance]);
+  }
+  if (search) activeFilterChips.push(`Recherche : « ${search} »`);
 
   return (
-    <PortalShell portal="parent" contentClassName="mx-auto max-w-md px-5 pb-24 pt-6">
-      <Link
-        href="/parent/dashboard"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900"
-      >
-        <ArrowLeft className="h-4 w-4" /> Retour
-      </Link>
-      <h1 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">Notes détaillées</h1>
+    <PortalShell portal="parent">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Tableau de bord', href: '/parent/dashboard' },
+          { label: 'Notes' },
+        ]}
+        title="Notes"
+        subtitle="Toutes les notes publiées par les enseignants, par matière et période"
+      />
 
-      {students.data.length > 1 && (
-        <form method="GET" action="/parent/grades" className="mt-4">
-          <select
-            name="studentId"
-            defaultValue={selectedId ?? ''}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-            onChange={(e) => e.currentTarget.form?.submit()}
-          >
-            {students.data.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.firstName} {s.lastName}
-              </option>
+      <div className="mt-4">
+        <ChildSelector items={children} activeStudentId={activeStudentId} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard
+          icon={GraduationCap}
+          tone="blue"
+          label="MOYENNE GLOBALE"
+          value={overallAvg != null ? `${formatGrade(overallAvg, 1)} / 20` : '—'}
+        >
+          Sur {valuesAll.length} note{valuesAll.length > 1 ? 's' : ''} publiée
+          {valuesAll.length > 1 ? 's' : ''}
+        </KpiCard>
+        <KpiCard
+          icon={TrendingUp}
+          tone="violet"
+          label="MOYENNE DU MOIS"
+          value={monthAvg != null ? `${formatGrade(monthAvg, 1)} / 20` : '—'}
+        >
+          {valuesMonth.length} note{valuesMonth.length > 1 ? 's' : ''} ce mois-ci
+        </KpiCard>
+        <KpiCard icon={Award} tone="green" label="EXCELLENTES" value={excellentCount}>
+          Notes ≥ 16 / 20
+        </KpiCard>
+        <KpiCard icon={Sparkles} tone="rose" label="À RENFORCER" value={insuffisantCount}>
+          Notes &lt; 10 / 20
+        </KpiCard>
+      </div>
+
+      <div className="mt-6">
+        <GradesFilters
+          subjects={subjects}
+          terms={terms}
+          period={period}
+          subjectId={activeSubjectId}
+          termId={explicitTermId}
+          performance={performance}
+          q={search}
+        />
+      </div>
+
+      <section className="mt-6">
+        {pageRows.length === 0 ? (
+          <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/60">
+            <EmptyState
+              icon={GraduationCap}
+              title={
+                allGrades.length === 0
+                  ? 'Aucune note publiée'
+                  : 'Aucune note avec ces filtres'
+              }
+              description={
+                allGrades.length === 0
+                  ? 'Les enseignants publieront ici les notes des évaluations dès qu’elles seront validées.'
+                  : 'Élargissez la période, retirez un filtre, ou videz la recherche pour voir plus de notes.'
+              }
+              tone="slate"
+            />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pageRows.map((g) => (
+              <GradeRow key={g.id} grade={g} />
             ))}
-          </select>
-        </form>
-      )}
+            <Pagination
+              page={page}
+              total={total}
+              pageSize={PAGE_SIZE}
+              itemLabel={{ singular: 'note', plural: 'notes' }}
+            />
+          </div>
+        )}
+      </section>
 
-      {grades.data.length === 0 ? (
-        <div className="mt-5 rounded-2xl bg-white p-6 text-center ring-1 ring-slate-200">
-          <TrendingUp className="mx-auto h-10 w-10 text-slate-300" />
-          <p className="mt-3 text-sm font-semibold text-slate-700">Aucune note publiée</p>
-        </div>
-      ) : (
-        <ul className="mt-5 space-y-3">
-          {grades.data.map((g) => (
-            <li key={g.id} className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="h-2 w-2 rounded-full"
-                      style={{ background: g.assessment.teachingAssignment.subject.color ?? 'oklch(0.65 0.15 250)' }}
-                    />
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                      {g.assessment.teachingAssignment.subject.name}
-                    </span>
-                    {g.assessment.term && (
-                      <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-600">
-                        {g.assessment.term.name}
-                      </span>
-                    )}
-                  </div>
-                  <h3 className="mt-1 text-sm font-bold text-slate-900">{g.assessment.title}</h3>
-                  <div className="mt-1 text-[11px] text-slate-500">
-                    {g.assessment.scheduledAt &&
-                      new Date(g.assessment.scheduledAt).toLocaleDateString('fr-FR', { dateStyle: 'medium' })}
-                    {' · '}
-                    coef {Number(g.assessment.coefficientOverride ?? 1)}
-                  </div>
-                  {g.comment && (
-                    <p className="mt-2 rounded-md bg-slate-50 px-2 py-1 text-xs italic text-slate-700">
-                      « {g.comment} »
-                    </p>
-                  )}
-                </div>
-                <div className="text-right">
-                  {g.isAbsent ? (
-                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
-                      Absent
-                    </span>
-                  ) : (
-                    <div className="font-mono text-2xl font-bold tabular-nums text-slate-900">
-                      {Number(g.value)}
-                      <span className="text-sm font-normal text-slate-400">
-                        /{Number(g.assessment.maxScore)}
-                      </span>
-                    </div>
-                  )}
-                  {g.status === 'revised' && (
-                    <span className="mt-1 inline-flex rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700">
-                      Révisée
-                    </span>
-                  )}
-                </div>
-              </div>
-            </li>
+      {activeFilterChips.length > 0 && (
+        <p className="mt-4 text-[11px] text-slate-500">
+          Filtres actifs :{' '}
+          {activeFilterChips.map((chip, idx) => (
+            <span key={chip}>
+              <span className="font-bold text-slate-700">{chip}</span>
+              {idx < activeFilterChips.length - 1 && <span className="text-slate-400"> · </span>}
+            </span>
           ))}
-        </ul>
+        </p>
       )}
     </PortalShell>
   );
