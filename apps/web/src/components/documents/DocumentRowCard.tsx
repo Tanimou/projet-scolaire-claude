@@ -1,7 +1,7 @@
-import { Download, ExternalLink, FileText, Megaphone, NotebookPen } from 'lucide-react';
+import { Download, ExternalLink, FileText, Megaphone, NotebookPen, Users } from 'lucide-react';
 import Link from 'next/link';
 
-import { formatDateShort } from '@pilotage/ui';
+import { formatDateShort, StatusBadge } from '@pilotage/ui';
 
 import type { DocumentRow } from './types';
 import {
@@ -13,18 +13,54 @@ import {
 } from './utils';
 
 /**
+ * Portal-aware deep link for a document's source entity.
+ * - Parent jumps into the announcement detail or the cahier de texte list
+ *   filtered to the student.
+ * - Teacher jumps into their own messaging list or the class lessons board.
+ */
+function resolveSourceHref(
+  portal: 'parent' | 'teacher',
+  doc: DocumentRow,
+): string {
+  if (doc.source === 'announcement') {
+    return portal === 'parent'
+      ? `/parent/announcements?focusId=${doc.sourceId}`
+      : `/teacher/messages`;
+  }
+  // lesson
+  if (portal === 'parent') return '/parent/lessons';
+  if (doc.context.classSectionId) {
+    return `/teacher/classes/${doc.context.classSectionId}/lessons`;
+  }
+  return '/teacher/classes';
+}
+
+/**
  * Single document card — renders one attachment row with file-type icon,
  * source badge, label, contextual line and a download/open button.
+ *
+ * Used across `/parent/documents` and `/teacher/documents`. The `portal`
+ * prop decides where the "source" pill deep-links to and which contextual
+ * bits (teacher name vs audience reach) are surfaced.
  */
-export function DocumentRowCard({ doc }: { doc: DocumentRow }) {
+export function DocumentRowCard({
+  doc,
+  portal,
+}: {
+  doc: DocumentRow;
+  portal: 'parent' | 'teacher';
+}) {
   const Icon = kindIcon(doc.kind);
   const SourceIcon = doc.source === 'announcement' ? Megaphone : NotebookPen;
   const sourceLabel =
-    doc.source === 'announcement' ? 'Annonce école' : 'Cahier de texte';
-  const sourceHref =
-    doc.source === 'announcement'
-      ? `/parent/announcements?focusId=${doc.sourceId}`
-      : `/parent/lessons`;
+    portal === 'teacher'
+      ? doc.source === 'announcement'
+        ? 'Mon message'
+        : 'Mon cahier de texte'
+      : doc.source === 'announcement'
+        ? 'Annonce école'
+        : 'Cahier de texte';
+  const sourceHref = resolveSourceHref(portal, doc);
 
   const sizeLabel = formatBytes(doc.sizeBytes);
   const isExternal = doc.url ? /^https?:\/\//i.test(doc.url) : false;
@@ -54,6 +90,20 @@ export function DocumentRowCard({ doc }: { doc: DocumentRow }) {
             <SourceIcon className="h-3 w-3" />
             {sourceLabel}
           </Link>
+          {portal === 'teacher' && doc.context.isDraft && (
+            <StatusBadge label="Brouillon" tone="warning" size="sm" withDot />
+          )}
+          {portal === 'teacher' &&
+            doc.context.audienceCount !== null &&
+            doc.context.audienceCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-violet-200"
+                title="Destinataires touchés"
+              >
+                <Users className="h-3 w-3" />
+                {doc.context.audienceCount}
+              </span>
+            )}
           {sizeLabel && (
             <span className="text-[10px] font-medium text-slate-500">{sizeLabel}</span>
           )}
@@ -89,7 +139,13 @@ export function DocumentRowCard({ doc }: { doc: DocumentRow }) {
               <span>{doc.context.className}</span>
             </>
           )}
-          {doc.context.teacherName && (
+          {portal === 'teacher' && doc.context.audienceLabel && (
+            <>
+              <span className="mx-1 text-slate-400">·</span>
+              <span className="text-slate-600">{doc.context.audienceLabel}</span>
+            </>
+          )}
+          {portal === 'parent' && doc.context.teacherName && (
             <>
               <span className="mx-1 text-slate-400">·</span>
               <span>{doc.context.teacherName}</span>
