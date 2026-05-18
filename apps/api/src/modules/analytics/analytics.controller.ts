@@ -140,6 +140,7 @@ export class AnalyticsController {
     @Query('actorId') actorId?: string,
     @Query('action') action?: string,
     @Query('resourceType') resourceType?: string,
+    @Query('portal') portal?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
@@ -153,8 +154,17 @@ export class AnalyticsController {
       actorId,
       action,
       resourceType,
+      portal,
       take,
       skip,
     });
+  }
+
+  /** Audit log facets — distinct values for filter dropdowns. */
+  @Get('audit-facets')
+  @RequiresPermission('audit.read')
+  async auditFacets(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    return this.analytics.auditFacets({ tenantId: me.tenantId });
   }
 }

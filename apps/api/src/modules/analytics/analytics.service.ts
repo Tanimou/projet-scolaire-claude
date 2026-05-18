@@ -1658,6 +1658,7 @@ export class AnalyticsService {
     actorId?: string;
     action?: string;
     resourceType?: string;
+    portal?: string;
     take: number;
     skip: number;
   }): Promise<{
@@ -1673,6 +1674,9 @@ export class AnalyticsService {
       resourceId: string | null;
       detail: string | null;
       ipAddress: string | null;
+      userAgent: string | null;
+      before: unknown;
+      after: unknown;
     }>;
     total: number;
     kpis: {
@@ -1682,13 +1686,14 @@ export class AnalyticsService {
       adminLogins: number;
     };
   }> {
-    const { tenantId, from, to, actorId, action, resourceType, take, skip } = opts;
+    const { tenantId, from, to, actorId, action, resourceType, portal, take, skip } = opts;
 
     const where = {
       tenantId,
       ...(actorId ? { actorId } : {}),
       ...(action ? { action: { contains: action, mode: 'insensitive' as const } } : {}),
       ...(resourceType ? { resourceType } : {}),
+      ...(portal ? { portal } : {}),
       ...(from || to
         ? {
             createdAt: {
@@ -1743,6 +1748,9 @@ export class AnalyticsService {
         resourceId: r.resourceId,
         detail,
         ipAddress: r.ipAddress,
+        userAgent: r.userAgent,
+        before: r.before,
+        after: r.after,
       };
     });
 
@@ -1771,6 +1779,88 @@ export class AnalyticsService {
       data,
       total,
       kpis: { today, criticalChanges, sensitiveExports, adminLogins },
+    };
+  }
+
+  /**
+   * Facets for the audit page filter strip — distinct resourceTypes, portals
+   * and actors (with name) observed in this tenant's recent audit history.
+   * Limits the actor list to keep the dropdown tractable.
+   */
+  async auditFacets(opts: {
+    tenantId: string;
+  }): Promise<{
+    resourceTypes: string[];
+    portals: string[];
+    actions: string[];
+    actors: Array<{ id: string; name: string; role: string | null }>;
+  }> {
+    const { tenantId } = opts;
+
+    const [resourceTypeRows, portalRows, actionRows, actorRows] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where: { tenantId },
+        select: { resourceType: true },
+        distinct: ['resourceType'],
+        orderBy: { resourceType: 'asc' },
+        take: 100,
+      }),
+      this.prisma.auditLog.findMany({
+        where: { tenantId, portal: { not: null } },
+        select: { portal: true },
+        distinct: ['portal'],
+        orderBy: { portal: 'asc' },
+        take: 20,
+      }),
+      this.prisma.auditLog.findMany({
+        where: { tenantId },
+        select: { action: true },
+        distinct: ['action'],
+        orderBy: { action: 'asc' },
+        take: 100,
+      }),
+      this.prisma.auditLog.findMany({
+        where: { tenantId, actorId: { not: null } },
+        select: { actorId: true, actorRole: true },
+        distinct: ['actorId'],
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      }),
+    ]);
+
+    const actorIds = Array.from(
+      new Set(actorRows.map((a) => a.actorId).filter((id): id is string => !!id)),
+    );
+    const actorProfiles =
+      actorIds.length === 0
+        ? []
+        : await this.prisma.userProfile
+            .findMany({
+              where: { id: { in: actorIds } },
+              select: { id: true, firstName: true, lastName: true },
+            })
+            .catch(() => []);
+    const nameById = new Map(
+      actorProfiles.map((a) => [a.id, [a.firstName, a.lastName].filter(Boolean).join(' ').trim()]),
+    );
+    const roleById = new Map(
+      actorRows.filter((a) => a.actorId).map((a) => [a.actorId as string, a.actorRole]),
+    );
+
+    const actors = actorIds
+      .map((id) => ({
+        id,
+        name: nameById.get(id) || '—',
+        role: roleById.get(id) ?? null,
+      }))
+      .filter((a) => a.name && a.name !== '—')
+      .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+
+    return {
+      resourceTypes: resourceTypeRows.map((r) => r.resourceType).filter(Boolean),
+      portals: portalRows.map((r) => r.portal).filter((p): p is string => !!p),
+      actions: actionRows.map((r) => r.action).filter(Boolean),
+      actors,
     };
   }
 
