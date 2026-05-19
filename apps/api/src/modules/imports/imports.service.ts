@@ -171,7 +171,7 @@ export class ImportsService {
     return this.prisma.importBatch.findMany({
       where: { tenantId },
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      take: 100,
       select: {
         id: true,
         type: true,
