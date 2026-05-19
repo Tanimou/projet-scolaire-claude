@@ -6,10 +6,14 @@ import { auth } from '@/auth';
 import { fetchBranding, fetchMe, type BrandingResponse, type MeResponse } from '@/lib/me';
 import {
   AppShell,
+  DISPLAY_PREFS_DEFAULTS,
+  DisplayPrefsProvider,
   HelpSidebarCard,
   Sidebar,
   TipOfTheDayCard,
   Topbar,
+  TopbarTodayChip,
+  type DisplayPreferences,
   type SidebarGroup,
   type SidebarItemDef,
 } from '@pilotage/ui';
@@ -121,6 +125,7 @@ export async function AppShellRoot({
       actions={
         <>
           {topbarExtras}
+          <TopbarTodayChip />
           <TopbarBell portal={portal} />
           <TopbarUserMenu
             portal={portal}
@@ -134,15 +139,81 @@ export async function AppShellRoot({
     />
   );
 
+  const display = resolveDisplayPrefs(me);
+
   return (
     <>
       <BrandingStyle branding={branding} />
-      <AppShell portal={portal} sidebar={sidebar} topbar={topbar} contentClassName={contentClassName}>
-        {children}
-      </AppShell>
+      <BootstrapDisplayPrefsStyle prefs={display} />
+      <DisplayPrefsProvider initial={display}>
+        <AppShell portal={portal} sidebar={sidebar} topbar={topbar} contentClassName={contentClassName}>
+          {children}
+        </AppShell>
+      </DisplayPrefsProvider>
     </>
   );
 }
+
+/**
+ * Extract the user's display preferences from the `/me` payload.
+ * `MeResponse.preferences.display` is normalised server-side (see
+ * `me.controller.ts#normalizeDisplay`); we still fall back to defaults if the
+ * field is missing (e.g. legacy users, or `/me` returned an older snapshot).
+ */
+function resolveDisplayPrefs(me: MeResponse | null): DisplayPreferences {
+  const raw =
+    me && me.preferences && typeof me.preferences === 'object'
+      ? ((me.preferences as Record<string, unknown>).display as DisplayPreferences | undefined)
+      : undefined;
+  return {
+    density: raw?.density ?? DISPLAY_PREFS_DEFAULTS.density,
+    accent: raw?.accent ?? DISPLAY_PREFS_DEFAULTS.accent,
+    dateFormat: raw?.dateFormat ?? DISPLAY_PREFS_DEFAULTS.dateFormat,
+    gradeFormat: raw?.gradeFormat ?? DISPLAY_PREFS_DEFAULTS.gradeFormat,
+  };
+}
+
+/**
+ * Server-rendered <style> so the first paint already carries the user's accent
+ * CSS variables and `data-density` selector matches (the client provider then
+ * keeps them in sync across navigations).
+ */
+function BootstrapDisplayPrefsStyle({ prefs }: { prefs: DisplayPreferences }) {
+  const acc = ACCENT_PALETTE[prefs.accent];
+  const css =
+    `:root{` +
+    `--display-accent-solid:${acc.solid};` +
+    `--display-accent-soft:${acc.soft};` +
+    `--display-accent-text:${acc.text};` +
+    `--display-accent-ring:${acc.ring};` +
+    `}` +
+    `html{`+
+    // `data-density` is set by the client provider; this is the SSR fallback.
+    `}`;
+  return (
+    <>
+      <style dangerouslySetInnerHTML={{ __html: css }} />
+      <script
+        // No-flash density init: write `data-density` and `data-accent` on <html>
+        // synchronously, before React hydrates, so CSS selectors apply on first paint.
+        dangerouslySetInnerHTML={{
+          __html: `(function(){var r=document.documentElement;r.setAttribute('data-density',${JSON.stringify(
+            prefs.density,
+          )});r.setAttribute('data-accent',${JSON.stringify(prefs.accent)});})();`,
+        }}
+      />
+    </>
+  );
+}
+
+const ACCENT_PALETTE: Record<DisplayPreferences['accent'], { solid: string; soft: string; text: string; ring: string }> = {
+  default: { solid: 'var(--brand-primary, #2563EB)', soft: '#EFF6FF', text: 'var(--brand-primary, #2563EB)', ring: 'var(--brand-primary, #2563EB)' },
+  blue: { solid: '#2563EB', soft: '#EFF6FF', text: '#1D4ED8', ring: '#BFDBFE' },
+  violet: { solid: '#7C3AED', soft: '#F5F3FF', text: '#6D28D9', ring: '#DDD6FE' },
+  emerald: { solid: '#059669', soft: '#ECFDF5', text: '#047857', ring: '#A7F3D0' },
+  rose: { solid: '#E11D48', soft: '#FFF1F2', text: '#BE123C', ring: '#FECDD3' },
+  amber: { solid: '#D97706', soft: '#FFFBEB', text: '#B45309', ring: '#FDE68A' },
+};
 
 /**
  * Inline <style> that injects the school's branding palette as CSS variables.

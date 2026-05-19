@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../lib/cn';
 import { formatGrade } from '../lib/format';
+import { formatPreferredGrade } from '../lib/display-prefs';
+import { useDisplayGradeFormat } from './DisplayPrefsProvider';
 import { gradeBucket } from '../lib/grade-bucket';
 
 export interface GradePillProps {
@@ -55,6 +57,9 @@ export function GradePill({
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState(value == null ? '' : formatGrade(value, 2).replace('.', ','));
   const inputRef = useRef<HTMLInputElement>(null);
+  // Editable cells always show the /20 numeric so teachers can keep typing;
+  // read-only pills follow the user's preferred grade format.
+  const preferredFormat = useDisplayGradeFormat();
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -124,6 +129,18 @@ export function GradePill({
     );
   }
 
+  // Display rule for non-editable pills:
+  //  - 'twenty'  → numeric ("13" / "13,5"), matches historic look — no "/ 20" so the pill stays compact.
+  //  - 'percent' → "67,5 %"
+  //  - 'letter'  → "A" … "E"
+  // Editable pills always show the raw numeric (typeable).
+  const display =
+    value == null
+      ? '—'
+      : editable
+        ? formatGrade(value, value % 1 === 0 ? 0 : 1)
+        : formatPreferredGrade(value, preferredFormat, { max, withScale: false });
+
   return (
     <button
       type="button"
@@ -139,7 +156,7 @@ export function GradePill({
         className,
       )}
     >
-      {value == null ? '—' : formatGrade(value, value % 1 === 0 ? 0 : 1)}
+      {display}
     </button>
   );
 }

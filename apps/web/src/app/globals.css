@@ -200,3 +200,81 @@
   border-radius: var(--r-2xl);
   box-shadow: var(--elev-card);
 }
+
+/* =============================================================================
+   Display preferences — density tokens
+   Components opt in by adding the `density-card` / `density-card-tight` class
+   alongside their regular Tailwind utilities. `data-density` is set on <html>
+   by the DisplayPrefsProvider (with a no-flash <script> on first paint).
+   Default ("cozy") is intentionally identical to the previous fixed padding,
+   so threading the provider into AppShell is a no-op for users on defaults.
+   ========================================================================== */
+:root {
+  --display-accent-solid: var(--brand-primary, #2563EB);
+  --display-accent-soft: #EFF6FF;
+  --display-accent-text: var(--brand-primary, #2563EB);
+  --display-accent-ring: var(--brand-primary, #2563EB);
+}
+
+/* Larger card surface (KpiCard, primary panels). Default = cozy. */
+.density-card {
+  padding: 1.25rem; /* p-5 */
+}
+html[data-density='compact'] .density-card {
+  padding: 0.875rem; /* between p-3 and p-4 */
+}
+html[data-density='spacious'] .density-card {
+  padding: 1.75rem; /* p-7 */
+}
+
+/* Tighter card surface (inner panels, ToolCard, smaller widgets). Default = p-4. */
+.density-card-tight {
+  padding: 1rem; /* p-4 */
+}
+html[data-density='compact'] .density-card-tight {
+  padding: 0.625rem; /* ~p-2.5 */
+}
+html[data-density='spacious'] .density-card-tight {
+  padding: 1.5rem; /* p-6 */
+}
+
+/* List row padding (used inside grouped feeds & timelines). Default = py-3. */
+.density-row {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+html[data-density='compact'] .density-row {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+html[data-density='spacious'] .density-row {
+  padding-top: 1.125rem;
+  padding-bottom: 1.125rem;
+}
+
+/* Section gap between KPI grids, panels, etc. — applied on grids that use
+   `gap-4 density-grid-gap`. Default cozy = same gap as before. */
+.density-grid-gap {
+  gap: 1rem; /* gap-4 */
+}
+html[data-density='compact'] .density-grid-gap {
+  gap: 0.5rem; /* gap-2 */
+}
+html[data-density='spacious'] .density-grid-gap {
+  gap: 1.5rem; /* gap-6 */
+}
+
+/* Accent-coloured surfaces — opt-in via `accent-soft` / `accent-text` /
+   `accent-ring` classes. CSS variables are set both by the SSR bootstrap
+   <style> in AppShellRoot and by the client provider on navigation, so first
+   paint already has the user's accent. */
+.accent-soft-bg {
+  background-color: var(--display-accent-soft);
+}
+.accent-text {
+  color: var(--display-accent-text);
+}
+.accent-ring {
+  --tw-ring-color: var(--display-accent-ring);
+  box-shadow: 0 0 0 1px var(--display-accent-ring);
+}
