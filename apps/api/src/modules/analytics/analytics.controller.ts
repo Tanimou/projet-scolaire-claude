@@ -35,6 +35,15 @@ export class AnalyticsController {
     return this.analytics.adminDashboard({ tenantId, schoolId });
   }
 
+  /** Cross-cutting "needs my attention now" feed for the admin dashboard. */
+  @Get('admin-action-center')
+  @RequiresPermission('schools.read')
+  async adminActionCenter(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    const { tenantId, schoolId } = await this.ctx.forUser(me);
+    return this.analytics.adminActionCenter({ tenantId, schoolId });
+  }
+
   /** Detailed school-perf donut payload (sometimes needed alone) */
   @Get('school-performance')
   @RequiresPermission('schools.read')
