@@ -58,7 +58,7 @@ export function SectionHeader({
           actionLabel && (
             <a
               href={actionHref}
-              className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-bold text-blue-700 hover:underline"
+              className="accent-text inline-flex items-center gap-1 whitespace-nowrap text-xs font-bold hover:underline"
             >
               {actionLabel}
               <ArrowRight className="h-3 w-3" aria-hidden />

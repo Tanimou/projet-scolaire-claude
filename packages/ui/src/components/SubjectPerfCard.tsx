@@ -73,7 +73,9 @@ export function SubjectPerfCard({
     <Wrapper
       href={href}
       className={cn(
-        'flex flex-col gap-3 rounded-2xl bg-white p-5 ring-1 ring-slate-200/60',
+        // `density-card` keeps the previous p-5 on cozy (default) and shrinks/grows
+        // on compact/spacious from the user's display prefs.
+        'density-card flex flex-col gap-3 rounded-2xl bg-white ring-1 ring-slate-200/60',
         href && 'transition hover:-translate-y-0.5 hover:ring-slate-300',
         className,
       )}

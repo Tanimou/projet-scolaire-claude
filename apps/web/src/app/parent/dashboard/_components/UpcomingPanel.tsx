@@ -5,7 +5,7 @@ import Link from 'next/link';
 
 import {
   MiniCalendar,
-  formatDateShort,
+  PreferredDate,
   formatInDays,
   subjectColor,
   type CalendarEventDot,
@@ -64,7 +64,7 @@ export function UpcomingPanel({ upcoming }: { upcoming: UpcomingItem[] }) {
         </div>
         <Link
           href="/parent/upcoming"
-          className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 hover:underline"
+          className="accent-text inline-flex items-center gap-1 text-[11px] font-bold hover:underline"
         >
           <Calendar className="h-3 w-3" />
           Voir calendrier
@@ -91,7 +91,7 @@ export function UpcomingPanel({ upcoming }: { upcoming: UpcomingItem[] }) {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-bold text-slate-900">{u.title}</div>
                   <div className="truncate text-[10px] text-slate-500">
-                    {u.subjectName} · {formatDateShort(u.date)} · {formatInDays(u.date)}
+                    {u.subjectName} · <PreferredDate value={u.date} /> · {formatInDays(u.date)}
                   </div>
                 </div>
               </li>

@@ -109,7 +109,7 @@ export function NotificationBell({
                 onClick={() => {
                   onMarkAllRead();
                 }}
-                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
+                className="accent-text inline-flex items-center gap-1 text-xs font-semibold hover:underline"
               >
                 <CheckCheck className="h-3.5 w-3.5" />
                 Tout marquer comme lu
@@ -184,7 +184,7 @@ export function NotificationBell({
             <footer className="border-t border-slate-100 px-4 py-2.5 text-center">
               <a
                 href={seeAllHref}
-                className="text-xs font-bold text-blue-700 hover:underline"
+                className="accent-text text-xs font-bold hover:underline"
               >
                 Voir toutes les notifications →
               </a>

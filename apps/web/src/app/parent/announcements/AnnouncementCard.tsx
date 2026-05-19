@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowRight, Check, Loader2, Megaphone, Pin } from 'lucid
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 
-import { StatusBadge } from '@pilotage/ui';
+import { PreferredDate, StatusBadge } from '@pilotage/ui';
 
 import { markAnnouncementReadAction } from './actions';
 
@@ -16,7 +16,7 @@ export interface AnnouncementCardProps {
   body: string;
   priority: Priority;
   pinned: boolean;
-  publishedAtLabel: string | null;
+  publishedAt: string | null;
   scopeLabel: string;
   audienceLabel: string | null;
   authorLabel: string | null;
@@ -146,8 +146,10 @@ export function AnnouncementCard(props: AnnouncementCardProps) {
               </span>
             )}
             {props.authorLabel && <span>• {props.authorLabel}</span>}
-            {props.publishedAtLabel && (
-              <span className="ml-auto whitespace-nowrap">{props.publishedAtLabel}</span>
+            {props.publishedAt && (
+              <span className="ml-auto whitespace-nowrap">
+                <PreferredDate value={props.publishedAt} />
+              </span>
             )}
           </div>
         </div>
@@ -169,7 +171,7 @@ export function AnnouncementCard(props: AnnouncementCardProps) {
             Marquer lue
           </button>
         )}
-        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 group-hover:underline">
+        <span className="accent-text inline-flex items-center gap-1 text-[11px] font-bold group-hover:underline">
           Lire <ArrowRight className="h-3 w-3" />
         </span>
       </div>

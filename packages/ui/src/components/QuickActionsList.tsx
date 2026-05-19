@@ -85,7 +85,7 @@ export function QuickActionsList({
       {seeAllHref && (
         <a
           href={seeAllHref}
-          className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+          className="accent-text mt-3 inline-flex items-center gap-1 text-xs font-bold hover:underline"
         >
           {seeAllLabel} →
         </a>

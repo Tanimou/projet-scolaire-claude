@@ -65,7 +65,7 @@ export function AlertCard({
   const cls = POLARITY_CLASSES[polarity];
   const Icon = icon ?? POLARITY_DEFAULT_ICON[polarity];
   return (
-    <article className={cn('flex gap-3 rounded-xl p-4 ring-1', cls.bg, className)}>
+    <article className={cn('density-card-tight flex gap-3 rounded-xl ring-1', cls.bg, className)}>
       <span className={cn('inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg', cls.iconBg)}>
         <Icon className={cn('h-4 w-4', cls.iconColor)} />
       </span>

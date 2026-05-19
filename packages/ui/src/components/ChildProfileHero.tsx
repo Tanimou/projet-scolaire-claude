@@ -36,7 +36,8 @@ export function ChildProfileHero({
   return (
     <article
       className={cn(
-        'flex flex-col gap-4 rounded-2xl bg-white p-5 ring-1 ring-slate-200/60 sm:flex-row sm:items-center',
+        // `density-card` reacts to display prefs density (cozy = p-5).
+        'density-card flex flex-col gap-4 rounded-2xl bg-white ring-1 ring-slate-200/60 sm:flex-row sm:items-center',
         className,
       )}
     >
