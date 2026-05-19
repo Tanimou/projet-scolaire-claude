@@ -14,6 +14,8 @@ import {
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import { PreferredDate } from '@pilotage/ui';
+
 import { createLesson, deleteLesson, updateLesson } from './actions';
 import type { Lesson } from './types';
 
@@ -167,7 +169,7 @@ function LessonRow({
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <span className="inline-flex items-center gap-1 rounded-md bg-teal-50 px-2 py-0.5 font-bold text-teal-700">
               <Calendar className="h-3 w-3" />
-              {new Date(l.date).toLocaleDateString('fr-FR', { dateStyle: 'medium' })}
+              <PreferredDate value={l.date} />
             </span>
             {l.status === 'draft' ? (
               <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-800">
@@ -204,8 +206,7 @@ function LessonRow({
                 <BookOpen className="h-3 w-3" /> Devoirs
                 {dueDate && (
                   <span className="font-normal">
-                    · pour le{' '}
-                    {dueDate.toLocaleDateString('fr-FR', { dateStyle: 'medium' })}
+                    · pour le <PreferredDate value={dueDate} />
                   </span>
                 )}
                 {overdue ? (

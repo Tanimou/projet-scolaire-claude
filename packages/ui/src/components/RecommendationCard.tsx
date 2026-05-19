@@ -42,7 +42,7 @@ export function RecommendationCard({
   );
 
   const baseClass = cn(
-    'flex items-center gap-3 rounded-xl bg-white p-3 ring-1 ring-slate-200/60 transition hover:ring-slate-300',
+    'density-card-mini flex items-center gap-3 rounded-xl bg-white ring-1 ring-slate-200/60 transition hover:ring-slate-300',
     className,
   );
 

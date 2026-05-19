@@ -238,6 +238,19 @@ html[data-density='spacious'] .density-card-tight {
   padding: 1.5rem; /* p-6 */
 }
 
+/* Mini card surface (inner stat tiles, RecommendationCard, chips). Default = p-3.
+   Use this for surfaces that were already smaller than tight so density still
+   scales them without bumping the baseline. */
+.density-card-mini {
+  padding: 0.75rem; /* p-3 */
+}
+html[data-density='compact'] .density-card-mini {
+  padding: 0.5rem; /* p-2 */
+}
+html[data-density='spacious'] .density-card-mini {
+  padding: 1.125rem; /* between p-4 and p-5 */
+}
+
 /* List row padding (used inside grouped feeds & timelines). Default = py-3. */
 .density-row {
   padding-top: 0.75rem;

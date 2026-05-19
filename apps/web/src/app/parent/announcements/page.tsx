@@ -8,7 +8,6 @@ import {
   KpiCard,
   PageHeader,
   Pagination,
-  formatDateShort,
 } from '@pilotage/ui';
 
 import { AnnouncementCard } from './AnnouncementCard';
@@ -179,7 +178,7 @@ export default async function ParentAnnouncementsPage({
                 body={a.body}
                 priority={a.priority}
                 pinned={a.pinned}
-                publishedAtLabel={a.publishedAt ? formatDateShort(a.publishedAt) : null}
+                publishedAt={a.publishedAt ?? null}
                 scopeLabel={SCOPE_LABEL[a.scope] ?? a.scope}
                 audienceLabel={audienceLabel(a)}
                 authorLabel={a.authorRoleHint ? ROLE_LABEL[a.authorRoleHint] ?? null : null}

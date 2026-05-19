@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 
 import { cn } from '../lib/cn';
-import { formatDateShort } from '../lib/format';
 import { Avatar, type AvatarProps } from './Avatar';
+import { PreferredDate } from './PreferredDate';
 
 export interface CommentItem {
   id: string;
@@ -35,7 +35,7 @@ export function CommentsFeed({ items, emptyState, clampLines = 3, className }: C
   return (
     <ul className={cn('flex flex-col gap-4', className)}>
       {items.map((c) => (
-        <li key={c.id} className="flex gap-3">
+        <li key={c.id} className="density-row flex gap-3">
           <Avatar
             src={c.author.src}
             firstName={c.author.firstName}
@@ -54,7 +54,7 @@ export function CommentsFeed({ items, emptyState, clampLines = 3, className }: C
                 dateTime={typeof c.date === 'string' ? c.date : c.date.toISOString()}
                 className="shrink-0 text-[11px] text-slate-500"
               >
-                {formatDateShort(c.date)}
+                <PreferredDate value={c.date} />
               </time>
             </div>
             <p
@@ -70,7 +70,7 @@ export function CommentsFeed({ items, emptyState, clampLines = 3, className }: C
             {c.href && (
               <a
                 href={c.href}
-                className="mt-1 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+                className="accent-text mt-1 inline-flex items-center gap-1 text-xs font-bold hover:underline"
               >
                 Lire la suite →
               </a>

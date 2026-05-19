@@ -46,7 +46,7 @@ export function Stats2x2Grid({ cells, cols = 2, className }: Stats2x2GridProps) 
       )}
     >
       {cells.map((c, i) => (
-        <div key={i} className="rounded-xl bg-slate-50 p-3">
+        <div key={i} className="density-card-mini rounded-xl bg-slate-50">
           <div className={cn('font-mono text-2xl font-bold tabular-nums', TONE_TEXT[c.tone ?? 'slate'])}>
             {c.value}
           </div>

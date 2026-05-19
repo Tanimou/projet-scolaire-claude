@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 
-import { formatDateShort, formatGrade, subjectColor } from '@pilotage/ui';
+import { formatGrade, PreferredDate, subjectColor } from '@pilotage/ui';
 
 export interface GradeRow {
   id: string;
@@ -60,7 +60,7 @@ export function RecentGradesTable({
         </div>
         <Link
           href={seeAllHref}
-          className="text-[11px] font-bold text-blue-700 hover:underline"
+          className="accent-text text-[11px] font-bold hover:underline"
         >
           Voir toutes les notes →
         </Link>
@@ -91,7 +91,7 @@ export function RecentGradesTable({
                   return (
                     <tr key={g.id} className="hover:bg-slate-50/60">
                       <td className="px-3 py-2.5 text-xs text-slate-500">
-                        {formatDateShort(g.date)}
+                        <PreferredDate value={g.date} />
                       </td>
                       <td className="px-3 py-2.5 text-sm font-bold text-slate-900">
                         <span className="inline-flex items-center gap-1.5">

@@ -65,7 +65,7 @@ export function SubjectKpiCard({
   );
 
   const baseClass = cn(
-    'group relative flex flex-col rounded-2xl bg-gradient-to-br p-5 text-white shadow-md transition-transform hover:-translate-y-0.5',
+    'group density-card relative flex flex-col rounded-2xl bg-gradient-to-br text-white shadow-md transition-transform hover:-translate-y-0.5',
     color.gradient,
     className,
   );
