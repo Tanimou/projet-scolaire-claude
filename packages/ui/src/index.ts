@@ -25,6 +25,19 @@ export {
   type GradeBucketInfo,
 } from './lib/grade-bucket';
 export { subjectColor, SUBJECT_CODES, type SubjectColor, type SubjectCode } from './lib/subject-color';
+export {
+  ACCENT_TOKEN_MAP,
+  DISPLAY_PREFS_DEFAULTS,
+  formatPreferredDate,
+  formatPreferredGrade,
+  type AccentTokens,
+  type DisplayAccent,
+  type DisplayDateFormat,
+  type DisplayDensity,
+  type DisplayGradeFormat,
+  type DisplayPreferences,
+  type FormatPreferredGradeOptions,
+} from './lib/display-prefs';
 
 // Primitives (kept)
 export { Button, buttonVariants, type ButtonProps } from './components/Button';
@@ -144,3 +157,17 @@ export { UserMenu, type UserMenuProps, type UserMenuItem } from './components/Us
 // Sidebar footer cards
 export { TipOfTheDayCard, type TipOfTheDayCardProps } from './components/TipOfTheDayCard';
 export { HelpSidebarCard, type HelpSidebarCardProps } from './components/HelpSidebarCard';
+
+// Display preferences (densité · accent · format date/note)
+export {
+  DisplayPrefsProvider,
+  useDisplayAccent,
+  useDisplayDateFormat,
+  useDisplayDensity,
+  useDisplayGradeFormat,
+  useDisplayPrefs,
+  type DisplayPrefsProviderProps,
+} from './components/DisplayPrefsProvider';
+export { PreferredDate, type PreferredDateProps } from './components/PreferredDate';
+export { PreferredGrade, type PreferredGradeProps } from './components/PreferredGrade';
+export { TopbarTodayChip } from './components/TopbarTodayChip';

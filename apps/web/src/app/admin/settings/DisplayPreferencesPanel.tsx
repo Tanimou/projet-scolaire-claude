@@ -530,7 +530,10 @@ function LivePreview({
       </div>
 
       <div className="border-t border-slate-100 bg-white/60 px-6 py-3 text-[11px] text-slate-500">
-        <strong>Important —</strong> ces préférences sont en cours de déploiement progressif sur l&apos;ensemble du portail. L&apos;aperçu ci-dessus reflète déjà vos choix ; les nouvelles pages les adoptent au fur et à mesure.
+        <strong>Appliqué partout —</strong> la densité agit sur les cartes KPI, l&apos;accent
+        colore les liens « Voir » et le bandeau de date du topbar, le format des notes change
+        l&apos;affichage des pastilles de notes (les saisies restent toujours en /20). Le
+        format des dates s&apos;applique à la puce « aujourd&apos;hui » du topbar.
       </div>
     </section>
   );

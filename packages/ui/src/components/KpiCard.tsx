@@ -76,7 +76,9 @@ export function KpiCard({
   return (
     <article
       className={cn(
-        'flex flex-col rounded-2xl bg-white p-5 ring-1 ring-slate-200/60 shadow-sm',
+        // `density-card` reacts to <html data-density="…"> set by
+        // DisplayPrefsProvider — keeps `p-5` look on default (cozy).
+        'density-card flex flex-col rounded-2xl bg-white ring-1 ring-slate-200/60 shadow-sm',
         className,
       )}
     >
@@ -148,7 +150,9 @@ export function KpiCard({
       {href && (
         <a
           href={href}
-          className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+          // Uses the user's accent (default = brand colour) so the chosen
+          // accent shows up on every KPI card link across the app.
+          className="accent-text mt-2 inline-flex items-center gap-1 text-xs font-bold hover:underline"
         >
           {hrefLabel ?? 'Voir →'}
         </a>
