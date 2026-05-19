@@ -5,7 +5,6 @@ import {
   Languages,
   Lock,
   Mail,
-  Palette,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -30,6 +29,11 @@ import {
   formatDateShort,
 } from '@pilotage/ui';
 
+import { DisplayPreferencesPanel } from '../../admin/settings/DisplayPreferencesPanel';
+import {
+  DISPLAY_PREFS_DEFAULTS,
+  type DisplayPreferences,
+} from '../../admin/settings/display-prefs-types';
 import {
   PreferencesPanel,
   type PreferenceRow,
@@ -88,7 +92,7 @@ function localeLabel(code: string | null | undefined): string {
 }
 
 export default async function ParentSettingsPage() {
-  const [me, prefsResp, childrenResp] = await Promise.all([
+  const [me, prefsResp, childrenResp, displayResp] = await Promise.all([
     fetchMe(),
     safe(
       api<{ data: PreferenceRow[] }>('/api/v1/notifications/preferences', {
@@ -100,10 +104,16 @@ export default async function ParentSettingsPage() {
         cache: 'no-store',
       }),
     ),
+    safe(
+      api<{ data: DisplayPreferences }>('/api/v1/me/display-preferences', {
+        cache: 'no-store',
+      }),
+    ),
   ]);
 
   const preferences = prefsResp?.data ?? [];
   const children = childrenResp?.data ?? [];
+  const display: DisplayPreferences = displayResp?.data ?? DISPLAY_PREFS_DEFAULTS;
 
   return (
     <PortalShell portal="parent">
@@ -167,14 +177,7 @@ export default async function ParentSettingsPage() {
           </TabsContent>
 
           <TabsContent value="display">
-            <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/60">
-              <EmptyState
-                icon={Palette}
-                title="Préférences d'affichage"
-                description="Thème (clair / sombre), densité de l'interface, format des notes et des dates. Disponible bientôt — le portail famille s'adaptera à vos préférences."
-                tone="slate"
-              />
-            </section>
+            <DisplayPreferencesPanel initial={display} portal="parent" />
           </TabsContent>
 
           <TabsContent value="security">

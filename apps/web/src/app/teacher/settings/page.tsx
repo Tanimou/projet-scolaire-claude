@@ -1,4 +1,4 @@
-import { Lock, Palette, Settings, User } from 'lucide-react';
+import { Lock, Settings, User } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
@@ -13,6 +13,11 @@ import {
   TabsTrigger,
 } from '@pilotage/ui';
 
+import { DisplayPreferencesPanel } from '../../admin/settings/DisplayPreferencesPanel';
+import {
+  DISPLAY_PREFS_DEFAULTS,
+  type DisplayPreferences,
+} from '../../admin/settings/display-prefs-types';
 import {
   PreferencesPanel,
   type PreferenceRow,
@@ -31,12 +36,20 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 }
 
 export default async function TeacherSettingsPage() {
-  const prefsResp = await safe(
-    api<{ data: PreferenceRow[] }>('/api/v1/notifications/preferences', {
-      cache: 'no-store',
-    }),
-  );
+  const [prefsResp, displayResp] = await Promise.all([
+    safe(
+      api<{ data: PreferenceRow[] }>('/api/v1/notifications/preferences', {
+        cache: 'no-store',
+      }),
+    ),
+    safe(
+      api<{ data: DisplayPreferences }>('/api/v1/me/display-preferences', {
+        cache: 'no-store',
+      }),
+    ),
+  ]);
   const preferences = prefsResp?.data ?? [];
+  const display: DisplayPreferences = displayResp?.data ?? DISPLAY_PREFS_DEFAULTS;
 
   return (
     <PortalShell portal="teacher">
@@ -74,14 +87,7 @@ export default async function TeacherSettingsPage() {
           </TabsContent>
 
           <TabsContent value="display">
-            <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/60">
-              <EmptyState
-                icon={Palette}
-                title="Préférences d'affichage"
-                description="Thème (clair / sombre), densité de l'interface, langue, format des dates et des notes."
-                tone="slate"
-              />
-            </section>
+            <DisplayPreferencesPanel initial={display} portal="teacher" />
           </TabsContent>
 
           <TabsContent value="security">
