@@ -1,12 +1,16 @@
 import {
   Activity,
+  AlertTriangle,
   Award,
   BarChart3,
   CheckCircle2,
   ClipboardList,
   FileSpreadsheet,
+  Filter,
   GraduationCap,
   Minus,
+  Sparkles,
+  Target,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
@@ -26,6 +30,16 @@ import {
 
 import { ClassReportRow } from './_components/ClassReportRow';
 import { ExportReportButton } from './_components/ExportReportButton';
+import { ReportsFilters } from './ReportsFilters';
+import type {
+  BandFilter,
+  ClassReportRowData,
+  GradeLevelOption,
+  PerfBand,
+  SignalFilter,
+  SortKey,
+  SubjectOption,
+} from './types';
 
 export const metadata: Metadata = { title: 'Rapports' };
 export const dynamic = 'force-dynamic';
@@ -40,23 +54,7 @@ interface TeacherReportsResponse {
     publishedGrades: number;
     passRate: number | null;
   };
-  classes: Array<{
-    assignmentId: string;
-    classSectionId: string;
-    classSectionName: string;
-    gradeLevelName: string | null;
-    subjectId: string;
-    subjectCode: string;
-    subjectName: string;
-    subjectColor: string | null;
-    studentCount: number;
-    average: number | null;
-    publishedAssessments: number;
-    perTerm: Array<{ termId: string; termName: string; average: number | null }>;
-    sparkline: Array<{ x: string; y: number }>;
-    passRate: number | null;
-    distribution: { low: number; mid: number; high: number };
-  }>;
+  classes: ClassReportRowData[];
   recentAssessments: Array<{
     id: string;
     title: string;
@@ -110,7 +108,157 @@ const KIND_LABEL: Record<string, string> = {
   other: 'Autre',
 };
 
-export default async function TeacherReportsPage() {
+const VALID_BANDS: ReadonlyArray<PerfBand> = ['excellent', 'bon', 'correct', 'risque', 'unknown'];
+const VALID_SIGNALS: ReadonlyArray<SignalFilter> = [
+  'at-risk',
+  'low-pass-rate',
+  'declining',
+  'improving',
+  'no-data',
+];
+const VALID_SORTS: ReadonlyArray<SortKey> = [
+  'name-asc',
+  'avg-desc',
+  'avg-asc',
+  'pass-asc',
+  'pass-desc',
+  'students-desc',
+  'trend-desc',
+  'trend-asc',
+];
+
+interface BandMeta {
+  label: string;
+  description: string;
+  /** Tailwind class for the section header left stripe. */
+  stripe: string;
+  /** Tailwind class for the count chip. */
+  chip: string;
+  /** Tailwind class for the icon tile background. */
+  iconBg: string;
+  iconColor: string;
+}
+
+const BAND_META: Record<PerfBand, BandMeta> = {
+  excellent: {
+    label: 'Excellent',
+    description: 'Moyenne ≥ 16 / 20',
+    stripe: 'bg-emerald-500',
+    chip: 'bg-emerald-100 text-emerald-700',
+    iconBg: 'bg-emerald-100',
+    iconColor: 'text-emerald-600',
+  },
+  bon: {
+    label: 'Bon',
+    description: 'Moyenne entre 14 et 16',
+    stripe: 'bg-blue-500',
+    chip: 'bg-blue-100 text-blue-700',
+    iconBg: 'bg-blue-100',
+    iconColor: 'text-blue-600',
+  },
+  correct: {
+    label: 'Correct',
+    description: 'Moyenne entre 10 et 14',
+    stripe: 'bg-amber-500',
+    chip: 'bg-amber-100 text-amber-800',
+    iconBg: 'bg-amber-100',
+    iconColor: 'text-amber-700',
+  },
+  risque: {
+    label: 'À renforcer',
+    description: 'Moyenne inférieure à 10',
+    stripe: 'bg-rose-500',
+    chip: 'bg-rose-100 text-rose-700',
+    iconBg: 'bg-rose-100',
+    iconColor: 'text-rose-700',
+  },
+  unknown: {
+    label: 'Pas encore de moyenne',
+    description: 'Aucune note publiée pour cette affectation',
+    stripe: 'bg-slate-300',
+    chip: 'bg-slate-100 text-slate-600',
+    iconBg: 'bg-slate-100',
+    iconColor: 'text-slate-500',
+  },
+};
+
+const BAND_ORDER: ReadonlyArray<PerfBand> = ['risque', 'correct', 'bon', 'excellent', 'unknown'];
+
+function bandOf(avg: number | null): PerfBand {
+  if (avg == null) return 'unknown';
+  if (avg >= 16) return 'excellent';
+  if (avg >= 14) return 'bon';
+  if (avg >= 10) return 'correct';
+  return 'risque';
+}
+
+function trendOf(sparkline: Array<{ y: number }>): number | null {
+  if (!sparkline || sparkline.length < 2) return null;
+  const first = sparkline[0]!.y;
+  const last = sparkline[sparkline.length - 1]!.y;
+  return Math.round((last - first) * 10) / 10;
+}
+
+function matchesSignal(c: ClassReportRowData, signal: SignalFilter): boolean {
+  if (!signal) return true;
+  const trend = trendOf(c.sparkline);
+  switch (signal) {
+    case 'at-risk':
+      return c.average !== null && c.average < 10;
+    case 'low-pass-rate':
+      return c.passRate !== null && c.passRate < 50;
+    case 'declining':
+      return trend !== null && trend < -0.5;
+    case 'improving':
+      return trend !== null && trend > 0.5;
+    case 'no-data':
+      return c.average === null;
+    default:
+      return true;
+  }
+}
+
+function sortClasses(rows: ClassReportRowData[], sort: SortKey): ClassReportRowData[] {
+  const arr = rows.slice();
+  switch (sort) {
+    case 'avg-desc':
+      return arr.sort((a, b) => (b.average ?? -1) - (a.average ?? -1));
+    case 'avg-asc':
+      return arr.sort((a, b) => (a.average ?? 21) - (b.average ?? 21));
+    case 'pass-desc':
+      return arr.sort((a, b) => (b.passRate ?? -1) - (a.passRate ?? -1));
+    case 'pass-asc':
+      return arr.sort((a, b) => (a.passRate ?? 101) - (b.passRate ?? 101));
+    case 'students-desc':
+      return arr.sort((a, b) => b.studentCount - a.studentCount);
+    case 'trend-desc':
+      return arr.sort((a, b) => (trendOf(b.sparkline) ?? -99) - (trendOf(a.sparkline) ?? -99));
+    case 'trend-asc':
+      return arr.sort((a, b) => (trendOf(a.sparkline) ?? 99) - (trendOf(b.sparkline) ?? 99));
+    case 'name-asc':
+    default:
+      return arr.sort((a, b) =>
+        `${a.classSectionName} ${a.subjectName}`.localeCompare(
+          `${b.classSectionName} ${b.subjectName}`,
+          'fr',
+        ),
+      );
+  }
+}
+
+export default async function TeacherReportsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    q?: string;
+    subjectId?: string;
+    gradeLevel?: string;
+    band?: string;
+    signal?: string;
+    sort?: string;
+  }>;
+}) {
+  const sp = await searchParams;
   const reports = await safe(
     api<TeacherReportsResponse>('/api/v1/analytics/teacher-reports', { cache: 'no-store' }),
   );
@@ -139,9 +287,78 @@ export default async function TeacherReportsPage() {
     );
   }
 
-  const { academicYear, terms, kpis, classes, recentAssessments } = reports;
+  const { academicYear, terms, kpis, classes: allClasses, recentAssessments } = reports;
 
-  const trendIcon = kpis.trendDelta === null ? Minus : kpis.trendDelta >= 0 ? TrendingUp : TrendingDown;
+  // --- Filters from URL --------------------------------------------------
+  const search = (sp.q ?? '').trim().toLowerCase();
+  const band: BandFilter = VALID_BANDS.includes(sp.band as PerfBand)
+    ? (sp.band as PerfBand)
+    : '';
+  const signal: SignalFilter = VALID_SIGNALS.includes(sp.signal as SignalFilter)
+    ? (sp.signal as SignalFilter)
+    : '';
+  const sort: SortKey = VALID_SORTS.includes(sp.sort as SortKey)
+    ? (sp.sort as SortKey)
+    : 'name-asc';
+
+  // Facet options derived from the unfiltered class list.
+  const subjectMap = new Map<string, SubjectOption>();
+  const gradeMap = new Map<string, GradeLevelOption>();
+  for (const c of allClasses) {
+    if (!subjectMap.has(c.subjectId)) {
+      subjectMap.set(c.subjectId, {
+        id: c.subjectId,
+        code: c.subjectCode,
+        name: c.subjectName,
+      });
+    }
+    if (c.gradeLevelName) {
+      const cur = gradeMap.get(c.gradeLevelName);
+      if (cur) cur.count += 1;
+      else gradeMap.set(c.gradeLevelName, { name: c.gradeLevelName, count: 1 });
+    }
+  }
+  const subjectFacet = Array.from(subjectMap.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, 'fr'),
+  );
+  const gradeFacet = Array.from(gradeMap.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, 'fr'),
+  );
+
+  const activeSubjectId = sp.subjectId && subjectMap.has(sp.subjectId) ? sp.subjectId : '';
+  const activeGradeLevel = sp.gradeLevel && gradeMap.has(sp.gradeLevel) ? sp.gradeLevel : '';
+
+  // Filter pipeline: subject → gradeLevel → band → signal → search.
+  const filtered = allClasses
+    .filter((c) => (activeSubjectId ? c.subjectId === activeSubjectId : true))
+    .filter((c) => (activeGradeLevel ? c.gradeLevelName === activeGradeLevel : true))
+    .filter((c) => (band ? bandOf(c.average) === band : true))
+    .filter((c) => matchesSignal(c, signal))
+    .filter((c) => {
+      if (!search) return true;
+      const hay = [
+        c.classSectionName,
+        c.subjectName,
+        c.subjectCode,
+        c.gradeLevelName ?? '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(search);
+    });
+
+  const sorted = sortClasses(filtered, sort);
+
+  // --- Stable KPIs --------------------------------------------------------
+  // Use the unfiltered slice so cards stay steady when filtering.
+  const atRiskCount = allClasses.filter((c) => c.average !== null && c.average < 10).length;
+  const decliningCount = allClasses.filter((c) => {
+    const t = trendOf(c.sparkline);
+    return t !== null && t < -0.5;
+  }).length;
+
+  const trendIcon =
+    kpis.trendDelta === null ? Minus : kpis.trendDelta >= 0 ? TrendingUp : TrendingDown;
   const trendTone: 'green' | 'rose' | 'slate' =
     kpis.trendDelta === null ? 'slate' : kpis.trendDelta >= 0 ? 'green' : 'rose';
   const trendValue =
@@ -150,8 +367,33 @@ export default async function TeacherReportsPage() {
       : `${kpis.trendDelta > 0 ? '+' : ''}${(Math.round(kpis.trendDelta * 10) / 10).toFixed(1)} pt`;
 
   const noData =
-    classes.length === 0 ||
+    allClasses.length === 0 ||
     (kpis.publishedGrades === 0 && kpis.publishedAssessments === 0);
+
+  // --- Grouping by perf band ---------------------------------------------
+  const grouped: Array<{ band: PerfBand; rows: ClassReportRowData[] }> = [];
+  for (const b of BAND_ORDER) {
+    const rows = sorted.filter((c) => bandOf(c.average) === b);
+    if (rows.length > 0) grouped.push({ band: b, rows });
+  }
+
+  // --- Active filter chips -----------------------------------------------
+  const activeFilterChips: string[] = [];
+  if (activeSubjectId)
+    activeFilterChips.push(`Matière : ${subjectMap.get(activeSubjectId)!.name}`);
+  if (activeGradeLevel) activeFilterChips.push(`Niveau : ${activeGradeLevel}`);
+  if (band) activeFilterChips.push(`Bande : ${BAND_META[band].label}`);
+  if (signal) {
+    const signalLabels: Record<Exclude<SignalFilter, ''>, string> = {
+      'at-risk': 'Classes à risque',
+      'low-pass-rate': 'Taux de réussite faible',
+      declining: 'Tendance en baisse',
+      improving: 'Tendance en hausse',
+      'no-data': 'Sans note publiée',
+    };
+    activeFilterChips.push(`Signal : ${signalLabels[signal]}`);
+  }
+  if (search) activeFilterChips.push(`Recherche : « ${search} »`);
 
   return (
     <PortalShell portal="teacher">
@@ -169,7 +411,7 @@ export default async function TeacherReportsPage() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <ExportReportButton
-              classes={classes}
+              classes={allClasses}
               recentAssessments={recentAssessments}
               terms={terms}
               academicYear={academicYear}
@@ -185,6 +427,7 @@ export default async function TeacherReportsPage() {
         }
       />
 
+      {/* KPI strip — stable across filters. */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           icon={Award}
@@ -216,6 +459,55 @@ export default async function TeacherReportsPage() {
         </KpiCard>
       </div>
 
+      {/* Action strip — surfaces classes that need attention. */}
+      {!noData && (atRiskCount > 0 || decliningCount > 0) ? (
+        <div className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl bg-gradient-to-r from-rose-50 via-amber-50 to-white p-4 ring-1 ring-rose-200/70">
+          <span
+            aria-hidden
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700"
+          >
+            <AlertTriangle className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="font-bold text-slate-900">
+              {atRiskCount > 0 ? (
+                <>
+                  {atRiskCount} classe{atRiskCount > 1 ? 's' : ''} avec moyenne &lt; 10
+                </>
+              ) : null}
+              {atRiskCount > 0 && decliningCount > 0 ? ' · ' : ''}
+              {decliningCount > 0 ? (
+                <>
+                  {decliningCount} classe{decliningCount > 1 ? 's' : ''} en baisse récente
+                </>
+              ) : null}
+            </p>
+            <p className="mt-0.5 text-xs text-slate-600">
+              Filtrez la vue ci-dessous pour cibler les classes prioritaires et adapter votre
+              feuille de route pédagogique.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {atRiskCount > 0 ? (
+              <Link
+                href="/teacher/reports?signal=at-risk"
+                className="inline-flex items-center gap-1 rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-rose-700 hover:shadow-md"
+              >
+                <Target className="h-3.5 w-3.5" /> Voir les classes à risque
+              </Link>
+            ) : null}
+            {decliningCount > 0 ? (
+              <Link
+                href="/teacher/reports?signal=declining"
+                className="inline-flex items-center gap-1 rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-amber-600 hover:shadow-md"
+              >
+                <TrendingDown className="h-3.5 w-3.5" /> Tendances en baisse
+              </Link>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60">
         <SectionHeader
           title="Performance par classe"
@@ -239,31 +531,104 @@ export default async function TeacherReportsPage() {
             />
           </div>
         ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                  <th className="py-2.5 pr-3">Classe / Matière</th>
-                  <th className="px-3 text-center">Élèves</th>
-                  <th className="px-3 text-center">Évaluations</th>
-                  {terms.map((t) => (
-                    <th key={t.id} className="px-3 text-center">
-                      {t.name}
-                    </th>
-                  ))}
-                  <th className="px-3 text-center">Moyenne</th>
-                  <th className="px-3 text-center">Réussite</th>
-                  <th className="px-3 text-center">Distribution</th>
-                  <th className="px-3 text-center">Tendance</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {classes.map((c) => (
-                  <ClassReportRow key={c.assignmentId} row={c} termsCount={terms.length} />
+          <>
+            <div className="mt-4">
+              <ReportsFilters
+                subjects={subjectFacet}
+                gradeLevels={gradeFacet}
+                q={search}
+                subjectId={activeSubjectId}
+                gradeLevel={activeGradeLevel}
+                band={band}
+                signal={signal}
+                sort={sort}
+              />
+            </div>
+
+            {activeFilterChips.length > 0 ? (
+              <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                <Filter className="h-3 w-3 shrink-0" />
+                <span className="font-medium text-slate-600">Filtres actifs :</span>
+                {activeFilterChips.map((chip) => (
+                  <span
+                    key={chip}
+                    className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-700"
+                  >
+                    {chip}
+                  </span>
                 ))}
-              </tbody>
-            </table>
-          </div>
+                <Link
+                  href="/teacher/reports"
+                  className="ml-1 rounded-full px-2 py-0.5 font-bold text-blue-700 hover:bg-blue-50"
+                >
+                  Réinitialiser
+                </Link>
+              </div>
+            ) : null}
+
+            {sorted.length === 0 ? (
+              <div className="mt-5">
+                <EmptyState
+                  icon={Sparkles}
+                  title="Aucune classe ne correspond"
+                  description="Aucune affectation ne correspond à vos filtres actuels. Réinitialisez pour retrouver l'intégralité de vos classes."
+                  tone="slate"
+                  action={{ label: 'Réinitialiser les filtres', href: '/teacher/reports' }}
+                />
+              </div>
+            ) : (
+              <div className="mt-4 space-y-6">
+                {grouped.map((group) => {
+                  const meta = BAND_META[group.band];
+                  return (
+                    <div key={group.band} className="overflow-hidden rounded-xl ring-1 ring-slate-200/60">
+                      <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50/60 px-4 py-2.5">
+                        <span aria-hidden className={`h-7 w-1.5 rounded-full ${meta.stripe}`} />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="text-sm font-bold text-slate-900">{meta.label}</h3>
+                          <p className="text-[11px] text-slate-500">{meta.description}</p>
+                        </div>
+                        <span
+                          className={`inline-flex shrink-0 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-bold ${meta.chip}`}
+                        >
+                          {group.rows.length} classe{group.rows.length > 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-200 bg-white text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                              <th className="py-2.5 pl-4 pr-3">Classe / Matière</th>
+                              <th className="px-3 text-center">Élèves</th>
+                              <th className="px-3 text-center">Évaluations</th>
+                              {terms.map((t) => (
+                                <th key={t.id} className="px-3 text-center">
+                                  {t.name}
+                                </th>
+                              ))}
+                              <th className="px-3 text-center">Moyenne</th>
+                              <th className="px-3 text-center">Réussite</th>
+                              <th className="px-3 text-center">Distribution</th>
+                              <th className="px-3 pr-4 text-center">Tendance</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {group.rows.map((c) => (
+                              <ClassReportRow
+                                key={c.assignmentId}
+                                row={c}
+                                termsCount={terms.length}
+                              />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </section>
 
