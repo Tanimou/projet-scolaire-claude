@@ -11,10 +11,10 @@ import {
   KpiCard,
   PageHeader,
   Pagination,
+  PreferredDate,
   RowActions,
   StarRating,
   StatusBadge,
-  formatDateShort,
   type DonutSegment,
 } from '@pilotage/ui';
 
@@ -314,11 +314,11 @@ export default async function StudentsPage({
                           {s.externalRef ?? '—'}
                         </td>
                         <td className="px-4 py-3 text-sm text-slate-700">
-                          {formatDateShort(s.birthDate)}
+                          <PreferredDate value={s.birthDate} />
                         </td>
                         <td className="px-4 py-3">
                           {enrol ? (
-                            <span className="inline-flex rounded-md bg-blue-50 px-2 py-0.5 text-xs font-bold text-blue-700">
+                            <span className="inline-flex rounded-md accent-soft-bg px-2 py-0.5 text-xs font-bold accent-text">
                               {enrol.classSection.name}
                             </span>
                           ) : (

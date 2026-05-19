@@ -18,12 +18,12 @@ import { api, ApiError } from '@/lib/api-client';
 import {
   KpiCard,
   PageHeader,
+  PreferredDate,
   StatusBadge,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-  formatDateShort,
 } from '@pilotage/ui';
 
 import { TeacherAssignmentsPanel } from './TeacherAssignmentsPanel';
@@ -186,14 +186,14 @@ export default async function TeacherDetailPage({
                 <Mail className="h-4 w-4 text-slate-400" />
                 <a
                   href={`mailto:${teacher.userProfile.email}`}
-                  className="text-blue-700 hover:underline"
+                  className="accent-text hover:underline"
                 >
                   {teacher.userProfile.email}
                 </a>
               </div>
               <div className="flex items-center gap-2 text-slate-700">
                 <Calendar className="h-4 w-4 text-slate-400" />
-                Recruté·e {formatDateShort(teacher.hiredAt) || '—'}
+                Recruté·e <PreferredDate value={teacher.hiredAt} />
               </div>
               <div className="flex items-center gap-2 text-slate-700">
                 <SchoolIcon className="h-4 w-4 text-slate-400" />
@@ -270,7 +270,7 @@ export default async function TeacherDetailPage({
                 <ProfileField
                   icon={Calendar}
                   label="Date d'embauche"
-                  value={formatDateShort(teacher.hiredAt) || '—'}
+                  value={<PreferredDate value={teacher.hiredAt} />}
                 />
                 <ProfileField
                   icon={Users}
@@ -301,7 +301,7 @@ function ProfileField({
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
-  value: string;
+  value: React.ReactNode;
 }) {
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-3">

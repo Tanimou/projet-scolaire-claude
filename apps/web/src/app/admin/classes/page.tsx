@@ -240,7 +240,7 @@ export default async function ClassesPage({
                         <td className="px-4 py-3">
                           <Link
                             href={`/admin/classes/${c.id}`}
-                            className="text-sm font-bold text-blue-700 hover:underline"
+                            className="text-sm font-bold accent-text hover:underline"
                           >
                             {c.name}
                           </Link>
