@@ -77,6 +77,134 @@ export class AttendanceController {
 
   // -------- Class sessions --------
 
+  /**
+   * List past class sessions for a teaching assignment with per-session
+   * attendance counts. Used by the teacher attendance workspace to show
+   * historic sessions + student-leaderboard data. Sorted by date desc.
+   */
+  @Get('class-sessions')
+  @RequiresPermission('class_sessions.read')
+  async listSessions(
+    @Query('teachingAssignmentId') teachingAssignmentId: string | undefined,
+    @Query('limit') limitStr: string | undefined,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ) {
+    if (!teachingAssignmentId) {
+      throw new BadRequestException('teachingAssignmentId requis.');
+    }
+    const me = await this.users.ensureUser(jwt);
+    const a = await this.prisma.teachingAssignment.findUnique({
+      where: { id: teachingAssignmentId },
+      include: {
+        classSection: {
+          include: {
+            enrollments: {
+              where: { status: 'active' },
+              select: { studentId: true },
+            },
+          },
+        },
+      },
+    });
+    if (!a || a.tenantId !== me.tenantId) throw new NotFoundException('Affectation introuvable.');
+    await this.assertOwnership(a.teacherProfileId, me, jwt);
+
+    const parsedLimit = parseInt(limitStr ?? '200', 10);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 500)
+      : 200;
+
+    const sessions = await this.prisma.classSession.findMany({
+      where: { tenantId: me.tenantId, teachingAssignmentId: a.id },
+      orderBy: { date: 'desc' },
+      take: limit,
+      include: {
+        attendanceRecords: {
+          select: { status: true, studentId: true, justification: true },
+        },
+      },
+    });
+
+    // Per-student leaderboard from the windowed sessions.
+    const studentStats = new Map<
+      string,
+      { absent: number; absentExcused: number; late: number; leftEarly: number; sessions: number }
+    >();
+    for (const s of sessions) {
+      const seenInSession = new Set<string>();
+      for (const r of s.attendanceRecords) {
+        seenInSession.add(r.studentId);
+        const cur = studentStats.get(r.studentId) ?? {
+          absent: 0,
+          absentExcused: 0,
+          late: 0,
+          leftEarly: 0,
+          sessions: 0,
+        };
+        if (r.status === 'absent') cur.absent += 1;
+        else if (r.status === 'absent_excused') cur.absentExcused += 1;
+        else if (r.status === 'late') cur.late += 1;
+        else if (r.status === 'left_early') cur.leftEarly += 1;
+        studentStats.set(r.studentId, cur);
+      }
+      for (const studentId of seenInSession) {
+        const cur = studentStats.get(studentId)!;
+        cur.sessions += 1;
+      }
+    }
+
+    const studentIds = Array.from(studentStats.keys());
+    const students = studentIds.length
+      ? await this.prisma.student.findMany({
+          where: { id: { in: studentIds }, tenantId: me.tenantId },
+          select: { id: true, firstName: true, lastName: true, externalRef: true },
+        })
+      : [];
+
+    return {
+      classSize: a.classSection.enrollments.length,
+      sessions: sessions.map((s) => {
+        const counts = s.attendanceRecords.reduce(
+          (acc, r) => {
+            acc[r.status] = (acc[r.status] ?? 0) + 1;
+            return acc;
+          },
+          {} as Record<string, number>,
+        );
+        const unjustifiedAbsences = s.attendanceRecords.filter(
+          (r) => r.status === 'absent' && (!r.justification || r.justification.trim() === ''),
+        ).length;
+        return {
+          id: s.id,
+          date: s.date,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          topic: s.topic,
+          cancelled: s.cancelled,
+          recordedTotal: s.attendanceRecords.length,
+          counts: {
+            present: counts.present ?? 0,
+            absent: counts.absent ?? 0,
+            absentExcused: counts.absent_excused ?? 0,
+            late: counts.late ?? 0,
+            leftEarly: counts.left_early ?? 0,
+          },
+          unjustifiedAbsences,
+        };
+      }),
+      students: students.map((st) => ({
+        ...st,
+        stats: studentStats.get(st.id) ?? {
+          absent: 0,
+          absentExcused: 0,
+          late: 0,
+          leftEarly: 0,
+          sessions: 0,
+        },
+      })),
+    };
+  }
+
   /** Opens (or returns existing) the session for a (teachingAssignment, date) — idempotent. */
   @Post('class-sessions/open')
   @RequiresPermission('class_sessions.write')
