@@ -26,6 +26,8 @@ import {
   type DonutSegment,
 } from '@pilotage/ui';
 
+import { AdminActionCenter, type ActionCenterData } from './AdminActionCenter';
+
 export const metadata: Metadata = { title: 'Tableau de bord administrateur' };
 export const dynamic = 'force-dynamic';
 
@@ -136,9 +138,10 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 const CYCLE_PALETTE = ['#2563EB', '#64748B', '#14B8A6', '#F59E0B', '#A855F7'];
 
 export default async function AdminDashboardPage() {
-  const [dashboard, academicYears] = await Promise.all([
+  const [dashboard, academicYears, actionCenter] = await Promise.all([
     safe(api<DashboardResponse>('/api/v1/analytics/dashboard', { cache: 'no-store' })),
     safe(api<{ data: AcademicYearRow[] }>('/api/v1/academic-years', { cache: 'no-store' })),
+    safe(api<ActionCenterData>('/api/v1/analytics/admin-action-center', { cache: 'no-store' })),
   ]);
 
   const kpis = dashboard?.kpis;
@@ -174,8 +177,11 @@ export default async function AdminDashboardPage() {
         ) : null
       }
     >
+      {/* ─── Action center: what needs your attention right now ─── */}
+      <AdminActionCenter data={actionCenter} />
+
       {/* ─── KPI strip ─── */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard
           icon={Users}
           tone="blue"

@@ -144,6 +144,42 @@ export interface AdminDashboardResponse {
   }>;
 }
 
+/**
+ * Cross-portal "what needs my attention now" feed for the admin dashboard.
+ * Aggregates actionable items from announcements, alerts, requests, imports
+ * and exports so the admin can triage in one place.
+ */
+export interface AdminActionCenterResponse {
+  generatedAt: string;
+  totalActionable: number;
+  items: Array<{
+    key:
+      | 'critical-alerts'
+      | 'pending-requests'
+      | 'draft-announcements'
+      | 'expiring-announcements'
+      | 'pending-imports'
+      | 'failed-imports'
+      | 'failed-exports';
+    label: string;
+    count: number;
+    severity: 'critical' | 'warning' | 'info';
+    href: string;
+    actionLabel: string;
+    /** Short hint like "le plus ancien il y a 3j" or "expire dans 2j" */
+    detail: string | null;
+    /** Optional preview rows (up to 3) so the panel can render a peek list */
+    preview?: Array<{ id: string; title: string; meta?: string | null }>;
+  }>;
+  /** Headline counts used in the panel summary line */
+  digest: {
+    studentsAtRisk: number;
+    draftsCreatedToday: number;
+    importsAwaitingConfirmation: number;
+    activeUrgentAnnouncements: number;
+  };
+}
+
 export interface TeacherSubjectStat {
   subjectId: string;
   subjectCode: string;
@@ -1438,6 +1474,313 @@ export class AnalyticsService {
       alertRules: AnalyticsService.DEFAULT_ALERT_RULES,
       recentAudit,
       recentExports,
+    };
+  }
+
+  /**
+   * Action-center payload for `/admin/dashboard` — cross-cutting feed of items
+   * that need admin attention right now. Pulls from announcements (drafts +
+   * expiring), alerts (open + high), pending Guardianships, ImportBatch
+   * (validated / failed), ExportJob (failed last 24h). All buckets are bounded
+   * to small counts so the panel renders fast without N+1.
+   */
+  async adminActionCenter(opts: {
+    tenantId: string;
+    schoolId: string;
+  }): Promise<AdminActionCenterResponse> {
+    const { tenantId, schoolId } = opts;
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const sevenDaysAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const ageDays = (d: Date): number =>
+      Math.max(0, Math.floor((now.getTime() - d.getTime()) / (24 * 60 * 60 * 1000)));
+    const inDays = (d: Date): number =>
+      Math.max(0, Math.floor((d.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+
+    const [
+      criticalAlerts,
+      pendingRequests,
+      drafts,
+      expiringAnnouncements,
+      pendingImports,
+      failedImports,
+      failedExports,
+      activeUrgent,
+      studentsAtRiskRows,
+      draftsToday,
+    ] = await Promise.all([
+      this.prisma.alertInstance.findMany({
+        where: { tenantId, schoolId, status: 'open', severity: 'high' },
+        orderBy: { detectedAt: 'asc' },
+        select: {
+          id: true,
+          title: true,
+          detectedAt: true,
+          student: { select: { firstName: true, lastName: true } },
+        },
+        take: 5,
+      }),
+      this.prisma.guardianship.findMany({
+        where: { tenantId, status: 'pending' },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          createdAt: true,
+          guardian: { select: { firstName: true, lastName: true } },
+          student: { select: { firstName: true, lastName: true } },
+        },
+        take: 5,
+      }),
+      this.prisma.announcement.findMany({
+        where: { tenantId, schoolId, publishedAt: null },
+        orderBy: { updatedAt: 'asc' },
+        select: { id: true, title: true, updatedAt: true, createdAt: true, priority: true },
+        take: 5,
+      }),
+      this.prisma.announcement.findMany({
+        where: {
+          tenantId,
+          schoolId,
+          publishedAt: { not: null, lte: now },
+          expiresAt: { not: null, gt: now, lte: sevenDaysAhead },
+        },
+        orderBy: { expiresAt: 'asc' },
+        select: { id: true, title: true, expiresAt: true, priority: true, pinned: true },
+        take: 5,
+      }),
+      this.prisma.importBatch.findMany({
+        where: { tenantId, schoolId, status: 'validated' },
+        orderBy: { startedAt: 'asc' },
+        select: { id: true, fileName: true, startedAt: true, type: true },
+        take: 5,
+      }),
+      this.prisma.importBatch.findMany({
+        where: { tenantId, schoolId, status: { in: ['failed', 'rolled_back'] } },
+        orderBy: { startedAt: 'desc' },
+        select: { id: true, fileName: true, startedAt: true, status: true },
+        take: 5,
+      }),
+      this.prisma.exportJob.findMany({
+        where: { tenantId, schoolId, status: 'failed', createdAt: { gte: oneDayAgo } },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, fileName: true, createdAt: true, kind: true },
+        take: 5,
+      }),
+      this.prisma.announcement.count({
+        where: {
+          tenantId,
+          schoolId,
+          priority: 'urgent',
+          publishedAt: { not: null, lte: now },
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        },
+      }),
+      this.prisma.alertInstance.findMany({
+        where: { tenantId, schoolId, status: 'open', severity: 'high' },
+        select: { studentId: true },
+      }),
+      this.prisma.announcement.count({
+        where: { tenantId, schoolId, publishedAt: null, createdAt: { gte: startOfToday } },
+      }),
+    ]);
+
+    const studentsAtRisk = new Set(studentsAtRiskRows.map((a) => a.studentId)).size;
+
+    const items: AdminActionCenterResponse['items'] = [];
+
+    if (criticalAlerts.length > 0) {
+      // Total count may exceed 5; do a quick countOnly to be honest
+      const totalCritical = await this.prisma.alertInstance.count({
+        where: { tenantId, schoolId, status: 'open', severity: 'high' },
+      });
+      const oldest = criticalAlerts[0]!;
+      items.push({
+        key: 'critical-alerts',
+        label: 'Alertes critiques ouvertes',
+        count: totalCritical,
+        severity: 'critical',
+        href: '/admin/alerts?severity=high&status=open',
+        actionLabel: 'Traiter',
+        detail:
+          totalCritical > 0
+            ? `Étudiant·e·s concerné·e·s : ${studentsAtRisk} · la plus ancienne il y a ${ageDays(oldest.detectedAt)}j`
+            : null,
+        preview: criticalAlerts.slice(0, 3).map((a) => ({
+          id: a.id,
+          title: a.title,
+          meta: [a.student?.firstName, a.student?.lastName]
+            .filter(Boolean)
+            .join(' ') || null,
+        })),
+      });
+    }
+
+    if (pendingRequests.length > 0) {
+      const totalPending = await this.prisma.guardianship.count({
+        where: { tenantId, status: 'pending' },
+      });
+      const oldest = pendingRequests[0]!;
+      items.push({
+        key: 'pending-requests',
+        label: 'Demandes en attente',
+        count: totalPending,
+        severity: ageDays(oldest.createdAt) >= 3 ? 'warning' : 'info',
+        href: '/admin/enrollment-requests',
+        actionLabel: 'Examiner',
+        detail:
+          totalPending > 0
+            ? `Plus ancienne il y a ${ageDays(oldest.createdAt)}j`
+            : null,
+        preview: pendingRequests.slice(0, 3).map((r) => ({
+          id: r.id,
+          title:
+            [r.student?.firstName, r.student?.lastName].filter(Boolean).join(' ') ||
+            'Élève à rattacher',
+          meta:
+            [r.guardian?.firstName, r.guardian?.lastName].filter(Boolean).join(' ') ||
+            null,
+        })),
+      });
+    }
+
+    if (drafts.length > 0) {
+      const totalDrafts = await this.prisma.announcement.count({
+        where: { tenantId, schoolId, publishedAt: null },
+      });
+      const oldest = drafts[0]!;
+      const oldestRef = oldest.updatedAt ?? oldest.createdAt;
+      items.push({
+        key: 'draft-announcements',
+        label: 'Annonces en brouillon',
+        count: totalDrafts,
+        severity: ageDays(oldestRef) >= 7 ? 'warning' : 'info',
+        href: '/admin/communications?status=brouillon',
+        actionLabel: 'Publier',
+        detail:
+          totalDrafts > 0
+            ? `${draftsToday} créée${draftsToday > 1 ? 's' : ''} aujourd&apos;hui · plus ancien il y a ${ageDays(oldestRef)}j`.replace(
+                '&apos;',
+                "'",
+              )
+            : null,
+        preview: drafts.slice(0, 3).map((d) => ({
+          id: d.id,
+          title: d.title,
+          meta: d.priority === 'urgent' ? 'Urgent' : d.priority === 'high' ? 'Important' : null,
+        })),
+      });
+    }
+
+    if (expiringAnnouncements.length > 0) {
+      const next = expiringAnnouncements[0]!;
+      items.push({
+        key: 'expiring-announcements',
+        label: 'Annonces qui expirent sous 7 jours',
+        count: expiringAnnouncements.length,
+        severity:
+          next.expiresAt && inDays(next.expiresAt) <= 1 ? 'warning' : 'info',
+        href: '/admin/communications',
+        actionLabel: 'Vérifier',
+        detail:
+          next.expiresAt != null
+            ? `Prochaine expiration dans ${inDays(next.expiresAt)}j`
+            : null,
+        preview: expiringAnnouncements.slice(0, 3).map((a) => ({
+          id: a.id,
+          title: a.title,
+          meta:
+            a.expiresAt != null
+              ? `expire dans ${inDays(a.expiresAt)}j`
+              : null,
+        })),
+      });
+    }
+
+    if (pendingImports.length > 0) {
+      const totalPendingImports = await this.prisma.importBatch.count({
+        where: { tenantId, schoolId, status: 'validated' },
+      });
+      const oldest = pendingImports[0]!;
+      items.push({
+        key: 'pending-imports',
+        label: 'Imports à confirmer',
+        count: totalPendingImports,
+        severity: ageDays(oldest.startedAt) >= 1 ? 'warning' : 'info',
+        href: '/admin/imports?status=pending',
+        actionLabel: 'Confirmer',
+        detail:
+          totalPendingImports > 0
+            ? `Plus ancien il y a ${ageDays(oldest.startedAt)}j`
+            : null,
+        preview: pendingImports.slice(0, 3).map((b) => ({
+          id: b.id,
+          title: b.fileName,
+          meta: b.type ?? null,
+        })),
+      });
+    }
+
+    if (failedImports.length > 0) {
+      items.push({
+        key: 'failed-imports',
+        label: 'Imports en échec récents',
+        count: failedImports.length,
+        severity: 'critical',
+        href: '/admin/imports?status=failed',
+        actionLabel: 'Investiguer',
+        detail: `Dernier il y a ${ageDays(failedImports[0]!.startedAt)}j`,
+        preview: failedImports.slice(0, 3).map((b) => ({
+          id: b.id,
+          title: b.fileName,
+          meta: b.status === 'rolled_back' ? 'annulé' : 'échec',
+        })),
+      });
+    }
+
+    if (failedExports.length > 0) {
+      items.push({
+        key: 'failed-exports',
+        label: 'Exports en échec (24h)',
+        count: failedExports.length,
+        severity: 'warning',
+        href: '/admin/exports?status=failed',
+        actionLabel: 'Relancer',
+        detail: `Dernier il y a ${ageDays(failedExports[0]!.createdAt)}j`,
+        preview: failedExports.slice(0, 3).map((e) => ({
+          id: e.id,
+          title: e.fileName,
+          meta: e.kind,
+        })),
+      });
+    }
+
+    // Severity order then count desc — critical bubbles up, then warning, then info.
+    const sevRank: Record<'critical' | 'warning' | 'info', number> = {
+      critical: 0,
+      warning: 1,
+      info: 2,
+    };
+    items.sort((a, b) => {
+      if (sevRank[a.severity] !== sevRank[b.severity]) {
+        return sevRank[a.severity] - sevRank[b.severity];
+      }
+      return b.count - a.count;
+    });
+
+    const totalActionable = items.reduce((sum, it) => sum + it.count, 0);
+
+    return {
+      generatedAt: now.toISOString(),
+      totalActionable,
+      items,
+      digest: {
+        studentsAtRisk,
+        draftsCreatedToday: draftsToday,
+        importsAwaitingConfirmation: items.find((i) => i.key === 'pending-imports')?.count ?? 0,
+        activeUrgentAnnouncements: activeUrgent,
+      },
     };
   }
 
