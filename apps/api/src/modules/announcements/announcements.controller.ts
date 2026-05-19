@@ -62,6 +62,15 @@ class UpdateAnnouncementDto {
   @IsOptional() @IsArray() attachments?: unknown[];
 }
 
+class PreviewRecipientsDto {
+  @IsEnum(AnnouncementScope) scope!: AnnouncementScope;
+  @IsOptional() @IsUUID() cycleId?: string;
+  @IsOptional() @IsUUID() gradeLevelId?: string;
+  @IsOptional() @IsUUID() classSectionId?: string;
+  @IsOptional() @IsUUID() studentId?: string;
+  @IsOptional() @IsUUID() userProfileId?: string;
+}
+
 @ApiTags('announcements')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -194,6 +203,111 @@ export class AnnouncementsController {
       },
     });
     return { unread: n };
+  }
+
+  /**
+   * Estimates the number of recipients an announcement would reach if published
+   * right now with the given scope payload. Used by the composer to surface a
+   * live "Cette annonce touchera ~N personnes" panel before the admin clicks
+   * Publier. Returns `count` (distinct user profiles in the union) and a
+   * `breakdown` by role (parents / teachers / admins / staff).
+   *
+   * Pure-read (no side effects). Same auth surface as `create` — requires
+   * `announcements.write` because the breakdown reveals roster size which is
+   * sensitive context. Teachers calling this endpoint for school_wide /
+   * individual_user scopes will get a 400 mirroring the create-time rule, so
+   * the composer can't be used to enumerate the school via the preview.
+   */
+  @Get('preview-recipients')
+  @RequiresPermission('announcements.write')
+  async previewRecipients(@Query() q: PreviewRecipientsDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    const roles = jwt.realm_access?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
+    const isTeacher = roles.includes('teacher');
+
+    if (!isAdmin && isTeacher) {
+      if (q.scope === 'school_wide' || q.scope === 'individual_user') {
+        throw new BadRequestException(
+          "Cette portée est réservée à l'administration. Choisissez une classe, un niveau ou un cycle où vous enseignez.",
+        );
+      }
+    }
+
+    // Validate scope payload requirements early so the preview surfaces the
+    // same "Champ requis" hints as a real publish attempt.
+    this.validateScope({
+      title: 'preview',
+      body: 'preview',
+      scope: q.scope,
+      cycleId: q.cycleId,
+      gradeLevelId: q.gradeLevelId,
+      classSectionId: q.classSectionId,
+      studentId: q.studentId,
+      userProfileId: q.userProfileId,
+    } as CreateAnnouncementDto);
+
+    const recipientIds = await this.recipients.computeRecipients({
+      tenantId: me.tenantId,
+      schoolId,
+      scope: q.scope,
+      cycleId: q.cycleId ?? null,
+      gradeLevelId: q.gradeLevelId ?? null,
+      classSectionId: q.classSectionId ?? null,
+      studentId: q.studentId ?? null,
+      userProfileId: q.userProfileId ?? null,
+    });
+
+    const ids = [...recipientIds];
+    if (ids.length === 0) {
+      return {
+        count: 0,
+        breakdown: { parents: 0, teachers: 0, admins: 0, other: 0 },
+      };
+    }
+
+    // Single batched lookup: join user_profiles → user_roles (active only) →
+    // roles to bucket the recipient set. A profile with both teacher + parent
+    // roles is counted once per role bucket (so the breakdown sum can exceed
+    // `count`); `count` itself is the distinct profile count.
+    const profiles = await this.prisma.userProfile.findMany({
+      where: { id: { in: ids }, tenantId: me.tenantId },
+      select: {
+        id: true,
+        userRoles: {
+          where: { revokedAt: null },
+          select: { role: { select: { slug: true } } },
+        },
+      },
+    });
+
+    let parents = 0;
+    let teachers = 0;
+    let admins = 0;
+    let other = 0;
+    for (const p of profiles) {
+      const slugs = new Set(p.userRoles.map((ur) => ur.role.slug));
+      let bucketed = false;
+      if (slugs.has('parent')) {
+        parents++;
+        bucketed = true;
+      }
+      if (slugs.has('teacher')) {
+        teachers++;
+        bucketed = true;
+      }
+      if (slugs.has('super_admin') || slugs.has('school_admin')) {
+        admins++;
+        bucketed = true;
+      }
+      if (!bucketed) other++;
+    }
+
+    return {
+      count: profiles.length,
+      breakdown: { parents, teachers, admins, other },
+    };
   }
 
   @Get(':id')
