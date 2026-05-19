@@ -230,7 +230,100 @@ export class AnnouncementsController {
       }
       return { ...a, readAt: receipt.readAt ?? new Date() };
     }
-    return a;
+
+    // Admin / author detail view: enrich with recipient breakdown so the
+    // /admin/announcements/[id] page can surface the real engagement of the
+    // announcement (read rate, time-to-read, per-recipient roster). The list
+    // endpoint only exposes a count; everything else here is detail-page only.
+    const receipts = await this.prisma.announcementReceipt.findMany({
+      where: { announcementId: id },
+      orderBy: [{ readAt: 'desc' }, { createdAt: 'asc' }],
+      take: 500,
+    });
+
+    const userProfileIds = receipts.map((r) => r.userProfileId);
+    const authorIds = a.authorId ? [a.authorId] : [];
+    const allIds = Array.from(new Set([...userProfileIds, ...authorIds]));
+    const profiles = allIds.length
+      ? await this.prisma.userProfile.findMany({
+          where: { id: { in: allIds }, tenantId: me.tenantId },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            userRoles: {
+              where: { revokedAt: null },
+              select: { role: { select: { slug: true, name: true } } },
+            },
+          },
+        })
+      : [];
+    const profileById = new Map(
+      profiles.map((p) => [
+        p.id,
+        {
+          id: p.id,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          email: p.email,
+          roles: p.userRoles.map((ur) => ur.role.slug),
+          roleLabels: p.userRoles.map((ur) => ur.role.name),
+        },
+      ]),
+    );
+
+    const totalReceipts = receipts.length;
+    const readReceipts = receipts.filter((r) => r.readAt !== null);
+    const readCount = readReceipts.length;
+    const unreadCount = totalReceipts - readCount;
+    const readRate = totalReceipts > 0 ? readCount / totalReceipts : 0;
+
+    let firstReadAt: Date | null = null;
+    let lastReadAt: Date | null = null;
+    const minutesToRead: number[] = [];
+    for (const r of readReceipts) {
+      if (!r.readAt) continue;
+      if (!firstReadAt || r.readAt < firstReadAt) firstReadAt = r.readAt;
+      if (!lastReadAt || r.readAt > lastReadAt) lastReadAt = r.readAt;
+      const ref = a.publishedAt ?? r.createdAt;
+      if (ref) {
+        const m = Math.max(0, (r.readAt.getTime() - ref.getTime()) / 60000);
+        if (Number.isFinite(m)) minutesToRead.push(m);
+      }
+    }
+    minutesToRead.sort((x, y) => x - y);
+    const medianMinutesToRead =
+      minutesToRead.length === 0
+        ? null
+        : minutesToRead[Math.floor(minutesToRead.length / 2)];
+
+    return {
+      ...a,
+      author: profileById.get(a.authorId)
+        ? {
+            id: a.authorId,
+            firstName: profileById.get(a.authorId)!.firstName,
+            lastName: profileById.get(a.authorId)!.lastName,
+          }
+        : null,
+      stats: {
+        total: totalReceipts,
+        read: readCount,
+        unread: unreadCount,
+        readRate,
+        firstReadAt: firstReadAt ? firstReadAt.toISOString() : null,
+        lastReadAt: lastReadAt ? lastReadAt.toISOString() : null,
+        medianMinutesToRead,
+      },
+      recipients: receipts.map((r) => ({
+        id: r.id,
+        userProfileId: r.userProfileId,
+        readAt: r.readAt ? r.readAt.toISOString() : null,
+        createdAt: r.createdAt.toISOString(),
+        userProfile: profileById.get(r.userProfileId) ?? null,
+      })),
+    };
   }
 
   @Post()
