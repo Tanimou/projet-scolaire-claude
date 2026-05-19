@@ -24,9 +24,15 @@ import {
   type SubjectMetric,
 } from '@pilotage/ui';
 
+import {
+  FamilyOverviewSwimlane,
+  type FamilyChildOverview,
+} from './_components/FamilyOverviewSwimlane';
 import { RecentGradesTable, type GradeRow } from './_components/RecentGradesTable';
 import { SupportStrip } from './_components/SupportStrip';
 import { UpcomingPanel, type UpcomingItem } from './_components/UpcomingPanel';
+
+const FAMILY_OVERVIEW_MAX = 8;
 
 export const metadata: Metadata = { title: 'Tableau de bord famille' };
 export const dynamic = 'force-dynamic';
@@ -179,16 +185,27 @@ export default async function ParentDashboardPage({
     );
   }
 
-  const [dashboard, alertsResp, commentsResp] = await Promise.all([
-    safe(
-      api<ParentDashboardResponse>(
-        `/api/v1/analytics/parent-dashboard/${activeStudent.id}`,
-        { cache: 'no-store' },
-      ),
-    ),
-    safe(
-      api<{ data: ParentAlertItem[] }>(`/api/v1/alerts/parent/${activeStudent.id}`, {
-        cache: 'no-store',
+  // Parallel-fetch dashboard + alerts for EVERY child (capped at 8) so the
+  // family-overview swimlane has live KPIs per child without N round trips.
+  // The active child's data is then picked from the same cache — no double
+  // fetch. Comments are still per-active-child only (heavier payload).
+  const familyChildren = allStudents.slice(0, FAMILY_OVERVIEW_MAX);
+  const [familyData, commentsResp] = await Promise.all([
+    Promise.all(
+      familyChildren.map(async (s) => {
+        const [dash, alertsResp] = await Promise.all([
+          safe(
+            api<ParentDashboardResponse>(`/api/v1/analytics/parent-dashboard/${s.id}`, {
+              cache: 'no-store',
+            }),
+          ),
+          safe(
+            api<{ data: ParentAlertItem[] }>(`/api/v1/alerts/parent/${s.id}`, {
+              cache: 'no-store',
+            }),
+          ),
+        ]);
+        return { student: s, dashboard: dash, alerts: alertsResp?.data ?? [] };
       }),
     ),
     safe(
@@ -198,8 +215,36 @@ export default async function ParentDashboardPage({
       ),
     ),
   ]);
-  const alerts: ParentAlertItem[] = alertsResp?.data ?? [];
+
+  const activeEntry =
+    familyData.find((d) => d.student.id === activeStudent.id) ?? familyData[0] ?? null;
+  const dashboard = activeEntry?.dashboard ?? null;
+  const alerts: ParentAlertItem[] = activeEntry?.alerts ?? [];
   const realComments: ParentCommentItem[] = commentsResp?.data ?? [];
+
+  // Build per-child overviews for the swimlane (only meaningful with 2+).
+  const familyOverviews: FamilyChildOverview[] = familyData.map(({ student, dashboard: d, alerts: a }) => {
+    const firstEnrol = student.enrollments[0]?.classSection;
+    const classLabel =
+      d?.student.classSectionName ?? firstEnrol?.name ?? null;
+    const cycleColor = firstEnrol?.gradeLevel?.cycle?.color ?? null;
+    return {
+      id: student.id,
+      firstName: d?.student.firstName ?? student.firstName,
+      lastName: d?.student.lastName ?? student.lastName,
+      classLabel,
+      cycleColor,
+      studentAverage: d?.globalPerformance.studentAverage ?? null,
+      classAverage: d?.globalPerformance.classAverage ?? null,
+      attendanceRate: d?.globalPerformance.attendanceRate ?? null,
+      progression: d?.globalPerformance.progression ?? null,
+      openAlerts: a.filter((al) => al.status === 'open' || al.status === 'acknowledged').length,
+      highAlerts: a.filter(
+        (al) => al.severity === 'high' && (al.status === 'open' || al.status === 'acknowledged'),
+      ).length,
+      hasData: d != null,
+    };
+  });
 
   const perf = dashboard?.globalPerformance;
   const subjectPerf = dashboard?.subjectPerf ?? [];
@@ -276,24 +321,20 @@ export default async function ParentDashboardPage({
       title="Tableau de bord"
       subtitle="Vue d'ensemble des performances et activités"
     >
-      {/* Switcher si plusieurs enfants */}
-      {allStudents.length > 1 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
-          <span className="font-bold text-slate-500">Enfant :</span>
-          {allStudents.map((s) => (
-            <a
-              key={s.id}
-              href={`/parent/dashboard?studentId=${s.id}`}
-              className={
-                s.id === activeStudent.id
-                  ? 'rounded-full bg-blue-600 px-3 py-1 text-xs font-bold text-white'
-                  : 'rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50'
-              }
-            >
-              {s.firstName} {s.lastName.toUpperCase()}
-            </a>
-          ))}
-        </div>
+      {/* Vue famille — swimlane comparant tous les enfants quand 2+ rattachés.
+          Remplace l'ancien switcher à chips : KPIs lisibles + sélection visuelle
+          via accent-ring. */}
+      {familyOverviews.length > 1 && (
+        <FamilyOverviewSwimlane
+          overviews={familyOverviews}
+          activeStudentId={activeStudent.id}
+        />
+      )}
+      {allStudents.length > FAMILY_OVERVIEW_MAX && (
+        <p className="-mt-3 mb-4 text-[11px] text-slate-500">
+          Affichage des {FAMILY_OVERVIEW_MAX} premiers enfants. Contactez
+          l&apos;administration si vous gérez davantage de dossiers.
+        </p>
       )}
 
       {/* ─────────── Row 1 : Hero (profile + global perf + alerts) ─────────── */}
