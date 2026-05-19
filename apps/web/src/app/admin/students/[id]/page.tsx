@@ -4,6 +4,7 @@ import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
+import { PreferredDate } from '@pilotage/ui';
 
 import { StudentDetailTabs } from './StudentDetailTabs';
 
@@ -112,14 +113,13 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
               )}
               {student.birthDate && (
                 <span>
-                  Né(e) le{' '}
-                  {new Date(student.birthDate).toLocaleDateString('fr-FR', { dateStyle: 'long' })}
+                  Né(e) le <PreferredDate value={student.birthDate} formatOverride="long" />
                 </span>
               )}
               {activeEnrollment && (
-                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-blue-700 font-bold">
+                <span className="inline-flex items-center gap-1 rounded-md accent-soft-bg px-2 py-0.5 accent-text font-bold">
                   {activeEnrollment.classSection.gradeLevel?.cycle?.name && (
-                    <span className="font-semibold text-blue-600">
+                    <span className="font-semibold accent-text">
                       {activeEnrollment.classSection.gradeLevel.cycle.name} ·
                     </span>
                   )}

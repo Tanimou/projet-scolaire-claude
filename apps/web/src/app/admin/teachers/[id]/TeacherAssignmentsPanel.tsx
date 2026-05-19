@@ -269,7 +269,7 @@ export function TeacherAssignmentsPanel({
                 {assignments.map((a) => (
                   <tr key={a.id} className="hover:bg-slate-50/60">
                     <td className="px-4 py-3">
-                      <span className="inline-flex rounded-md bg-blue-50 px-2 py-0.5 text-xs font-bold text-blue-700">
+                      <span className="inline-flex rounded-md accent-soft-bg px-2 py-0.5 text-xs font-bold accent-text">
                         {a.className}
                       </span>
                       <span className="ml-1.5 text-[11px] text-slate-500">

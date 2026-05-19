@@ -40,7 +40,7 @@ export function StudentRowActions({
     <div className="flex items-center justify-end gap-1">
       <Link
         href={`/admin/students/${studentId}`}
-        className="rounded-md px-2 py-1 text-xs font-bold text-blue-700 hover:bg-blue-50"
+        className="rounded-md px-2 py-1 text-xs font-bold accent-text hover:bg-slate-100"
       >
         Détail
       </Link>

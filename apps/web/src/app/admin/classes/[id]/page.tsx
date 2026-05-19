@@ -12,6 +12,7 @@ import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
+import { PreferredDate } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Détail classe' };
 export const dynamic = 'force-dynamic';
@@ -73,15 +74,15 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
 
       {/* Breadcrumb of the relationship chain */}
       <nav aria-label="Hiérarchie" className="mt-4 flex flex-wrap items-center gap-1 text-xs text-slate-500">
-        <Link href="/admin/school/structure" className="hover:text-blue-700">
+        <Link href="/admin/school/structure" className="hover:text-slate-900">
           École
         </Link>
         <ChevronRight className="h-3 w-3" />
-        <Link href="/admin/cycles" className="hover:text-blue-700">
+        <Link href="/admin/cycles" className="hover:text-slate-900">
           Cycle <strong className="text-slate-700">{cls.gradeLevel.cycle.name}</strong>
         </Link>
         <ChevronRight className="h-3 w-3" />
-        <Link href="/admin/cycles" className="hover:text-blue-700">
+        <Link href="/admin/cycles" className="hover:text-slate-900">
           Niveau <strong className="text-slate-700">{cls.gradeLevel.name}</strong>{' '}
           <span className="font-mono text-[10px] text-slate-400">({cls.gradeLevel.code})</span>
         </Link>
@@ -156,7 +157,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
             </div>
             <Link
               href={`/admin/students?classSectionId=${cls.id}`}
-              className="text-xs font-bold text-blue-700 hover:underline"
+              className="text-xs font-bold accent-text hover:underline"
             >
               Voir tous →
             </Link>
@@ -167,7 +168,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
               <p className="mt-3 text-sm font-semibold text-slate-700">Aucun élève dans cette classe</p>
               <p className="mt-1 text-xs text-slate-500">
                 Allez sur une fiche élève pour l&apos;inscrire ici, ou importez en masse via{' '}
-                <Link href="/admin/imports" className="font-bold text-blue-700 hover:underline">
+                <Link href="/admin/imports" className="font-bold accent-text hover:underline">
                   /admin/imports
                 </Link>{' '}
                 (type « enrollments »).
@@ -195,8 +196,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
                         )}
                         {e.student.birthDate && (
                           <span>
-                            né(e) le{' '}
-                            {new Date(e.student.birthDate).toLocaleDateString('fr-FR', { dateStyle: 'short' })}
+                            né(e) le <PreferredDate value={e.student.birthDate} />
                           </span>
                         )}
                       </div>
@@ -222,7 +222,7 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
                 Matières & coefficients
               </h3>
             </div>
-            <Link href="/admin/subjects" className="text-xs font-bold text-blue-700 hover:underline">
+            <Link href="/admin/subjects" className="text-xs font-bold accent-text hover:underline">
               Modifier →
             </Link>
           </div>

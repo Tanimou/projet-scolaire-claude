@@ -18,6 +18,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
+import { PreferredDate, formatPreferredDate, useDisplayDateFormat } from '@pilotage/ui';
 import { useState } from 'react';
 
 import {
@@ -125,6 +126,7 @@ function TabButton({
 }
 
 function IdentityTab({ student }: { student: StudentDetail }) {
+  const dateFmt = useDisplayDateFormat();
   const [editing, setEditing] = useState(false);
   const [firstName, setFirstName] = useState(student.firstName);
   const [lastName, setLastName] = useState(student.lastName);
@@ -179,7 +181,7 @@ function IdentityTab({ student }: { student: StudentDetail }) {
           <Row label="Nom" value={student.lastName} />
           <Row
             label="Date de naissance"
-            value={student.birthDate ? new Date(student.birthDate).toLocaleDateString('fr-FR', { dateStyle: 'long' }) : '—'}
+            value={student.birthDate ? formatPreferredDate(student.birthDate, dateFmt) : '—'}
           />
           <Row label="Sexe" value={student.gender ?? '—'} />
           <Row label="Matricule" value={student.externalRef ?? '—'} mono />
@@ -414,7 +416,7 @@ function EnrollmentsTab({
             <button
               type="button"
               onClick={() => setAdding(true)}
-              className="inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+              className="inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
             >
               <Plus className="h-3 w-3" /> Ajouter une inscription
             </button>
@@ -440,11 +442,12 @@ function EnrollmentsTab({
                     {e.classSection.name} <span className="font-medium text-slate-500">· {e.classSection.gradeLevel.name}</span>
                   </div>
                   <div className="text-xs text-slate-500">
-                    {e.academicYear.name} · Inscrit le {new Date(e.enrolledAt).toLocaleDateString('fr-FR')}
+                    {e.academicYear.name} · Inscrit le{' '}
+                    <PreferredDate value={e.enrolledAt} />
                     {e.endedAt && (
                       <>
                         {' '}
-                        → Terminé le {new Date(e.endedAt).toLocaleDateString('fr-FR')}
+                        → Terminé le <PreferredDate value={e.endedAt} />
                         {e.endReason && <span className="italic"> ({e.endReason})</span>}
                       </>
                     )}
