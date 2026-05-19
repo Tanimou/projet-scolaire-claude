@@ -152,7 +152,30 @@ export class AnnouncementsController {
         { announcement: { publishedAt: 'desc' } },
       ],
     });
-    return { data: receipts.map((r) => ({ ...r.announcement, readAt: r.readAt, receiptId: r.id })) };
+
+    // Enrich with author identity (firstName/lastName) so the parent communication
+    // page can group communications by interlocutor. Single batch query keyed on
+    // distinct authorIds present in the fetched receipts (no schema change needed —
+    // Announcement.authorId is a plain UUID without a Prisma relation).
+    const authorIds = Array.from(
+      new Set(receipts.map((r) => r.announcement.authorId).filter(Boolean)),
+    );
+    const authors = authorIds.length
+      ? await this.prisma.userProfile.findMany({
+          where: { id: { in: authorIds }, tenantId: me.tenantId },
+          select: { id: true, firstName: true, lastName: true },
+        })
+      : [];
+    const authorById = new Map(authors.map((a) => [a.id, a]));
+
+    return {
+      data: receipts.map((r) => ({
+        ...r.announcement,
+        readAt: r.readAt,
+        receiptId: r.id,
+        author: authorById.get(r.announcement.authorId) ?? null,
+      })),
+    };
   }
 
   @Get('unread-count')
