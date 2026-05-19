@@ -1,11 +1,13 @@
-import { AlertCircle, ArrowLeft } from 'lucide-react';
+import { AlertCircle, ArrowLeft, BookOpen } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
+import { PageHeader } from '@pilotage/ui';
 
 import { Gradebook } from './Gradebook';
+import { GradebookInsights } from './GradebookInsights';
 
 export const metadata: Metadata = { title: 'Notes' };
 export const dynamic = 'force-dynamic';
@@ -93,28 +95,66 @@ export default async function GradebookPage({ params }: { params: Promise<{ id: 
     );
   }
 
+  const subjectColorStyle = data.assignment.subject.color
+    ? { backgroundColor: `${data.assignment.subject.color}1A`, color: data.assignment.subject.color }
+    : { backgroundColor: '#E2E8F0', color: '#475569' };
+
   return (
     <PortalShell portal="teacher">
-      <Link
-        href={`/teacher/classes/${id}`}
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900"
-      >
-        <ArrowLeft className="h-4 w-4" /> Retour à la classe
-      </Link>
-      <div className="mt-4">
-        <div className="text-xs text-slate-500">
-          {data.assignment.classSection.gradeLevel.cycle?.name} ·{' '}
-          {data.assignment.classSection.name} · {data.assignment.subject.name}
-        </div>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">Notes & évaluations</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Coefficient de base de la matière à ce niveau : <strong>{data.assignment.baseCoefficient}</strong>.
-          Vous pouvez surcharger ce coefficient sur chaque évaluation individuelle.
-        </p>
-      </div>
+      <PageHeader
+        breadcrumb={[
+          { label: 'Tableau de bord', href: '/teacher/dashboard' },
+          { label: 'Mes classes', href: '/teacher/classes' },
+          {
+            label: data.assignment.classSection.name,
+            href: `/teacher/classes/${id}`,
+          },
+          { label: data.assignment.subject.name },
+        ]}
+        leading={
+          <span
+            aria-hidden
+            className="inline-flex h-12 w-12 items-center justify-center rounded-2xl text-lg font-bold ring-1 ring-slate-200/60"
+            style={subjectColorStyle}
+          >
+            <BookOpen className="h-5 w-5" />
+          </span>
+        }
+        title="Notes & évaluations"
+        subtitle={
+          <>
+            {data.assignment.classSection.gradeLevel.cycle?.name && (
+              <>{data.assignment.classSection.gradeLevel.cycle.name} · </>
+            )}
+            {data.assignment.classSection.gradeLevel.name} ·{' '}
+            {data.assignment.classSection.name} · {data.assignment.subject.name} · coef. de base{' '}
+            <strong className="font-bold">{data.assignment.baseCoefficient}</strong>
+          </>
+        }
+        actions={
+          <Link
+            href={`/teacher/classes/${id}`}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" /> Retour à la classe
+          </Link>
+        }
+      />
+
       <div className="mt-6">
-        <Gradebook initial={data} teachingAssignmentId={id} />
+        <GradebookInsights data={data} />
       </div>
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-base font-bold text-slate-900">Carnet de notes</h2>
+          <p className="text-[11px] text-slate-500">
+            Saisissez les notes, créez de nouvelles évaluations et publiez vos brouillons
+            ci-dessous.
+          </p>
+        </div>
+        <Gradebook initial={data} teachingAssignmentId={id} />
+      </section>
     </PortalShell>
   );
 }
