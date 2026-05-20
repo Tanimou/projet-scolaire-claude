@@ -180,6 +180,30 @@ export interface AdminActionCenterResponse {
   };
 }
 
+export interface TeacherActionCenterResponse {
+  generatedAt: string;
+  totalActionable: number;
+  items: Array<{
+    key: 'draft-assessments' | 'incomplete-grading' | 'upcoming-week' | 'missing-lessons';
+    label: string;
+    count: number;
+    severity: 'critical' | 'warning' | 'info';
+    href: string;
+    actionLabel: string;
+    /** Short hint like "la plus ancienne il y a 3j" or "dans 2j" */
+    detail: string | null;
+    /** Optional preview rows (up to 3) so the panel can render a peek list */
+    preview?: Array<{ id: string; title: string; meta?: string | null }>;
+  }>;
+  /** Headline counts used in the panel summary line */
+  digest: {
+    draftsToPublish: number;
+    gradesToComplete: number;
+    assessmentsThisWeek: number;
+    lessonsToFill: number;
+  };
+}
+
 export interface TeacherSubjectStat {
   subjectId: string;
   subjectCode: string;
@@ -974,6 +998,276 @@ export class AnalyticsService {
       subjectStats: Array.from(bySubject.values()),
       upcomingAssessments,
       recentActivity,
+    };
+  }
+
+  /**
+   * Cross-cutting "what needs my attention now" feed for the teacher dashboard.
+   * Mirrors `adminActionCenter` but scoped to the teacher's own assignments:
+   * draft assessments to publish, incomplete grade entry, assessments coming
+   * up this week, and recent sessions still missing a cahier-de-texte entry.
+   * Each bucket previews up to 3 rows + an honest total count.
+   */
+  async teacherActionCenter(opts: {
+    tenantId: string;
+    teacherProfileId: string;
+    academicYearId?: string;
+  }): Promise<TeacherActionCenterResponse> {
+    const { tenantId, teacherProfileId, academicYearId } = opts;
+    const now = new Date();
+    const sevenDaysAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const ageDays = (d: Date): number =>
+      Math.max(0, Math.floor((now.getTime() - d.getTime()) / (24 * 60 * 60 * 1000)));
+    const inDays = (d: Date): number =>
+      Math.max(0, Math.floor((d.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+
+    const assignmentScope = academicYearId ? { academicYearId } : {};
+    const assignments = await this.prisma.teachingAssignment.findMany({
+      where: { tenantId, teacherProfileId, ...assignmentScope },
+      select: { id: true },
+    });
+    const assignmentIds = assignments.map((a) => a.id);
+
+    // No classes assigned yet — nothing to surface.
+    if (assignmentIds.length === 0) {
+      return {
+        generatedAt: now.toISOString(),
+        totalActionable: 0,
+        items: [],
+        digest: {
+          draftsToPublish: 0,
+          gradesToComplete: 0,
+          assessmentsThisWeek: 0,
+          lessonsToFill: 0,
+        },
+      };
+    }
+
+    const classSubjectSelect = {
+      teachingAssignment: {
+        select: {
+          classSection: { select: { id: true, name: true } },
+          subject: { select: { code: true, name: true } },
+        },
+      },
+    };
+
+    const [
+      draftAssessments,
+      draftCount,
+      publishedForGrading,
+      upcomingWeek,
+      upcomingWeekCount,
+      missingLessonSessions,
+      missingLessonCount,
+    ] = await Promise.all([
+      this.prisma.assessment.findMany({
+        where: { tenantId, teacherProfileId, isPublished: false },
+        orderBy: [{ scheduledAt: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, title: true, scheduledAt: true, createdAt: true, ...classSubjectSelect },
+        take: 5,
+      }),
+      this.prisma.assessment.count({
+        where: { tenantId, teacherProfileId, isPublished: false },
+      }),
+      this.prisma.assessment.findMany({
+        where: { tenantId, teacherProfileId, isPublished: true },
+        select: {
+          id: true,
+          title: true,
+          publishedAt: true,
+          _count: { select: { grades: true } },
+          teachingAssignment: {
+            select: {
+              classSection: {
+                select: {
+                  id: true,
+                  name: true,
+                  _count: { select: { enrollments: { where: { status: 'active' } } } },
+                },
+              },
+              subject: { select: { code: true, name: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.assessment.findMany({
+        where: { tenantId, teacherProfileId, scheduledAt: { gte: now, lte: sevenDaysAhead } },
+        orderBy: { scheduledAt: 'asc' },
+        select: { id: true, title: true, scheduledAt: true, ...classSubjectSelect },
+        take: 5,
+      }),
+      this.prisma.assessment.count({
+        where: { tenantId, teacherProfileId, scheduledAt: { gte: now, lte: sevenDaysAhead } },
+      }),
+      this.prisma.classSession.findMany({
+        where: {
+          tenantId,
+          teacherProfileId,
+          cancelled: false,
+          date: { gte: fourteenDaysAgo, lte: now },
+          lessonEntry: { is: null },
+        },
+        orderBy: { date: 'asc' },
+        select: {
+          id: true,
+          date: true,
+          topic: true,
+          teachingAssignment: {
+            select: {
+              classSection: { select: { name: true } },
+              subject: { select: { code: true, name: true } },
+            },
+          },
+        },
+        take: 5,
+      }),
+      this.prisma.classSession.count({
+        where: {
+          tenantId,
+          teacherProfileId,
+          cancelled: false,
+          date: { gte: fourteenDaysAgo, lte: now },
+          lessonEntry: { is: null },
+        },
+      }),
+    ]);
+
+    const items: TeacherActionCenterResponse['items'] = [];
+
+    // 1. Draft assessments awaiting publication.
+    if (draftAssessments.length > 0) {
+      const overdueDrafts = draftAssessments.filter(
+        (a) => a.scheduledAt != null && a.scheduledAt < now,
+      ).length;
+      const oldest = draftAssessments[0]!;
+      const oldestRef = oldest.scheduledAt ?? oldest.createdAt;
+      items.push({
+        key: 'draft-assessments',
+        label: 'Évaluations en brouillon',
+        count: draftCount,
+        severity: overdueDrafts > 0 ? 'critical' : 'warning',
+        href: '/teacher/assessments?status=draft',
+        actionLabel: 'Publier',
+        detail:
+          overdueDrafts > 0
+            ? `${overdueDrafts} déjà programmée${overdueDrafts > 1 ? 's' : ''} · plus ancienne il y a ${ageDays(oldestRef)}j`
+            : `Plus ancienne il y a ${ageDays(oldestRef)}j`,
+        preview: draftAssessments.slice(0, 3).map((a) => ({
+          id: a.id,
+          title: a.title,
+          meta:
+            [a.teachingAssignment.classSection.name, a.teachingAssignment.subject.code]
+              .filter(Boolean)
+              .join(' · ') || null,
+        })),
+      });
+    }
+
+    // 2. Published assessments with incomplete grade entry.
+    const incomplete = publishedForGrading
+      .map((a) => {
+        const enrolled = a.teachingAssignment.classSection._count?.enrollments ?? 0;
+        const entered = a._count?.grades ?? 0;
+        return { ...a, enrolled, entered, missing: Math.max(0, enrolled - entered) };
+      })
+      .filter((a) => a.enrolled > 0 && a.missing > 0)
+      .sort((x, y) => y.missing - x.missing);
+
+    if (incomplete.length > 0) {
+      const totalMissing = incomplete.reduce((sum, a) => sum + a.missing, 0);
+      items.push({
+        key: 'incomplete-grading',
+        label: 'Saisies de notes incomplètes',
+        count: incomplete.length,
+        severity: 'warning',
+        href: '/teacher/assessments?status=published',
+        actionLabel: 'Compléter',
+        detail: `${totalMissing} note${totalMissing > 1 ? 's' : ''} manquante${totalMissing > 1 ? 's' : ''} au total`,
+        preview: incomplete.slice(0, 3).map((a) => ({
+          id: a.id,
+          title: a.title,
+          meta: `${a.entered}/${a.enrolled} · ${a.teachingAssignment.classSection.name}`,
+        })),
+      });
+    }
+
+    // 3. Assessments scheduled within the next 7 days.
+    if (upcomingWeek.length > 0) {
+      const next = upcomingWeek[0]!;
+      const nextInDays = next.scheduledAt ? inDays(next.scheduledAt) : null;
+      items.push({
+        key: 'upcoming-week',
+        label: 'Évaluations cette semaine',
+        count: upcomingWeekCount,
+        severity: nextInDays != null && nextInDays <= 2 ? 'warning' : 'info',
+        href: '/teacher/assessments?status=upcoming',
+        actionLabel: 'Préparer',
+        detail:
+          nextInDays != null
+            ? nextInDays === 0
+              ? 'La plus proche est aujourd&apos;hui'.replace('&apos;', "'")
+              : `La plus proche dans ${nextInDays}j`
+            : null,
+        preview: upcomingWeek.slice(0, 3).map((a) => ({
+          id: a.id,
+          title: a.title,
+          meta:
+            [
+              a.teachingAssignment.classSection.name,
+              a.scheduledAt ? `dans ${inDays(a.scheduledAt)}j` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || null,
+        })),
+      });
+    }
+
+    // 4. Recent sessions without a cahier-de-texte entry.
+    if (missingLessonSessions.length > 0) {
+      const oldest = missingLessonSessions[0]!;
+      items.push({
+        key: 'missing-lessons',
+        label: 'Cahier de texte à compléter',
+        count: missingLessonCount,
+        severity: ageDays(oldest.date) >= 3 ? 'warning' : 'info',
+        href: '/teacher/classes',
+        actionLabel: 'Renseigner',
+        detail: `Séance la plus ancienne il y a ${ageDays(oldest.date)}j`,
+        preview: missingLessonSessions.slice(0, 3).map((s) => ({
+          id: s.id,
+          title:
+            s.topic ||
+            `${s.teachingAssignment.subject.name} — ${s.teachingAssignment.classSection.name}`,
+          meta: `${s.teachingAssignment.classSection.name} · il y a ${ageDays(s.date)}j`,
+        })),
+      });
+    }
+
+    // Severity order then count desc — critical bubbles up, then warning, then info.
+    const sevRank: Record<'critical' | 'warning' | 'info', number> = {
+      critical: 0,
+      warning: 1,
+      info: 2,
+    };
+    items.sort((a, b) => {
+      if (sevRank[a.severity] !== sevRank[b.severity]) {
+        return sevRank[a.severity] - sevRank[b.severity];
+      }
+      return b.count - a.count;
+    });
+
+    return {
+      generatedAt: now.toISOString(),
+      totalActionable: items.reduce((sum, it) => sum + it.count, 0),
+      items,
+      digest: {
+        draftsToPublish: draftCount,
+        gradesToComplete: incomplete.length,
+        assessmentsThisWeek: upcomingWeekCount,
+        lessonsToFill: missingLessonCount,
+      },
     };
   }
 

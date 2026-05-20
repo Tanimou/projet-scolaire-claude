@@ -36,6 +36,7 @@ import {
   type AssignmentOption,
   type GradebookData,
 } from './_components/InlineGradebook';
+import { TeacherActionCenter, type TeacherActionData } from './_components/TeacherActionCenter';
 
 export const metadata: Metadata = { title: 'Tableau de bord professeur' };
 export const dynamic = 'force-dynamic';
@@ -99,10 +100,11 @@ export default async function TeacherDashboardPage({
   searchParams: Promise<{ a?: string }>;
 }) {
   const sp = await searchParams;
-  const [me, dashboard, mine] = await Promise.all([
+  const [me, dashboard, mine, actionCenter] = await Promise.all([
     fetchMe(),
     safe(api<TeacherDashboardResponse>('/api/v1/analytics/teacher-dashboard', { cache: 'no-store' })),
     safe(api<MyAssignmentsResp>('/api/v1/teachers/me/assignments', { cache: 'no-store' })),
+    safe(api<TeacherActionData>('/api/v1/analytics/teacher-action-center', { cache: 'no-store' })),
   ]);
 
   const subjectStats = dashboard?.subjectStats ?? [];
@@ -208,6 +210,13 @@ export default async function TeacherDashboardPage({
       title="Tableau de bord"
       subtitle={`Bienvenue, ${me?.firstName ?? 'Professeur'} 👋`}
     >
+      {/* ──────── Row 0 : action center (only when something needs attention) ──────── */}
+      {actionCenter && actionCenter.items.length > 0 && (
+        <div className="mb-6">
+          <TeacherActionCenter data={actionCenter} />
+        </div>
+      )}
+
       {/* ──────── Row 1 : 4 subject KPI cards ──────── */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {subjectStats.length === 0 ? (

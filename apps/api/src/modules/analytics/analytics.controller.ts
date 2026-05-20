@@ -67,6 +67,20 @@ export class AnalyticsController {
     });
   }
 
+  /** Cross-cutting "needs my attention now" feed for the teacher dashboard. */
+  @Get('teacher-action-center')
+  @RequiresPermission('teaching_assignments.read')
+  async teacherActionCenter(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    const teacher = await this.teachers.ensureForUser(me);
+    const { activeAcademicYearId } = await this.ctx.forUser(me);
+    return this.analytics.teacherActionCenter({
+      tenantId: me.tenantId,
+      teacherProfileId: teacher.id,
+      academicYearId: activeAcademicYearId ?? undefined,
+    });
+  }
+
   /** Teacher reports payload — backs `/teacher/reports`. */
   @Get('teacher-reports')
   @RequiresPermission('teaching_assignments.read')
