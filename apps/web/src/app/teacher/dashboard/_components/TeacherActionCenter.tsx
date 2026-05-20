@@ -4,6 +4,7 @@ import {
   ClipboardList,
   Compass,
   FileEdit,
+  LifeBuoy,
   type LucideIcon,
   NotebookPen,
   Sparkles,
@@ -11,7 +12,12 @@ import {
 import Link from 'next/link';
 
 export interface TeacherActionItem {
-  key: 'draft-assessments' | 'incomplete-grading' | 'upcoming-week' | 'missing-lessons';
+  key:
+    | 'draft-assessments'
+    | 'incomplete-grading'
+    | 'upcoming-week'
+    | 'students-at-risk'
+    | 'missing-lessons';
   label: string;
   count: number;
   severity: 'critical' | 'warning' | 'info';
@@ -25,6 +31,7 @@ export interface TeacherActionDigest {
   draftsToPublish: number;
   gradesToComplete: number;
   assessmentsThisWeek: number;
+  studentsAtRisk: number;
   lessonsToFill: number;
 }
 
@@ -39,6 +46,7 @@ const ICON_BY_KEY: Record<TeacherActionItem['key'], LucideIcon> = {
   'draft-assessments': FileEdit,
   'incomplete-grading': ClipboardList,
   'upcoming-week': CalendarClock,
+  'students-at-risk': LifeBuoy,
   'missing-lessons': NotebookPen,
 };
 
@@ -148,6 +156,12 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
               hidden={digest.gradesToComplete === 0}
             />
             <DigestChip
+              label="élèves en difficulté"
+              value={digest.studentsAtRisk}
+              tone="rose"
+              hidden={digest.studentsAtRisk === 0}
+            />
+            <DigestChip
               label="évals cette semaine"
               value={digest.assessmentsThisWeek}
               tone="violet"
@@ -171,8 +185,8 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
           <div className="text-sm text-emerald-900">
             <p className="font-bold">Rien en attente</p>
             <p className="mt-0.5 text-xs text-emerald-800/80">
-              Aucune évaluation en brouillon, aucune saisie incomplète, aucun cahier de texte en
-              retard. Beau travail&nbsp;!
+              Aucune évaluation en brouillon, aucune saisie incomplète, aucun élève sous le seuil et
+              aucun cahier de texte en retard. Beau travail&nbsp;!
             </p>
           </div>
         </div>
