@@ -7,6 +7,7 @@ import type {
 } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { NotificationPreferencesService } from './preferences.service';
 
 export interface NotificationDto {
   id: string;
@@ -49,9 +50,17 @@ export interface CreateNotificationArgs {
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly preferences: NotificationPreferencesService,
+  ) {}
 
-  /** Insert one notification. Returns the created row. */
+  /**
+   * Insert one notification unconditionally. This is the raw low-level insert
+   * and does NOT consult notification preferences — reserve it for guaranteed
+   * deliveries. Fan-out producers should use `createMany`, which honours each
+   * recipient's in-app preference per kind.
+   */
   async create(args: CreateNotificationArgs): Promise<Notification> {
     return this.prisma.notification.create({
       data: {
@@ -71,7 +80,10 @@ export class NotificationsService {
   /**
    * Bulk fan-out. Deduplicates by (userProfileId, sourceType, sourceId)
    * within the same tenant so a single source event doesn't ping the same
-   * recipient twice even if dispatchers fire concurrently.
+   * recipient twice even if dispatchers fire concurrently. Then drops items
+   * whose recipient has explicitly disabled the in-app channel for that kind
+   * (via `/notifications/preferences`), so the settings toggles actually gate
+   * delivery.
    */
   async createMany(items: CreateNotificationArgs[]): Promise<{ created: number }> {
     if (items.length === 0) return { created: 0 };
@@ -101,10 +113,21 @@ export class NotificationsService {
       existing.map((e) => `${e.userProfileId}|${e.sourceType ?? ''}|${e.sourceId ?? ''}`),
     );
 
-    const toInsert = items.filter((i) => {
+    const deduped = items.filter((i) => {
       if (!i.sourceType || !i.sourceId) return true;
       return !seen.has(`${i.userProfileId}|${i.sourceType}|${i.sourceId}`);
     });
+    if (deduped.length === 0) return { created: 0 };
+
+    // Honour per-user notification preferences: drop items whose recipient has
+    // explicitly turned the in-app channel off for that kind. Missing override
+    // rows default to in-app on, so they pass through untouched.
+    const disabled = await this.preferences.disabledInAppKeys(
+      deduped.map((i) => ({ userProfileId: i.userProfileId, kind: i.kind })),
+    );
+    const toInsert = disabled.size
+      ? deduped.filter((i) => !disabled.has(`${i.userProfileId}|${i.kind}`))
+      : deduped;
     if (toInsert.length === 0) return { created: 0 };
 
     const res = await this.prisma.notification.createMany({
