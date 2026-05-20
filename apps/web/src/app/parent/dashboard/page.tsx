@@ -28,6 +28,11 @@ import {
   FamilyOverviewSwimlane,
   type FamilyChildOverview,
 } from './_components/FamilyOverviewSwimlane';
+import {
+  ParentActionCenter,
+  buildParentActionItems,
+  type ParentActionChild,
+} from './_components/ParentActionCenter';
 import { RecentGradesTable, type GradeRow } from './_components/RecentGradesTable';
 import { SupportStrip } from './_components/SupportStrip';
 import { UpcomingPanel, type UpcomingItem } from './_components/UpcomingPanel';
@@ -246,6 +251,39 @@ export default async function ParentDashboardPage({
     };
   });
 
+  // Family action feed — built entirely from the data already fetched above
+  // (no extra round-trips). Aggregates alerts, upcoming evals, fresh grades and
+  // attendance across every attached child into one triage panel.
+  const actionChildren: ParentActionChild[] = familyData
+    .filter((d) => d.dashboard != null)
+    .map(({ student, dashboard: d, alerts: a }) => ({
+      studentId: student.id,
+      firstName: d?.student.firstName ?? student.firstName,
+      alerts: a.map((al) => ({
+        id: al.id,
+        severity: al.severity,
+        status: al.status,
+        title: al.title,
+        subjectName: al.subjectName,
+      })),
+      upcoming: (d?.upcomingAssessments ?? []).map((u) => ({
+        id: u.id,
+        title: u.title,
+        date: u.date,
+        subjectName: u.subjectName,
+      })),
+      recentGrades: (d?.recentGrades ?? []).map((g) => ({
+        id: g.id,
+        title: g.title,
+        date: g.date,
+        subjectName: g.subjectName,
+        value: g.value,
+        max: g.max,
+      })),
+      attendanceRate: d?.globalPerformance.attendanceRate ?? null,
+    }));
+  const actionItems = buildParentActionItems(actionChildren);
+
   const perf = dashboard?.globalPerformance;
   const subjectPerf = dashboard?.subjectPerf ?? [];
   const termEvolution = dashboard?.termEvolution ?? [];
@@ -321,6 +359,12 @@ export default async function ParentDashboardPage({
       title="Tableau de bord"
       subtitle="Vue d'ensemble des performances et activités"
     >
+      {/* Centre de suivi — feed transversal « ce qui demande votre attention »
+          agrégé sur tous les enfants. Ne s'affiche que s'il y a au moins une
+          action en attente, pour ne pas concurrencer le message « tout est au
+          vert » de la carte Alertes plus bas. */}
+      <ParentActionCenter items={actionItems} />
+
       {/* Vue famille — swimlane comparant tous les enfants quand 2+ rattachés.
           Remplace l'ancien switcher à chips : KPIs lisibles + sélection visuelle
           via accent-ring. */}
