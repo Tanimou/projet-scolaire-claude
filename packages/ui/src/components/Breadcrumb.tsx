@@ -32,7 +32,10 @@ export function Breadcrumb({ items, separator, className }: BreadcrumbProps) {
               {isLast || !it.href ? (
                 <span className={cn(isLast && 'font-semibold text-slate-900')}>{it.label}</span>
               ) : (
-                <a href={it.href} className="transition-colors hover:text-slate-900 hover:underline">
+                <a
+                  href={it.href}
+                  className="rounded transition-colors hover:accent-text hover:underline focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline"
+                >
                   {it.label}
                 </a>
               )}

@@ -152,7 +152,7 @@ export function KpiCard({
           href={href}
           // Uses the user's accent (default = brand colour) so the chosen
           // accent shows up on every KPI card link across the app.
-          className="accent-text mt-2 inline-flex items-center gap-1 text-xs font-bold hover:underline"
+          className="accent-text mt-2 inline-flex items-center gap-1 rounded text-xs font-bold hover:underline focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline"
         >
           {hrefLabel ?? 'Voir →'}
         </a>

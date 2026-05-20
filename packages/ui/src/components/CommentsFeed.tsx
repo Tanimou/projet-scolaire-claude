@@ -70,7 +70,7 @@ export function CommentsFeed({ items, emptyState, clampLines = 3, className }: C
             {c.href && (
               <a
                 href={c.href}
-                className="accent-text mt-1 inline-flex items-center gap-1 text-xs font-bold hover:underline"
+                className="accent-text mt-1 inline-flex items-center gap-1 rounded text-xs font-bold hover:underline focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline"
               >
                 Lire la suite →
               </a>

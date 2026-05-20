@@ -74,15 +74,15 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
 
       {/* Breadcrumb of the relationship chain */}
       <nav aria-label="Hiérarchie" className="mt-4 flex flex-wrap items-center gap-1 text-xs text-slate-500">
-        <Link href="/admin/school/structure" className="hover:text-slate-900">
+        <Link href="/admin/school/structure" className="rounded transition-colors hover:accent-text focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline">
           École
         </Link>
         <ChevronRight className="h-3 w-3" />
-        <Link href="/admin/cycles" className="hover:text-slate-900">
+        <Link href="/admin/cycles" className="rounded transition-colors hover:accent-text focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline">
           Cycle <strong className="text-slate-700">{cls.gradeLevel.cycle.name}</strong>
         </Link>
         <ChevronRight className="h-3 w-3" />
-        <Link href="/admin/cycles" className="hover:text-slate-900">
+        <Link href="/admin/cycles" className="rounded transition-colors hover:accent-text focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline">
           Niveau <strong className="text-slate-700">{cls.gradeLevel.name}</strong>{' '}
           <span className="font-mono text-[10px] text-slate-400">({cls.gradeLevel.code})</span>
         </Link>

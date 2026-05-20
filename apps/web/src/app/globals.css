@@ -277,17 +277,23 @@ html[data-density='spacious'] .density-grid-gap {
   gap: 1.5rem; /* gap-6 */
 }
 
-/* Accent-coloured surfaces — opt-in via `accent-soft` / `accent-text` /
-   `accent-ring` classes. CSS variables are set both by the SSR bootstrap
-   <style> in AppShellRoot and by the client provider on navigation, so first
-   paint already has the user's accent. */
-.accent-soft-bg {
+/* Accent-coloured surfaces — opt-in via `accent-soft-bg` / `accent-text` /
+   `accent-ring` / `accent-outline`. CSS variables are set both by the SSR
+   bootstrap <style> in AppShellRoot and by the client provider on navigation,
+   so first paint already has the user's accent.
+   Registered as Tailwind v4 `@utility` (not plain `.class` rules) so variants
+   compose — e.g. `hover:accent-text`, `focus-visible:accent-outline`. Plain
+   `.accent-*` rules cannot be prefixed by Tailwind variants. */
+@utility accent-soft-bg {
   background-color: var(--display-accent-soft);
 }
-.accent-text {
+@utility accent-text {
   color: var(--display-accent-text);
 }
-.accent-ring {
+@utility accent-ring {
   --tw-ring-color: var(--display-accent-ring);
   box-shadow: 0 0 0 1px var(--display-accent-ring);
+}
+@utility accent-outline {
+  outline: 2px solid var(--display-accent-ring);
 }
