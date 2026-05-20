@@ -191,7 +191,7 @@ function YearCard({ year }: { year: AcademicYearItem }) {
                 <button
                   type="button"
                   onClick={() => setAddingTerm(true)}
-                  className="inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+                  className="inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
                 >
                   <Plus className="h-3 w-3" /> Ajouter
                 </button>

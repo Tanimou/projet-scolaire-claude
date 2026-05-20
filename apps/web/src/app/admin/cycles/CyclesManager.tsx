@@ -85,7 +85,7 @@ export function CyclesManager({ initial }: { initial: CycleItem[] }) {
                   <button
                     type="button"
                     onClick={() => setAddingLevelToCycle(cycle.id)}
-                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+                    className="inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
                   >
                     <Plus className="h-3 w-3" /> Ajouter un niveau
                   </button>

@@ -208,7 +208,7 @@ export default async function TeacherClassesPage() {
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs">
                     <Link
                       href={`/teacher/classes/${c.primaryAssignmentId}`}
-                      className="font-bold text-blue-700 hover:underline"
+                      className="font-bold accent-text hover:underline"
                     >
                       Voir la classe →
                     </Link>

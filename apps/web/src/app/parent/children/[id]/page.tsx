@@ -644,7 +644,7 @@ export default async function ChildDetailPage({
         Pour la vue complète avec graphiques par matière, consultez le{' '}
         <Link
           href={`/parent/dashboard?studentId=${id}`}
-          className="font-bold text-blue-700 hover:underline"
+          className="font-bold accent-text hover:underline"
         >
           tableau de bord détaillé
         </Link>

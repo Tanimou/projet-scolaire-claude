@@ -92,7 +92,7 @@ export default async function AdminRolesPage() {
             </p>
             <Link
               href="/admin/roles/new"
-              className="mt-4 inline-flex items-center gap-1.5 text-sm font-bold text-blue-700 hover:underline"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-bold accent-text hover:underline"
             >
               <Plus className="h-3.5 w-3.5" />
               Créer mon premier rôle
@@ -142,7 +142,7 @@ function RoleCard({ role }: { role: RoleListItem }) {
         <div className="flex items-center gap-2">
           <Link
             href={role.isSystem ? `/admin/roles/${role.id}` : `/admin/roles/${role.id}/edit`}
-            className="font-semibold text-blue-700 hover:underline"
+            className="font-semibold accent-text hover:underline"
           >
             {role.isSystem ? 'Voir' : 'Éditer'}
           </Link>

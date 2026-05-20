@@ -292,7 +292,7 @@ export function InlineGradebook({
           </p>
           <Link
             href={`/teacher/classes/${assignment.id}/grades`}
-            className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+            className="mt-3 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
           >
             Ouvrir la gradebook <ArrowRight className="h-3 w-3" />
           </Link>

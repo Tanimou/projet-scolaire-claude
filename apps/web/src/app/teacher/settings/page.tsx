@@ -111,7 +111,7 @@ export default async function TeacherSettingsPage() {
         <Settings className="h-3 w-3" />
         Onglet <strong className="mx-1">Notifications</strong> entièrement éditable — vos
         préférences contrôlent la cloche du topbar et le centre{' '}
-        <Link href="/teacher/notifications" className="font-bold text-blue-700 hover:underline">
+        <Link href="/teacher/notifications" className="font-bold accent-text hover:underline">
           /teacher/notifications
         </Link>
         .
