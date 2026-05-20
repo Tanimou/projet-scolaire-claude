@@ -27,6 +27,10 @@ import {
   formatInDays,
 } from '@pilotage/ui';
 
+import type { IcsEvent } from '@/lib/ics';
+
+import { CalendarExportButton } from './CalendarExportButton';
+
 export type CalendarEventType =
   | 'vacation_break'
   | 'public_holiday'
@@ -184,6 +188,21 @@ export function PortalCalendarView({ portal, events }: Props) {
     [events, filterType],
   );
 
+  const icsEvents = useMemo<IcsEvent[]>(
+    () =>
+      filteredEvents.map((e) => ({
+        id: e.id,
+        title: e.title,
+        description: e.description,
+        startsAt: e.startsAt,
+        endsAt: e.endsAt,
+        allDay: e.allDay,
+        categories: [TYPE_LABEL[e.type]],
+        location: scopeLabel(e),
+      })),
+    [filteredEvents],
+  );
+
   const monthEvents = useMemo(() => {
     const start = new Date(month.getFullYear(), month.getMonth(), 1).getTime();
     const end = new Date(month.getFullYear(), month.getMonth() + 1, 0, 23, 59, 59).getTime();
@@ -278,6 +297,11 @@ export function PortalCalendarView({ portal, events }: Props) {
             </FilterChip>
           );
         })}
+        <CalendarExportButton
+          events={icsEvents}
+          calendarName="Calendrier scolaire"
+          fileNameStem={`calendrier-scolaire-${portal}`}
+        />
       </div>
 
       {/* Main grid : month view + upcoming sidebar */}
