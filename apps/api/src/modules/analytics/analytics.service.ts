@@ -189,7 +189,10 @@ export interface TeacherActionCenterResponse {
       | 'incomplete-grading'
       | 'upcoming-week'
       | 'students-at-risk'
-      | 'missing-lessons';
+      | 'unjustified-absences'
+      | 'missing-lessons'
+      | 'homework-to-collect'
+      | 'classes-at-risk';
     label: string;
     count: number;
     severity: 'critical' | 'warning' | 'info';
@@ -206,7 +209,10 @@ export interface TeacherActionCenterResponse {
     gradesToComplete: number;
     assessmentsThisWeek: number;
     studentsAtRisk: number;
+    unjustifiedAbsences: number;
     lessonsToFill: number;
+    homeworkToCollect: number;
+    classesAtRisk: number;
   };
 }
 
@@ -1023,6 +1029,8 @@ export class AnalyticsService {
     const now = new Date();
     const sevenDaysAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const ageDays = (d: Date): number =>
       Math.max(0, Math.floor((now.getTime() - d.getTime()) / (24 * 60 * 60 * 1000)));
     const inDays = (d: Date): number =>
@@ -1046,7 +1054,10 @@ export class AnalyticsService {
           gradesToComplete: 0,
           assessmentsThisWeek: 0,
           studentsAtRisk: 0,
+          unjustifiedAbsences: 0,
           lessonsToFill: 0,
+          homeworkToCollect: 0,
+          classesAtRisk: 0,
         },
       };
     }
@@ -1066,9 +1077,14 @@ export class AnalyticsService {
       publishedForGrading,
       upcomingWeek,
       upcomingWeekCount,
+      unjustifiedAbsences,
+      unjustifiedAbsenceCount,
       missingLessonSessions,
       missingLessonCount,
       atRiskGradeRows,
+      homeworkDue,
+      homeworkDueCount,
+      publishedGradesForRisk,
     ] = await Promise.all([
       this.prisma.assessment.findMany({
         where: { tenantId, teacherProfileId, isPublished: false },
@@ -1109,6 +1125,37 @@ export class AnalyticsService {
       this.prisma.assessment.count({
         where: { tenantId, teacherProfileId, scheduledAt: { gte: now, lte: sevenDaysAhead } },
       }),
+      this.prisma.attendanceRecord.findMany({
+        where: {
+          tenantId,
+          status: 'absent',
+          justifiedAt: null,
+          recordedAt: { gte: fourteenDaysAgo },
+          classSession: { teacherProfileId },
+        },
+        orderBy: { recordedAt: 'desc' },
+        select: {
+          id: true,
+          recordedAt: true,
+          student: { select: { firstName: true, lastName: true } },
+          classSession: {
+            select: {
+              date: true,
+              teachingAssignment: { select: { classSection: { select: { name: true } } } },
+            },
+          },
+        },
+        take: 5,
+      }),
+      this.prisma.attendanceRecord.count({
+        where: {
+          tenantId,
+          status: 'absent',
+          justifiedAt: null,
+          recordedAt: { gte: fourteenDaysAgo },
+          classSession: { teacherProfileId },
+        },
+      }),
       this.prisma.classSession.findMany({
         where: {
           tenantId,
@@ -1140,6 +1187,37 @@ export class AnalyticsService {
           lessonEntry: { is: null },
         },
       }),
+      // Homework whose due date just passed — collect / grade it.
+      this.prisma.lessonEntry.findMany({
+        where: {
+          tenantId,
+          teacherProfileId,
+          homework: { not: null },
+          homeworkDueAt: { gte: sevenDaysAgo, lt: tomorrow },
+        },
+        orderBy: { homeworkDueAt: 'asc' },
+        select: {
+          id: true,
+          title: true,
+          homeworkDueAt: true,
+          teachingAssignment: {
+            select: {
+              classSection: { select: { name: true } },
+              subject: { select: { code: true, name: true } },
+            },
+          },
+        },
+        take: 5,
+      }),
+      this.prisma.lessonEntry.count({
+        where: {
+          tenantId,
+          teacherProfileId,
+          homework: { not: null },
+          homeworkDueAt: { gte: sevenDaysAgo, lt: tomorrow },
+        },
+      }),
+      // Published grades for per-class average — at-risk detection (< 10/20).
       this.prisma.grade.findMany({
         where: {
           tenantId,
@@ -1151,7 +1229,18 @@ export class AnalyticsService {
           value: true,
           studentId: true,
           student: { select: { firstName: true, lastName: true } },
-          assessment: { select: { maxScore: true } },
+          assessment: {
+            select: {
+              maxScore: true,
+              teachingAssignmentId: true,
+              teachingAssignment: {
+                select: {
+                  classSection: { select: { name: true } },
+                  subject: { select: { code: true, name: true } },
+                },
+              },
+            },
+          },
         },
       }),
     ]);
@@ -1281,6 +1370,22 @@ export class AnalyticsService {
           id: s.studentId,
           title: s.name,
           meta: `${fmt(s.average)}/20`,
+    // 4. Recent unjustified absences awaiting follow-up.
+    if (unjustifiedAbsences.length > 0) {
+      const recent = unjustifiedAbsences[0]!;
+      items.push({
+        key: 'unjustified-absences',
+        label: 'Absences à justifier',
+        count: unjustifiedAbsenceCount,
+        severity: unjustifiedAbsenceCount >= 5 ? 'warning' : 'info',
+        href: '/teacher/classes',
+        actionLabel: 'Vérifier',
+        detail: `Sur les 14 derniers jours · dernière il y a ${ageDays(recent.recordedAt)}j`,
+        preview: unjustifiedAbsences.slice(0, 3).map((r) => ({
+          id: r.id,
+          title:
+            [r.student?.firstName, r.student?.lastName].filter(Boolean).join(' ') || 'Élève',
+          meta: r.classSession?.teachingAssignment?.classSection?.name ?? null,
         })),
       });
     }
@@ -1302,6 +1407,78 @@ export class AnalyticsService {
             s.topic ||
             `${s.teachingAssignment.subject.name} — ${s.teachingAssignment.classSection.name}`,
           meta: `${s.teachingAssignment.classSection.name} · il y a ${ageDays(s.date)}j`,
+        })),
+      });
+    }
+
+    // 5. Homework whose due date just passed — to be collected / graded.
+    if (homeworkDue.length > 0) {
+      const oldest = homeworkDue[0]!;
+      items.push({
+        key: 'homework-to-collect',
+        label: 'Devoirs à relever',
+        count: homeworkDueCount,
+        severity: oldest.homeworkDueAt != null && ageDays(oldest.homeworkDueAt) >= 3 ? 'warning' : 'info',
+        href: '/teacher/classes',
+        actionLabel: 'Relever',
+        detail:
+          oldest.homeworkDueAt != null
+            ? `Échéance la plus ancienne il y a ${ageDays(oldest.homeworkDueAt)}j`
+            : null,
+        preview: homeworkDue.slice(0, 3).map((h) => ({
+          id: h.id,
+          title: h.title,
+          meta:
+            [
+              h.teachingAssignment.classSection.name,
+              h.homeworkDueAt != null ? `il y a ${ageDays(h.homeworkDueAt)}j` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || null,
+        })),
+      });
+    }
+
+    // 6. Classes whose published average has dipped below 10/20.
+    const riskByAssignment = new Map<
+      string,
+      { total: number; count: number; className: string; subjectName: string }
+    >();
+    for (const g of publishedGradesForRisk) {
+      if (g.value === null || g.value === undefined) continue;
+      const n = typeof g.value === 'number' ? g.value : Number(g.value);
+      if (!Number.isFinite(n)) continue;
+      const max = Number(g.assessment.maxScore ?? 20) || 20;
+      const norm = max > 0 ? (n / max) * 20 : n;
+      const key = g.assessment.teachingAssignmentId;
+      const acc = riskByAssignment.get(key) ?? {
+        total: 0,
+        count: 0,
+        className: g.assessment.teachingAssignment.classSection.name,
+        subjectName: g.assessment.teachingAssignment.subject.name,
+      };
+      acc.total += norm;
+      acc.count += 1;
+      riskByAssignment.set(key, acc);
+    }
+    const atRiskClasses = [...riskByAssignment.values()]
+      .filter((c) => c.count > 0 && c.total / c.count < 10)
+      .map((c) => ({ ...c, average: Math.round((c.total / c.count) * 10) / 10 }))
+      .sort((a, b) => a.average - b.average);
+
+    if (atRiskClasses.length > 0) {
+      items.push({
+        key: 'classes-at-risk',
+        label: 'Classes à renforcer',
+        count: atRiskClasses.length,
+        severity: 'warning',
+        href: '/teacher/reports?signal=at-risk',
+        actionLabel: 'Analyser',
+        detail: 'Moyenne de classe sous 10/20',
+        preview: atRiskClasses.slice(0, 3).map((c, idx) => ({
+          id: `${c.className}-${idx}`,
+          title: `${c.className} · ${c.subjectName}`,
+          meta: `${c.average.toFixed(1).replace('.', ',')}/20`,
         })),
       });
     }
@@ -1328,7 +1505,10 @@ export class AnalyticsService {
         gradesToComplete: incomplete.length,
         assessmentsThisWeek: upcomingWeekCount,
         studentsAtRisk: atRisk.length,
+        unjustifiedAbsences: unjustifiedAbsenceCount,
         lessonsToFill: missingLessonCount,
+        homeworkToCollect: homeworkDueCount,
+        classesAtRisk: atRiskClasses.length,
       },
     };
   }

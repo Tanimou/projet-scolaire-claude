@@ -1,6 +1,7 @@
 import {
   ArrowRight,
   CalendarClock,
+  ClipboardCheck,
   ClipboardList,
   Compass,
   FileEdit,
@@ -8,6 +9,8 @@ import {
   type LucideIcon,
   NotebookPen,
   Sparkles,
+  UserX,
+  TrendingDown,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -17,7 +20,10 @@ export interface TeacherActionItem {
     | 'incomplete-grading'
     | 'upcoming-week'
     | 'students-at-risk'
-    | 'missing-lessons';
+    | 'unjustified-absences'
+    | 'missing-lessons'
+    | 'homework-to-collect'
+    | 'classes-at-risk';
   label: string;
   count: number;
   severity: 'critical' | 'warning' | 'info';
@@ -32,7 +38,10 @@ export interface TeacherActionDigest {
   gradesToComplete: number;
   assessmentsThisWeek: number;
   studentsAtRisk: number;
+  unjustifiedAbsences: number;
   lessonsToFill: number;
+  homeworkToCollect: number;
+  classesAtRisk: number;
 }
 
 export interface TeacherActionData {
@@ -47,7 +56,10 @@ const ICON_BY_KEY: Record<TeacherActionItem['key'], LucideIcon> = {
   'incomplete-grading': ClipboardList,
   'upcoming-week': CalendarClock,
   'students-at-risk': LifeBuoy,
+  'unjustified-absences': UserX,
   'missing-lessons': NotebookPen,
+  'homework-to-collect': ClipboardCheck,
+  'classes-at-risk': TrendingDown,
 };
 
 const SEVERITY_STYLES: Record<
@@ -168,10 +180,28 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
               hidden={digest.assessmentsThisWeek === 0}
             />
             <DigestChip
+              label="absences à justifier"
+              value={digest.unjustifiedAbsences}
+              tone="rose"
+              hidden={digest.unjustifiedAbsences === 0}
+            />
+            <DigestChip
               label="cahiers à remplir"
               value={digest.lessonsToFill}
               tone="sky"
               hidden={digest.lessonsToFill === 0}
+            />
+            <DigestChip
+              label="devoirs à relever"
+              value={digest.homeworkToCollect}
+              tone="sky"
+              hidden={digest.homeworkToCollect === 0}
+            />
+            <DigestChip
+              label="classes à renforcer"
+              value={digest.classesAtRisk}
+              tone="rose"
+              hidden={digest.classesAtRisk === 0}
             />
           </div>
         )}
@@ -185,13 +215,13 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
           <div className="text-sm text-emerald-900">
             <p className="font-bold">Rien en attente</p>
             <p className="mt-0.5 text-xs text-emerald-800/80">
-              Aucune évaluation en brouillon, aucune saisie incomplète, aucun élève sous le seuil et
-              aucun cahier de texte en retard. Beau travail&nbsp;!
+              Aucune évaluation en brouillon, aucune saisie incomplète, aucune absence à justifier
+              et aucun cahier de texte en retard. Beau travail&nbsp;!
             </p>
           </div>
         </div>
       ) : (
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {items.map((item) => (
             <ActionCard key={item.key} item={item} />
           ))}
