@@ -65,7 +65,7 @@ export function QuickActionsList({
               {a.href ? (
                 <a
                   href={a.href}
-                  className="flex items-center gap-3 px-1 py-2.5 transition hover:text-slate-900"
+                  className="flex items-center gap-3 rounded-lg px-1 py-2.5 transition hover:text-slate-900 focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline"
                 >
                   {inner}
                 </a>
@@ -73,7 +73,7 @@ export function QuickActionsList({
                 <button
                   type="button"
                   onClick={a.onClick}
-                  className="flex w-full items-center gap-3 px-1 py-2.5 text-left transition hover:text-slate-900"
+                  className="flex w-full items-center gap-3 rounded-lg px-1 py-2.5 text-left transition hover:text-slate-900 focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline"
                 >
                   {inner}
                 </button>
@@ -85,7 +85,7 @@ export function QuickActionsList({
       {seeAllHref && (
         <a
           href={seeAllHref}
-          className="accent-text mt-3 inline-flex items-center gap-1 text-xs font-bold hover:underline"
+          className="accent-text mt-3 inline-flex items-center gap-1 rounded text-xs font-bold hover:underline focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline"
         >
           {seeAllLabel} →
         </a>

@@ -53,7 +53,13 @@ export function AvatarNameCell({
   );
   if (href) {
     return (
-      <a href={href} className={cn('flex min-w-0 items-center gap-3 hover:underline', className)}>
+      <a
+        href={href}
+        className={cn(
+          'flex min-w-0 items-center gap-3 rounded hover:underline focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:accent-outline',
+          className,
+        )}
+      >
         {inner}
       </a>
     );
