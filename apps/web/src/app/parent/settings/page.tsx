@@ -237,7 +237,7 @@ export default async function ParentSettingsPage() {
         Vos préférences contrôlent la cloche du topbar et la page{' '}
         <Link
           href="/parent/notifications"
-          className="font-bold text-blue-700 hover:underline"
+          className="font-bold accent-text hover:underline"
         >
           /parent/notifications
         </Link>

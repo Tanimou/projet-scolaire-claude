@@ -334,7 +334,7 @@ export default async function TeacherDashboardPage({
           </div>
           <Link
             href="/teacher/notifications"
-            className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+            className="mt-3 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
           >
             <GraduationCap className="h-3 w-3" />
             Voir mes notifications →

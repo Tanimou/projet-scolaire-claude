@@ -362,7 +362,7 @@ export default async function ImportsListPage({
             <p className="mt-3 text-sm text-slate-600">Aucun import pour le moment.</p>
             <Link
               href="/admin/imports/new"
-              className="mt-4 inline-flex items-center gap-1.5 text-sm font-bold text-blue-700 hover:underline"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-bold accent-text hover:underline"
             >
               Lancer mon premier import →
             </Link>

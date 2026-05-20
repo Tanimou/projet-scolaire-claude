@@ -289,7 +289,7 @@ export function RoleBuilderForm({
                     <button
                       type="button"
                       onClick={() => toggleGroup(codes.map((c) => c.code))}
-                      className="ml-2 text-[10px] font-bold uppercase tracking-wider text-blue-700 hover:underline"
+                      className="ml-2 text-[10px] font-bold uppercase tracking-wider accent-text hover:underline"
                     >
                       {allSelected ? 'Tout décocher' : 'Tout sélectionner'}
                     </button>

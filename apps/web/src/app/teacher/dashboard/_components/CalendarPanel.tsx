@@ -95,7 +95,7 @@ export function CalendarPanel({ upcoming }: { upcoming: UpcomingItem[] }) {
         )}
         <Link
           href="/teacher/assessments"
-          className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+          className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
         >
           Voir toutes les évaluations →
         </Link>

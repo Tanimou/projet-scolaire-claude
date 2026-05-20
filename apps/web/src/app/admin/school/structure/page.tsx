@@ -142,7 +142,7 @@ export default async function StructurePage({
             <p className="mt-3 text-sm font-semibold text-slate-700">Aucun cycle défini</p>
             <p className="mt-1 text-xs text-slate-500">
               Commencez par créer les cycles de votre établissement (ex. Collège, Lycée) depuis{' '}
-              <Link className="font-bold text-blue-700 hover:underline" href="/admin/cycles">
+              <Link className="font-bold accent-text hover:underline" href="/admin/cycles">
                 Cycles & niveaux
               </Link>
               .
@@ -164,7 +164,7 @@ export default async function StructurePage({
               {data.subjects.length} matière(s) actives — leurs coefficients sont définis par niveau
             </p>
           </div>
-          <Link href="/admin/subjects" className="text-xs font-bold text-blue-700 hover:underline">
+          <Link href="/admin/subjects" className="text-xs font-bold accent-text hover:underline">
             Gérer les coefficients →
           </Link>
         </div>
@@ -219,7 +219,7 @@ function CycleBlock({ cycle }: { cycle: CycleNode }) {
           <Chip label="Élèves" value={totalStudents} tone="teal" />
           <Link
             href={`/admin/cycles`}
-            className="ml-2 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+            className="ml-2 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
           >
             Niveaux <ChevronRight className="h-3 w-3" />
           </Link>
@@ -243,7 +243,7 @@ function CycleBlock({ cycle }: { cycle: CycleNode }) {
               </div>
               {lv.classes.length === 0 ? (
                 <p className="mt-2 ml-15 pl-15 text-[11px] italic text-slate-400">
-                  Aucune classe pour cette année. <Link href="/admin/classes" className="font-bold text-blue-700 hover:underline">Créer une classe →</Link>
+                  Aucune classe pour cette année. <Link href="/admin/classes" className="font-bold accent-text hover:underline">Créer une classe →</Link>
                 </p>
               ) : (
                 <div className="mt-2 flex flex-wrap gap-2">

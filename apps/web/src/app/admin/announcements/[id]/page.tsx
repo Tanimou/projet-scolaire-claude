@@ -651,7 +651,7 @@ function RecipientsBucket({
                       {r.userProfile?.email ? (
                         <a
                           href={`mailto:${r.userProfile.email}`}
-                          className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-700 hover:underline"
+                          className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:accent-text hover:underline"
                         >
                           <Mail className="h-3 w-3 text-slate-400" />
                           {r.userProfile.email}

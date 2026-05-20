@@ -80,7 +80,7 @@ export default async function SettingsPage() {
               <Field label="Année active" value="Configurée via /admin/academic-years" />
               <Link
                 href="/admin/establishment"
-                className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+                className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
               >
                 Ouvrir Établissement →
               </Link>
@@ -98,7 +98,7 @@ export default async function SettingsPage() {
               <Field label="Police" value="Inter (par défaut)" />
               <Link
                 href="/admin/establishment"
-                className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+                className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
               >
                 Ouvrir l&apos;onglet Identité visuelle →
               </Link>
@@ -117,7 +117,7 @@ export default async function SettingsPage() {
               <Field label="Coefficients" value="Configurables par matière + niveau" />
               <Link
                 href="/admin/subjects"
-                className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+                className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
               >
                 Configurer les matières →
               </Link>
@@ -144,7 +144,7 @@ export default async function SettingsPage() {
                 />
                 <Link
                   href="/admin/notifications"
-                  className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+                  className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
                 >
                   Ouvrir le centre de notifications →
                 </Link>
@@ -167,7 +167,7 @@ export default async function SettingsPage() {
                 href={`${process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? 'http://localhost:8180'}/realms/pilotage-scolaire/account/`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+                className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
               >
                 Ouvrir le portail compte Keycloak ↗
               </Link>
@@ -186,7 +186,7 @@ export default async function SettingsPage() {
               <Field label="Partage de données" value="Aucun export externe automatique" />
               <Link
                 href="/admin/audit"
-                className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+                className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
               >
                 Consulter le journal d&apos;audit →
               </Link>
@@ -205,7 +205,7 @@ export default async function SettingsPage() {
               <Field label="URL signée téléchargement" value="TTL 1 h (présigné AWS SDK)" />
               <Link
                 href="/admin/exports"
-                className="mt-3 inline-flex text-xs font-bold text-blue-700 hover:underline"
+                className="mt-3 inline-flex text-xs font-bold accent-text hover:underline"
               >
                 Ouvrir Exports →
               </Link>

@@ -143,7 +143,7 @@ export default async function EstablishmentPage() {
               </dl>
               <p className="mt-5 text-xs text-slate-500">
                 Pour modifier ces informations, ouvrez la fiche de l&apos;école dans{' '}
-                <Link href="/admin/schools" className="font-bold text-blue-700 hover:underline">
+                <Link href="/admin/schools" className="font-bold accent-text hover:underline">
                   /admin/schools
                 </Link>
                 .
@@ -187,7 +187,7 @@ export default async function EstablishmentPage() {
               </dl>
               <p className="mt-5 text-xs text-slate-500">
                 Les barèmes spécifiques par matière sont configurables dans{' '}
-                <Link href="/admin/subjects" className="font-bold text-blue-700 hover:underline">
+                <Link href="/admin/subjects" className="font-bold accent-text hover:underline">
                   /admin/subjects
                 </Link>
                 .
@@ -220,7 +220,7 @@ export default async function EstablishmentPage() {
                   Aucune année active. Activez-en une via{' '}
                   <Link
                     href="/admin/academic-years"
-                    className="font-bold text-blue-700 hover:underline"
+                    className="font-bold accent-text hover:underline"
                   >
                     /admin/academic-years
                   </Link>
@@ -229,7 +229,7 @@ export default async function EstablishmentPage() {
               )}
               <Link
                 href="/admin/academic-years"
-                className="mt-4 inline-flex items-center text-xs font-bold text-blue-700 hover:underline"
+                className="mt-4 inline-flex items-center text-xs font-bold accent-text hover:underline"
               >
                 Gérer les années académiques →
               </Link>

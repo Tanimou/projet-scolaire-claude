@@ -292,7 +292,7 @@ export default async function AdminDashboardPage() {
           )}
           <Link
             href="/admin/enrollment-requests"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+            className="mt-4 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
           >
             Voir toutes les demandes
           </Link>
@@ -350,7 +350,7 @@ export default async function AdminDashboardPage() {
           )}
           <Link
             href="/admin/teaching-assignments"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+            className="mt-4 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
           >
             Voir toutes les affectations
           </Link>
@@ -391,7 +391,7 @@ export default async function AdminDashboardPage() {
           )}
           <Link
             href="/admin/analytics"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+            className="mt-4 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
           >
             Voir le tableau de bord analytique
           </Link>
@@ -450,7 +450,7 @@ export default async function AdminDashboardPage() {
           </div>
           <Link
             href="/admin/alerts"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:underline"
+            className="mt-4 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
           >
             Gérer les règles d&apos;alerte
           </Link>
@@ -583,7 +583,7 @@ function StructureGrid({ structure }: { structure?: DashboardResponse['schoolStr
             </li>
           ))}
         </ul>
-        <Link href="/admin/academic-years" className="mt-2 inline-flex text-[11px] font-bold text-blue-700 hover:underline">
+        <Link href="/admin/academic-years" className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline">
           + Ajouter une année
         </Link>
       </div>
@@ -635,7 +635,7 @@ function StructureGrid({ structure }: { structure?: DashboardResponse['schoolStr
         </ul>
         <Link
           href="/admin/classes"
-          className="mt-2 inline-flex text-[11px] font-bold text-blue-700 hover:underline"
+          className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline"
         >
           Voir toutes les classes
         </Link>
@@ -659,7 +659,7 @@ function StructureGrid({ structure }: { structure?: DashboardResponse['schoolStr
         </ul>
         <Link
           href="/admin/subjects"
-          className="mt-2 inline-flex text-[11px] font-bold text-blue-700 hover:underline"
+          className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline"
         >
           Voir toutes les matières
         </Link>

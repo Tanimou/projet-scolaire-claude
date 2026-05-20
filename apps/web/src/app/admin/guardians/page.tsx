@@ -250,7 +250,7 @@ export default async function GuardiansPage({
       <p className="mt-4 inline-flex items-center gap-1.5 text-xs text-slate-500">
         <Users className="h-3 w-3" />
         Le rattachement parent-élève peut aussi être géré depuis la fiche de chaque élève.
-        <Link href="/admin/enrollments" className="font-bold text-blue-700 hover:underline">
+        <Link href="/admin/enrollments" className="font-bold accent-text hover:underline">
           Voir les demandes →
         </Link>
         <span className="hidden">

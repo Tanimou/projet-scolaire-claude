@@ -143,7 +143,7 @@ export function ImportWizard({ types }: { types: ImportTypeMeta[] }) {
               <button
                 type="button"
                 onClick={() => downloadTemplate(selectedType.type)}
-                className="mt-4 inline-flex items-center gap-1.5 text-sm font-bold text-blue-700 hover:underline"
+                className="mt-4 inline-flex items-center gap-1.5 text-sm font-bold accent-text hover:underline"
               >
                 <Download className="h-3.5 w-3.5" />
                 Télécharger un template CSV pré-rempli
