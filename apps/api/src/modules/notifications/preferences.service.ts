@@ -119,6 +119,35 @@ export class NotificationPreferencesService {
   }
 
   /**
+   * Batch variant of the in-app channel check used by `createMany` fan-out.
+   * Given the (userProfileId, kind) pairs in a dispatch batch, returns the set
+   * of `${userProfileId}|${kind}` keys whose in-app channel is *explicitly*
+   * disabled. Pairs with no override row are absent from the result (default
+   * in-app on), so callers keep them. One query per batch, deduplicated.
+   */
+  async disabledInAppKeys(
+    pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
+  ): Promise<Set<string>> {
+    if (pairs.length === 0) return new Set();
+    const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
+    for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
+    const rows = await this.prisma.notificationPreference.findMany({
+      where: {
+        OR: [...uniq.values()].map((p) => ({
+          userProfileId: p.userProfileId,
+          kind: p.kind,
+        })),
+      },
+      select: { userProfileId: true, kind: true, inAppEnabled: true },
+    });
+    return new Set(
+      rows
+        .filter((r) => !r.inAppEnabled)
+        .map((r) => `${r.userProfileId}|${r.kind}`),
+    );
+  }
+
+  /**
    * Used by future dispatchers to decide whether to deliver. In-app is the
    * channel we have today; email + push wait for R8.2.
    */
