@@ -3,10 +3,29 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api } from '@/lib/api-client';
+import { api, ApiError } from '@/lib/api-client';
 import { PreferredDate } from '@pilotage/ui';
 
+import type { StudentAcademicSnapshot } from './StudentAcademicTab';
 import { StudentDetailTabs } from './StudentDetailTabs';
+
+/** Shape returned by the analytics parent-dashboard endpoint (admin-accessible). */
+interface AcademicDashboardResponse {
+  student: { rank: number | null; classSize: number };
+  globalPerformance: StudentAcademicSnapshot['globalPerformance'];
+  subjectPerf: StudentAcademicSnapshot['subjectPerf'];
+  termEvolution: StudentAcademicSnapshot['termEvolution'];
+  recentGrades: StudentAcademicSnapshot['recentGrades'];
+}
+
+async function safe<T>(p: Promise<T>): Promise<T | null> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof ApiError) return null;
+    throw err;
+  }
+}
 
 export const metadata: Metadata = { title: "Détail élève" };
 export const dynamic = 'force-dynamic';
@@ -80,11 +99,27 @@ export interface SimpleGuardian {
 
 export default async function StudentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [student, classes, guardians] = await Promise.all([
+  const [student, classes, guardians, academicResp] = await Promise.all([
     api<StudentDetail>(`/api/v1/students/${id}`, { cache: 'no-store' }),
     api<{ data: SimpleClass[] }>('/api/v1/classes', { cache: 'no-store' }),
     api<{ data: SimpleGuardian[] }>('/api/v1/guardians?limit=200', { cache: 'no-store' }),
+    safe(
+      api<AcademicDashboardResponse>(`/api/v1/analytics/parent-dashboard/${id}`, {
+        cache: 'no-store',
+      }),
+    ),
   ]);
+
+  const academic: StudentAcademicSnapshot | null = academicResp
+    ? {
+        globalPerformance: academicResp.globalPerformance,
+        subjectPerf: academicResp.subjectPerf,
+        termEvolution: academicResp.termEvolution,
+        recentGrades: academicResp.recentGrades,
+        rank: academicResp.student.rank,
+        classSize: academicResp.student.classSize,
+      }
+    : null;
 
   const activeEnrollment = student.enrollments.find((e) => e.status === 'active');
 
@@ -140,7 +175,12 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
       </header>
 
       <div className="mt-8">
-        <StudentDetailTabs student={student} classes={classes.data} guardians={guardians.data} />
+        <StudentDetailTabs
+          student={student}
+          classes={classes.data}
+          guardians={guardians.data}
+          academic={academic}
+        />
       </div>
     </PortalShell>
   );

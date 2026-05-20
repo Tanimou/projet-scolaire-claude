@@ -6,6 +6,7 @@ import {
   BookOpen,
   Check,
   Edit2,
+  GraduationCap,
   HeartHandshake,
   IdCard,
   Loader2,
@@ -30,9 +31,10 @@ import {
   updateStudent,
 } from '../actions';
 
+import { StudentAcademicTab, type StudentAcademicSnapshot } from './StudentAcademicTab';
 import type { SimpleClass, SimpleGuardian, StudentDetail } from './page';
 
-type Tab = 'identity' | 'enrollments' | 'guardians';
+type Tab = 'identity' | 'enrollments' | 'guardians' | 'academic';
 
 const RELATIONSHIP_LABEL: Record<string, string> = {
   mother: 'Mère',
@@ -47,18 +49,31 @@ export function StudentDetailTabs({
   student,
   classes,
   guardians,
+  academic,
 }: {
   student: StudentDetail;
   classes: SimpleClass[];
   guardians: SimpleGuardian[];
+  academic: StudentAcademicSnapshot | null;
 }) {
   const [tab, setTab] = useState<Tab>('identity');
+
+  const academicCount =
+    academic && academic.subjectPerf.length > 0 ? academic.subjectPerf.length : undefined;
 
   return (
     <div>
       <div className="flex gap-1 border-b border-slate-200">
         <TabButton active={tab === 'identity'} onClick={() => setTab('identity')} icon={<IdCard className="h-4 w-4" />}>
           Identité
+        </TabButton>
+        <TabButton
+          active={tab === 'academic'}
+          onClick={() => setTab('academic')}
+          icon={<GraduationCap className="h-4 w-4" />}
+          count={academicCount}
+        >
+          Académique
         </TabButton>
         <TabButton
           active={tab === 'enrollments'}
@@ -80,6 +95,9 @@ export function StudentDetailTabs({
 
       <div className="mt-6">
         {tab === 'identity' && <IdentityTab student={student} />}
+        {tab === 'academic' && (
+          <StudentAcademicTab academic={academic} firstName={student.firstName} />
+        )}
         {tab === 'enrollments' && <EnrollmentsTab student={student} classes={classes} />}
         {tab === 'guardians' && <GuardiansTab student={student} guardians={guardians} />}
       </div>
