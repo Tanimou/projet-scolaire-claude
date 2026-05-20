@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Compass,
   FileEdit,
+  LifeBuoy,
   type LucideIcon,
   NotebookPen,
   Sparkles,
@@ -18,6 +19,7 @@ export interface TeacherActionItem {
     | 'draft-assessments'
     | 'incomplete-grading'
     | 'upcoming-week'
+    | 'students-at-risk'
     | 'unjustified-absences'
     | 'missing-lessons'
     | 'homework-to-collect'
@@ -35,6 +37,7 @@ export interface TeacherActionDigest {
   draftsToPublish: number;
   gradesToComplete: number;
   assessmentsThisWeek: number;
+  studentsAtRisk: number;
   unjustifiedAbsences: number;
   lessonsToFill: number;
   homeworkToCollect: number;
@@ -52,6 +55,7 @@ const ICON_BY_KEY: Record<TeacherActionItem['key'], LucideIcon> = {
   'draft-assessments': FileEdit,
   'incomplete-grading': ClipboardList,
   'upcoming-week': CalendarClock,
+  'students-at-risk': LifeBuoy,
   'unjustified-absences': UserX,
   'missing-lessons': NotebookPen,
   'homework-to-collect': ClipboardCheck,
@@ -162,6 +166,12 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
               value={digest.gradesToComplete}
               tone="rose"
               hidden={digest.gradesToComplete === 0}
+            />
+            <DigestChip
+              label="élèves en difficulté"
+              value={digest.studentsAtRisk}
+              tone="rose"
+              hidden={digest.studentsAtRisk === 0}
             />
             <DigestChip
               label="évals cette semaine"

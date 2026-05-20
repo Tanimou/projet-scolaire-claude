@@ -188,6 +188,7 @@ export interface TeacherActionCenterResponse {
       | 'draft-assessments'
       | 'incomplete-grading'
       | 'upcoming-week'
+      | 'students-at-risk'
       | 'unjustified-absences'
       | 'missing-lessons'
       | 'homework-to-collect'
@@ -207,6 +208,7 @@ export interface TeacherActionCenterResponse {
     draftsToPublish: number;
     gradesToComplete: number;
     assessmentsThisWeek: number;
+    studentsAtRisk: number;
     unjustifiedAbsences: number;
     lessonsToFill: number;
     homeworkToCollect: number;
@@ -1051,6 +1053,7 @@ export class AnalyticsService {
           draftsToPublish: 0,
           gradesToComplete: 0,
           assessmentsThisWeek: 0,
+          studentsAtRisk: 0,
           unjustifiedAbsences: 0,
           lessonsToFill: 0,
           homeworkToCollect: 0,
@@ -1078,6 +1081,7 @@ export class AnalyticsService {
       unjustifiedAbsenceCount,
       missingLessonSessions,
       missingLessonCount,
+      atRiskGradeRows,
       homeworkDue,
       homeworkDueCount,
       publishedGradesForRisk,
@@ -1223,6 +1227,8 @@ export class AnalyticsService {
         },
         select: {
           value: true,
+          studentId: true,
+          student: { select: { firstName: true, lastName: true } },
           assessment: {
             select: {
               maxScore: true,
@@ -1329,6 +1335,41 @@ export class AnalyticsService {
       });
     }
 
+    // 4. Students whose average across this teacher's grades is below 10/20.
+    const perStudent = new Map<string, { name: string; sum: number; count: number }>();
+    for (const g of atRiskGradeRows) {
+      if (g.value === null || g.value === undefined) continue;
+      const raw = Number(g.value);
+      if (!Number.isFinite(raw)) continue;
+      const maxScore = Number(g.assessment.maxScore ?? 20) || 20;
+      const norm = maxScore > 0 ? (raw / maxScore) * 20 : raw;
+      const name =
+        [g.student?.firstName, g.student?.lastName].filter(Boolean).join(' ') || 'Élève';
+      const acc = perStudent.get(g.studentId) ?? { name, sum: 0, count: 0 };
+      acc.sum += norm;
+      acc.count += 1;
+      perStudent.set(g.studentId, acc);
+    }
+    const atRisk = Array.from(perStudent.entries())
+      .map(([studentId, v]) => ({ studentId, name: v.name, average: v.sum / v.count }))
+      .filter((s) => s.average < 10)
+      .sort((a, b) => a.average - b.average);
+
+    if (atRisk.length > 0) {
+      const fmt = (x: number): string => (Math.round(x * 10) / 10).toFixed(1).replace('.', ',');
+      const worst = atRisk[0]!;
+      items.push({
+        key: 'students-at-risk',
+        label: 'Élèves en difficulté',
+        count: atRisk.length,
+        severity: worst.average < 8 ? 'critical' : 'warning',
+        href: '/teacher/reports?signal=at-risk',
+        actionLabel: 'Analyser',
+        detail: `Moyenne sous 10/20 · la plus basse à ${fmt(worst.average)}/20`,
+        preview: atRisk.slice(0, 3).map((s) => ({
+          id: s.studentId,
+          title: s.name,
+          meta: `${fmt(s.average)}/20`,
     // 4. Recent unjustified absences awaiting follow-up.
     if (unjustifiedAbsences.length > 0) {
       const recent = unjustifiedAbsences[0]!;
@@ -1463,6 +1504,7 @@ export class AnalyticsService {
         draftsToPublish: draftCount,
         gradesToComplete: incomplete.length,
         assessmentsThisWeek: upcomingWeekCount,
+        studentsAtRisk: atRisk.length,
         unjustifiedAbsences: unjustifiedAbsenceCount,
         lessonsToFill: missingLessonCount,
         homeworkToCollect: homeworkDueCount,
