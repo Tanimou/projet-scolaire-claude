@@ -1,17 +1,25 @@
 import {
   ArrowRight,
   CalendarClock,
+  ClipboardCheck,
   ClipboardList,
   Compass,
   FileEdit,
   type LucideIcon,
   NotebookPen,
   Sparkles,
+  TrendingDown,
 } from 'lucide-react';
 import Link from 'next/link';
 
 export interface TeacherActionItem {
-  key: 'draft-assessments' | 'incomplete-grading' | 'upcoming-week' | 'missing-lessons';
+  key:
+    | 'draft-assessments'
+    | 'incomplete-grading'
+    | 'upcoming-week'
+    | 'missing-lessons'
+    | 'homework-to-collect'
+    | 'classes-at-risk';
   label: string;
   count: number;
   severity: 'critical' | 'warning' | 'info';
@@ -26,6 +34,8 @@ export interface TeacherActionDigest {
   gradesToComplete: number;
   assessmentsThisWeek: number;
   lessonsToFill: number;
+  homeworkToCollect: number;
+  classesAtRisk: number;
 }
 
 export interface TeacherActionData {
@@ -40,6 +50,8 @@ const ICON_BY_KEY: Record<TeacherActionItem['key'], LucideIcon> = {
   'incomplete-grading': ClipboardList,
   'upcoming-week': CalendarClock,
   'missing-lessons': NotebookPen,
+  'homework-to-collect': ClipboardCheck,
+  'classes-at-risk': TrendingDown,
 };
 
 const SEVERITY_STYLES: Record<
@@ -158,6 +170,18 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
               value={digest.lessonsToFill}
               tone="sky"
               hidden={digest.lessonsToFill === 0}
+            />
+            <DigestChip
+              label="devoirs à relever"
+              value={digest.homeworkToCollect}
+              tone="sky"
+              hidden={digest.homeworkToCollect === 0}
+            />
+            <DigestChip
+              label="classes à renforcer"
+              value={digest.classesAtRisk}
+              tone="rose"
+              hidden={digest.classesAtRisk === 0}
             />
           </div>
         )}
