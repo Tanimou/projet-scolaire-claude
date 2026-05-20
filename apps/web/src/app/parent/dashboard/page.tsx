@@ -2,6 +2,7 @@ import { AlertTriangle, Sparkles, TrendingDown, UserX } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 import { api, ApiError } from '@/lib/api-client';
 import { fetchMe } from '@/lib/me';
 import {
@@ -34,6 +35,7 @@ import {
   type ParentActionChild,
 } from './_components/ParentActionCenter';
 import { RecentGradesTable, type GradeRow } from './_components/RecentGradesTable';
+import { SchoolEventsPanel } from './_components/SchoolEventsPanel';
 import { SupportStrip } from './_components/SupportStrip';
 import { UpcomingPanel, type UpcomingItem } from './_components/UpcomingPanel';
 
@@ -161,12 +163,14 @@ export default async function ParentDashboardPage({
   searchParams: Promise<{ studentId?: string }>;
 }) {
   const params = await searchParams;
-  const [me, students] = await Promise.all([
+  const [me, students, calendarResp] = await Promise.all([
     fetchMe(),
     safe(api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' })),
+    safe(api<{ data: PortalCalendarEvent[] }>('/api/v1/calendar/events', { cache: 'no-store' })),
   ]);
 
   const allStudents = students?.data ?? [];
+  const schoolEvents = calendarResp?.data ?? [];
   const activeStudent =
     params.studentId && allStudents.find((s) => s.id === params.studentId)
       ? allStudents.find((s) => s.id === params.studentId)
@@ -635,7 +639,10 @@ export default async function ParentDashboardPage({
         </section>
       </div>
 
-      {/* ─────────── Row 4 : Bottom support strip (Image 2 polish) ─────────── */}
+      {/* ─────────── Row 4 : École — événements scolaires à venir ─────────── */}
+      <SchoolEventsPanel events={schoolEvents} />
+
+      {/* ─────────── Row 5 : Bottom support strip (Image 2 polish) ─────────── */}
       <div className="mt-6">
         <SupportStrip childFirstName={activeStudent.firstName} />
       </div>
