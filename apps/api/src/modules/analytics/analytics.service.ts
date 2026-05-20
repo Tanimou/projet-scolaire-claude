@@ -184,7 +184,12 @@ export interface TeacherActionCenterResponse {
   generatedAt: string;
   totalActionable: number;
   items: Array<{
-    key: 'draft-assessments' | 'incomplete-grading' | 'upcoming-week' | 'missing-lessons';
+    key:
+      | 'draft-assessments'
+      | 'incomplete-grading'
+      | 'upcoming-week'
+      | 'unjustified-absences'
+      | 'missing-lessons';
     label: string;
     count: number;
     severity: 'critical' | 'warning' | 'info';
@@ -200,6 +205,7 @@ export interface TeacherActionCenterResponse {
     draftsToPublish: number;
     gradesToComplete: number;
     assessmentsThisWeek: number;
+    unjustifiedAbsences: number;
     lessonsToFill: number;
   };
 }
@@ -1039,6 +1045,7 @@ export class AnalyticsService {
           draftsToPublish: 0,
           gradesToComplete: 0,
           assessmentsThisWeek: 0,
+          unjustifiedAbsences: 0,
           lessonsToFill: 0,
         },
       };
@@ -1059,6 +1066,8 @@ export class AnalyticsService {
       publishedForGrading,
       upcomingWeek,
       upcomingWeekCount,
+      unjustifiedAbsences,
+      unjustifiedAbsenceCount,
       missingLessonSessions,
       missingLessonCount,
     ] = await Promise.all([
@@ -1100,6 +1109,37 @@ export class AnalyticsService {
       }),
       this.prisma.assessment.count({
         where: { tenantId, teacherProfileId, scheduledAt: { gte: now, lte: sevenDaysAhead } },
+      }),
+      this.prisma.attendanceRecord.findMany({
+        where: {
+          tenantId,
+          status: 'absent',
+          justifiedAt: null,
+          recordedAt: { gte: fourteenDaysAgo },
+          classSession: { teacherProfileId },
+        },
+        orderBy: { recordedAt: 'desc' },
+        select: {
+          id: true,
+          recordedAt: true,
+          student: { select: { firstName: true, lastName: true } },
+          classSession: {
+            select: {
+              date: true,
+              teachingAssignment: { select: { classSection: { select: { name: true } } } },
+            },
+          },
+        },
+        take: 5,
+      }),
+      this.prisma.attendanceRecord.count({
+        where: {
+          tenantId,
+          status: 'absent',
+          justifiedAt: null,
+          recordedAt: { gte: fourteenDaysAgo },
+          classSession: { teacherProfileId },
+        },
       }),
       this.prisma.classSession.findMany({
         where: {
@@ -1224,7 +1264,27 @@ export class AnalyticsService {
       });
     }
 
-    // 4. Recent sessions without a cahier-de-texte entry.
+    // 4. Recent unjustified absences awaiting follow-up.
+    if (unjustifiedAbsences.length > 0) {
+      const recent = unjustifiedAbsences[0]!;
+      items.push({
+        key: 'unjustified-absences',
+        label: 'Absences à justifier',
+        count: unjustifiedAbsenceCount,
+        severity: unjustifiedAbsenceCount >= 5 ? 'warning' : 'info',
+        href: '/teacher/classes',
+        actionLabel: 'Vérifier',
+        detail: `Sur les 14 derniers jours · dernière il y a ${ageDays(recent.recordedAt)}j`,
+        preview: unjustifiedAbsences.slice(0, 3).map((r) => ({
+          id: r.id,
+          title:
+            [r.student?.firstName, r.student?.lastName].filter(Boolean).join(' ') || 'Élève',
+          meta: r.classSession?.teachingAssignment?.classSection?.name ?? null,
+        })),
+      });
+    }
+
+    // 5. Recent sessions without a cahier-de-texte entry.
     if (missingLessonSessions.length > 0) {
       const oldest = missingLessonSessions[0]!;
       items.push({
@@ -1266,6 +1326,7 @@ export class AnalyticsService {
         draftsToPublish: draftCount,
         gradesToComplete: incomplete.length,
         assessmentsThisWeek: upcomingWeekCount,
+        unjustifiedAbsences: unjustifiedAbsenceCount,
         lessonsToFill: missingLessonCount,
       },
     };

@@ -7,11 +7,17 @@ import {
   type LucideIcon,
   NotebookPen,
   Sparkles,
+  UserX,
 } from 'lucide-react';
 import Link from 'next/link';
 
 export interface TeacherActionItem {
-  key: 'draft-assessments' | 'incomplete-grading' | 'upcoming-week' | 'missing-lessons';
+  key:
+    | 'draft-assessments'
+    | 'incomplete-grading'
+    | 'upcoming-week'
+    | 'unjustified-absences'
+    | 'missing-lessons';
   label: string;
   count: number;
   severity: 'critical' | 'warning' | 'info';
@@ -25,6 +31,7 @@ export interface TeacherActionDigest {
   draftsToPublish: number;
   gradesToComplete: number;
   assessmentsThisWeek: number;
+  unjustifiedAbsences: number;
   lessonsToFill: number;
 }
 
@@ -39,6 +46,7 @@ const ICON_BY_KEY: Record<TeacherActionItem['key'], LucideIcon> = {
   'draft-assessments': FileEdit,
   'incomplete-grading': ClipboardList,
   'upcoming-week': CalendarClock,
+  'unjustified-absences': UserX,
   'missing-lessons': NotebookPen,
 };
 
@@ -154,6 +162,12 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
               hidden={digest.assessmentsThisWeek === 0}
             />
             <DigestChip
+              label="absences à justifier"
+              value={digest.unjustifiedAbsences}
+              tone="rose"
+              hidden={digest.unjustifiedAbsences === 0}
+            />
+            <DigestChip
               label="cahiers à remplir"
               value={digest.lessonsToFill}
               tone="sky"
@@ -171,13 +185,13 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
           <div className="text-sm text-emerald-900">
             <p className="font-bold">Rien en attente</p>
             <p className="mt-0.5 text-xs text-emerald-800/80">
-              Aucune évaluation en brouillon, aucune saisie incomplète, aucun cahier de texte en
-              retard. Beau travail&nbsp;!
+              Aucune évaluation en brouillon, aucune saisie incomplète, aucune absence à justifier
+              et aucun cahier de texte en retard. Beau travail&nbsp;!
             </p>
           </div>
         </div>
       ) : (
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {items.map((item) => (
             <ActionCard key={item.key} item={item} />
           ))}
