@@ -144,7 +144,8 @@ cmd_migrate() {
 
 cmd_seed() {
   log "Seeding data…"
-  compose --profile seed run --rm seed
+  # `seed` depends on the api service (app profile), so activate both profiles.
+  compose --profile app --profile seed run --rm seed
   ok "Seed complete."
 }
 

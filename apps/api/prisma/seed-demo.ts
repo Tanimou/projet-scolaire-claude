@@ -1167,15 +1167,15 @@ async function main() {
     d.setDate(d.getDate() + offset);
     return d;
   };
-  const allDay = (offset: number): { start: Date; end: Date } => {
-    const start = day(offset, 0);
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
-    return { start, end };
+  const allDay = (offset: number): { starts: Date; ends: Date } => {
+    const starts = day(offset, 0);
+    const ends = new Date(starts);
+    ends.setHours(23, 59, 59, 999);
+    return { starts, ends };
   };
-  const span = (startOffset: number, endOffset: number): { start: Date; end: Date } => ({
-    start: day(startOffset, 0),
-    end: (() => {
+  const span = (startOffset: number, endOffset: number): { starts: Date; ends: Date } => ({
+    starts: day(startOffset, 0),
+    ends: (() => {
       const e = day(endOffset, 0);
       e.setHours(23, 59, 59, 999);
       return e;
