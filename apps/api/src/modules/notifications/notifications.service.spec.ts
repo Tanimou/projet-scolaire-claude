@@ -71,7 +71,7 @@ describe('NotificationsService.createMany — preference gating', () => {
     ]);
 
     expect(res.created).toBe(1);
-    expect(created[0].kind).toBe('grade_published');
+    expect(created[0]!.kind).toBe('grade_published');
   });
 
   it('returns early without querying preferences when there are no items', async () => {
@@ -94,6 +94,6 @@ describe('NotificationsService.createMany — preference gating', () => {
     ]);
 
     expect(res.created).toBe(1);
-    expect(created[0].userProfileId).toBe('u2');
+    expect(created[0]!.userProfileId).toBe('u2');
   });
 });

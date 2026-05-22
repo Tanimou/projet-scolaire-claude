@@ -1081,10 +1081,9 @@ export class AnalyticsService {
       unjustifiedAbsenceCount,
       missingLessonSessions,
       missingLessonCount,
-      atRiskGradeRows,
       homeworkDue,
       homeworkDueCount,
-      publishedGradesForRisk,
+      atRiskGradeRows,
     ] = await Promise.all([
       this.prisma.assessment.findMany({
         where: { tenantId, teacherProfileId, isPublished: false },
@@ -1370,6 +1369,10 @@ export class AnalyticsService {
           id: s.studentId,
           title: s.name,
           meta: `${fmt(s.average)}/20`,
+        })),
+      });
+    }
+
     // 4. Recent unjustified absences awaiting follow-up.
     if (unjustifiedAbsences.length > 0) {
       const recent = unjustifiedAbsences[0]!;
@@ -1444,7 +1447,7 @@ export class AnalyticsService {
       string,
       { total: number; count: number; className: string; subjectName: string }
     >();
-    for (const g of publishedGradesForRisk) {
+    for (const g of atRiskGradeRows) {
       if (g.value === null || g.value === undefined) continue;
       const n = typeof g.value === 'number' ? g.value : Number(g.value);
       if (!Number.isFinite(n)) continue;

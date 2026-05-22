@@ -2,7 +2,7 @@
 # ------------------------------------------------------------------------------
 # NestJS API — multi-stage build (deps → build → runtime)
 # ------------------------------------------------------------------------------
-ARG NODE_VERSION=22.11.0
+ARG NODE_VERSION=22.13.1
 ARG PNPM_VERSION=9.12.3
 
 # ---------- 1) Base image with pnpm ----------
@@ -31,10 +31,21 @@ FROM deps AS build
 COPY . .
 # Generate Prisma client + build api
 RUN pnpm --filter @pilotage/contracts build
-RUN pnpm --filter @pilotage/api prisma generate
+# `exec` is required: `pnpm --filter X prisma …` looks for a "prisma" SCRIPT,
+# finds none, and silently no-ops (exit 0) — leaving the client ungenerated and
+# every Prisma result typed `any`. `exec` runs the prisma binary instead.
+RUN pnpm --filter @pilotage/api exec prisma generate
 RUN pnpm --filter @pilotage/api build
 # Prune dev deps for runtime
 RUN pnpm --filter @pilotage/api deploy --prod /prod/api
+# `pnpm deploy --prod` prunes the prisma CLI (a devDependency) and ships
+# @prisma/client WITHOUT its generated client. Re-materialise the client
+# directly inside the pruned tree, using the prisma CLI from the build stage
+# (cwd=/prod/api so it resolves the deployed @prisma/client). The native engine
+# target is linux-musl — identical alpine in build and runtime stages.
+RUN mkdir -p /prod/api/prisma && cp -rf /app/apps/api/prisma/. /prod/api/prisma/ \
+ && cd /prod/api \
+ && /app/apps/api/node_modules/.bin/prisma generate --schema=prisma/schema.prisma
 
 # ---------- 4) Runtime ----------
 FROM node:${NODE_VERSION}-alpine AS runtime

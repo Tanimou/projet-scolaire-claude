@@ -171,6 +171,15 @@ services:
     ports:
       - "${MAILDEV_SMTP_PORT:-1025}:1025"
       - "${MAILDEV_WEB_PORT:-1080}:1080"
+    # The image's built-in healthcheck reads ${MAILDEV_WEB_PORT}, which is a
+    # host-side compose var unset inside the container → it probes localhost:
+    # with an empty port and always fails. Override with the real internal port.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:1080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks: [pilotage]
 
   # -------------------------------------------------------------------------
@@ -204,7 +213,10 @@ services:
     profiles: ["app"]
     environment:
       <<: *app-env
-    command: ["pnpm", "--filter", "@pilotage/api", "prisma", "migrate", "deploy"]
+    # No SQL migration history in the repo — schema is driven by `prisma db push`
+    # (idempotent sync of schema.prisma → database). Client is already generated
+    # in the image, so skip regeneration here.
+    command: ["pnpm", "--filter", "@pilotage/api", "exec", "prisma", "db", "push", "--skip-generate", "--accept-data-loss"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -226,6 +238,10 @@ services:
     environment:
       <<: *app-env
       PORT: "4000"
+      # jwks-rsa@4 imports the ESM-only jose@6 via require(); Node enables
+      # require(ESM) by default from 22.12, so enable it explicitly to stay
+      # compatible if the base image ever lags behind. Harmless on newer Node.
+      NODE_OPTIONS: "--enable-source-maps --experimental-require-module"
     ports:
       - "${API_PORT:-4000}:4000"
     depends_on:
@@ -234,7 +250,7 @@ services:
       redis:
         condition: service_healthy
       keycloak:
-        condition: service_healthy
+        condition: service_started
       migrator:
         condition: service_completed_successfully
     healthcheck:
@@ -257,6 +273,8 @@ services:
     restart: unless-stopped
     environment:
       <<: *app-env
+      # See api note — jwks-rsa@4 / jose@6 require(ESM) compatibility.
+      NODE_OPTIONS: "--enable-source-maps --experimental-require-module"
     depends_on:
       postgres:
         condition: service_healthy
@@ -283,7 +301,11 @@ services:
     environment:
       <<: *app-env
       PORT: "3000"
-      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}
+      # Server-side only: the Next server (proxy route + server components) reaches
+      # the API over the internal docker network. Client bundles never use this —
+      # the browser calls the same-origin /api/proxy route, which fans out here.
+      NEXT_PUBLIC_API_URL: http://api:4000
+      # Browser-facing: login redirects must hit the host-published Keycloak port.
       NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
       NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
     ports:
@@ -311,7 +333,8 @@ services:
     profiles: ["seed"]
     environment:
       <<: *app-env
-    command: ["pnpm", "--filter", "@pilotage/api", "prisma", "db", "seed"]
+    # No `prisma.seed` key in package.json — run the tsx seed script directly.
+    command: ["pnpm", "--filter", "@pilotage/api", "run", "prisma:seed"]
     depends_on:
       api:
         condition: service_healthy

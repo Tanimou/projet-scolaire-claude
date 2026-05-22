@@ -2,7 +2,7 @@
 # ------------------------------------------------------------------------------
 # NestJS BullMQ worker — multi-stage
 # ------------------------------------------------------------------------------
-ARG NODE_VERSION=22.11.0
+ARG NODE_VERSION=22.13.1
 ARG PNPM_VERSION=9.12.3
 
 FROM node:${NODE_VERSION}-alpine AS base
@@ -27,9 +27,16 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 FROM deps AS build
 COPY . .
 RUN pnpm --filter @pilotage/contracts build
-RUN pnpm --filter @pilotage/api prisma generate
+# `exec` required — see Dockerfile.api note (bare `prisma` is a silent no-op).
+RUN pnpm --filter @pilotage/api exec prisma generate
 RUN pnpm --filter @pilotage/worker build
 RUN pnpm --filter @pilotage/worker deploy --prod /prod/worker
+# The worker uses @prisma/client but owns no schema/CLI — regenerate the client
+# into its pruned tree from the api schema + build-stage prisma CLI (same trick
+# as Dockerfile.api). Keeps the deployed @prisma/client runnable at runtime.
+RUN mkdir -p /prod/worker/prisma && cp -rf /app/apps/api/prisma/. /prod/worker/prisma/ \
+ && cd /prod/worker \
+ && /app/apps/api/node_modules/.bin/prisma generate --schema=prisma/schema.prisma
 
 FROM node:${NODE_VERSION}-alpine AS runtime
 RUN apk add --no-cache libc6-compat openssl tini && \
