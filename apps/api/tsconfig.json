@@ -10,7 +10,8 @@
     "declaration": false,
     "removeComments": true,
     "sourceMap": true,
-    "incremental": false
+    "incremental": false,
+    "types": ["node", "jest"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]
