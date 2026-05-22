@@ -48,13 +48,13 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
-      "rootUrl": "http://localhost:3100",
+      "rootUrl": "http://localhost:3000",
       "baseUrl": "/admin",
-      "redirectUris": ["http://localhost:3100/admin/*", "http://localhost:3100/api/auth/callback/admin", "http://localhost:3100/api/auth/callback/keycloak-admin"],
-      "webOrigins": ["http://localhost:3100"],
+      "redirectUris": ["http://localhost:3000/admin/*", "http://localhost:3000/api/auth/callback/admin", "http://localhost:3000/api/auth/callback/keycloak-admin"],
+      "webOrigins": ["http://localhost:3000"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:3100/admin/login"
+        "post.logout.redirect.uris": "http://localhost:3000/admin/login"
       }
     },
     {
@@ -66,13 +66,13 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
-      "rootUrl": "http://localhost:3100",
+      "rootUrl": "http://localhost:3000",
       "baseUrl": "/teacher",
-      "redirectUris": ["http://localhost:3100/teacher/*", "http://localhost:3100/api/auth/callback/teacher", "http://localhost:3100/api/auth/callback/keycloak-teacher"],
-      "webOrigins": ["http://localhost:3100"],
+      "redirectUris": ["http://localhost:3000/teacher/*", "http://localhost:3000/api/auth/callback/teacher", "http://localhost:3000/api/auth/callback/keycloak-teacher"],
+      "webOrigins": ["http://localhost:3000"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:3100/teacher/login"
+        "post.logout.redirect.uris": "http://localhost:3000/teacher/login"
       }
     },
     {
@@ -84,13 +84,13 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
-      "rootUrl": "http://localhost:3100",
+      "rootUrl": "http://localhost:3000",
       "baseUrl": "/parent",
-      "redirectUris": ["http://localhost:3100/parent/*", "http://localhost:3100/api/auth/callback/parent", "http://localhost:3100/api/auth/callback/keycloak-parent"],
-      "webOrigins": ["http://localhost:3100"],
+      "redirectUris": ["http://localhost:3000/parent/*", "http://localhost:3000/api/auth/callback/parent", "http://localhost:3000/api/auth/callback/keycloak-parent"],
+      "webOrigins": ["http://localhost:3000"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:3100/parent/login"
+        "post.logout.redirect.uris": "http://localhost:3000/parent/login"
       }
     },
     {

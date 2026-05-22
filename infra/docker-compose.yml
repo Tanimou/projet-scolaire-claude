@@ -308,6 +308,17 @@ services:
       # Browser-facing: login redirects must hit the host-published Keycloak port.
       NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
       NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
+      # NextAuth v5 (Auth.js) REQUIRES a secret to sign session JWTs — without it
+      # every /api/auth/* call 500s with MissingSecret and login is impossible.
+      AUTH_SECRET: ${AUTH_SECRET:-pilotage-dev-auth-secret-change-me-min-32-chars-0a1b2c3d}
+      # Canonical public URL — makes NextAuth redirects/callbacks deterministic
+      # (otherwise it can fall back to the bound HOSTNAME 0.0.0.0).
+      AUTH_URL: http://localhost:${WEB_PORT:-3000}
+      # Per-portal Keycloak client secrets (must match the realm). Defaults align
+      # with the imported realm so credentials (ROPC) login works out of the box.
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-change-me-portal-admin}
+      KEYCLOAK_TEACHER_CLIENT_SECRET: ${KEYCLOAK_TEACHER_CLIENT_SECRET:-change-me-portal-teacher}
+      KEYCLOAK_PARENT_CLIENT_SECRET: ${KEYCLOAK_PARENT_CLIENT_SECRET:-change-me-portal-parent}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
