@@ -2,7 +2,7 @@
 # ------------------------------------------------------------------------------
 # Next.js Web — multi-stage build (standalone output)
 # ------------------------------------------------------------------------------
-ARG NODE_VERSION=22.11.0
+ARG NODE_VERSION=22.13.1
 ARG PNPM_VERSION=9.12.3
 
 FROM node:${NODE_VERSION}-alpine AS base
@@ -42,6 +42,10 @@ RUN pnpm --filter @pilotage/contracts build && \
     pnpm --filter @pilotage/i18n build && \
     pnpm --filter @pilotage/ui build && \
     pnpm --filter @pilotage/web build
+# The repo ships no apps/web/public dir (no static assets yet); ensure it exists
+# so the runtime COPY below never fails. Appended after the build RUN so the
+# expensive `next build` layer stays cached on rebuilds.
+RUN mkdir -p /app/apps/web/public
 
 # ---------- runtime (standalone) ----------
 FROM node:${NODE_VERSION}-alpine AS runtime
