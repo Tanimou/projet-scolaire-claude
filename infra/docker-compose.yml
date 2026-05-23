@@ -16,6 +16,9 @@ x-app-env: &app-env
   DATABASE_URL: postgresql://pilotage:pilotage@postgres:5432/pilotage?schema=public
   REDIS_URL: redis://redis:6379
   KEYCLOAK_URL: http://keycloak:8080
+  # Browser-facing Keycloak URL (must equal KC_HOSTNAME). The api uses it as the
+  # expected token issuer; the web uses it as the OIDC issuer + auth-redirect host.
+  KEYCLOAK_PUBLIC_URL: http://localhost:8180
   KEYCLOAK_REALM: pilotage-scolaire
   KEYCLOAK_ADMIN_CLIENT_ID: portal-admin
   KEYCLOAK_TEACHER_CLIENT_ID: portal-teacher
@@ -102,6 +105,14 @@ services:
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: keycloak
       KC_HOSTNAME_STRICT: "false"
+      # Fixed browser-facing frontend URL → token `iss` and the authorization
+      # endpoint are always localhost:8180 (browser-reachable), regardless of the
+      # internal host the request arrives on. Backchannel-dynamic keeps the
+      # token/jwks endpoints on the request host (keycloak:8080) so the api/web
+      # containers reach them internally. This makes BOTH the credentials (ROPC,
+      # internal) and SSO-redirect (OIDC, browser) flows mint a consistent iss.
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HTTP_ENABLED: "true"
       KC_PROXY: edge
       KC_HEALTH_ENABLED: "true"

@@ -3,9 +3,19 @@ import 'next-auth/jwt';
 import Credentials from 'next-auth/providers/credentials';
 import Keycloak from 'next-auth/providers/keycloak';
 
-const KEYCLOAK_ISSUER = `${process.env.KEYCLOAK_URL ?? 'http://localhost:8180'}/realms/${
-  process.env.KEYCLOAK_REALM ?? 'pilotage-scolaire'
-}`;
+const KEYCLOAK_REALM = process.env.KEYCLOAK_REALM ?? 'pilotage-scolaire';
+// Internal issuer — reachable from the web container (server-side ROPC, refresh,
+// and OIDC discovery/token go here).
+const KEYCLOAK_INTERNAL_ISSUER = `${process.env.KEYCLOAK_URL ?? 'http://localhost:8180'}/realms/${KEYCLOAK_REALM}`;
+// Public issuer — the browser-facing Keycloak URL (KC_HOSTNAME). Used as the
+// OIDC provider `issuer` so it matches the token `iss` and the authorization
+// redirect targets a browser-reachable host. Falls back to the internal URL
+// when no split is configured (backward-compatible).
+const KEYCLOAK_PUBLIC_ISSUER = `${
+  process.env.KEYCLOAK_PUBLIC_URL ?? process.env.KEYCLOAK_URL ?? 'http://localhost:8180'
+}/realms/${KEYCLOAK_REALM}`;
+// Server-side direct calls (ROPC login, token refresh) always use the internal URL.
+const KEYCLOAK_ISSUER = KEYCLOAK_INTERNAL_ISSUER;
 
 const PORTAL_FROM_PROVIDER = {
   'keycloak-admin': 'admin',
@@ -55,15 +65,26 @@ function clientCreds(portal: Portal) {
   };
 }
 
-const portalClient = (portal: Portal) =>
-  Keycloak({
+const portalClient = (portal: Portal) => {
+  // `issuer` is the browser-facing URL (matches token `iss` + the auth-redirect
+  // host). Discovery must instead be fetched over the INTERNAL URL the container
+  // can reach — but the Keycloak() helper overwrites `wellKnown` from `issuer`,
+  // so we override it on the returned object (post-spread) to win. Keycloak's
+  // KC_HOSTNAME + backchannel-dynamic make the discovery doc advertise the public
+  // issuer/authorization endpoint but internal token/jwks endpoints.
+  const provider = Keycloak({
     id: `keycloak-${portal}`,
     name: `Pilotage scolaire — ${portal}`,
     clientId: clientCreds(portal).clientId,
     clientSecret: clientCreds(portal).clientSecret,
-    issuer: KEYCLOAK_ISSUER,
+    issuer: KEYCLOAK_PUBLIC_ISSUER,
     authorization: { params: { scope: 'openid email profile' } },
   });
+  return {
+    ...provider,
+    wellKnown: `${KEYCLOAK_INTERNAL_ISSUER}/.well-known/openid-configuration`,
+  };
+};
 
 function decodeJwtClaims(token: string | undefined): Record<string, unknown> | null {
   if (!token) return null;
