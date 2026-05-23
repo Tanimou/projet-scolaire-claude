@@ -303,7 +303,14 @@ services:
       context: ..
       dockerfile: infra/docker/Dockerfile.web
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}
+        # NEXT_PUBLIC_* are INLINED at build time into both client AND server
+        # bundles, so the runtime env can't override them. The API base is only
+        # ever used server-side (server components + the /api/proxy route) — the
+        # browser calls the same-origin /api/proxy — so bake the INTERNAL url.
+        # If it were localhost:4000, the web container's SSR fetch hits its own
+        # localhost and ECONNREFUSEs.
+        NEXT_PUBLIC_API_URL: http://api:4000
+        # Browser-facing: KC login redirects must hit the host-published port.
         NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
         NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
     container_name: pilotage_web
