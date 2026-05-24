@@ -297,3 +297,160 @@ html[data-density='spacious'] .density-grid-gap {
 @utility accent-outline {
   outline: 2px solid var(--display-accent-ring);
 }
+
+/* Accent gradient button surface (portal-aware). Composes with Tailwind
+   variants because it is a v4 `@utility`. */
+@utility btn-accent {
+  background-image: var(--accent-gradient);
+  color: #fff;
+}
+
+/* =============================================================================
+   Motion system — keyframe animation library (pure CSS, SSR-safe)
+   ---------------------------------------------------------------------------
+   Inspired by the "Orange rdv" design language, adapted to pilotage tokens.
+   These pair with the framer-motion client primitives in @pilotage/ui
+   (FadeIn, Stagger, AnimatedNumber, MotionCard…). Colours read from --accent-*
+   so each portal animates in its own hue. All honour `prefers-reduced-motion`
+   via the base reset above (animation-duration forced to ~0).
+   ========================================================================== */
+@keyframes pil-fade-in       { from { opacity: 0; transform: translateY(8px);  } to { opacity: 1; transform: none; } }
+@keyframes pil-slide-up      { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+@keyframes pil-slide-down    { from { opacity: 0; transform: translateY(-12px);} to { opacity: 1; transform: none; } }
+@keyframes pil-scale-in      { from { opacity: 0; transform: scale(0.96);      } to { opacity: 1; transform: scale(1); } }
+@keyframes pil-count-in      { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes pil-shimmer       { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes pil-gradient-x    { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes pil-pulse-dot     { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.7); } }
+@keyframes pil-float         { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes pil-progress-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes pil-spin-slow     { to { transform: rotate(360deg); } }
+
+/* Entrance utilities (use alone or together with .stagger-N) */
+.page-transition    { animation: pil-fade-in 380ms var(--ease-out) both; }
+.animate-fade-in    { animation: pil-fade-in 320ms var(--ease-out) both; }
+.animate-slide-up   { animation: pil-slide-up 420ms var(--ease-out) both; }
+.animate-slide-down { animation: pil-slide-down 320ms var(--ease-out) both; }
+.animate-scale-in   { animation: pil-scale-in 280ms var(--ease-out) both; }
+.animate-count-in   { animation: pil-count-in 520ms var(--ease-out) both; }
+.animate-float      { animation: pil-float 3s ease-in-out infinite; }
+.animate-spin-slow  { animation: pil-spin-slow 8s linear infinite; }
+
+/* Stagger — apply on children alongside an entrance utility */
+.stagger-1  { animation-delay: 40ms;  animation-fill-mode: both; }
+.stagger-2  { animation-delay: 80ms;  animation-fill-mode: both; }
+.stagger-3  { animation-delay: 120ms; animation-fill-mode: both; }
+.stagger-4  { animation-delay: 160ms; animation-fill-mode: both; }
+.stagger-5  { animation-delay: 200ms; animation-fill-mode: both; }
+.stagger-6  { animation-delay: 240ms; animation-fill-mode: both; }
+.stagger-7  { animation-delay: 280ms; animation-fill-mode: both; }
+.stagger-8  { animation-delay: 320ms; animation-fill-mode: both; }
+.stagger-9  { animation-delay: 360ms; animation-fill-mode: both; }
+.stagger-10 { animation-delay: 400ms; animation-fill-mode: both; }
+.stagger-11 { animation-delay: 440ms; animation-fill-mode: both; }
+.stagger-12 { animation-delay: 480ms; animation-fill-mode: both; }
+
+/* Skeleton shimmer — neutral sweep for loading placeholders */
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    oklch(0.94 0.01 250) 25%,
+    oklch(0.975 0.005 250) 50%,
+    oklch(0.94 0.01 250) 75%
+  );
+  background-size: 200% 100%;
+  animation: pil-shimmer 1.6s infinite linear;
+}
+
+/* Animated gradient — welcome banners / hero strips */
+.animated-gradient {
+  background-size: 200% 200%;
+  animation: pil-gradient-x 8s ease infinite;
+}
+
+/* Live pulse dot — alerts, "online", real-time chips */
+.pulse-dot { animation: pil-pulse-dot 2s ease-in-out infinite; }
+
+/* Animated progress fill — pair with a left-origin scaleX bar */
+.animate-progress-fill {
+  transform-origin: left center;
+  animation: pil-progress-fill 900ms var(--ease-out) both;
+}
+
+/* Accent glow — soft halo in the active portal accent */
+.glow-accent {
+  box-shadow:
+    0 0 16px color-mix(in oklch, var(--accent-500) 28%, transparent),
+    0 0 36px color-mix(in oklch, var(--accent-500) 12%, transparent);
+}
+
+/* Hover lift — opt-in for interactive tiles / clickable cards */
+.hover-lift {
+  transition: transform var(--motion-slow) var(--ease-out), box-shadow var(--motion-slow) var(--ease-out);
+}
+.hover-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--elev-3);
+}
+
+/* Ripple — material-style tap feedback in the active accent */
+.ripple { position: relative; overflow: hidden; }
+.ripple::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, color-mix(in oklch, var(--accent-500) 22%, transparent) 0%, transparent 70%);
+  transform: scale(0);
+  opacity: 0;
+  transition: transform 0.5s ease, opacity 0.5s ease;
+}
+.ripple:active::after { transform: scale(2.5); opacity: 1; transition: transform 0s, opacity 0s; }
+
+/* Gradient text helper — logos, hero numbers */
+.text-gradient-accent {
+  background: linear-gradient(120deg, var(--accent-500), var(--accent-700));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Every Card transitions its shadow; cards opt into a translate lift via
+   data-hover="lift" (set by the Card `hover` prop). Accent-tinted shadow. */
+[data-slot='card'] {
+  transition:
+    box-shadow var(--motion-slow) var(--ease-out),
+    transform var(--motion-slow) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out);
+}
+[data-slot='card'][data-hover='lift']:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 12px 30px -8px color-mix(in oklch, var(--accent-500) 20%, transparent),
+    0 6px 14px -10px oklch(0.2 0.02 250 / 0.18);
+}
+
+/* =============================================================================
+   Custom scrollbars — slim, accent-on-hover (Orange-rdv polish)
+   ========================================================================== */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.82 0.02 250) transparent;
+}
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: oklch(0.82 0.02 250);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklch, var(--accent-500) 55%, oklch(0.7 0.02 250));
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: oklch(0.78 0.02 250); border-radius: 9999px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--accent-500); }
+
+html { -webkit-tap-highlight-color: transparent; }

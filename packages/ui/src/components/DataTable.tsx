@@ -90,7 +90,7 @@ export function DataTable<T extends { id: string }>({
                 key={row.id}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={cn(
-                  'hover:bg-slate-50/60',
+                  'transition-colors hover:bg-slate-50',
                   onRowClick && 'cursor-pointer',
                 )}
               >

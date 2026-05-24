@@ -1,4 +1,4 @@
-import { AlertTriangle, Sparkles, TrendingDown, UserX } from 'lucide-react';
+import { AlertTriangle, Sparkles, TrendingDown, UserX, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
@@ -14,7 +14,10 @@ import {
   GroupedBarChart,
   LineChart,
   SectionHeader,
+  Stagger,
+  StaggerItem,
   SubjectPerfCard,
+  WelcomeBanner,
   formatGrade,
   formatPercent,
   gradeVerdict,
@@ -363,6 +366,23 @@ export default async function ParentDashboardPage({
       title="Tableau de bord"
       subtitle="Vue d'ensemble des performances et activités"
     >
+      {/* ─────────── Welcome hero ─────────── */}
+      <WelcomeBanner
+        icon={Users}
+        title={`Bonjour ${me?.firstName ?? ''} 👋`}
+        subtitle="Suivez la scolarité de votre famille en un coup d'œil."
+        aside={
+          <span className="text-sm font-semibold capitalize text-white/90">
+            {new Date().toLocaleDateString('fr-FR', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            })}
+          </span>
+        }
+        className="mb-6"
+      />
+
       {/* Centre de suivi — feed transversal « ce qui demande votre attention »
           agrégé sur tous les enfants. Ne s'affiche que s'il y a au moins une
           action en attente, pour ne pas concurrencer le message « tout est au
@@ -526,7 +546,7 @@ export default async function ParentDashboardPage({
               className="mt-3"
             />
           ) : (
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Stagger className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {subjectPerf.slice(0, 4).map((s) => {
                 const metrics: SubjectMetric[] = [
                   {
@@ -551,17 +571,18 @@ export default async function ParentDashboardPage({
                   { label: 'Coefficient', value: String(s.coefficient) },
                 ];
                 return (
-                  <SubjectPerfCard
-                    key={s.subjectId}
-                    subjectCode={s.subjectCode}
-                    subjectName={s.subjectName}
-                    grade={s.studentAverage}
-                    metrics={metrics}
-                    href={`/parent/grades?studentId=${activeStudent.id}&subject=${s.subjectCode}`}
-                  />
+                  <StaggerItem key={s.subjectId}>
+                    <SubjectPerfCard
+                      subjectCode={s.subjectCode}
+                      subjectName={s.subjectName}
+                      grade={s.studentAverage}
+                      metrics={metrics}
+                      href={`/parent/grades?studentId=${activeStudent.id}&subject=${s.subjectCode}`}
+                    />
+                  </StaggerItem>
                 );
               })}
-            </div>
+            </Stagger>
           )}
         </div>
 

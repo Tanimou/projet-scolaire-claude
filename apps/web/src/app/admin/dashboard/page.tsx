@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   FileText,
   GraduationCap,
+  LayoutDashboard,
   Users,
 } from 'lucide-react';
 import type { Metadata } from 'next';
@@ -21,7 +22,10 @@ import {
   EmptyState,
   KpiCard,
   SectionHeader,
+  Stagger,
+  StaggerItem,
   StatusBadge,
+  WelcomeBanner,
   formatDateLong,
   type DonutSegment,
 } from '@pilotage/ui';
@@ -177,61 +181,89 @@ export default async function AdminDashboardPage() {
         ) : null
       }
     >
-      {/* ─── Action center: what needs your attention right now ─── */}
-      <AdminActionCenter data={actionCenter} />
+      {/* ─── Welcome hero ─── */}
+      <WelcomeBanner
+        icon={LayoutDashboard}
+        title="Bonjour 👋"
+        subtitle="Voici l'état de votre établissement aujourd'hui."
+        aside={
+          <span className="text-sm font-semibold capitalize text-white/90">
+            {new Date().toLocaleDateString('fr-FR', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            })}
+          </span>
+        }
+      />
 
-      {/* ─── KPI strip ─── */}
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <KpiCard
-          icon={Users}
-          tone="blue"
-          label="ÉLÈVES"
-          value={kpis?.students.formatted ?? '—'}
-          delta={pickDelta(kpis?.students)}
-          deltaSuffix="%"
-          deltaPeriod="vs mois dernier"
-          trend={kpis?.students.trend}
-        />
-        <KpiCard
-          icon={GraduationCap}
-          tone="green"
-          label="PROFESSEURS"
-          value={kpis?.teachers.formatted ?? '—'}
-          delta={pickDelta(kpis?.teachers)}
-          deltaSuffix="%"
-          deltaPeriod="vs mois dernier"
-          trend={kpis?.teachers.trend}
-        />
-        <KpiCard
-          icon={BookOpen}
-          tone="violet"
-          label="CLASSES"
-          value={kpis?.classes.formatted ?? '—'}
-          delta={pickDeltaAbs(kpis?.classes)}
-          deltaSuffix=""
-          deltaPeriod="vs mois dernier"
-          trend={kpis?.classes.trend}
-        />
-        <KpiCard
-          icon={ClipboardList}
-          tone="orange"
-          label="DEMANDES EN ATTENTE"
-          value={kpis?.pendingRequests.formatted ?? '—'}
-          delta={pickDelta(kpis?.pendingRequests)}
-          deltaSuffix="%"
-          deltaPeriod="vs mois dernier"
-          trend={kpis?.pendingRequests.trend}
-        />
-        <KpiCard
-          icon={Bell}
-          tone="rose"
-          label="ALERTES CONFIGURÉES"
-          value={kpis?.configuredAlerts.formatted ?? '—'}
-          delta={2}
-          deltaSuffix=""
-          deltaPeriod="vs mois dernier"
-        />
+      {/* ─── Action center: what needs your attention right now ─── */}
+      <div className="mt-6">
+        <AdminActionCenter data={actionCenter} />
       </div>
+
+      {/* ─── KPI strip (cascade entrance + count-up values) ─── */}
+      <Stagger className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <StaggerItem>
+          <KpiCard
+            icon={Users}
+            tone="blue"
+            label="ÉLÈVES"
+            value={kpis?.students.value ?? '—'}
+            delta={pickDelta(kpis?.students)}
+            deltaSuffix="%"
+            deltaPeriod="vs mois dernier"
+            trend={kpis?.students.trend}
+          />
+        </StaggerItem>
+        <StaggerItem>
+          <KpiCard
+            icon={GraduationCap}
+            tone="green"
+            label="PROFESSEURS"
+            value={kpis?.teachers.value ?? '—'}
+            delta={pickDelta(kpis?.teachers)}
+            deltaSuffix="%"
+            deltaPeriod="vs mois dernier"
+            trend={kpis?.teachers.trend}
+          />
+        </StaggerItem>
+        <StaggerItem>
+          <KpiCard
+            icon={BookOpen}
+            tone="violet"
+            label="CLASSES"
+            value={kpis?.classes.value ?? '—'}
+            delta={pickDeltaAbs(kpis?.classes)}
+            deltaSuffix=""
+            deltaPeriod="vs mois dernier"
+            trend={kpis?.classes.trend}
+          />
+        </StaggerItem>
+        <StaggerItem>
+          <KpiCard
+            icon={ClipboardList}
+            tone="orange"
+            label="DEMANDES EN ATTENTE"
+            value={kpis?.pendingRequests.value ?? '—'}
+            delta={pickDelta(kpis?.pendingRequests)}
+            deltaSuffix="%"
+            deltaPeriod="vs mois dernier"
+            trend={kpis?.pendingRequests.trend}
+          />
+        </StaggerItem>
+        <StaggerItem>
+          <KpiCard
+            icon={Bell}
+            tone="rose"
+            label="ALERTES CONFIGURÉES"
+            value={kpis?.configuredAlerts.value ?? '—'}
+            delta={2}
+            deltaSuffix=""
+            deltaPeriod="vs mois dernier"
+          />
+        </StaggerItem>
+      </Stagger>
 
       {/* ─── Row 2: Structure (2/5) + Demandes (3/5) ─── */}
       <div className="mt-6 grid gap-6 lg:grid-cols-5">

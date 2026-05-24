@@ -41,7 +41,7 @@ export {
 
 // Primitives (kept)
 export { Button, buttonVariants, type ButtonProps } from './components/Button';
-export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './components/Card';
+export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, type CardProps } from './components/Card';
 export { Input, type InputProps } from './components/Input';
 export { Label } from './components/Label';
 export { Badge, badgeVariants, type BadgeProps } from './components/Badge';
@@ -61,6 +61,25 @@ export {
 export { Topbar, type TopbarProps } from './components/Topbar';
 export { Breadcrumb, type BreadcrumbProps, type BreadcrumbItem } from './components/Breadcrumb';
 export { PageHeader, type PageHeaderProps } from './components/PageHeader';
+
+// Motion primitives (framer-motion, client) — pair with the CSS motion utils
+export {
+  FadeIn,
+  Stagger,
+  StaggerItem,
+  Reveal,
+  HoverLift,
+  PageTransition,
+  AnimatedNumber,
+  type FadeInProps,
+  type StaggerProps,
+  type StaggerItemProps,
+  type RevealProps,
+  type HoverLiftProps,
+  type PageTransitionProps,
+  type AnimatedNumberProps,
+} from './components/Motion';
+export { WelcomeBanner, type WelcomeBannerProps } from './components/WelcomeBanner';
 
 // Atoms
 export { Avatar, AvatarGroup, type AvatarProps, type AvatarGroupProps, type AvatarSize, type AvatarTone } from './components/Avatar';

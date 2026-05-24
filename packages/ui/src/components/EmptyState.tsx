@@ -46,14 +46,14 @@ export function EmptyState({
     <div
       role="status"
       className={cn(
-        'flex flex-col items-center gap-3 rounded-2xl bg-white p-10 text-center ring-1 ring-slate-200/60',
+        'animate-fade-in flex flex-col items-center gap-3 rounded-2xl bg-white p-10 text-center ring-1 ring-slate-200/60',
         className,
       )}
     >
       {Icon && (
         <span
           className={cn(
-            'inline-flex h-12 w-12 items-center justify-center rounded-2xl',
+            'animate-float inline-flex h-12 w-12 items-center justify-center rounded-2xl',
             TONE_BG[tone],
           )}
         >
@@ -66,7 +66,7 @@ export function EmptyState({
         (action.href ? (
           <a
             href={action.href}
-            className="mt-2 inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
+            className="btn-accent mt-2 inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:brightness-105 active:scale-[0.97]"
           >
             {action.label}
           </a>
@@ -74,7 +74,7 @@ export function EmptyState({
           <button
             type="button"
             onClick={action.onClick}
-            className="mt-2 inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
+            className="btn-accent mt-2 inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:brightness-105 active:scale-[0.97]"
           >
             {action.label}
           </button>

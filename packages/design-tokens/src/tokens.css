@@ -68,6 +68,16 @@
   --accent-600:  var(--admin-600);
   --accent-700:  var(--admin-700);
 
+  /* Accent gradients & glow — reference --accent-* so they swap per portal.
+     color-mix / var() resolve lazily at use site (computed-value time), so a
+     [data-portal="teacher"] subtree paints these in the teacher hue. */
+  --accent-gradient:      linear-gradient(135deg, var(--accent-500), var(--accent-700));
+  --accent-gradient-soft: linear-gradient(135deg,
+                            color-mix(in oklch, var(--accent-500) 16%, white),
+                            color-mix(in oklch, var(--accent-500) 4%, white));
+  --accent-glow:          color-mix(in oklch, var(--accent-500) 28%, transparent);
+  --accent-glow-soft:     color-mix(in oklch, var(--accent-500) 12%, transparent);
+
   /* === Semantic === */
   --success-50:   oklch(0.96 0.04 160);
   --success-100:  oklch(0.92 0.07 160);

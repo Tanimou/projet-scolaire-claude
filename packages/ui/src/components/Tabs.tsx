@@ -94,7 +94,7 @@ export function TabsTrigger({ value: trigger, children, disabled, className }: T
       disabled={disabled}
       onClick={() => setValue(trigger)}
       className={cn(
-        'inline-flex items-center gap-2 whitespace-nowrap text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex items-center gap-2 whitespace-nowrap text-sm font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50',
         variant === 'underline' &&
           (active
             ? 'border-b-2 border-[color:var(--accent-500)] px-4 py-2.5 text-slate-900'
@@ -129,7 +129,7 @@ export function TabsContent({ value: target, children, className }: TabsContentP
       role="tabpanel"
       id={`${idBase}-panel-${target}`}
       aria-labelledby={`${idBase}-trigger-${target}`}
-      className={cn('mt-4', className)}
+      className={cn('animate-fade-in mt-4', className)}
     >
       {children}
     </div>
