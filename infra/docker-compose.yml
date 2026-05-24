@@ -16,6 +16,9 @@ x-app-env: &app-env
   DATABASE_URL: postgresql://pilotage:pilotage@postgres:5432/pilotage?schema=public
   REDIS_URL: redis://redis:6379
   KEYCLOAK_URL: http://keycloak:8080
+  # Browser-facing Keycloak URL (must equal KC_HOSTNAME). The api uses it as the
+  # expected token issuer; the web uses it as the OIDC issuer + auth-redirect host.
+  KEYCLOAK_PUBLIC_URL: http://localhost:8180
   KEYCLOAK_REALM: pilotage-scolaire
   KEYCLOAK_ADMIN_CLIENT_ID: portal-admin
   KEYCLOAK_TEACHER_CLIENT_ID: portal-teacher
@@ -102,6 +105,14 @@ services:
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: keycloak
       KC_HOSTNAME_STRICT: "false"
+      # Fixed browser-facing frontend URL → token `iss` and the authorization
+      # endpoint are always localhost:8180 (browser-reachable), regardless of the
+      # internal host the request arrives on. Backchannel-dynamic keeps the
+      # token/jwks endpoints on the request host (keycloak:8080) so the api/web
+      # containers reach them internally. This makes BOTH the credentials (ROPC,
+      # internal) and SSO-redirect (OIDC, browser) flows mint a consistent iss.
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HTTP_ENABLED: "true"
       KC_PROXY: edge
       KC_HEALTH_ENABLED: "true"
@@ -292,7 +303,14 @@ services:
       context: ..
       dockerfile: infra/docker/Dockerfile.web
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}
+        # NEXT_PUBLIC_* are INLINED at build time into both client AND server
+        # bundles, so the runtime env can't override them. The API base is only
+        # ever used server-side (server components + the /api/proxy route) — the
+        # browser calls the same-origin /api/proxy — so bake the INTERNAL url.
+        # If it were localhost:4000, the web container's SSR fetch hits its own
+        # localhost and ECONNREFUSEs.
+        NEXT_PUBLIC_API_URL: http://api:4000
+        # Browser-facing: KC login redirects must hit the host-published port.
         NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
         NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
     container_name: pilotage_web
@@ -308,6 +326,17 @@ services:
       # Browser-facing: login redirects must hit the host-published Keycloak port.
       NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
       NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
+      # NextAuth v5 (Auth.js) REQUIRES a secret to sign session JWTs — without it
+      # every /api/auth/* call 500s with MissingSecret and login is impossible.
+      AUTH_SECRET: ${AUTH_SECRET:-pilotage-dev-auth-secret-change-me-min-32-chars-0a1b2c3d}
+      # Canonical public URL — makes NextAuth redirects/callbacks deterministic
+      # (otherwise it can fall back to the bound HOSTNAME 0.0.0.0).
+      AUTH_URL: http://localhost:${WEB_PORT:-3000}
+      # Per-portal Keycloak client secrets (must match the realm). Defaults align
+      # with the imported realm so credentials (ROPC) login works out of the box.
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-change-me-portal-admin}
+      KEYCLOAK_TEACHER_CLIENT_SECRET: ${KEYCLOAK_TEACHER_CLIENT_SECRET:-change-me-portal-teacher}
+      KEYCLOAK_PARENT_CLIENT_SECRET: ${KEYCLOAK_PARENT_CLIENT_SECRET:-change-me-portal-parent}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:

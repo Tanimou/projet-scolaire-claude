@@ -70,8 +70,12 @@ export function Sidebar({
         className,
       )}
     >
-      {/* Brand zone */}
+      {/* Brand zone — subtle accent tint at the top of the rail */}
       <div
+        style={{
+          background:
+            'linear-gradient(to bottom, color-mix(in oklch, var(--accent-500) 16%, var(--surface-sidebar)), var(--surface-sidebar))',
+        }}
         className={cn(
           'flex shrink-0 items-center gap-2 border-b border-white/5 px-5 py-5',
           isCompact && 'justify-center px-0',
@@ -135,20 +139,37 @@ export function SidebarItem({ item, compact }: SidebarItemProps) {
       data-active={active ? 'true' : 'false'}
       style={
         active
-          ? { background: 'var(--surface-sidebar-active, oklch(0.40 0.16 260))', color: 'white' }
+          ? {
+              background: 'var(--accent-500, oklch(0.40 0.16 260))',
+              color: 'white',
+              boxShadow: '0 6px 16px -6px color-mix(in oklch, var(--accent-500) 55%, transparent)',
+            }
           : disabled
             ? { color: 'var(--ink-on-sidebar-faint, oklch(0.55 0.03 250))' }
             : { color: 'var(--ink-on-sidebar-muted, oklch(0.70 0.02 250))' }
       }
       className={cn(
-        'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+        'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
         compact && 'justify-center px-0',
         disabled && 'cursor-not-allowed opacity-60',
-        !active && !disabled && 'hover:bg-white/10 hover:text-white',
+        !active && !disabled && 'hover:translate-x-0.5 hover:bg-white/10 hover:text-white',
       )}
       title={titleAttr}
     >
-      <Icon className={cn('h-5 w-5 shrink-0', active && 'text-white')} aria-hidden="true" />
+      {active && !compact && (
+        <span
+          aria-hidden="true"
+          className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-white/90"
+        />
+      )}
+      <Icon
+        className={cn(
+          'h-5 w-5 shrink-0 transition-transform',
+          active && 'text-white',
+          !active && !disabled && 'group-hover:scale-110',
+        )}
+        aria-hidden="true"
+      />
       {!compact && <span className="flex-1 truncate">{label}</span>}
       {!compact && disabled && (
         <span

@@ -40,6 +40,14 @@ export interface LineChartProps<T extends Record<string, unknown>> {
 }
 
 const TICK_STYLE = { fontSize: 12, fill: 'oklch(0.50 0.02 250)' };
+const TOOLTIP_STYLE = {
+  borderRadius: 12,
+  border: '1px solid oklch(0.92 0.01 250)',
+  padding: 12,
+  fontSize: 12,
+  backgroundColor: 'white',
+  boxShadow: '0 10px 28px -10px rgba(2, 6, 23, 0.22)',
+};
 
 export function LineChart<T extends Record<string, unknown>>({
   data,
@@ -60,12 +68,7 @@ export function LineChart<T extends Record<string, unknown>>({
           <YAxis tick={TICK_STYLE} axisLine={false} tickLine={false} domain={yDomain} width={32} />
           <Tooltip
             cursor={{ stroke: 'oklch(0.92 0.01 250)', strokeWidth: 1 }}
-            contentStyle={{
-              borderRadius: 12,
-              border: '1px solid oklch(0.92 0.01 250)',
-              padding: 12,
-              fontSize: 12,
-            }}
+            contentStyle={TOOLTIP_STYLE}
           />
           {showLegend && (
             <Legend
@@ -76,17 +79,17 @@ export function LineChart<T extends Record<string, unknown>>({
               wrapperStyle={{ paddingTop: 8, fontSize: 12 }}
             />
           )}
-          {series.map((s) => (
+          {series.map((s, si) => (
             <Line
               key={s.key}
               type="monotone"
               dataKey={s.key}
               name={s.label}
               stroke={s.color}
-              strokeWidth={2}
+              strokeWidth={2.5}
               strokeDasharray={s.dashed ? '4 4' : undefined}
               dot={{ r: s.dotRadius ?? 4, fill: s.color, strokeWidth: 0 }}
-              activeDot={{ r: (s.dotRadius ?? 4) + 2 }}
+              activeDot={{ r: (s.dotRadius ?? 4) + 2, stroke: '#fff', strokeWidth: 2 }}
               label={
                 annotateValues
                   ? {
@@ -97,7 +100,10 @@ export function LineChart<T extends Record<string, unknown>>({
                     }
                   : false
               }
-              isAnimationActive={false}
+              isAnimationActive
+              animationDuration={900}
+              animationBegin={si * 120}
+              animationEasing="ease-out"
             />
           ))}
         </RLineChart>

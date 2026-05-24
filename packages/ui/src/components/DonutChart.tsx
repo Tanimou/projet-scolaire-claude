@@ -68,8 +68,12 @@ export function DonutChart({
               outerRadius="80%"
               startAngle={90}
               endAngle={-270}
+              paddingAngle={2}
               strokeWidth={2}
               stroke="#fff"
+              isAnimationActive
+              animationDuration={800}
+              animationEasing="ease-out"
             >
               {data.map((seg, i) => (
                 <Cell key={i} fill={seg.color} />

@@ -2,11 +2,18 @@ import { forwardRef, type HTMLAttributes } from 'react';
 
 import { cn } from '../lib/cn';
 
-export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
+export interface CardProps extends HTMLAttributes<HTMLDivElement> {
+  /** Hover affordance: 'lift' adds a subtle translate + accent-tinted shadow on hover. */
+  hover?: 'none' | 'lift';
+}
+
+export const Card = forwardRef<HTMLDivElement, CardProps>(
+  ({ className, hover = 'none', ...props }, ref) => (
     <div
       ref={ref}
-      className={cn('rounded-2xl border border-ink-200 bg-white shadow-sm', className)}
+      data-slot="card"
+      data-hover={hover === 'lift' ? 'lift' : undefined}
+      className={cn('rounded-2xl border border-ink-200/70 bg-white shadow-sm', className)}
       {...props}
     />
   ),

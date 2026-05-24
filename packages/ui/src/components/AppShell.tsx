@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { cn } from '../lib/cn';
+import { PageTransition } from './Motion';
 import type { PortalKey } from './Sidebar';
 
 export interface AppShellProps {
@@ -50,7 +51,7 @@ export function AppShell({
             contentClassName,
           )}
         >
-          {children}
+          <PageTransition>{children}</PageTransition>
         </main>
       </div>
     </div>

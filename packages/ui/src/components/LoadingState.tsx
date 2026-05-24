@@ -9,10 +9,7 @@ export function Skeleton({ className }: SkeletonProps) {
   return (
     <span
       aria-hidden
-      className={cn(
-        'inline-block animate-pulse rounded-md bg-slate-200/80',
-        className,
-      )}
+      className={cn('skeleton-shimmer inline-block rounded-md', className)}
     />
   );
 }

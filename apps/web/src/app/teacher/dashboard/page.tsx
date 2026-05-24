@@ -23,7 +23,10 @@ import {
   EmptyState,
   QuickActionsList,
   SectionHeader,
+  Stagger,
+  StaggerItem,
   SubjectKpiCard,
+  WelcomeBanner,
   subjectColor,
   type ActivityEntry,
   type QuickAction,
@@ -210,6 +213,23 @@ export default async function TeacherDashboardPage({
       title="Tableau de bord"
       subtitle={`Bienvenue, ${me?.firstName ?? 'Professeur'} 👋`}
     >
+      {/* ──────── Welcome hero ──────── */}
+      <WelcomeBanner
+        icon={GraduationCap}
+        title={`Bonjour, ${me?.firstName ?? 'Professeur'} 👋`}
+        subtitle="Voici votre espace pédagogique du jour."
+        aside={
+          <span className="text-sm font-semibold capitalize text-white/90">
+            {new Date().toLocaleDateString('fr-FR', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            })}
+          </span>
+        }
+        className="mb-6"
+      />
+
       {/* ──────── Row 0 : action center (only when something needs attention) ──────── */}
       {actionCenter && actionCenter.items.length > 0 && (
         <div className="mb-6">
@@ -217,8 +237,8 @@ export default async function TeacherDashboardPage({
         </div>
       )}
 
-      {/* ──────── Row 1 : 4 subject KPI cards ──────── */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* ──────── Row 1 : 4 subject KPI cards (cascade entrance) ──────── */}
+      <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {subjectStats.length === 0 ? (
           <div className="sm:col-span-2 lg:col-span-4">
             <EmptyState
@@ -233,19 +253,20 @@ export default async function TeacherDashboardPage({
             const icon =
               SUBJECT_FALLBACK_ICONS[subjectColor(s.subjectCode).code] ?? BookOpen;
             return (
-              <SubjectKpiCard
-                key={s.subjectId}
-                subjectCode={s.subjectCode}
-                label={s.subjectName}
-                icon={icon}
-                classCount={s.classCount}
-                studentCount={s.studentCount}
-                href={`/teacher/classes?subject=${s.subjectCode}`}
-              />
+              <StaggerItem key={s.subjectId}>
+                <SubjectKpiCard
+                  subjectCode={s.subjectCode}
+                  label={s.subjectName}
+                  icon={icon}
+                  classCount={s.classCount}
+                  studentCount={s.studentCount}
+                  href={`/teacher/classes?subject=${s.subjectCode}`}
+                />
+              </StaggerItem>
             );
           })
         )}
-      </div>
+      </Stagger>
 
       {/* ──────── Row 2 : Gradebook + Distribution + Calendar (12-col grid) ──────── */}
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">

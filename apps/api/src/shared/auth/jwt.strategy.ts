@@ -23,8 +23,14 @@ export interface KeycloakJwtPayload {
 export class JwtStrategy extends PassportStrategy(Strategy, 'keycloak-jwt') {
   constructor(config: ConfigService) {
     const keycloakUrl = config.get<string>('KEYCLOAK_URL') ?? 'http://127.0.0.1:8180';
+    // Browser-facing issuer (Keycloak KC_HOSTNAME). Tokens carry this in `iss`
+    // whether minted via the internal host (ROPC) or the browser host (OIDC).
+    // JWKS are still fetched over the internal URL the api can actually reach.
+    // Falls back to KEYCLOAK_URL when no split is configured (backward-compatible).
+    const publicUrl = config.get<string>('KEYCLOAK_PUBLIC_URL') ?? keycloakUrl;
     const realm = config.get<string>('KEYCLOAK_REALM') ?? 'pilotage-scolaire';
-    const issuer = `${keycloakUrl}/realms/${realm}`;
+    const issuer = `${publicUrl}/realms/${realm}`;
+    const jwksIssuer = `${keycloakUrl}/realms/${realm}`;
 
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -33,7 +39,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'keycloak-jwt') {
         cache: true,
         rateLimit: true,
         jwksRequestsPerMinute: 10,
-        jwksUri: `${issuer}/protocol/openid-connect/certs`,
+        jwksUri: `${jwksIssuer}/protocol/openid-connect/certs`,
       }),
       issuer,
       algorithms: ['RS256'],

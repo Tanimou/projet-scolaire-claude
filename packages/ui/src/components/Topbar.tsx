@@ -17,25 +17,42 @@ export interface TopbarProps {
 
 /**
  * Topbar — sticky top header inside AppShell.
- * Composes title + actions. Caller is responsible for actual click handlers
- * (burger toggle, year change, etc.).
+ * Composes title + actions, with a thin accent gradient hairline beneath
+ * (the portal-accent "liseré" from the Orange-rdv design language). Caller is
+ * responsible for actual click handlers (burger toggle, year change, etc.).
  */
 export function Topbar({ title, subtitle, burger, actions, className }: TopbarProps) {
   return (
-    <header
-      className={cn(
-        'sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 border-b border-slate-200/70 bg-white/95 px-6 backdrop-blur',
-        className,
-      )}
-    >
-      {burger && <div className="lg:hidden">{burger}</div>}
-      <div className="min-w-0 flex-1">
-        <h1 className="truncate text-xl font-bold text-slate-900">{title}</h1>
-        {subtitle && (
-          <p className="mt-0.5 truncate text-[13px] text-slate-500">{subtitle}</p>
+    <>
+      <header
+        className={cn(
+          'sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 border-b border-slate-200/70 bg-white/85 px-6 backdrop-blur-md',
+          className,
         )}
-      </div>
-      {actions && <div className="flex items-center gap-3">{actions}</div>}
-    </header>
+      >
+        {burger && <div className="lg:hidden">{burger}</div>}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden
+              className="hidden h-1.5 w-1.5 shrink-0 rounded-full sm:block"
+              style={{ background: 'var(--accent-500)' }}
+            />
+            <h1 className="truncate text-xl font-bold text-slate-900">{title}</h1>
+          </div>
+          {subtitle && <p className="mt-0.5 truncate text-[13px] text-slate-500">{subtitle}</p>}
+        </div>
+        {actions && <div className="flex items-center gap-3">{actions}</div>}
+      </header>
+      {/* Accent gradient hairline */}
+      <div
+        aria-hidden
+        className="h-px shrink-0"
+        style={{
+          background:
+            'linear-gradient(to right, var(--accent-500), color-mix(in oklch, var(--accent-500) 30%, transparent) 38%, transparent 78%)',
+        }}
+      />
+    </>
   );
 }
