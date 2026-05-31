@@ -25,6 +25,7 @@ import {
 
 import { ChildSelector } from '../_components/ChildSelector';
 import { AttendanceCalendar, type CalendarRecord } from './AttendanceCalendar';
+import { AttendanceExport, type AttendanceExportRow } from './AttendanceExport';
 import { AttendanceFilters } from './AttendanceFilters';
 import type {
   AttendancePeriod,
@@ -343,6 +344,28 @@ export default async function ParentAttendancePage({
     }
   }
 
+  // CSV export rows — the full *filtered* set (not just the current page) so the
+  // download mirrors exactly what the parent is currently looking at.
+  const activeChild = children.find((c) => c.id === activeStudentId);
+  const activeChildName = activeChild
+    ? `${activeChild.firstName} ${activeChild.lastName}`.trim()
+    : 'enfant';
+  const exportRows: AttendanceExportRow[] = filtered.map((r) => ({
+    date: r.classSession.date,
+    subject: r.classSession.teachingAssignment?.subject.name ?? '',
+    classSection: r.classSession.teachingAssignment?.classSection.name ?? '',
+    status: STATUS_LABEL[r.status],
+    justified:
+      r.justifiedAt != null
+        ? 'Oui'
+        : r.status === 'absent' || r.status === 'absent_excused'
+          ? 'Non'
+          : '',
+    arrivedAt: r.arrivedAt ?? '',
+    justification: r.justification ?? '',
+    comment: r.comment ?? '',
+  }));
+
   // Active filter chips summary.
   const activeFilterChips: string[] = [];
   if (period === 'month') activeFilterChips.push('Ce mois-ci');
@@ -455,7 +478,24 @@ export default async function ParentAttendancePage({
             q={search}
           />
 
-          <section className="mt-4 space-y-6">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-slate-500">
+              {total === 0
+                ? 'Aucun enregistrement'
+                : `${total} enregistrement${total > 1 ? 's' : ''}${
+                    activeFilterChips.length > 0
+                      ? ` (filtré${total > 1 ? 's' : ''})`
+                      : ''
+                  }`}
+            </p>
+            <AttendanceExport
+              rows={exportRows}
+              childName={activeChildName}
+              filtered={activeFilterChips.length > 0}
+            />
+          </div>
+
+          <section className="mt-3 space-y-6">
             {pageGroups.length === 0 ? (
               <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/60">
                 <EmptyState
