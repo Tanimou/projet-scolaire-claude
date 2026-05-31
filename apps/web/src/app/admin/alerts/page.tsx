@@ -25,6 +25,7 @@ import {
 
 import { AlertInstanceActions } from './AlertInstanceActions';
 import { AlertRuleToggle } from './AlertRuleToggle';
+import { AlertsExportButton, type AlertsExportButtonProps } from './AlertsExportButton';
 import { AlertsFilters } from './AlertsFilters';
 import { AlertsTabsRouter } from './AlertsTabsRouter';
 import type { AlertRuleCode } from './actions';
@@ -189,6 +190,27 @@ export default async function AlertsPage({
   const filteredActive = applyFilters(activeRows);
   const filteredHistory = applyFilters(historyRows);
 
+  // ── context-aware CSV export: mirrors whatever the current tab shows
+  //    (filters included), so the download matches the view on screen.
+  const exportProps: AlertsExportButtonProps =
+    currentTab === 'rules'
+      ? { mode: 'rules', rules, disabled: rules.length === 0 }
+      : currentTab === 'active'
+        ? {
+            mode: 'instances',
+            rows: filteredActive,
+            slug: 'alertes-actives',
+            heading: 'Alertes actives',
+            disabled: filteredActive.length === 0,
+          }
+        : {
+            mode: 'instances',
+            rows: filteredHistory,
+            slug: 'alertes-historique',
+            heading: 'Historique des alertes',
+            disabled: filteredHistory.length === 0,
+          };
+
   // ── group active by severity
   const activeBySeverity = new Map<AlertSeverity, AlertInstance[]>();
   for (const s of SEVERITY_ORDER) activeBySeverity.set(s, []);
@@ -206,7 +228,12 @@ export default async function AlertsPage({
         ]}
         title="Alertes"
         subtitle="Configurez les règles, lancez l'évaluation, traitez les alertes ouvertes"
-        actions={<EvaluateNowButton />}
+        actions={
+          <div className="flex items-start gap-2">
+            <AlertsExportButton {...exportProps} />
+            <EvaluateNowButton />
+          </div>
+        }
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
