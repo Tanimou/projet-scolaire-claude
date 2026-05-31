@@ -32,7 +32,7 @@ Ouvrir:
 | [docs/mockups/](./docs/mockups/) | 4 mockups HTML haute-fidélité (ouvrables navigateur) |
 | [docs/screens/](./docs/screens/) | Wireframes détaillés de chaque écran |
 | [docs/spec/data-model.md](./docs/spec/data-model.md) | Modèle relationnel complet (Postgres 15) |
-| [docs/adr/](./docs/adr/) | 17 Architecture Decision Records |
+| [docs/adr/](./docs/adr/) | 18 Architecture Decision Records |
 
 ## Stack
 
@@ -66,6 +66,26 @@ Identity · School Structure · Enrollment · Teaching · Assessment · Gradeboo
 | 7 — Hardening + A11y + Perf | 2-3 sem | audit OWASP, WCAG, Lighthouse ≥90 |
 | 8 — Docker prod + Deploy | 1-2 sem | livraison portable |
 | 9 — Extensions | itératif | paiement, messagerie, tutorat |
+
+### 9a — Module Finance (futur)
+
+Le module Finance est prévu en **Phase 9 (Extensions)**, après la livraison de la plateforme de base (Phases 0–8). Il prendra la forme d'un **espace séparé** dans le portail admin (`/admin/finance`), et non d'une grande carte sur le dashboard principal — ce choix préserve la lisibilité du dashboard centré sur le pilotage pédagogique.
+
+**Périmètre prévu :**
+
+| Fonctionnalité | Description |
+|---|---|
+| Frais d'inscription | Tarif par cycle / classe, appliqué à chaque nouvel inscrit |
+| Scolarité par cycle / classe | Montants configurables, surcharges optionnelles |
+| Paiements attendus / reçus / en retard | Échéancier par famille, enregistrement des versements, détection des retards |
+| Graphes de recouvrement | Taux global + par cycle/classe + évolution mensuelle |
+| État financier par famille | Solde, historique, reçus PDF téléchargeables |
+
+Le dashboard admin affichera un **signal discret** (badge dans la section « Alertes opérationnelles ») indiquant les familles en retard de paiement, avec un lien vers `/admin/finance?filtre=en_retard`. Ce signal ne prendra pas la forme d'une grande carte.
+
+> Les demandes d'inscription et de rattachement parent-élève restent accessibles via les KPI du dashboard admin et la page dédiée `/admin/enrollments` — elles ne migrent pas vers le module Finance.
+
+Voir [docs/adr/ADR-018-finance-module.md](./docs/adr/ADR-018-finance-module.md) pour les décisions d'architecture détaillées.
 
 ## Commands utiles (post-scaffolding)
 
