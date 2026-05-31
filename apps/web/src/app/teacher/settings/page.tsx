@@ -104,13 +104,19 @@ function summarize(assignments: TeacherAssignment[]): TeachingSummary {
 
   const studentCount = [...classes.values()].reduce((sum, n) => sum + n, 0);
 
+  // With no active year we fall back to ALL assignments, which may span several
+  // years — only label the summary with a year when the scope is a single one,
+  // otherwise the year chip would misrepresent the aggregated totals.
+  const yearIds = new Set(scope.map((a) => a.academicYear.id));
+  const yearName = yearIds.size === 1 ? (scope[0]?.academicYear.name ?? null) : null;
+
   return {
     subjects: [...subjects.values()],
     classCount: classes.size,
     studentCount,
     weeklyHours,
     mainClassCount: mainClasses.size,
-    yearName: scope[0]?.academicYear.name ?? null,
+    yearName,
   };
 }
 
