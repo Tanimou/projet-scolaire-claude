@@ -45,38 +45,50 @@ interface DayCell {
 
 const WEEKDAYS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
 
-const STATE_STYLE: Record<
-  Exclude<DayState, 'none'>,
-  { cell: string; dot: string; label: string }
-> = {
-  present: {
-    cell: 'bg-emerald-50 ring-emerald-200 text-emerald-900 hover:bg-emerald-100',
-    dot: 'bg-emerald-500',
-    label: 'Présent',
-  },
-  late: {
-    cell: 'bg-amber-50 ring-amber-200 text-amber-900 hover:bg-amber-100',
-    dot: 'bg-amber-500',
-    label: 'Retard / départ anticipé',
+/**
+ * A single recorded session's normalized category. Identical to `DayState`
+ * minus the empty `none`, this is the shared vocabulary used by BOTH the
+ * per-day aggregate state and the per-day counters.
+ */
+type SessionCategory = Exclude<DayState, 'none'>;
+
+/**
+ * The ONE source of truth for every category: its cell/dot styling and its
+ * legend label. Declared worst-first — that key order doubles as the
+ * aggregation priority (see `CATEGORY_PRIORITY`), so styling, classification,
+ * and the legend can never drift apart.
+ */
+const CATEGORY_CONFIG: Record<SessionCategory, { cell: string; dot: string; legend: string }> = {
+  absent_unjustified: {
+    cell: 'bg-rose-50 ring-rose-200 text-rose-900 hover:bg-rose-100',
+    dot: 'bg-rose-500',
+    legend: 'À justifier',
   },
   absent_excused: {
     cell: 'bg-sky-50 ring-sky-200 text-sky-900 hover:bg-sky-100',
     dot: 'bg-sky-500',
-    label: 'Absence justifiée',
+    legend: 'Justifiée',
   },
-  absent_unjustified: {
-    cell: 'bg-rose-50 ring-rose-200 text-rose-900 hover:bg-rose-100',
-    dot: 'bg-rose-500',
-    label: 'Absence à justifier',
+  late: {
+    cell: 'bg-amber-50 ring-amber-200 text-amber-900 hover:bg-amber-100',
+    dot: 'bg-amber-500',
+    legend: 'Retard',
+  },
+  present: {
+    cell: 'bg-emerald-50 ring-emerald-200 text-emerald-900 hover:bg-emerald-100',
+    dot: 'bg-emerald-500',
+    legend: 'Présent',
   },
 };
 
-const LEGEND: Array<{ state: Exclude<DayState, 'none'>; text: string }> = [
-  { state: 'present', text: 'Présent' },
-  { state: 'late', text: 'Retard' },
-  { state: 'absent_excused', text: 'Justifiée' },
-  { state: 'absent_unjustified', text: 'À justifier' },
-];
+/** Worst-first classification priority, derived from the config key order. */
+const CATEGORY_PRIORITY = Object.keys(CATEGORY_CONFIG) as SessionCategory[];
+
+/**
+ * Legend rows, derived straight from `CATEGORY_CONFIG` (best→worst reads more
+ * naturally for a legend, so the worst-first priority is reversed for display).
+ */
+const LEGEND: SessionCategory[] = [...CATEGORY_PRIORITY].reverse();
 
 /** `YYYY-MM` key for a year/month pair. */
 function monthKey(year: number, month: number): string {
@@ -98,21 +110,50 @@ function monthTitle(year: number, month: number): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
-/** Collapse a day's session statuses into a single worst-first state. */
-function aggregate(records: CalendarRecord[]): DayState {
-  if (records.length === 0) return 'none';
-  let hasUnjustified = false;
-  let hasExcused = false;
-  let hasLate = false;
-  for (const r of records) {
-    if (r.status === 'absent' && !r.justified) hasUnjustified = true;
-    else if (r.status === 'absent' || r.status === 'absent_excused') hasExcused = true;
-    else if (r.status === 'late' || r.status === 'left_early') hasLate = true;
+/**
+ * Map a single session's (status, justified) pair to its normalized category.
+ * This is the ONLY place attendance classification lives — both the day's
+ * aggregate colour and its counters derive from it, so they cannot drift.
+ */
+function categorize(r: CalendarRecord): SessionCategory {
+  if (r.status === 'absent') {
+    return r.justified ? 'absent_excused' : 'absent_unjustified';
   }
-  if (hasUnjustified) return 'absent_unjustified';
-  if (hasExcused) return 'absent_excused';
-  if (hasLate) return 'late';
+  if (r.status === 'absent_excused') return 'absent_excused';
+  if (r.status === 'late' || r.status === 'left_early') return 'late';
   return 'present';
+}
+
+/**
+ * The per-day breakdown surfaced by a cell: its worst-first state plus the
+ * counters used by the tooltip and the month summary.
+ */
+type DayBreakdown = Omit<DayCell, 'day' | 'key' | 'isToday'>;
+
+/**
+ * Categorize every session of a day once, then derive the worst-first state
+ * and all counters from the same tally — single classification, no divergence.
+ */
+function summarizeDay(records: CalendarRecord[]): DayBreakdown {
+  const counts: Record<SessionCategory, number> = {
+    absent_unjustified: 0,
+    absent_excused: 0,
+    late: 0,
+    present: 0,
+  };
+  for (const r of records) counts[categorize(r)] += 1;
+  const state: DayState =
+    records.length === 0
+      ? 'none'
+      : (CATEGORY_PRIORITY.find((c) => counts[c] > 0) ?? 'present');
+  return {
+    state,
+    total: records.length,
+    present: counts.present,
+    absent: counts.absent_excused + counts.absent_unjustified,
+    late: counts.late,
+    unjustified: counts.absent_unjustified,
+  };
 }
 
 /**
@@ -163,26 +204,11 @@ export function AttendanceCalendar({ records }: { records: CalendarRecord[] }) {
     for (let d = 1; d <= daysInMonth; d++) {
       const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const dayRecords = byDay.get(key) ?? [];
-      const present = dayRecords.filter((r) => r.status === 'present').length;
-      const absent = dayRecords.filter(
-        (r) => r.status === 'absent' || r.status === 'absent_excused',
-      ).length;
-      const late = dayRecords.filter(
-        (r) => r.status === 'late' || r.status === 'left_early',
-      ).length;
-      const unjustified = dayRecords.filter(
-        (r) => r.status === 'absent' && !r.justified,
-      ).length;
       out.push({
         day: d,
         key,
-        state: aggregate(dayRecords),
-        total: dayRecords.length,
-        present,
-        absent,
-        late,
-        unjustified,
         isToday: key === todayKey,
+        ...summarizeDay(dayRecords),
       });
     }
     return out;
@@ -286,7 +312,7 @@ export function AttendanceCalendar({ records }: { records: CalendarRecord[] }) {
                 </div>
               );
             }
-            const style = STATE_STYLE[cell.state];
+            const style = CATEGORY_CONFIG[cell.state];
             const tip = buildTooltip(cell);
             return (
               <div
@@ -313,10 +339,13 @@ export function AttendanceCalendar({ records }: { records: CalendarRecord[] }) {
         {/* Legend + month summary */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
           <ul className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            {LEGEND.map((l) => (
-              <li key={l.state} className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                <span className={`h-2.5 w-2.5 rounded-full ${STATE_STYLE[l.state].dot}`} aria-hidden />
-                {l.text}
+            {LEGEND.map((cat) => (
+              <li key={cat} className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                <span
+                  className={`h-2.5 w-2.5 rounded-full ${CATEGORY_CONFIG[cat].dot}`}
+                  aria-hidden
+                />
+                {CATEGORY_CONFIG[cat].legend}
               </li>
             ))}
           </ul>
