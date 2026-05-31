@@ -1,4 +1,4 @@
-import { Minus, PieChart, TrendingDown, TrendingUp } from 'lucide-react';
+import { Activity, Minus, PieChart, TrendingDown, TrendingUp } from 'lucide-react';
 
 import {
   DonutChart,
@@ -8,9 +8,17 @@ import {
   gradeVerdict,
 } from '@pilotage/ui';
 
-import type { GradesAnalytics } from './analytics';
+import type { GradesAnalytics, RegularityTone } from './analytics';
 
 const LINE_SERIES = [{ key: 'avg', label: 'Moyenne /20', color: '#2563EB' }];
+
+/** Chip tones for the regularity reading, keyed by spread band. */
+const REGULARITY_TONE: Record<RegularityTone, string> = {
+  emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  blue: 'bg-blue-50 text-blue-700 ring-blue-200',
+  amber: 'bg-amber-50 text-amber-700 ring-amber-200',
+  rose: 'bg-rose-50 text-rose-700 ring-rose-200',
+};
 
 const DIST_META = [
   { key: 'excellent', label: 'Excellent (≥ 16)', color: '#10B981' },
@@ -50,7 +58,7 @@ function TrendChip({ delta }: { delta: number | null }) {
  * grade set (independent of the active filters) so it stays a stable overview.
  */
 export function GradesOverview({ analytics }: { analytics: GradesAnalytics }) {
-  const { monthly, distribution, gradedCount, trendDelta } = analytics;
+  const { monthly, distribution, gradedCount, trendDelta, consistency } = analytics;
   const lastAvg = monthly.length > 0 ? monthly[monthly.length - 1]!.avg : null;
 
   const segments = DIST_META.map((d) => ({
@@ -115,6 +123,27 @@ export function GradesOverview({ analytics }: { analytics: GradesAnalytics }) {
               legendPosition="right"
               height={180}
             />
+            {consistency && (
+              <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-slate-100 pt-3 text-[11px] text-slate-500">
+                <span className="font-bold uppercase tracking-wider text-slate-400">
+                  Régularité
+                </span>
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-bold ring-1 ${REGULARITY_TONE[consistency.tone]}`}
+                  title={`Écart-type ${formatGrade(consistency.stdDev, 1)} pts — ${consistency.hint}`}
+                >
+                  <Activity className="h-3 w-3" aria-hidden />
+                  {consistency.label}
+                </span>
+                <span>
+                  écart-type{' '}
+                  <span className="font-bold text-slate-700">
+                    {formatGrade(consistency.stdDev, 1)} pts
+                  </span>
+                </span>
+                <span className="text-slate-400">· {consistency.hint}</span>
+              </div>
+            )}
           </div>
         )}
       </div>
