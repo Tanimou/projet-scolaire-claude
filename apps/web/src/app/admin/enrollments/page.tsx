@@ -53,8 +53,14 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 
 const PAGE_SIZE = 10;
 
+// Default ("Toutes") meta, kept as a standalone const so it can serve as a
+// guaranteed-defined fallback when the active tab key is unknown — under
+// `noUncheckedIndexedAccess`, indexing `TAB_META` (incl. `TAB_META.all`)
+// yields `T | undefined`, so a concrete literal is needed to narrow the type.
+const DEFAULT_TAB_META = { label: 'Toutes', slug: 'toutes' } as const;
+
 const TAB_META: Record<string, { label: string; slug: string }> = {
-  all: { label: 'Toutes', slug: 'toutes' },
+  all: DEFAULT_TAB_META,
   pending: { label: 'En attente', slug: 'en-attente' },
   to_verify: { label: 'À vérifier', slug: 'a-verifier' },
   approved: { label: 'Approuvées', slug: 'approuvees' },
@@ -133,7 +139,7 @@ export default async function EnrollmentsPage({
   const startIdx = (page - 1) * PAGE_SIZE;
   const pageRows = rows.slice(startIdx, startIdx + PAGE_SIZE);
 
-  const tabMeta = TAB_META[tab] ?? TAB_META.all;
+  const tabMeta = TAB_META[tab] ?? DEFAULT_TAB_META;
   const exportRows = rows.map((r) => ({
     guardianFirstName: r.guardian.firstName,
     guardianLastName: r.guardian.lastName,
