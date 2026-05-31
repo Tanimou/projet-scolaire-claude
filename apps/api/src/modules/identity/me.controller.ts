@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
-import { IsIn, IsOptional } from 'class-validator';
+import type { Prisma } from '@prisma/client';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -51,6 +52,55 @@ function normalizeDisplay(raw: unknown): DisplayPreferences {
     dateFormat: pickOne(obj.dateFormat, DISPLAY_DATE_FORMATS, DISPLAY_DEFAULTS.dateFormat),
     gradeFormat: pickOne(obj.gradeFormat, DISPLAY_GRADE_FORMATS, DISPLAY_DEFAULTS.gradeFormat),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Self-service profile (R8.3) — fields a user may edit about themselves.
+// firstName / lastName / email stay administration-managed; here we expose the
+// soft, self-owned bits: phone (UserProfile column), specialty (TeacherProfile
+// column, teachers only) and a free-text bio stored in preferences.profile.bio
+// (no schema change — same JSON-bag pattern as display preferences).
+// ---------------------------------------------------------------------------
+
+class UpdateProfileDto {
+  @IsOptional() @IsString() @MaxLength(40) phone?: string;
+  @IsOptional() @IsString() @MaxLength(120) specialty?: string;
+  @IsOptional() @IsString() @MaxLength(600) bio?: string;
+}
+
+export interface SelfProfile {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string | null;
+  photoUrl: string | null;
+  bio: string | null;
+  isTeacher: boolean;
+  specialty: string | null;
+  hiredAt: string | null;
+  externalRef: string | null;
+}
+
+type TeacherProfileBits = {
+  specialty: string | null;
+  hiredAt: Date | null;
+  externalRef: string | null;
+} | null;
+
+/** Trim a free-text field; an empty/blank string clears the value to null. */
+function cleanText(value: string | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function readBio(prefs: Record<string, unknown>): string | null {
+  const profile = prefs.profile;
+  if (profile && typeof profile === 'object') {
+    const bio = (profile as Record<string, unknown>).bio;
+    if (typeof bio === 'string' && bio.trim().length > 0) return bio;
+  }
+  return null;
 }
 
 @ApiTags('identity')
@@ -118,5 +168,85 @@ export class MeController {
       data: { preferences: { ...prefs, display: { ...next } } },
     });
     return { data: next };
+  }
+
+  /** Returns the current user's self-editable profile (contact, specialty, bio). */
+  @Get('profile')
+  @RequiresPermission('profile.read.self')
+  async getProfile(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const user = await this.users.ensureUser(jwt);
+    const teacher = await this.prisma.teacherProfile.findUnique({
+      where: { userProfileId: user.id },
+      select: { specialty: true, hiredAt: true, externalRef: true },
+    });
+    return { data: this.buildSelfProfile(user, teacher) };
+  }
+
+  /**
+   * Update the self-editable profile fields. `phone` and `bio` apply to any
+   * user; `specialty` is persisted only when the caller has a TeacherProfile
+   * (silently ignored otherwise so non-teachers can't fabricate one). An empty
+   * string clears the field. Omitted fields are left untouched.
+   */
+  @Patch('profile')
+  @RequiresPermission('profile.write.self')
+  async updateProfile(
+    @Body() dto: UpdateProfileDto,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ) {
+    const user = await this.users.ensureUser(jwt);
+    const prefs = (user.preferences as Record<string, unknown> | null) ?? {};
+
+    const phone = cleanText(dto.phone);
+    const bio = cleanText(dto.bio);
+
+    const userData: Prisma.UserProfileUpdateInput = {};
+    if (phone !== undefined) userData.phone = phone;
+    if (bio !== undefined) {
+      const profile = (prefs.profile && typeof prefs.profile === 'object'
+        ? (prefs.profile as Record<string, unknown>)
+        : {}) as Record<string, unknown>;
+      userData.preferences = { ...prefs, profile: { ...profile, bio } } as Prisma.InputJsonValue;
+    }
+    if (Object.keys(userData).length > 0) {
+      await this.prisma.userProfile.update({ where: { id: user.id }, data: userData });
+    }
+
+    let teacher = await this.prisma.teacherProfile.findUnique({
+      where: { userProfileId: user.id },
+      select: { specialty: true, hiredAt: true, externalRef: true },
+    });
+
+    const specialty = cleanText(dto.specialty);
+    if (specialty !== undefined && teacher) {
+      teacher = await this.prisma.teacherProfile.update({
+        where: { userProfileId: user.id },
+        data: { specialty },
+        select: { specialty: true, hiredAt: true, externalRef: true },
+      });
+    }
+
+    // Re-read the user so the response reflects the persisted phone/bio.
+    const fresh = await this.prisma.userProfile.findUnique({ where: { id: user.id } });
+    return { data: this.buildSelfProfile(fresh ?? user, teacher) };
+  }
+
+  private buildSelfProfile(
+    user: { firstName: string; lastName: string; email: string; phone: string | null; photoUrl: string | null; preferences: unknown },
+    teacher: TeacherProfileBits,
+  ): SelfProfile {
+    const prefs = (user.preferences as Record<string, unknown> | null) ?? {};
+    return {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phone: user.phone,
+      photoUrl: user.photoUrl,
+      bio: readBio(prefs),
+      isTeacher: teacher !== null,
+      specialty: teacher?.specialty ?? null,
+      hiredAt: teacher?.hiredAt ? teacher.hiredAt.toISOString() : null,
+      externalRef: teacher?.externalRef ?? null,
+    };
   }
 }
