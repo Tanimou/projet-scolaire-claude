@@ -31,6 +31,9 @@ x-app-env: &app-env
   MAIL_HOST: maildev
   MAIL_PORT: "1025"
   MAIL_FROM: "Pilotage scolaire <no-reply@pilotage.local>"
+  # Browser-facing web origin — used by the worker to absolutise notification
+  # email deep links (e.g. "/parent/grades?..." → full clickable URL).
+  WEB_PUBLIC_URL: http://localhost:3000
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   LOG_LEVEL: debug
 

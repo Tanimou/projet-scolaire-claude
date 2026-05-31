@@ -148,6 +148,33 @@ export class NotificationPreferencesService {
   }
 
   /**
+   * Batch variant for the *email* channel, symmetrical to `disabledInAppKeys`
+   * but inverted: returns the set of `${userProfileId}|${kind}` keys whose
+   * email channel is *explicitly enabled*. The email default is **off**, so a
+   * missing override row means "no email" and is absent from the result — the
+   * dispatcher emails only recipients who opted in. One query per batch.
+   */
+  async emailEnabledKeys(
+    pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
+  ): Promise<Set<string>> {
+    if (pairs.length === 0) return new Set();
+    const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
+    for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
+    const rows = await this.prisma.notificationPreference.findMany({
+      where: {
+        OR: [...uniq.values()].map((p) => ({
+          userProfileId: p.userProfileId,
+          kind: p.kind,
+        })),
+      },
+      select: { userProfileId: true, kind: true, emailEnabled: true },
+    });
+    return new Set(
+      rows.filter((r) => r.emailEnabled).map((r) => `${r.userProfileId}|${r.kind}`),
+    );
+  }
+
+  /**
    * Used by future dispatchers to decide whether to deliver. In-app is the
    * channel we have today; email + push wait for R8.2.
    */

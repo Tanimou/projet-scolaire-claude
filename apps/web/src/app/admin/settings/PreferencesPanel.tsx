@@ -22,7 +22,7 @@ type Channel = 'inAppEnabled' | 'emailEnabled' | 'pushEnabled';
 
 const CHANNELS: Array<{ key: Channel; label: string; comingSoon?: boolean }> = [
   { key: 'inAppEnabled', label: 'In-app' },
-  { key: 'emailEnabled', label: 'Email', comingSoon: true },
+  { key: 'emailEnabled', label: 'Email' },
   { key: 'pushEnabled', label: 'Push', comingSoon: true },
 ];
 
@@ -33,7 +33,8 @@ export function PreferencesPanel({ initial }: { initial: PreferenceRow[] }) {
         <h2 className="text-base font-bold text-slate-900">Préférences de notification</h2>
         <p className="mt-1 text-xs text-slate-500">
           Choisissez les événements qui déclenchent une notification, et sur quel canal. Le canal
-          in-app alimente la cloche du topbar et la page Notifications.
+          in-app alimente la cloche du topbar et la page Notifications ; le canal email envoie un
+          message à votre adresse pour chaque événement activé.
         </p>
       </div>
 
@@ -44,8 +45,8 @@ export function PreferencesPanel({ initial }: { initial: PreferenceRow[] }) {
       </div>
 
       <div className="border-t border-slate-100 bg-slate-50 px-6 py-3 text-[11px] text-slate-500">
-        Email + Push arrivent à la phase R8.2 — le worker dispatcher est déjà prêt à les consommer
-        une fois les canaux activés côté infra (Resend / Web Push).
+        Email activé : les notifications cochées vous sont aussi envoyées par email (le canal email
+        est désactivé par défaut, à vous de l'activer). Push arrive prochainement.
       </div>
     </div>
   );

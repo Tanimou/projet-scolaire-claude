@@ -1,3 +1,4 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import type {
   Notification,
@@ -5,8 +6,11 @@ import type {
   NotificationSeverity,
   Prisma,
 } from '@prisma/client';
+import { Queue } from 'bullmq';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { QUEUE_NOTIFICATIONS_EMAIL } from '../../shared/queue/queue.module';
+import type { NotificationEmailJob } from './notification-email.types';
 import { NotificationPreferencesService } from './preferences.service';
 
 export interface NotificationDto {
@@ -53,6 +57,8 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly preferences: NotificationPreferencesService,
+    @InjectQueue(QUEUE_NOTIFICATIONS_EMAIL)
+    private readonly emailQueue: Queue<NotificationEmailJob>,
   ) {}
 
   /**
@@ -128,22 +134,103 @@ export class NotificationsService {
     const toInsert = disabled.size
       ? deduped.filter((i) => !disabled.has(`${i.userProfileId}|${i.kind}`))
       : deduped;
-    if (toInsert.length === 0) return { created: 0 };
 
-    const res = await this.prisma.notification.createMany({
-      data: toInsert.map((i) => ({
-        tenantId: i.tenantId,
-        userProfileId: i.userProfileId,
-        kind: i.kind,
-        severity: i.severity ?? 'info',
-        title: i.title,
-        body: i.body ?? null,
-        link: i.link ?? null,
-        sourceType: i.sourceType ?? null,
-        sourceId: i.sourceId ?? null,
-      })),
-    });
-    return { created: res.count };
+    let created = 0;
+    if (toInsert.length > 0) {
+      const res = await this.prisma.notification.createMany({
+        data: toInsert.map((i) => ({
+          tenantId: i.tenantId,
+          userProfileId: i.userProfileId,
+          kind: i.kind,
+          severity: i.severity ?? 'info',
+          title: i.title,
+          body: i.body ?? null,
+          link: i.link ?? null,
+          sourceType: i.sourceType ?? null,
+          sourceId: i.sourceId ?? null,
+        })),
+      });
+      created = res.count;
+    }
+
+    // Email channel (R8.2) — runs on the full deduped set, INDEPENDENT of the
+    // in-app gate above: a recipient may keep email on while turning the in-app
+    // feed off (and vice-versa). Best-effort; never blocks or fails the in-app
+    // insert that the caller depends on.
+    await this.dispatchEmails(deduped);
+
+    return { created };
+  }
+
+  /**
+   * Enqueue an email per recipient who has *explicitly enabled* the email
+   * channel for the notification's kind. Email defaults to off, so this is a
+   * no-op for the vast majority until a parent opts in via settings. Content is
+   * snapshotted from the notification, so the worker renders without a DB hit.
+   *
+   * Note: source-dedup relies on the in-app row existing to suppress repeats.
+   * For an email-only recipient (in-app off) a producer that fires twice for
+   * the same source could email twice — acceptable for v1 since producers are
+   * one-shot per event (publish, alert-eval already dedups within 7 days).
+   */
+  private async dispatchEmails(items: CreateNotificationArgs[]): Promise<void> {
+    try {
+      if (items.length === 0) return;
+      const enabled = await this.preferences.emailEnabledKeys(
+        items.map((i) => ({ userProfileId: i.userProfileId, kind: i.kind })),
+      );
+      if (enabled.size === 0) return;
+
+      const toEmail = items.filter((i) => enabled.has(`${i.userProfileId}|${i.kind}`));
+      if (toEmail.length === 0) return;
+
+      const recipientIds = [...new Set(toEmail.map((i) => i.userProfileId))];
+      const profiles = await this.prisma.userProfile.findMany({
+        where: { id: { in: recipientIds } },
+        select: { id: true, email: true, firstName: true, lastName: true, locale: true },
+      });
+      const byId = new Map(profiles.map((p) => [p.id, p]));
+
+      const jobs = toEmail
+        .map((i) => {
+          const p = byId.get(i.userProfileId);
+          if (!p?.email) return null;
+          const data: NotificationEmailJob = {
+            tenantId: i.tenantId,
+            to: p.email,
+            recipientName: [p.firstName, p.lastName].filter(Boolean).join(' ').trim() || p.email,
+            locale: p.locale ?? 'fr-FR',
+            kind: i.kind,
+            severity: i.severity ?? 'info',
+            title: i.title,
+            body: i.body ?? null,
+            link: i.link ?? null,
+            sourceType: i.sourceType ?? null,
+            sourceId: i.sourceId ?? null,
+          };
+          return {
+            name: i.kind,
+            data,
+            opts: {
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 5_000 } as const,
+              removeOnComplete: { count: 200, age: 24 * 3600 },
+              removeOnFail: { count: 100, age: 7 * 24 * 3600 },
+            },
+          };
+        })
+        .filter((j): j is NonNullable<typeof j> => j !== null);
+
+      if (jobs.length === 0) return;
+      await this.emailQueue.addBulk(jobs);
+      this.logger.log(`Enqueued ${jobs.length} notification email(s)`);
+    } catch (err) {
+      // Email is a side channel — an enqueue failure must never surface to the
+      // caller whose in-app notifications already landed.
+      this.logger.error(
+        `Notification email dispatch failed (in-app unaffected): ${(err as Error).message}`,
+      );
+    }
   }
 
   async list(args: {

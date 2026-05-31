@@ -6,7 +6,8 @@
     "baseUrl": "./",
     "paths": { "@/*": ["src/*"] },
     "removeComments": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "types": ["node", "jest"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
