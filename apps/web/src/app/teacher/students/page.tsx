@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   CheckCircle2,
   ClipboardList,
   Sparkles,
@@ -56,6 +57,8 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 
 const PAGE_SIZE = 25;
 const RECENT_WINDOW_DAYS = 30;
+/** Élève « à risque » : moyenne < 50 % (≈ < 10/20). */
+const AT_RISK_PCT = 50;
 
 function avgTone(pct: number | null): {
   bg: string;
@@ -128,6 +131,8 @@ export default async function TeacherStudentsPage({
       if (!s.lastGradeAt || new Date(s.lastGradeAt).getTime() < recentCutoff) return false;
     } else if (activity === 'none') {
       if (s.gradesCount > 0) return false;
+    } else if (activity === 'at-risk') {
+      if (s.avgPct == null || s.avgPct >= AT_RISK_PCT) return false;
     }
     return true;
   });
@@ -164,6 +169,7 @@ export default async function TeacherStudentsPage({
     ? scored.reduce((sum, s) => sum + (s.avgPct ?? 0), 0) / scored.length
     : null;
   const cohortAvg20 = cohortAvgPct != null ? pctToGrade20(cohortAvgPct) : null;
+  const atRiskCount = scored.filter((s) => (s.avgPct ?? 0) < AT_RISK_PCT).length;
 
   const hasActiveFilters = !!(q || classSectionId || gender || activity);
 
@@ -179,7 +185,7 @@ export default async function TeacherStudentsPage({
         actions={<ExportStudentsButton students={sorted} filtered={hasActiveFilters} />}
       />
 
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard icon={User} tone="blue" label="ÉLÈVES" value={allStudents.length}>
           Effectif distinct
         </KpiCard>
@@ -190,6 +196,18 @@ export default async function TeacherStudentsPage({
           {allStudents.length > 0
             ? `Notés ≤ 30 j (${Math.round((recentlyGraded / allStudents.length) * 100)} %)`
             : 'Notés ≤ 30 j'}
+        </KpiCard>
+        <KpiCard
+          icon={AlertTriangle}
+          tone="rose"
+          label="À RISQUE"
+          value={atRiskCount}
+          href="/teacher/students?activity=at-risk"
+          hrefLabel="Voir la liste →"
+        >
+          {scored.length > 0
+            ? `Moyenne < ${pctToGrade20(AT_RISK_PCT)}/20 · ${Math.round((atRiskCount / scored.length) * 100)} % des notés`
+            : `Moyenne < ${pctToGrade20(AT_RISK_PCT)}/20`}
         </KpiCard>
         <KpiCard
           icon={Sparkles}
