@@ -121,6 +121,21 @@ function trendGlyph(trend: number | null): { glyph: string; cls: string } {
   return { glyph: '↓', cls: 'text-rose-600' };
 }
 
+type StatTone = 'blue' | 'green' | 'rose' | 'amber' | 'slate';
+
+/** Presence-rate tone — green ≥95, amber ≥90, rose below (or unknown). */
+function attendanceRateTone(rate: number | null): StatTone {
+  if (rate == null) return 'rose';
+  if (rate >= 95) return 'green';
+  if (rate >= 90) return 'amber';
+  return 'rose';
+}
+
+/** "3 séance(s)" — pluralizes the noun in French. */
+function pluralCount(count: number, singular: string): string {
+  return `${count} ${singular}${count > 1 ? 's' : ''}`;
+}
+
 export default async function ChildReportPage({
   params,
 }: {
@@ -191,7 +206,7 @@ export default async function ChildReportPage({
       <ReportToolbar backHref={`/parent/children/${id}`} childName={fullName} />
 
       {/* A4-friendly printable document */}
-      <main className="mx-auto my-6 max-w-[820px] bg-white p-8 shadow-lg ring-1 ring-slate-200/70 print:my-0 print:max-w-none print:p-0 print:shadow-none print:ring-0 sm:p-10">
+      <main className="print-document mx-auto my-6 max-w-[820px] bg-white p-8 shadow-lg ring-1 ring-slate-200/70 print:my-0 print:max-w-none print:p-0 print:shadow-none print:ring-0 sm:p-10">
         {/* Document header */}
         <header className="flex flex-wrap items-start justify-between gap-4 border-b-2 border-blue-600 pb-5">
           <div className="flex items-center gap-3">
@@ -215,7 +230,7 @@ export default async function ChildReportPage({
         </header>
 
         {/* Student identity */}
-        <section className="mt-6 grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl bg-slate-50 p-5 ring-1 ring-slate-200/70 sm:grid-cols-4 print:bg-slate-50">
+        <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl bg-slate-50 p-5 ring-1 ring-slate-200/70 sm:grid-cols-4 print:bg-slate-50">
           <Identity label="Élève" value={fullName} wide />
           <Identity label="Classe" value={`${classLabel}${levelLabel ? ` · ${levelLabel}` : ''}`} />
           <Identity
@@ -226,53 +241,9 @@ export default async function ChildReportPage({
           <Identity label="Date de naissance" value={frDateLong(dashboard?.student.birthDate ?? student.birthDate)} />
           <Identity label="Âge" value={age != null ? `${age} ans` : '—'} />
           <Identity label="Année scolaire" value={yearLabel || '—'} />
-        </section>
+        </dl>
 
-        {/* Global performance */}
-        <section className="mt-7">
-          <SectionTitle icon={GraduationCap}>Performance globale</SectionTitle>
-          {perf?.studentAverage == null ? (
-            <p className="mt-2 text-sm text-slate-500">
-              Aucune note publiée pour le moment — la moyenne générale apparaîtra dès la première
-              évaluation.
-            </p>
-          ) : (
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat
-                label="Moyenne générale"
-                value={`${formatGrade(perf.studentAverage)}/20`}
-                hint={gradeVerdict(perf.studentAverage)}
-                tone="blue"
-              />
-              <Stat
-                label="Moyenne de la classe"
-                value={perf.classAverage != null ? `${formatGrade(perf.classAverage)}/20` : '—'}
-                hint="Référence de classe"
-                tone="slate"
-              />
-              <Stat
-                label="Écart vs classe"
-                value={
-                  gapVsClass != null
-                    ? `${gapVsClass > 0 ? '+' : ''}${formatGrade(gapVsClass, 1)} pts`
-                    : '—'
-                }
-                hint={gapVsClass != null ? (gapVsClass >= 0 ? 'Au-dessus' : 'En dessous') : '—'}
-                tone={gapVsClass == null ? 'slate' : gapVsClass >= 0 ? 'green' : 'rose'}
-              />
-              <Stat
-                label="Progression"
-                value={
-                  perf.progression != null
-                    ? `${perf.progression > 0 ? '+' : ''}${formatGrade(perf.progression, 1)} pts`
-                    : '—'
-                }
-                hint="Sur la période"
-                tone={perf.progression == null ? 'slate' : perf.progression >= 0 ? 'green' : 'rose'}
-              />
-            </div>
-          )}
-        </section>
+        <GlobalPerformanceSection perf={perf} gapVsClass={gapVsClass} />
 
         {/* Subject performance table */}
         <section className="mt-7">
@@ -355,21 +326,21 @@ export default async function ChildReportPage({
               <Stat
                 label="Taux de présence"
                 value={attendanceRate != null ? formatPercent(attendanceRate, 1) : '—'}
-                hint={`${att.present} séance${att.present > 1 ? 's' : ''} sur ${att.total}`}
-                tone={attendanceRate != null && attendanceRate >= 95 ? 'green' : attendanceRate != null && attendanceRate >= 90 ? 'amber' : 'rose'}
+                hint={`${pluralCount(att.present, 'séance')} sur ${att.total}`}
+                tone={attendanceRateTone(attendanceRate)}
                 icon={CheckCircle2}
               />
               <Stat
                 label="Absences"
                 value={absencesTotal}
-                hint={`${att.absentExcused} justifiée${att.absentExcused > 1 ? 's' : ''}`}
+                hint={`${pluralCount(att.absentExcused, 'justifiée')}`}
                 tone={absencesTotal > 0 ? 'rose' : 'slate'}
                 icon={UserX}
               />
               <Stat
                 label="Retards & départs"
                 value={latesTotal}
-                hint={`${att.leftEarly} départ${att.leftEarly > 1 ? 's' : ''} anticipé${att.leftEarly > 1 ? 's' : ''}`}
+                hint={`${pluralCount(att.leftEarly, 'départ')} anticipé${att.leftEarly > 1 ? 's' : ''}`}
                 tone={latesTotal > 0 ? 'amber' : 'slate'}
                 icon={Clock}
               />
@@ -429,6 +400,66 @@ export default async function ChildReportPage({
 }
 
 // =============================================================================
+// Sections
+// =============================================================================
+
+/** Global performance tiles — falls back to a friendly note before any grade. */
+function GlobalPerformanceSection({
+  perf,
+  gapVsClass,
+}: {
+  perf: ParentDashboardResponse['globalPerformance'] | undefined;
+  gapVsClass: number | null;
+}) {
+  return (
+    <section className="mt-7">
+      <SectionTitle icon={GraduationCap}>Performance globale</SectionTitle>
+      {perf?.studentAverage == null ? (
+        <p className="mt-2 text-sm text-slate-500">
+          Aucune note publiée pour le moment — la moyenne générale apparaîtra dès la première
+          évaluation.
+        </p>
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat
+            label="Moyenne générale"
+            value={`${formatGrade(perf.studentAverage)}/20`}
+            hint={gradeVerdict(perf.studentAverage)}
+            tone="blue"
+          />
+          <Stat
+            label="Moyenne de la classe"
+            value={perf.classAverage != null ? `${formatGrade(perf.classAverage)}/20` : '—'}
+            hint="Référence de classe"
+            tone="slate"
+          />
+          <Stat
+            label="Écart vs classe"
+            value={
+              gapVsClass != null
+                ? `${gapVsClass > 0 ? '+' : ''}${formatGrade(gapVsClass, 1)} pts`
+                : '—'
+            }
+            hint={gapVsClass != null ? (gapVsClass >= 0 ? 'Au-dessus' : 'En dessous') : '—'}
+            tone={gapVsClass == null ? 'slate' : gapVsClass >= 0 ? 'green' : 'rose'}
+          />
+          <Stat
+            label="Progression"
+            value={
+              perf.progression != null
+                ? `${perf.progression > 0 ? '+' : ''}${formatGrade(perf.progression, 1)} pts`
+                : '—'
+            }
+            hint="Sur la période"
+            tone={perf.progression == null ? 'slate' : perf.progression >= 0 ? 'green' : 'rose'}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+// =============================================================================
 // Small presentational helpers (print-friendly: no shadows, solid borders)
 // =============================================================================
 
@@ -464,7 +495,7 @@ function Identity({
   );
 }
 
-const STAT_TONES: Record<string, string> = {
+const STAT_TONES: Record<StatTone, string> = {
   blue: 'bg-blue-50 text-blue-700 ring-blue-100',
   green: 'bg-emerald-50 text-emerald-700 ring-emerald-100',
   rose: 'bg-rose-50 text-rose-700 ring-rose-100',
@@ -482,7 +513,7 @@ function Stat({
   label: string;
   value: string | number;
   hint?: string;
-  tone: 'blue' | 'green' | 'rose' | 'amber' | 'slate';
+  tone: StatTone;
   icon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
