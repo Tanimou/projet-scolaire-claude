@@ -1,7 +1,7 @@
 'use client';
 
 import { Download } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 
 import {
   RULE_LABEL,
@@ -14,7 +14,11 @@ import {
 
 function csvEscape(v: string | number | boolean | null | undefined): string {
   if (v === null || v === undefined) return '';
-  const s = String(v);
+  let s = String(v);
+  // Neutralise CSV formula injection: a cell starting with = + - @ (or a
+  // leading tab/CR before one) can be executed as a formula when the file is
+  // opened in Excel/LibreOffice. Prefix with a quote so it stays literal text.
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   if (/[",;\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
@@ -31,7 +35,101 @@ function formatParameters(params: Record<string, unknown>): string {
   return entries.map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ');
 }
 
-function triggerDownload(lines: string[], filename: string) {
+interface CsvPayload {
+  lines: string[];
+  filename: string;
+}
+
+function todayStamp(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Pure builder for the rules-configuration export (testable outside React). */
+function buildRulesCsv(rules: AlertRule[], generatedAt: string): CsvPayload {
+  const lines: string[] = [];
+  lines.push('Règles d’alerte — Pilotage Scolaire');
+  lines.push(`Généré le;${generatedAt}`);
+  lines.push(`Règles;${rules.length}`);
+  lines.push('');
+  lines.push(
+    ['Code', 'Règle', 'Sévérité', 'Activée', 'Description', 'Paramètres', 'Alertes ouvertes']
+      .map(csvEscape)
+      .join(';'),
+  );
+  for (const r of rules) {
+    lines.push(
+      [
+        csvEscape(r.code),
+        csvEscape(r.label),
+        csvEscape(SEVERITY_LABEL[r.severity]),
+        csvEscape(r.enabled ? 'Oui' : 'Non'),
+        csvEscape(r.description),
+        csvEscape(formatParameters(r.parameters)),
+        csvEscape(r.openInstances),
+      ].join(';'),
+    );
+  }
+  return { lines, filename: `regles-alertes-${todayStamp()}.csv` };
+}
+
+/** Pure builder for an alert-instance export (testable outside React). */
+function buildInstancesCsv(
+  rows: AlertInstance[],
+  heading: string,
+  slug: string,
+  generatedAt: string,
+): CsvPayload {
+  // SEVERITY_ORDER is high → medium → low, so the smaller index is the more
+  // severe level. Ascending sort therefore lists high severity first, then
+  // most-recent within a level — i.e. the file reads as a triage list.
+  const sevRank = (s: AlertInstance['severity']) => SEVERITY_ORDER.indexOf(s);
+  const sorted = [...rows].sort((a, b) => {
+    const bySev = sevRank(a.severity) - sevRank(b.severity);
+    if (bySev !== 0) return bySev;
+    return b.detectedAt.localeCompare(a.detectedAt);
+  });
+
+  const lines: string[] = [];
+  lines.push(`${heading} — Pilotage Scolaire`);
+  lines.push(`Généré le;${generatedAt}`);
+  lines.push(`Alertes;${sorted.length}`);
+  lines.push('');
+  lines.push(
+    [
+      'Statut',
+      'Sévérité',
+      'Règle',
+      'Titre',
+      'Détail',
+      'Recommandation',
+      'Élève',
+      'Classe',
+      'Matière',
+      'Détectée le',
+    ]
+      .map(csvEscape)
+      .join(';'),
+  );
+  for (const a of sorted) {
+    lines.push(
+      [
+        csvEscape(STATUS_LABEL[a.status]),
+        csvEscape(SEVERITY_LABEL[a.severity]),
+        csvEscape(RULE_LABEL[a.code] ?? a.code),
+        csvEscape(a.title),
+        csvEscape(a.body),
+        csvEscape(a.recommendation ?? ''),
+        csvEscape(a.studentName),
+        csvEscape(a.classSectionName ?? ''),
+        csvEscape(a.subjectName ?? ''),
+        csvEscape(formatDate(a.detectedAt)),
+      ].join(';'),
+    );
+  }
+  return { lines, filename: `${slug}-${todayStamp()}.csv` };
+}
+
+function triggerDownload({ lines, filename }: CsvPayload) {
   // BOM keeps accented characters readable when opened in Excel.
   const csv = '﻿' + lines.join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -57,90 +155,22 @@ export type AlertsExportButtonProps = ExportMode & {
 export function AlertsExportButton(props: AlertsExportButtonProps) {
   const [busy, setBusy] = useState(false);
 
-  const handleExport = useCallback(() => {
+  // Plain handler (not memoised): the button is a DOM element, so there is no
+  // child to keep referentially stable, and the discriminated-union props make
+  // a narrow dependency list awkward. Keeping it inline is simpler and correct.
+  function handleExport() {
     setBusy(true);
     try {
-      const stamp = new Date().toISOString().slice(0, 10);
       const generatedAt = new Date().toLocaleString('fr-FR');
-      const lines: string[] = [];
-
-      if (props.mode === 'rules') {
-        lines.push('Règles d’alerte — Pilotage Scolaire');
-        lines.push(`Généré le;${generatedAt}`);
-        lines.push(`Règles;${props.rules.length}`);
-        lines.push('');
-        lines.push(
-          ['Code', 'Règle', 'Sévérité', 'Activée', 'Description', 'Paramètres', 'Alertes ouvertes']
-            .map(csvEscape)
-            .join(';'),
-        );
-        for (const r of props.rules) {
-          lines.push(
-            [
-              csvEscape(r.code),
-              csvEscape(r.label),
-              csvEscape(SEVERITY_LABEL[r.severity]),
-              csvEscape(r.enabled ? 'Oui' : 'Non'),
-              csvEscape(r.description),
-              csvEscape(formatParameters(r.parameters)),
-              csvEscape(r.openInstances),
-            ].join(';'),
-          );
-        }
-        triggerDownload(lines, `regles-alertes-${stamp}.csv`);
-        return;
-      }
-
-      // ── instances ── sort by severity (high → low) then most recent first so
-      //    the export reads like a triage list.
-      const sevRank = (s: AlertInstance['severity']) => SEVERITY_ORDER.indexOf(s);
-      const rows = [...props.rows].sort((a, b) => {
-        const bySev = sevRank(a.severity) - sevRank(b.severity);
-        if (bySev !== 0) return bySev;
-        return b.detectedAt.localeCompare(a.detectedAt);
-      });
-
-      lines.push(`${props.heading} — Pilotage Scolaire`);
-      lines.push(`Généré le;${generatedAt}`);
-      lines.push(`Alertes;${rows.length}`);
-      lines.push('');
-      lines.push(
-        [
-          'Statut',
-          'Sévérité',
-          'Règle',
-          'Titre',
-          'Détail',
-          'Recommandation',
-          'Élève',
-          'Classe',
-          'Matière',
-          'Détectée le',
-        ]
-          .map(csvEscape)
-          .join(';'),
-      );
-      for (const a of rows) {
-        lines.push(
-          [
-            csvEscape(STATUS_LABEL[a.status]),
-            csvEscape(SEVERITY_LABEL[a.severity]),
-            csvEscape(RULE_LABEL[a.code] ?? a.code),
-            csvEscape(a.title),
-            csvEscape(a.body),
-            csvEscape(a.recommendation ?? ''),
-            csvEscape(a.studentName),
-            csvEscape(a.classSectionName ?? ''),
-            csvEscape(a.subjectName ?? ''),
-            csvEscape(formatDate(a.detectedAt)),
-          ].join(';'),
-        );
-      }
-      triggerDownload(lines, `${props.slug}-${stamp}.csv`);
+      const payload =
+        props.mode === 'rules'
+          ? buildRulesCsv(props.rules, generatedAt)
+          : buildInstancesCsv(props.rows, props.heading, props.slug, generatedAt);
+      triggerDownload(payload);
     } finally {
       setBusy(false);
     }
-  }, [props]);
+  }
 
   const disabled = busy || props.disabled;
 
