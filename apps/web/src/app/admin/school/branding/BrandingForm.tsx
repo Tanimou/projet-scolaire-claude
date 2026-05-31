@@ -47,6 +47,7 @@ export function BrandingForm({ initial }: { initial: BrandingResponse }) {
     accentColor: initial.accentColor ?? '',
     fontFamily: initial.fontFamily ?? '',
     logoUrl: initial.logoUrl ?? '',
+    faviconUrl: initial.faviconUrl ?? '',
   });
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +72,7 @@ export function BrandingForm({ initial }: { initial: BrandingResponse }) {
       accentColor: form.accentColor || null,
       fontFamily: form.fontFamily || null,
       logoUrl: form.logoUrl || null,
+      faviconUrl: form.faviconUrl || null,
     });
     if (result.ok) {
       setStatus('saved');
@@ -105,6 +107,14 @@ export function BrandingForm({ initial }: { initial: BrandingResponse }) {
               onChange={(v) => change('logoUrl', v)}
               placeholder="https://…/logo.svg"
               help="Phase 1B : URL externe. L&apos;upload via MinIO arrive en Phase 2."
+            />
+            <Field
+              label="URL du favicon (ICO, PNG ou SVG)"
+              id="faviconUrl"
+              value={form.faviconUrl}
+              onChange={(v) => change('faviconUrl', v)}
+              placeholder="https://…/favicon.svg"
+              help="Icône affichée dans l&apos;onglet du navigateur sur les 3 portails. Idéalement carrée (32×32 ou SVG)."
             />
             <Field
               label="Police (Google Fonts)"
@@ -222,7 +232,27 @@ export function BrandingForm({ initial }: { initial: BrandingResponse }) {
               </div>
             </div>
           </div>
-          <p className="mt-3 text-xs text-slate-500">
+          {/* Browser-tab mock — previews the favicon as it appears in a tab */}
+          <div className="mt-3 flex items-center gap-2 rounded-t-lg border border-b-0 border-slate-200 bg-slate-100 px-2.5 py-1.5">
+            {form.faviconUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={form.faviconUrl}
+                alt=""
+                className="h-4 w-4 shrink-0 rounded-sm object-contain"
+              />
+            ) : (
+              <span className="grid h-4 w-4 shrink-0 place-items-center rounded-sm bg-slate-300 text-[8px] font-bold text-slate-600">
+                {form.displayName.charAt(0).toUpperCase() || 'P'}
+              </span>
+            )}
+            <span className="truncate text-[11px] font-medium text-slate-600">
+              {form.displayName || 'Pilotage scolaire'}
+            </span>
+            <X className="ml-auto h-3 w-3 shrink-0 text-slate-400" aria-hidden />
+          </div>
+
+          <p className="mt-2 text-xs text-slate-500">
             Le branding sera appliqué après rafraîchissement (cmd/ctrl + R) sur les 3 portails.
           </p>
         </div>

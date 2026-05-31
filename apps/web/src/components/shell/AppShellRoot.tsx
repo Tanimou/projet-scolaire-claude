@@ -222,7 +222,17 @@ const ACCENT_PALETTE: Record<DisplayPreferences['accent'], { solid: string; soft
 function BrandingStyle({ branding }: { branding: BrandingResponse | null }) {
   if (!branding) return null;
   const css = `:root{${branding.primaryColor ? `--brand-primary:${branding.primaryColor};` : ''}${branding.accentColor ? `--brand-accent:${branding.accentColor};` : ''}${branding.fontFamily ? `--brand-font:${branding.fontFamily};` : ''}}`;
-  return <style dangerouslySetInnerHTML={{ __html: css }} />;
+  return (
+    <>
+      {/* React 19 hoists this <link> into <head>; an explicit rel="icon" wins
+          over the default /favicon.ico, so the school's favicon shows in the tab
+          across every authenticated portal page. */}
+      {branding.faviconUrl ? (
+        <link rel="icon" href={branding.faviconUrl} />
+      ) : null}
+      <style dangerouslySetInnerHTML={{ __html: css }} />
+    </>
+  );
 }
 
 /**

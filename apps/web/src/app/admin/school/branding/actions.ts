@@ -12,6 +12,7 @@ export async function saveBranding(
     accentColor?: string | null;
     fontFamily?: string | null;
     logoUrl?: string | null;
+    faviconUrl?: string | null;
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
