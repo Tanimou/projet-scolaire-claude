@@ -1,183 +1,156 @@
 import {
   CalendarDays,
+  Calendar as CalendarIcon,
+  ChevronRight,
+  ClipboardList,
   Flag,
+  PartyPopper,
+  School,
+  Sparkles,
   Sun,
-  GraduationCap,
   Users,
-  Award,
-  MapPin,
-  type LucideIcon,
-} from "lucide-react";
-import Link from "next/link";
-import { SectionHeader } from "@pilotage/ui";
+} from 'lucide-react';
+import Link from 'next/link';
 
-export type SchoolEvent = {
-  id: string;
-  title: string;
-  type: string;
-  startsAt: string;
-  endsAt: string | null;
-  allDay?: boolean;
-  location?: string | null;
-  scopeType?: string | null;
+import { formatInDays } from '@pilotage/ui';
+
+import type { PortalCalendarEvent, CalendarEventType } from '@/components/calendar/PortalCalendarView';
+
+const TYPE_LABEL: Record<CalendarEventType, string> = {
+  vacation_break: 'Vacances',
+  public_holiday: 'Jour férié',
+  exam_period: 'Examens',
+  meeting: 'Réunion',
+  ceremony: 'Cérémonie',
+  pedagogical_day: 'Journée pédagogique',
+  custom: 'Événement',
 };
 
-type SchoolEventsPanelProps = {
-  events: SchoolEvent[];
+const TYPE_TONE: Record<CalendarEventType, string> = {
+  vacation_break: 'bg-amber-50 text-amber-800 border-amber-200',
+  public_holiday: 'bg-rose-50 text-rose-800 border-rose-200',
+  exam_period: 'bg-violet-50 text-violet-800 border-violet-200',
+  meeting: 'bg-blue-50 text-blue-800 border-blue-200',
+  ceremony: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+  pedagogical_day: 'bg-cyan-50 text-cyan-800 border-cyan-200',
+  custom: 'bg-slate-50 text-slate-800 border-slate-200',
 };
 
-const TYPE_LABEL: Record<string, string> = {
-  holiday: "Jour férié",
-  break: "Vacances",
-  exam: "Examen",
-  meeting: "Réunion",
-  ceremony: "Cérémonie",
-  other: "Événement",
+const TYPE_SOLID: Record<CalendarEventType, string> = {
+  vacation_break: 'bg-amber-500',
+  public_holiday: 'bg-rose-500',
+  exam_period: 'bg-violet-500',
+  meeting: 'bg-blue-500',
+  ceremony: 'bg-emerald-500',
+  pedagogical_day: 'bg-cyan-500',
+  custom: 'bg-slate-500',
 };
 
-const TYPE_ICON: Record<string, LucideIcon> = {
-  holiday: Flag,
-  break: Sun,
-  exam: GraduationCap,
+const TYPE_ICON: Record<CalendarEventType, typeof Sun> = {
+  vacation_break: Sun,
+  public_holiday: Flag,
+  exam_period: ClipboardList,
   meeting: Users,
-  ceremony: Award,
-  other: CalendarDays,
+  ceremony: PartyPopper,
+  pedagogical_day: Sparkles,
+  custom: CalendarIcon,
 };
 
-// icon box background + text tone per event type
-const TYPE_TONE: Record<string, string> = {
-  holiday: "bg-amber-50 text-amber-600",
-  break: "bg-sky-50 text-sky-600",
-  exam: "bg-rose-50 text-rose-600",
-  meeting: "bg-violet-50 text-violet-600",
-  ceremony: "bg-emerald-50 text-emerald-600",
-  other: "bg-slate-100 text-slate-600",
-};
-
-// type chip tone per event type
-const CHIP_TONE: Record<string, string> = {
-  holiday: "bg-amber-100 text-amber-700",
-  break: "bg-sky-100 text-sky-700",
-  exam: "bg-rose-100 text-rose-700",
-  meeting: "bg-violet-100 text-violet-700",
-  ceremony: "bg-emerald-100 text-emerald-700",
-  other: "bg-slate-100 text-slate-600",
-};
-
-const SCOPE_LABEL: Record<string, string> = {
-  school: "École",
-  cycle: "Cycle",
-  grade_level: "Niveau",
-  class_section: "Classe",
-};
-
-const DAY_FMT = new Intl.DateTimeFormat("fr-FR", { day: "2-digit" });
-const MONTH_FMT = new Intl.DateTimeFormat("fr-FR", { month: "short" });
-
-function daysUntil(date: Date, now: Date): number {
-  const startOfDay = (d: Date) =>
-    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  return Math.round((startOfDay(date) - startOfDay(now)) / 86_400_000);
+function scopeLabel(event: PortalCalendarEvent): string {
+  if (event.classSection) return `Classe ${event.classSection.name}`;
+  if (event.gradeLevel) return `Niveau ${event.gradeLevel.name}`;
+  if (event.cycle) return `Cycle ${event.cycle.name}`;
+  return "Toute l'école";
 }
 
-function relativeLabel(days: number): string {
-  if (days <= 0) return "Aujourd'hui";
-  if (days === 1) return "Demain";
-  if (days < 7) return `Dans ${days} j`;
-  if (days < 14) return "La semaine prochaine";
-  return `Dans ${Math.round(days / 7)} sem.`;
-}
-
-export function SchoolEventsPanel({ events }: SchoolEventsPanelProps) {
-  const now = new Date();
-
-  // Keep events that are upcoming or still ongoing (multi-day vacances/exams),
-  // soonest first, capped to keep the panel tidy.
+/**
+ * Surfaces the next school calendar events (vacances, jours fériés, examens,
+ * réunions, cérémonies, journées pédagogiques) on the teacher dashboard so staff
+ * don't have to open the dedicated calendar page to learn what's coming up.
+ *
+ * The /calendar/events endpoint already ABAC-scopes results server-side — teachers
+ * receive visibility "all" + "staff_only" — so no extra gating is needed here.
+ *
+ * Renders nothing when no upcoming event exists; an empty card would only add noise.
+ */
+export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] }) {
+  const now = Date.now();
   const upcoming = events
-    .filter((e) => {
-      const ref = e.endsAt ? new Date(e.endsAt) : new Date(e.startsAt);
-      return ref.getTime() >= now.getTime();
-    })
-    .sort(
-      (a, b) =>
-        new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
-    )
+    .filter((e) => new Date(e.endsAt).getTime() >= now)
+    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime())
     .slice(0, 6);
 
-  // Nothing to show → render nothing (avoids an empty card competing for space).
   if (upcoming.length === 0) return null;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <SectionHeader
-        title="Vie de l'école"
-        subtitle="Prochains événements du calendrier"
-        action={{ label: "Tout voir", href: "/teacher/calendar" }}
-      />
-      <ul className="mt-4 space-y-2">
-        {upcoming.map((e) => {
-          const Icon = TYPE_ICON[e.type] ?? CalendarDays;
-          const start = new Date(e.startsAt);
-          const days = daysUntil(start, now);
-          const soon = days <= 7;
-          const scope = e.scopeType ? SCOPE_LABEL[e.scopeType] : null;
+    <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60">
+      <header className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm shadow-violet-500/30">
+            <CalendarDays className="h-4 w-4" />
+          </span>
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">Vie de l&apos;école</h3>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Vacances, jours fériés, examens et événements de l&apos;établissement
+            </p>
+          </div>
+        </div>
+        <Link
+          href="/teacher/calendar"
+          className="accent-text inline-flex shrink-0 items-center gap-1 text-[11px] font-bold hover:underline"
+        >
+          Voir le calendrier
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Link>
+      </header>
 
+      <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        {upcoming.map((e) => {
+          const Icon = TYPE_ICON[e.type];
+          const start = new Date(e.startsAt);
+          const isImminent = start.getTime() - now <= 7 * 24 * 60 * 60 * 1000;
           return (
-            <li key={e.id}>
+            <li key={e.id} className="group">
               <Link
                 href="/teacher/calendar"
-                className="flex items-start gap-3 rounded-xl border border-slate-200 px-3 py-3 transition-colors hover:bg-slate-50"
+                className="flex h-full flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-sm"
               >
-                {/* date block */}
-                <div className="flex w-11 shrink-0 flex-col items-center rounded-lg bg-slate-50 py-1.5">
-                  <span className="text-base font-semibold leading-none text-slate-900 tabular-nums">
-                    {DAY_FMT.format(start)}
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-white ${TYPE_SOLID[e.type]}`}
+                  >
+                    <Icon className="h-4 w-4" />
                   </span>
-                  <span className="mt-0.5 text-[11px] font-medium uppercase text-slate-500">
-                    {MONTH_FMT.format(start).replace(".", "")}
+                  <div className="min-w-0">
+                    <div className="text-base font-bold leading-none tabular-nums text-slate-900">
+                      {start.getDate()}
+                    </div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      {start.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '')}
+                    </div>
+                  </div>
+                </div>
+                <h4 className="line-clamp-2 text-xs font-bold leading-snug text-slate-900">
+                  {e.title}
+                </h4>
+                <div className="mt-auto flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${TYPE_TONE[e.type]}`}
+                  >
+                    {TYPE_LABEL[e.type]}
+                  </span>
+                  <span
+                    className={`text-[10px] font-semibold ${
+                      isImminent ? 'text-rose-600' : 'text-slate-500'
+                    }`}
+                  >
+                    {formatInDays(e.startsAt)}
                   </span>
                 </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
-                        TYPE_TONE[e.type] ?? TYPE_TONE.other
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                    </span>
-                    <p className="truncate text-sm font-medium text-slate-900">
-                      {e.title}
-                    </p>
-                  </div>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                        CHIP_TONE[e.type] ?? CHIP_TONE.other
-                      }`}
-                    >
-                      {TYPE_LABEL[e.type] ?? TYPE_LABEL.other}
-                    </span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                        soon
-                          ? "bg-rose-50 text-rose-600"
-                          : "bg-slate-100 text-slate-500"
-                      }`}
-                    >
-                      {relativeLabel(days)}
-                    </span>
-                    {scope ? (
-                      <span className="text-[11px] text-slate-400">{scope}</span>
-                    ) : null}
-                    {e.location ? (
-                      <span className="inline-flex items-center gap-0.5 text-[11px] text-slate-400">
-                        <MapPin className="h-3 w-3" />
-                        <span className="truncate">{e.location}</span>
-                      </span>
-                    ) : null}
-                  </div>
+                <div className="flex items-center gap-1 text-[10px] font-medium text-slate-400">
+                  <School className="h-3 w-3" />
+                  <span className="truncate">{scopeLabel(e)}</span>
                 </div>
               </Link>
             </li>
