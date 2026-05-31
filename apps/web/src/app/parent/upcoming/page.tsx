@@ -17,6 +17,7 @@ import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
+import type { IcsEvent } from '@/lib/ics';
 import {
   EmptyState,
   KpiCard,
@@ -29,6 +30,10 @@ import {
 
 import { ChildSelector } from '../_components/ChildSelector';
 
+import {
+  AddEvaluationToCalendarButton,
+  ExportEvaluationsButton,
+} from './UpcomingCalendarExport';
 import { UpcomingFilters } from './UpcomingFilters';
 import type {
   HorizonFilter,
@@ -118,6 +123,44 @@ function horizonOf(date: Date, oneWeek: Date, twoWeeks: Date): UpcomingHorizon {
   return 'later';
 }
 
+/** One hour, in milliseconds — default block duration for an exported evaluation. */
+const EVAL_DURATION_MS = 60 * 60 * 1000;
+
+/**
+ * Map an upcoming evaluation to a calendar event. Timed (not all-day) so the
+ * exact instant the teacher planned is preserved across calendar apps; the
+ * description carries the pedagogical context (format, coefficient, barème).
+ */
+function evaluationToIcsEvent(u: UpcomingItem, childName: string | null): IcsEvent {
+  const start = new Date(u.scheduledAt);
+  const end = new Date(start.getTime() + EVAL_DURATION_MS);
+  const kindLabel = KIND_LABEL[u.kind] ?? u.kind;
+  const coef = u.coefficient.toLocaleString('fr-FR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  const descriptionLines = [
+    `Matière : ${u.subjectName}`,
+    `Format : ${kindLabel}`,
+    `Coefficient : ×${coef} · Barème : /${u.maxScore}`,
+    u.termName ? `Période : ${u.termName}` : null,
+    childName ? `Élève : ${childName}` : null,
+    u.description ? `\n${u.description}` : null,
+    '\nÉvaluation planifiée — Pilotage Scolaire.',
+  ].filter((line): line is string => Boolean(line));
+
+  return {
+    id: `eval-${u.id}`,
+    title: `${u.subjectName} — ${u.title}`,
+    description: descriptionLines.join('\n'),
+    startsAt: start.toISOString(),
+    endsAt: end.toISOString(),
+    allDay: false,
+    categories: ['Évaluation', kindLabel],
+    location: u.classSectionName || null,
+  };
+}
+
 export default async function ParentUpcomingPage({
   searchParams,
 }: {
@@ -161,6 +204,10 @@ export default async function ParentUpcomingPage({
     sp.studentId && children.find((c) => c.id === sp.studentId)
       ? sp.studentId
       : children[0]!.id;
+  const activeChild = children.find((c) => c.id === activeStudentId) ?? null;
+  const activeChildName = activeChild
+    ? `${activeChild.firstName} ${activeChild.lastName}`.trim()
+    : null;
 
   const resp = await safe(
     api<UpcomingResp>(`/api/v1/analytics/parent-upcoming/${activeStudentId}`, {
@@ -273,6 +320,9 @@ export default async function ParentUpcomingPage({
   }
   const groupOrder: UpcomingHorizon[] = ['this-week', 'next-week', 'later'];
 
+  // Calendar export reflects exactly what the parent currently sees (filtered).
+  const exportEvents = filtered.map((u) => evaluationToIcsEvent(u, activeChildName));
+
   // Active filter chip recap.
   const activeFilterChips: string[] = [];
   if (horizonFilter) {
@@ -311,6 +361,11 @@ export default async function ParentUpcomingPage({
         ]}
         title="Évaluations à venir"
         subtitle={headerSubtitle}
+        actions={
+          totalAll > 0 ? (
+            <ExportEvaluationsButton events={exportEvents} childName={activeChildName} />
+          ) : undefined
+        }
       />
 
       <div className="mt-4">
@@ -539,6 +594,9 @@ export default async function ParentUpcomingPage({
                               Fort coef.
                             </span>
                           )}
+                          <AddEvaluationToCalendarButton
+                            event={evaluationToIcsEvent(u, activeChildName)}
+                          />
                         </div>
                       </li>
                     );
