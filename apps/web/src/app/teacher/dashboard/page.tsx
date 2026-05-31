@@ -40,6 +40,8 @@ import {
   type GradebookData,
 } from './_components/InlineGradebook';
 import { TeacherActionCenter, type TeacherActionData } from './_components/TeacherActionCenter';
+import { SchoolEventsPanel } from './_components/SchoolEventsPanel';
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 
 export const metadata: Metadata = { title: 'Tableau de bord professeur' };
 export const dynamic = 'force-dynamic';
@@ -103,16 +105,20 @@ export default async function TeacherDashboardPage({
   searchParams: Promise<{ a?: string }>;
 }) {
   const sp = await searchParams;
-  const [me, dashboard, mine, actionCenter] = await Promise.all([
+  const [me, dashboard, mine, actionCenter, calendar] = await Promise.all([
     fetchMe(),
     safe(api<TeacherDashboardResponse>('/api/v1/analytics/teacher-dashboard', { cache: 'no-store' })),
     safe(api<MyAssignmentsResp>('/api/v1/teachers/me/assignments', { cache: 'no-store' })),
     safe(api<TeacherActionData>('/api/v1/analytics/teacher-action-center', { cache: 'no-store' })),
+    // School calendar — ABAC-scoped server-side to events the teacher may see
+    // (visibility "all" + "staff_only"). Feeds the SchoolEventsPanel.
+    safe(api<{ data: PortalCalendarEvent[] }>('/api/v1/calendar/events', { cache: 'no-store' })),
   ]);
 
   const subjectStats = dashboard?.subjectStats ?? [];
   const upcoming = dashboard?.upcomingAssessments ?? [];
   const assignments = mine?.data ?? [];
+  const schoolEvents = calendar?.data ?? [];
 
   // Pick the active assignment for the inline gradebook
   const assignmentOptions: AssignmentOption[] = assignments.map((a) => ({
@@ -295,6 +301,9 @@ export default async function TeacherDashboardPage({
           <CalendarPanel upcoming={upcoming} />
         </div>
       </div>
+
+      {/* ──────── Row 2.5 : school calendar events (only when upcoming exist) ──────── */}
+      <SchoolEventsPanel events={schoolEvents} />
 
       {/* ──────── Row 3 : bottom panels — classes / activity / tools ──────── */}
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">

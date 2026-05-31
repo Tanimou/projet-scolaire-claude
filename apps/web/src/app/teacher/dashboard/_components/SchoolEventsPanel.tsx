@@ -15,12 +15,14 @@ import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarVi
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Surfaces the next school-wide calendar events (vacances, jours fériés,
- * examens, réunions, cérémonies) on the parent dashboard so families don't have
- * to open the dedicated calendar page to learn what's coming up.
+ * Surfaces the next school calendar events (vacances, jours fériés, examens,
+ * réunions, cérémonies, journées pédagogiques) on the teacher dashboard so staff
+ * don't have to open the dedicated calendar page to learn what's coming up.
  *
- * Renders nothing when no upcoming event exists — the school may not have set up
- * a calendar yet, and an empty card would only add noise.
+ * The /calendar/events endpoint already ABAC-scopes results server-side — teachers
+ * receive visibility "all" + "staff_only" — so no extra gating is needed here.
+ *
+ * Renders nothing when no upcoming event exists; an empty card would only add noise.
  */
 export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] }) {
   const now = Date.now();
@@ -35,18 +37,18 @@ export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] })
     <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60">
       <header className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm shadow-blue-500/30">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm shadow-violet-500/30">
             <CalendarDays className="h-4 w-4" />
           </span>
           <div>
-            <h3 className="text-sm font-bold text-slate-900">Prochains événements scolaires</h3>
+            <h3 className="text-sm font-bold text-slate-900">Vie de l&apos;école</h3>
             <p className="mt-0.5 text-[11px] text-slate-500">
               Vacances, jours fériés, examens et événements de l&apos;établissement
             </p>
           </div>
         </div>
         <Link
-          href="/parent/calendar"
+          href="/teacher/calendar"
           className="accent-text inline-flex shrink-0 items-center gap-1 text-[11px] font-bold hover:underline"
         >
           Voir le calendrier
@@ -65,7 +67,7 @@ export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] })
           return (
             <li key={e.id} className="group">
               <Link
-                href="/parent/calendar"
+                href="/teacher/calendar"
                 className="flex h-full flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-sm"
               >
                 <div className="flex items-center gap-2">
