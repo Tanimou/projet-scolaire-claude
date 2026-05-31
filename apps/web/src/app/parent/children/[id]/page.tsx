@@ -8,6 +8,7 @@ import {
   GraduationCap,
   Mail,
   MessageSquare,
+  Printer,
   Sparkles,
   TrendingDown,
   TrendingUp,
@@ -303,6 +304,13 @@ export default async function ChildDetailPage({
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Mes enfants
+            </Link>
+            <Link
+              href={`/parent/children/${id}/report`}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              <Printer className="h-3.5 w-3.5 text-blue-600" />
+              Bilan imprimable
             </Link>
             <Link
               href={`/parent/dashboard?studentId=${id}`}

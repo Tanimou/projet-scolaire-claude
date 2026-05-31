@@ -454,3 +454,30 @@ html[data-density='spacious'] .density-grid-gap {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--accent-500); }
 
 html { -webkit-tap-highlight-color: transparent; }
+
+/* =============================================================================
+   Print — A4 documents (parent "Bilan de suivi" report and future printables)
+   Keep coloured stat tiles & badges intact when saving to PDF / printing.
+   ========================================================================== */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+  /* Force background colours (stat tiles, table headers, badges) to render
+     in the printed output — browsers strip them by default. */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  /* Avoid splitting cards, table rows, and report sections across pages. */
+  section,
+  table,
+  tr {
+    break-inside: avoid;
+  }
+}
