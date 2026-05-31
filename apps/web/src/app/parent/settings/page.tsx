@@ -142,7 +142,7 @@ export default async function ParentSettingsPage() {
 
           <TabsContent value="notifications">
             <div className="space-y-4">
-              <PreferencesPanel initial={preferences} />
+              <PreferencesPanel initial={preferences} recipientEmail={me?.email} />
               <section className="rounded-2xl bg-gradient-to-br from-violet-50 via-white to-blue-50 p-5 ring-1 ring-violet-100">
                 <div className="flex items-start gap-3">
                   <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-violet-600 ring-1 ring-violet-200">
