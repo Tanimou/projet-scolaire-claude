@@ -176,21 +176,7 @@ export default async function TeacherStudentsPage({
         ]}
         title="Mes élèves"
         subtitle="Tous les élèves que vous enseignez cette année, à travers vos différentes classes"
-        actions={
-          <ExportStudentsButton
-            students={sorted.map((s) => ({
-              firstName: s.firstName,
-              lastName: s.lastName,
-              externalRef: s.externalRef,
-              gender: s.gender,
-              classes: s.classes.map((c) => ({ name: c.name, gradeLevelName: c.gradeLevelName })),
-              gradesCount: s.gradesCount,
-              lastGradeAt: s.lastGradeAt,
-              avgPct: s.avgPct,
-            }))}
-            filtered={hasActiveFilters}
-          />
-        }
+        actions={<ExportStudentsButton students={sorted} filtered={hasActiveFilters} />}
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
