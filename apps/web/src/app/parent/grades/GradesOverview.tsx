@@ -21,22 +21,25 @@ const DIST_META = [
 
 function TrendChip({ delta }: { delta: number | null }) {
   if (delta == null) return null;
-  const up = delta > 0.05;
-  const down = delta < -0.05;
+  // Compare on the same value we display (rounded to 1 decimal) so the icon and
+  // tone never contradict the number — neutral exactly when it reads « 0.0 pts ».
+  const rounded = Math.round(delta * 10) / 10;
+  const up = rounded > 0;
+  const down = rounded < 0;
   const Icon = up ? TrendingUp : down ? TrendingDown : Minus;
   const tone = up
     ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
     : down
       ? 'bg-rose-50 text-rose-700 ring-rose-200'
       : 'bg-slate-100 text-slate-600 ring-slate-200';
-  const sign = delta > 0 ? '+' : '';
+  const sign = up ? '+' : '';
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${tone}`}
     >
       <Icon className="h-3.5 w-3.5" aria-hidden />
       {sign}
-      {formatGrade(delta, 1)} pts
+      {formatGrade(rounded, 1)} pts
     </span>
   );
 }
@@ -68,7 +71,12 @@ export function GradesOverview({ analytics }: { analytics: GradesAnalytics }) {
           />
           <TrendChip delta={trendDelta} />
         </div>
-        {monthly.length < 2 ? (
+        {gradedCount === 0 ? (
+          <div className="mt-4 flex items-center gap-2 text-sm text-slate-500">
+            <PieChart className="h-4 w-4 text-slate-400" aria-hidden />
+            Aucune note chiffrée pour le moment.
+          </div>
+        ) : monthly.length < 2 ? (
           <p className="mt-4 text-sm text-slate-500">
             Pas encore assez de mois notés pour tracer une tendance. La courbe
             apparaîtra dès le deuxième mois avec des notes.
