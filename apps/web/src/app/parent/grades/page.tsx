@@ -13,8 +13,10 @@ import {
 } from '@pilotage/ui';
 
 import { ChildSelector } from '../_components/ChildSelector';
+import { buildGradesAnalytics, gradeValueOn20 } from './analytics';
 import { GradeRow } from './GradeRow';
 import { GradesFilters } from './GradesFilters';
+import { GradesOverview } from './GradesOverview';
 import type {
   GradeRow as GradeRowType,
   GradesPeriod,
@@ -169,12 +171,8 @@ export default async function ParentGradesPage({
   const now = new Date();
   const monthStart = startOfMonth(now);
 
-  function valueOn20(g: GradeRowType): number | null {
-    if (g.isAbsent || g.value == null) return null;
-    const v = Number(g.value);
-    const max = Number(g.assessment.maxScore);
-    return max > 0 ? (v / max) * 20 : null;
-  }
+  const valueOn20 = gradeValueOn20;
+  const analytics = buildGradesAnalytics(allGrades);
 
   const valuesAll = allGrades.map(valueOn20).filter((v): v is number => v != null);
   const overallAvg =
@@ -295,6 +293,8 @@ export default async function ParentGradesPage({
           Notes &lt; 10 / 20
         </KpiCard>
       </div>
+
+      {allGrades.length > 0 && <GradesOverview analytics={analytics} />}
 
       <div className="mt-6">
         <GradesFilters
