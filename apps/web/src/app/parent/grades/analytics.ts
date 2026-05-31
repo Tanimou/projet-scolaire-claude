@@ -43,6 +43,16 @@ export interface GradeDistribution {
   absent: number;
 }
 
+export type RegularityTone = 'emerald' | 'blue' | 'amber' | 'rose';
+
+export interface RegularityInfo {
+  label: string;
+  hint: string;
+  tone: RegularityTone;
+  /** Standard deviation of the child's grades (points /20), rounded to .1. */
+  stdDev: number;
+}
+
 export interface GradesAnalytics {
   monthly: MonthlyPoint[];
   distribution: GradeDistribution;
@@ -50,6 +60,33 @@ export interface GradesAnalytics {
   gradedCount: number;
   /** Delta (pts) between the first and last plotted month, or `null`. */
   trendDelta: number | null;
+  /**
+   * How consistent the child's marks are (spread, not centre). `null` until at
+   * least three grades exist — régularité is meaningless on one or two notes.
+   */
+  consistency: RegularityInfo | null;
+}
+
+/**
+ * Ordered standard-deviation buckets (points /20), tightest first. Mirrors the
+ * teacher gradebook's dispersion reading, framed for a single child.
+ */
+const REGULARITY_BUCKETS: ReadonlyArray<{ max: number; info: Omit<RegularityInfo, 'stdDev'> }> = [
+  { max: 1.5, info: { label: 'Très régulier', hint: 'des notes très stables', tone: 'emerald' } },
+  { max: 3, info: { label: 'Régulier', hint: 'des résultats assez stables', tone: 'blue' } },
+  { max: 4.5, info: { label: 'Variable', hint: 'des écarts notables entre les notes', tone: 'amber' } },
+  { max: Infinity, info: { label: 'Irrégulier', hint: 'des notes très contrastées', tone: 'rose' } },
+];
+
+/** Reading of grade regularity from a set of /20 values (null when < 3). */
+export function computeRegularity(valuesOn20: number[]): RegularityInfo | null {
+  const n = valuesOn20.length;
+  if (n < 3) return null;
+  const mean = valuesOn20.reduce((s, v) => s + v, 0) / n;
+  const variance = valuesOn20.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
+  const stdDev = Math.sqrt(variance);
+  const info = REGULARITY_BUCKETS.find((b) => stdDev < b.max)!.info;
+  return { ...info, stdDev: Math.round(stdDev * 10) / 10 };
 }
 
 const MONTH_FMT = new Intl.DateTimeFormat('fr-FR', { month: 'short' });
@@ -79,6 +116,8 @@ export function buildGradesAnalytics(
   // Accumulate per-month sums to average at the end.
   const buckets = new Map<string, { label: string; sum: number; count: number }>();
   let gradedCount = 0;
+  // Every graded value on /20, feeding the regularity (spread) reading.
+  const valuesOn20: number[] = [];
 
   for (const g of grades) {
     if (g.isAbsent) {
@@ -89,6 +128,7 @@ export function buildGradesAnalytics(
     if (v == null) continue;
 
     gradedCount += 1;
+    valuesOn20.push(v);
     if (v >= 16) distribution.excellent += 1;
     else if (v >= 10) distribution.satisfaisant += 1;
     else distribution.insuffisant += 1;
@@ -120,5 +160,11 @@ export function buildGradesAnalytics(
       ? Math.round((monthly[monthly.length - 1]!.avg - monthly[0]!.avg) * 10) / 10
       : null;
 
-  return { monthly, distribution, gradedCount, trendDelta };
+  return {
+    monthly,
+    distribution,
+    gradedCount,
+    trendDelta,
+    consistency: computeRegularity(valuesOn20),
+  };
 }
