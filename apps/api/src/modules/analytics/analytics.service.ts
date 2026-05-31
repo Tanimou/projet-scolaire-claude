@@ -1362,7 +1362,10 @@ export class AnalyticsService {
         label: 'Élèves en difficulté',
         count: atRisk.length,
         severity: worst.average < 8 ? 'critical' : 'warning',
-        href: '/teacher/reports?signal=at-risk',
+        // Deep-link to the pre-filtered per-student roster (honours
+        // ?activity=at-risk) — an actionable triage list. The reports page
+        // is class/subject-level; its `signal` filter handles classes-at-risk.
+        href: '/teacher/students?activity=at-risk',
         actionLabel: 'Analyser',
         detail: `Moyenne sous 10/20 · la plus basse à ${fmt(worst.average)}/20`,
         preview: atRisk.slice(0, 3).map((s) => ({
