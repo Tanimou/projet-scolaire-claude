@@ -91,7 +91,10 @@ export function PreferencesPanel({
     startTransition(async () => {
       const res = await setChannelForKindsAction(kinds, channel, enabled);
       if (!res.ok) {
-        setRows(before); // rollback to the exact pre-bulk state
+        // Partial failure: keep the channel value only for kinds that actually
+        // landed server-side, revert the rest to their pre-bulk value.
+        const landed = new Set(res.succeededKinds);
+        setRows(before.map((r) => (landed.has(r.kind) ? { ...r, [channel]: enabled } : r)));
         setError(res.error ?? 'Erreur');
       }
       setBusy(null);
