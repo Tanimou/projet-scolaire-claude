@@ -20,6 +20,7 @@ import {
   formatGrade,
 } from '@pilotage/ui';
 
+import { ExportStudentsButton } from './ExportStudentsButton';
 import { StudentsFilters, type StudentsActivity, type StudentsSort } from './StudentsFilters';
 
 export const metadata: Metadata = { title: 'Mes élèves' };
@@ -175,6 +176,7 @@ export default async function TeacherStudentsPage({
         ]}
         title="Mes élèves"
         subtitle="Tous les élèves que vous enseignez cette année, à travers vos différentes classes"
+        actions={<ExportStudentsButton students={sorted} filtered={hasActiveFilters} />}
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

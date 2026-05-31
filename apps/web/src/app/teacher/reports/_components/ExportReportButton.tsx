@@ -3,6 +3,8 @@
 import { Download } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
+import { csvEscape, csvFixed1, downloadCsv } from '@/lib/csv';
+
 interface ClassRow {
   classSectionName: string;
   subjectName: string;
@@ -47,17 +49,7 @@ export interface ExportReportButtonProps {
   kpis: Kpis;
 }
 
-function csvEscape(v: string | number | null | undefined): string {
-  if (v === null || v === undefined) return '';
-  const s = String(v);
-  if (/[",;\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function fmt1(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '';
-  return (Math.round(n * 10) / 10).toFixed(1);
-}
+const fmt1 = csvFixed1;
 
 export function ExportReportButton({
   classes,
@@ -128,18 +120,8 @@ export function ExportReportButton({
         );
       }
 
-      // Add BOM for Excel UTF-8 compatibility
-      const csv = '﻿' + lines.join('\r\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
       const stamp = new Date().toISOString().slice(0, 10);
-      a.href = url;
-      a.download = `rapport-enseignant-${academicYear?.name ?? 'export'}-${stamp}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadCsv(`rapport-enseignant-${academicYear?.name ?? 'export'}-${stamp}.csv`, lines);
     } finally {
       setBusy(false);
     }
