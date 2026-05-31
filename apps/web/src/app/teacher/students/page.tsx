@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   CheckCircle2,
   ClipboardList,
   Sparkles,
@@ -20,6 +21,7 @@ import {
   formatGrade,
 } from '@pilotage/ui';
 
+import { AT_RISK_GRADE_20, isAtRisk, pctToGrade20 } from './at-risk';
 import { ExportStudentsButton } from './ExportStudentsButton';
 import { StudentsFilters, type StudentsActivity, type StudentsSort } from './StudentsFilters';
 
@@ -66,10 +68,6 @@ function avgTone(pct: number | null): {
   if (pct >= 80) return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Excellent' };
   if (pct >= 50) return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Satisfaisant' };
   return { bg: 'bg-rose-50', text: 'text-rose-700', label: 'À soutenir' };
-}
-
-function pctToGrade20(pct: number): number {
-  return Math.round((pct / 100) * 20 * 10) / 10;
 }
 
 function formatRelative(iso: string | null): string {
@@ -128,6 +126,8 @@ export default async function TeacherStudentsPage({
       if (!s.lastGradeAt || new Date(s.lastGradeAt).getTime() < recentCutoff) return false;
     } else if (activity === 'none') {
       if (s.gradesCount > 0) return false;
+    } else if (activity === 'at-risk') {
+      if (!isAtRisk(s.avgPct)) return false;
     }
     return true;
   });
@@ -164,6 +164,9 @@ export default async function TeacherStudentsPage({
     ? scored.reduce((sum, s) => sum + (s.avgPct ?? 0), 0) / scored.length
     : null;
   const cohortAvg20 = cohortAvgPct != null ? pctToGrade20(cohortAvgPct) : null;
+  // Aligné sur le filtre `activity === 'at-risk'` : une moyenne absente n'est
+  // PAS comptée comme « à risque » (et `scored` exclut déjà les null).
+  const atRiskCount = scored.filter((s) => isAtRisk(s.avgPct)).length;
 
   const hasActiveFilters = !!(q || classSectionId || gender || activity);
 
@@ -179,7 +182,7 @@ export default async function TeacherStudentsPage({
         actions={<ExportStudentsButton students={sorted} filtered={hasActiveFilters} />}
       />
 
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard icon={User} tone="blue" label="ÉLÈVES" value={allStudents.length}>
           Effectif distinct
         </KpiCard>
@@ -190,6 +193,18 @@ export default async function TeacherStudentsPage({
           {allStudents.length > 0
             ? `Notés ≤ 30 j (${Math.round((recentlyGraded / allStudents.length) * 100)} %)`
             : 'Notés ≤ 30 j'}
+        </KpiCard>
+        <KpiCard
+          icon={AlertTriangle}
+          tone="rose"
+          label="À RISQUE"
+          value={atRiskCount}
+          href="/teacher/students?activity=at-risk"
+          hrefLabel="Voir la liste →"
+        >
+          {scored.length > 0
+            ? `Moyenne < ${AT_RISK_GRADE_20}/20 · ${Math.round((atRiskCount / scored.length) * 100)} % des notés`
+            : `Moyenne < ${AT_RISK_GRADE_20}/20`}
         </KpiCard>
         <KpiCard
           icon={Sparkles}

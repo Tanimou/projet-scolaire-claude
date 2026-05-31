@@ -5,7 +5,9 @@ import { useTransition } from 'react';
 
 import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 
-export type StudentsActivity = 'recent' | 'none' | '';
+import { AT_RISK_GRADE_20 } from './at-risk';
+
+export type StudentsActivity = 'recent' | 'none' | 'at-risk' | '';
 export type StudentsSort = 'name' | 'recent' | 'avg-desc' | 'avg-asc';
 
 interface ClassOption {
@@ -22,6 +24,7 @@ const GENDER_OPTIONS: SelectOption[] = [
 const ACTIVITY_OPTIONS: SelectOption[] = [
   { value: 'recent', label: 'Notes récentes (30j)' },
   { value: 'none', label: 'Aucune note encore' },
+  { value: 'at-risk', label: `À risque (moy. < ${AT_RISK_GRADE_20})` },
 ];
 
 const SORT_OPTIONS: SelectOption[] = [
