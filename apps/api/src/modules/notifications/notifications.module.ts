@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 
 import { AuthModule } from '../../shared/auth/auth.module';
+import { QueueModule } from '../../shared/queue/queue.module';
 
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
@@ -14,7 +15,7 @@ import { NotificationPreferencesService } from './preferences.service';
  */
 @Global()
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, QueueModule],
   controllers: [NotificationsController, NotificationPreferencesController],
   providers: [NotificationsService, NotificationPreferencesService],
   exports: [NotificationsService, NotificationPreferencesService],

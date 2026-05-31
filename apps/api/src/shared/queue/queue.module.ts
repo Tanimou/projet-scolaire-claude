@@ -8,6 +8,8 @@ import { Module } from '@nestjs/common';
  * Queue names are kept as exported constants so producer + consumer agree.
  */
 export const QUEUE_EXPORTS = 'exports' as const;
+/** Notification email delivery (R8.2). Consumed by apps/worker. */
+export const QUEUE_NOTIFICATIONS_EMAIL = 'notifications-email' as const;
 
 @Module({
   imports: [
@@ -17,6 +19,7 @@ export const QUEUE_EXPORTS = 'exports' as const;
       },
     }),
     BullModule.registerQueue({ name: QUEUE_EXPORTS }),
+    BullModule.registerQueue({ name: QUEUE_NOTIFICATIONS_EMAIL }),
   ],
   exports: [BullModule],
 })
