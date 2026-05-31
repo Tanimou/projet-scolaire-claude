@@ -1,9 +1,10 @@
 'use client';
 
-import { Bell, Loader2, Mail, Smartphone } from 'lucide-react';
+import { AlertTriangle, Bell, CheckCircle2, Loader2, Mail, Send, Smartphone } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
 import {
+  sendTestEmailAction,
   setChannelForKindsAction,
   updatePreferenceAction,
   type NotificationKindCode,
@@ -59,7 +60,27 @@ export function PreferencesPanel({
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
+  // Test-email button state, kept separate from the toggle flow.
+  const [testState, setTestState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+
   const kinds = rows.map((r) => r.kind);
+
+  function sendTest() {
+    if (testState === 'sending') return;
+    setTestState('sending');
+    setTestMsg(null);
+    startTransition(async () => {
+      const res = await sendTestEmailAction();
+      if (res.ok) {
+        setTestState('sent');
+        setTestMsg(res.to ?? recipientEmail ?? null);
+      } else {
+        setTestState('error');
+        setTestMsg(res.error ?? 'Erreur');
+      }
+    });
+  }
 
   function flipCell(kind: NotificationKindCode, channel: Channel) {
     if (busy) return;
@@ -227,9 +248,38 @@ export function PreferencesPanel({
         ))}
       </div>
 
-      <div className="border-t border-slate-100 bg-slate-50 px-6 py-3 text-[11px] text-slate-500">
-        Email activé : les notifications cochées vous sont aussi envoyées par email (le canal email
-        est désactivé par défaut, à vous de l&apos;activer). Push arrive prochainement.
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-6 py-3">
+        <p className="min-w-0 flex-1 text-[11px] text-slate-500">
+          Email activé : les notifications cochées vous sont aussi envoyées par email (le canal
+          email est désactivé par défaut, à vous de l&apos;activer). Push arrive prochainement.
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          {testState === 'sent' && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Envoyé{testMsg ? ` à ${testMsg}` : ''}
+            </span>
+          )}
+          {testState === 'error' && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-600">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              {testMsg ?? 'Échec'}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={sendTest}
+            disabled={testState === 'sending'}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition-colors hover:bg-slate-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {testState === 'sending' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Send className="h-3.5 w-3.5" />
+            )}
+            Envoyer un email de test
+          </button>
+        </div>
       </div>
     </div>
   );

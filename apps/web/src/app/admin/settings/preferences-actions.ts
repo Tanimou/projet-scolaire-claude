@@ -41,6 +41,28 @@ export async function updatePreferenceAction(
   }
 }
 
+/**
+ * Trigger a one-off test email to the current user (POST, no body). Lets a
+ * parent/teacher confirm the email channel reaches their inbox after enabling
+ * it. The API resolves the recipient from the session profile and returns the
+ * address it sent to.
+ */
+export async function sendTestEmailAction(): Promise<{
+  ok: boolean;
+  to?: string;
+  error?: string;
+}> {
+  try {
+    const res = await api<{ ok: boolean; to: string }>('/api/v1/notifications/test-email', {
+      method: 'POST',
+    });
+    return { ok: true, to: res.to };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: `HTTP ${err.status}` };
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 export interface BulkChannelResult {
   ok: boolean;
   error?: string;

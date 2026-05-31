@@ -79,4 +79,20 @@ export class NotificationsController {
     });
     return { ok: true, count };
   }
+
+  /**
+   * Send a one-off test email to the current user from the settings page, so a
+   * parent/teacher can verify the email channel actually reaches their inbox
+   * after enabling it. Goes through the same queue + worker as real emails.
+   */
+  @Post('test-email')
+  @RequiresPermission('profile.read.self')
+  async sendTestEmail(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    const { to } = await this.notifications.sendTestEmail({
+      tenantId: me.tenantId,
+      userProfileId: me.id,
+    });
+    return { ok: true, to };
+  }
 }

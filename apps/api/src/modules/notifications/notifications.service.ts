@@ -1,5 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import type {
   Notification,
   NotificationKind,
@@ -231,6 +231,53 @@ export class NotificationsService {
         `Notification email dispatch failed (in-app unaffected): ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Send a one-off test email to the requesting user, on demand from the
+   * notification settings page. This deliberately bypasses the per-kind email
+   * preference (the user explicitly clicked "send me a test"), but routes
+   * through the exact same `notifications-email` queue → worker → SMTP path as
+   * real notifications, so a successful arrival proves the whole pipeline is
+   * wired for this account. Best-effort beyond the enqueue, like the fan-out.
+   *
+   * Returns the recipient address for the UI confirmation. Throws
+   * `BadRequestException` if the profile has no email on file.
+   */
+  async sendTestEmail(args: { tenantId: string; userProfileId: string }): Promise<{ to: string }> {
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { id: args.userProfileId },
+      select: { email: true, firstName: true, lastName: true, locale: true },
+    });
+    if (!profile?.email) {
+      throw new BadRequestException("Aucune adresse email n'est associée à votre profil.");
+    }
+
+    const data: NotificationEmailJob = {
+      tenantId: args.tenantId,
+      to: profile.email,
+      recipientName:
+        [profile.firstName, profile.lastName].filter(Boolean).join(' ').trim() || profile.email,
+      locale: profile.locale ?? 'fr-FR',
+      kind: 'system',
+      severity: 'info',
+      title: 'Email de test — Pilotage scolaire',
+      body: 'Ceci est un email de test envoyé depuis vos paramètres de notification. Si vous le recevez, le canal email est correctement configuré pour votre compte.',
+      link: null,
+      sourceType: 'test_email',
+      // Unique per send so the worker (and any future dedup) never suppresses a
+      // repeated test the user intentionally re-triggers.
+      sourceId: `test-${args.userProfileId}-${Date.now()}`,
+    };
+
+    await this.emailQueue.add('system', data, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5_000 } as const,
+      removeOnComplete: { count: 200, age: 24 * 3600 },
+      removeOnFail: { count: 100, age: 7 * 24 * 3600 },
+    });
+    this.logger.log(`Enqueued test email → ${profile.email}`);
+    return { to: profile.email };
   }
 
   async list(args: {
