@@ -24,6 +24,7 @@ import {
 } from '@pilotage/ui';
 
 import { ChildSelector } from '../_components/ChildSelector';
+import { AttendanceCalendar, type CalendarRecord } from './AttendanceCalendar';
 import { AttendanceFilters } from './AttendanceFilters';
 import type {
   AttendancePeriod,
@@ -263,6 +264,14 @@ export default async function ParentAttendancePage({
   // Subject breakdown over the full history.
   const subjectBreakdown = computeSubjectBreakdown(allRecords);
 
+  // Lightweight records for the monthly heatmap (rendered client-side so month
+  // navigation is instant). Reuses the data already fetched — no extra request.
+  const calendarRecords: CalendarRecord[] = allRecords.map((r) => ({
+    date: r.classSession.date,
+    status: r.status,
+    justified: r.justifiedAt != null,
+  }));
+
   // Apply filters: period → status → subject → search.
   const monthStart = startOfMonth(now);
   const ninetyAgo = daysAgo(90, now);
@@ -425,6 +434,13 @@ export default async function ParentAttendancePage({
               justificatif à l’école (mot d’excuse, certificat médical) dès que possible.
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Monthly attendance heatmap — at-a-glance read of the term's rhythm */}
+      {allRecords.length > 0 && (
+        <div className="mt-6">
+          <AttendanceCalendar records={calendarRecords} />
         </div>
       )}
 
