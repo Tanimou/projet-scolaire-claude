@@ -21,6 +21,7 @@ import {
   formatGrade,
 } from '@pilotage/ui';
 
+import { AT_RISK_GRADE_20, isAtRisk, pctToGrade20 } from './at-risk';
 import { ExportStudentsButton } from './ExportStudentsButton';
 import { StudentsFilters, type StudentsActivity, type StudentsSort } from './StudentsFilters';
 
@@ -57,8 +58,6 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 
 const PAGE_SIZE = 25;
 const RECENT_WINDOW_DAYS = 30;
-/** Élève « à risque » : moyenne < 50 % (≈ < 10/20). */
-const AT_RISK_PCT = 50;
 
 function avgTone(pct: number | null): {
   bg: string;
@@ -69,10 +68,6 @@ function avgTone(pct: number | null): {
   if (pct >= 80) return { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Excellent' };
   if (pct >= 50) return { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Satisfaisant' };
   return { bg: 'bg-rose-50', text: 'text-rose-700', label: 'À soutenir' };
-}
-
-function pctToGrade20(pct: number): number {
-  return Math.round((pct / 100) * 20 * 10) / 10;
 }
 
 function formatRelative(iso: string | null): string {
@@ -132,7 +127,7 @@ export default async function TeacherStudentsPage({
     } else if (activity === 'none') {
       if (s.gradesCount > 0) return false;
     } else if (activity === 'at-risk') {
-      if (s.avgPct == null || s.avgPct >= AT_RISK_PCT) return false;
+      if (!isAtRisk(s.avgPct)) return false;
     }
     return true;
   });
@@ -169,7 +164,9 @@ export default async function TeacherStudentsPage({
     ? scored.reduce((sum, s) => sum + (s.avgPct ?? 0), 0) / scored.length
     : null;
   const cohortAvg20 = cohortAvgPct != null ? pctToGrade20(cohortAvgPct) : null;
-  const atRiskCount = scored.filter((s) => (s.avgPct ?? 0) < AT_RISK_PCT).length;
+  // Aligné sur le filtre `activity === 'at-risk'` : une moyenne absente n'est
+  // PAS comptée comme « à risque » (et `scored` exclut déjà les null).
+  const atRiskCount = scored.filter((s) => isAtRisk(s.avgPct)).length;
 
   const hasActiveFilters = !!(q || classSectionId || gender || activity);
 
@@ -206,8 +203,8 @@ export default async function TeacherStudentsPage({
           hrefLabel="Voir la liste →"
         >
           {scored.length > 0
-            ? `Moyenne < ${pctToGrade20(AT_RISK_PCT)}/20 · ${Math.round((atRiskCount / scored.length) * 100)} % des notés`
-            : `Moyenne < ${pctToGrade20(AT_RISK_PCT)}/20`}
+            ? `Moyenne < ${AT_RISK_GRADE_20}/20 · ${Math.round((atRiskCount / scored.length) * 100)} % des notés`
+            : `Moyenne < ${AT_RISK_GRADE_20}/20`}
         </KpiCard>
         <KpiCard
           icon={Sparkles}
