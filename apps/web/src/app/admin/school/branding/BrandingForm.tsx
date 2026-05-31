@@ -9,6 +9,8 @@ import { type BrandingResponse } from '@/lib/me';
 import { saveBranding } from './actions';
 
 const DEFAULT_PRIMARY = 'oklch(0.62 0.18 250)';
+/** Hex equivalent of DEFAULT_PRIMARY — the fallback the native picker opens on. */
+const DEFAULT_PRIMARY_HEX = '#2563eb';
 
 const PRESET_COLORS: Array<{ label: string; value: string }> = [
   { label: 'Bleu (par défaut)', value: DEFAULT_PRIMARY },
@@ -27,9 +29,14 @@ const PRESET_COLORS: Array<{ label: string; value: string }> = [
  * picker opens on a reasonable color — picking always *writes* a hex string back,
  * which is itself a valid CSS color for the injected `--brand-*` variables.
  */
-function toHexForPicker(value: string, fallback = '#2563eb'): string {
+function toHexForPicker(value: string, fallback = DEFAULT_PRIMARY_HEX): string {
   const v = value.trim();
-  return /^#([0-9a-f]{6}|[0-9a-f]{3})$/i.test(v) ? v : fallback;
+  // `<input type="color">` only accepts #RRGGBB.
+  if (/^#[0-9a-f]{6}$/i.test(v)) return v;
+  // Expand shorthand #RGB → #RRGGBB so a valid short hex still drives the picker.
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(v);
+  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
+  return fallback;
 }
 
 export function BrandingForm({ initial }: { initial: BrandingResponse }) {
@@ -119,7 +126,7 @@ export function BrandingForm({ initial }: { initial: BrandingResponse }) {
             <button
               type="button"
               onClick={resetColors}
-              disabled={!colorsDirty}
+              disabled={!colorsDirty || status === 'saving'}
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <RotateCcw className="h-3.5 w-3.5" />
@@ -307,7 +314,9 @@ function ColorChooser({
           <input
             id={inputId}
             type="color"
-            value={toHexForPicker(trimmed)}
+            // Open the picker on the SAME color the swatch shows (incl. the
+            // optional fallback when the field is empty), not a separate default.
+            value={toHexForPicker(effective ?? '')}
             onChange={(e) => onChange(e.target.value)}
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             aria-label={`Sélecteur de couleur — ${title}`}
