@@ -6,6 +6,7 @@ import {
   Languages,
   Lock,
   Mail,
+  Phone,
   Settings,
   ShieldCheck,
   Star,
@@ -38,6 +39,8 @@ import {
   PreferencesPanel,
   type PreferenceRow,
 } from '../../admin/settings/PreferencesPanel';
+import { TeacherProfileForm } from './TeacherProfileForm';
+import type { SelfProfile } from './profile-actions';
 
 export const metadata: Metadata = { title: 'Paramètres' };
 export const dynamic = 'force-dynamic';
@@ -121,7 +124,7 @@ function summarize(assignments: TeacherAssignment[]): TeachingSummary {
 }
 
 export default async function TeacherSettingsPage() {
-  const [me, prefsResp, displayResp, assignmentsResp] = await Promise.all([
+  const [me, prefsResp, displayResp, assignmentsResp, profileResp] = await Promise.all([
     fetchMe(),
     safe(
       api<{ data: PreferenceRow[] }>('/api/v1/notifications/preferences', {
@@ -138,11 +141,13 @@ export default async function TeacherSettingsPage() {
         cache: 'no-store',
       }),
     ),
+    safe(api<{ data: SelfProfile }>('/api/v1/me/profile', { cache: 'no-store' })),
   ]);
 
   const preferences = prefsResp?.data ?? [];
   const display: DisplayPreferences = displayResp?.data ?? DISPLAY_PREFS_DEFAULTS;
   const summary = summarize(assignmentsResp?.data ?? []);
+  const profile = profileResp?.data ?? null;
 
   return (
     <PortalShell portal="teacher">
@@ -165,7 +170,7 @@ export default async function TeacherSettingsPage() {
           </TabsList>
 
           <TabsContent value="profile">
-            <ProfilePanel me={me} summary={summary} />
+            <ProfilePanel me={me} summary={summary} profile={profile} />
           </TabsContent>
 
           <TabsContent value="notifications">
@@ -202,7 +207,15 @@ export default async function TeacherSettingsPage() {
 const ACCENT_HERO =
   'linear-gradient(120deg, var(--accent-700), var(--accent-500) 55%, color-mix(in oklch, var(--accent-500) 65%, white))';
 
-function ProfilePanel({ me, summary }: { me: MeResponse | null; summary: TeachingSummary }) {
+function ProfilePanel({
+  me,
+  summary,
+  profile,
+}: {
+  me: MeResponse | null;
+  summary: TeachingSummary;
+  profile: SelfProfile | null;
+}) {
   if (!me) {
     return (
       <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/60">
@@ -282,6 +295,10 @@ function ProfilePanel({ me, summary }: { me: MeResponse | null; summary: Teachin
           <Field icon={User} label="Nom" value={me.lastName || '—'} />
           <Field icon={Mail} label="Adresse email" value={me.email} />
           <Field icon={Languages} label="Langue" value={localeLabel(me.locale)} />
+          {profile?.specialty && (
+            <Field icon={BookOpen} label="Discipline" value={profile.specialty} />
+          )}
+          {profile?.phone && <Field icon={Phone} label="Téléphone" value={profile.phone} />}
         </div>
 
         {summary.subjects.length > 0 && (
@@ -322,6 +339,17 @@ function ProfilePanel({ me, summary }: { me: MeResponse | null; summary: Teachin
           </p>
         </div>
       </section>
+
+      {profile && (
+        <TeacherProfileForm
+          initial={{
+            specialty: profile.specialty,
+            phone: profile.phone,
+            bio: profile.bio,
+          }}
+          isTeacher={profile.isTeacher}
+        />
+      )}
     </div>
   );
 }
