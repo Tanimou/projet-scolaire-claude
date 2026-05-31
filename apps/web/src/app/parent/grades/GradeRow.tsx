@@ -8,16 +8,8 @@ import {
   gradeVerdict,
 } from '@pilotage/ui';
 
+import { kindLabel as resolveKindLabel } from './types';
 import type { GradeRow as GradeRowType } from './types';
-
-const KIND_LABEL: Record<string, string> = {
-  written_test: 'Contrôle écrit',
-  oral_test: 'Oral',
-  homework: 'Devoir maison',
-  project: 'Projet',
-  practical: 'Travaux pratiques',
-  participation: 'Participation',
-};
 
 /**
  * One published grade rendered as a rich card. Highlights the subject (color
@@ -33,7 +25,7 @@ export function GradeRow({ grade }: { grade: GradeRowType }) {
   const coefficient = grade.assessment.coefficientOverride
     ? Number(grade.assessment.coefficientOverride)
     : 1;
-  const kindLabel = KIND_LABEL[grade.assessment.kind] ?? grade.assessment.kind;
+  const kindLabel = resolveKindLabel(grade.assessment.kind);
   const dateLabel = grade.assessment.scheduledAt
     ? formatDateShort(grade.assessment.scheduledAt)
     : grade.publishedAt

@@ -18,6 +18,25 @@ export type GradesPeriod = 'all' | 'month' | 'term';
 
 export type GradesPerformance = 'excellent' | 'satisfaisant' | 'insuffisant' | 'absent';
 
+/**
+ * Human labels for assessment kinds. Single source of truth shared by the grade
+ * cards ({@link ./GradeRow}) and the CSV export ({@link ./GradesExport}) so the
+ * wording stays consistent across the page.
+ */
+export const KIND_LABEL: Record<string, string> = {
+  written_test: 'Contrôle écrit',
+  oral_test: 'Oral',
+  homework: 'Devoir maison',
+  project: 'Projet',
+  practical: 'Travaux pratiques',
+  participation: 'Participation',
+};
+
+/** Resolve an assessment kind to its French label, falling back to the raw code. */
+export function kindLabel(kind: string): string {
+  return KIND_LABEL[kind] ?? kind;
+}
+
 export interface GradeRow {
   id: string;
   value: string | null;

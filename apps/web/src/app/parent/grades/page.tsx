@@ -15,8 +15,10 @@ import {
 import { ChildSelector } from '../_components/ChildSelector';
 import { buildGradesAnalytics, gradeValueOn20 } from './analytics';
 import { GradeRow } from './GradeRow';
+import { GradesExport, type GradeExportRow } from './GradesExport';
 import { GradesFilters } from './GradesFilters';
 import { GradesOverview } from './GradesOverview';
+import { kindLabel } from './types';
 import type {
   GradeRow as GradeRowType,
   GradesPeriod,
@@ -253,6 +255,42 @@ export default async function ParentGradesPage({
   }
   if (search) activeFilterChips.push(`Recherche : « ${search} »`);
 
+  // CSV export rows — the full *filtered* set (not just the current page) so the
+  // download mirrors exactly what the parent is currently looking at.
+  const activeChild = children.find((c) => c.id === activeStudentId);
+  const activeChildName = activeChild
+    ? `${activeChild.firstName} ${activeChild.lastName}`.trim()
+    : 'enfant';
+  const exportRows: GradeExportRow[] = filtered.map((g) => {
+    const max = Number(g.assessment.maxScore);
+    const rawValue = g.value != null ? Number(g.value) : null;
+    const on20 = valueOn20(g);
+    const coefficient = g.assessment.coefficientOverride
+      ? Number(g.assessment.coefficientOverride)
+      : 1;
+    return {
+      date: g.assessment.scheduledAt ?? g.publishedAt ?? '',
+      subject: g.assessment.teachingAssignment.subject.name,
+      assessment: g.assessment.title,
+      kind: kindLabel(g.assessment.kind),
+      term: g.assessment.term?.name ?? '',
+      score: g.isAbsent
+        ? 'Absent'
+        : rawValue != null && Number.isFinite(max) && max > 0
+          ? `${formatGrade(rawValue, rawValue % 1 === 0 ? 0 : 1)} / ${max.toFixed(0)}`
+          : '',
+      scoreOn20: on20 != null ? on20.toFixed(1).replace('.', ',') : '',
+      coefficient: coefficient.toLocaleString('fr-FR', { maximumFractionDigits: 2 }),
+      status:
+        g.status === 'revised'
+          ? 'Révisée'
+          : g.status === 'draft'
+            ? 'Brouillon'
+            : 'Publiée',
+      comment: g.comment ?? '',
+    };
+  });
+
   return (
     <PortalShell portal="parent">
       <PageHeader
@@ -262,6 +300,13 @@ export default async function ParentGradesPage({
         ]}
         title="Notes"
         subtitle="Toutes les notes publiées par les enseignants, par matière et période"
+        actions={
+          <GradesExport
+            rows={exportRows}
+            childName={activeChildName}
+            filtered={activeFilterChips.length > 0}
+          />
+        }
       />
 
       <div className="mt-4">
