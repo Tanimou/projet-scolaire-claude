@@ -15,6 +15,7 @@ import {
   formatDateShort,
 } from '@pilotage/ui';
 
+import { EnrollmentsExportButton } from './EnrollmentsExportButton';
 import { EnrollmentsPageTabs } from './EnrollmentsPageTabs';
 
 export const metadata: Metadata = { title: 'Inscriptions' };
@@ -51,6 +52,23 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 }
 
 const PAGE_SIZE = 10;
+
+const TAB_META: Record<string, { label: string; slug: string }> = {
+  all: { label: 'Toutes', slug: 'toutes' },
+  pending: { label: 'En attente', slug: 'en-attente' },
+  to_verify: { label: 'À vérifier', slug: 'a-verifier' },
+  approved: { label: 'Approuvées', slug: 'approuvees' },
+  rejected: { label: 'Rejetées', slug: 'rejetees' },
+};
+
+function requestStatusLabel(row: EnrollmentRequestRow): string {
+  if (row.status === 'revoked') return 'Rejetée';
+  const review = parseReview(row.notes, row.status === 'pending' ? 'pending' : 'approved');
+  if (review === 'to_verify') return 'À vérifier';
+  if (review === 'approved') return 'Approuvée';
+  if (review === 'pending') return 'En attente';
+  return review;
+}
 
 function parseRequestType(notes: string | null): 'rattachement' | 'inscription' {
   if (notes && notes.startsWith('{')) {
@@ -115,6 +133,20 @@ export default async function EnrollmentsPage({
   const startIdx = (page - 1) * PAGE_SIZE;
   const pageRows = rows.slice(startIdx, startIdx + PAGE_SIZE);
 
+  const tabMeta = TAB_META[tab] ?? TAB_META.all;
+  const exportRows = rows.map((r) => ({
+    guardianFirstName: r.guardian.firstName,
+    guardianLastName: r.guardian.lastName,
+    guardianEmail: r.guardian.email,
+    guardianPhone: r.guardian.phone,
+    studentFirstName: r.student.firstName,
+    studentLastName: r.student.lastName,
+    type: parseRequestType(r.notes) === 'inscription' ? 'Inscription' : 'Rattachement',
+    className: r.student.enrollments?.[0]?.classSection.name ?? '',
+    statusLabel: requestStatusLabel(r),
+    createdAt: r.createdAt,
+  }));
+
   return (
     <PortalShell portal="admin">
       <PageHeader
@@ -124,6 +156,13 @@ export default async function EnrollmentsPage({
         ]}
         title="Inscriptions"
         subtitle="Validez les demandes de rattachement et d'inscription des élèves"
+        actions={
+          <EnrollmentsExportButton
+            rows={exportRows}
+            tabLabel={tabMeta.label}
+            tabSlug={tabMeta.slug}
+          />
+        }
       />
 
       {/* KPI strip */}

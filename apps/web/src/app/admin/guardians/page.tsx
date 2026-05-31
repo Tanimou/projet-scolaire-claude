@@ -14,6 +14,7 @@ import {
   StatusBadge,
 } from '@pilotage/ui';
 
+import { GuardiansExportButton } from './GuardiansExportButton';
 import { GuardiansPageFilters } from './GuardiansPageFilters';
 
 export const metadata: Metadata = { title: 'Parents / Tuteurs' };
@@ -111,6 +112,12 @@ export default async function GuardiansPage({
         ]}
         title="Parents / Tuteurs"
         subtitle="Gérez les responsables légaux et leurs rattachements aux élèves"
+        actions={
+          <GuardiansExportButton
+            guardians={allGuardians}
+            filtered={Boolean(sp.q || sp.relationship)}
+          />
+        }
       />
 
       {/* KPI strip */}
