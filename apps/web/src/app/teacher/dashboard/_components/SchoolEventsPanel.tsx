@@ -1,67 +1,18 @@
-import {
-  CalendarDays,
-  Calendar as CalendarIcon,
-  ChevronRight,
-  ClipboardList,
-  Flag,
-  PartyPopper,
-  School,
-  Sparkles,
-  Sun,
-  Users,
-} from 'lucide-react';
+import { CalendarDays, ChevronRight, School } from 'lucide-react';
 import Link from 'next/link';
 
 import { formatInDays } from '@pilotage/ui';
 
-import type { PortalCalendarEvent, CalendarEventType } from '@/components/calendar/PortalCalendarView';
+import {
+  CALENDAR_TYPE_ICON,
+  CALENDAR_TYPE_LABEL,
+  CALENDAR_TYPE_SOLID,
+  CALENDAR_TYPE_TONE,
+  calendarScopeLabel,
+} from '@/components/calendar/event-display';
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 
-const TYPE_LABEL: Record<CalendarEventType, string> = {
-  vacation_break: 'Vacances',
-  public_holiday: 'Jour férié',
-  exam_period: 'Examens',
-  meeting: 'Réunion',
-  ceremony: 'Cérémonie',
-  pedagogical_day: 'Journée pédagogique',
-  custom: 'Événement',
-};
-
-const TYPE_TONE: Record<CalendarEventType, string> = {
-  vacation_break: 'bg-amber-50 text-amber-800 border-amber-200',
-  public_holiday: 'bg-rose-50 text-rose-800 border-rose-200',
-  exam_period: 'bg-violet-50 text-violet-800 border-violet-200',
-  meeting: 'bg-blue-50 text-blue-800 border-blue-200',
-  ceremony: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-  pedagogical_day: 'bg-cyan-50 text-cyan-800 border-cyan-200',
-  custom: 'bg-slate-50 text-slate-800 border-slate-200',
-};
-
-const TYPE_SOLID: Record<CalendarEventType, string> = {
-  vacation_break: 'bg-amber-500',
-  public_holiday: 'bg-rose-500',
-  exam_period: 'bg-violet-500',
-  meeting: 'bg-blue-500',
-  ceremony: 'bg-emerald-500',
-  pedagogical_day: 'bg-cyan-500',
-  custom: 'bg-slate-500',
-};
-
-const TYPE_ICON: Record<CalendarEventType, typeof Sun> = {
-  vacation_break: Sun,
-  public_holiday: Flag,
-  exam_period: ClipboardList,
-  meeting: Users,
-  ceremony: PartyPopper,
-  pedagogical_day: Sparkles,
-  custom: CalendarIcon,
-};
-
-function scopeLabel(event: PortalCalendarEvent): string {
-  if (event.classSection) return `Classe ${event.classSection.name}`;
-  if (event.gradeLevel) return `Niveau ${event.gradeLevel.name}`;
-  if (event.cycle) return `Cycle ${event.cycle.name}`;
-  return "Toute l'école";
-}
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Surfaces the next school calendar events (vacances, jours fériés, examens,
@@ -107,9 +58,12 @@ export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] })
 
       <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {upcoming.map((e) => {
-          const Icon = TYPE_ICON[e.type];
+          const Icon = CALENDAR_TYPE_ICON[e.type];
           const start = new Date(e.startsAt);
-          const isImminent = start.getTime() - now <= 7 * 24 * 60 * 60 * 1000;
+          const startMs = start.getTime();
+          // "Soon" = strictly upcoming and within a week — an event that started
+          // days ago but hasn't ended yet should not be flagged as imminent.
+          const isImminent = startMs >= now && startMs - now <= WEEK_MS;
           return (
             <li key={e.id} className="group">
               <Link
@@ -118,7 +72,7 @@ export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] })
               >
                 <div className="flex items-center gap-2">
                   <span
-                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-white ${TYPE_SOLID[e.type]}`}
+                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-white ${CALENDAR_TYPE_SOLID[e.type]}`}
                   >
                     <Icon className="h-4 w-4" />
                   </span>
@@ -136,9 +90,9 @@ export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] })
                 </h4>
                 <div className="mt-auto flex flex-wrap items-center gap-1.5">
                   <span
-                    className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${TYPE_TONE[e.type]}`}
+                    className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${CALENDAR_TYPE_TONE[e.type]}`}
                   >
-                    {TYPE_LABEL[e.type]}
+                    {CALENDAR_TYPE_LABEL[e.type]}
                   </span>
                   <span
                     className={`text-[10px] font-semibold ${
@@ -150,7 +104,7 @@ export function SchoolEventsPanel({ events }: { events: PortalCalendarEvent[] })
                 </div>
                 <div className="flex items-center gap-1 text-[10px] font-medium text-slate-400">
                   <School className="h-3 w-3" />
-                  <span className="truncate">{scopeLabel(e)}</span>
+                  <span className="truncate">{calendarScopeLabel(e)}</span>
                 </div>
               </Link>
             </li>
