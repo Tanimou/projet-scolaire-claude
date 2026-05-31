@@ -169,7 +169,7 @@ export default async function TeacherSettingsPage() {
           </TabsContent>
 
           <TabsContent value="notifications">
-            <PreferencesPanel initial={preferences} />
+            <PreferencesPanel initial={preferences} recipientEmail={me?.email} />
           </TabsContent>
 
           <TabsContent value="display">

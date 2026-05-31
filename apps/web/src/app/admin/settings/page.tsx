@@ -13,6 +13,7 @@ import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
+import { fetchMe } from '@/lib/me';
 import { Tabs, TabsContent, TabsList, TabsTrigger, PageHeader } from '@pilotage/ui';
 
 import { PreferencesPanel, type PreferenceRow } from './PreferencesPanel';
@@ -38,11 +39,14 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
  * each setting actually lives today.
  */
 export default async function SettingsPage() {
-  const prefsResp = await safe(
-    api<{ data: PreferenceRow[] }>('/api/v1/notifications/preferences', {
-      cache: 'no-store',
-    }),
-  );
+  const [me, prefsResp] = await Promise.all([
+    fetchMe(),
+    safe(
+      api<{ data: PreferenceRow[] }>('/api/v1/notifications/preferences', {
+        cache: 'no-store',
+      }),
+    ),
+  ]);
   const preferences = prefsResp?.data ?? [];
 
   return (
@@ -126,7 +130,7 @@ export default async function SettingsPage() {
 
           <TabsContent value="notifications">
             <div className="space-y-4">
-              <PreferencesPanel initial={preferences} />
+              <PreferencesPanel initial={preferences} recipientEmail={me?.email} />
               <SettingsCard
                 icon={Bell}
                 title="Paramètres globaux des notifications"
