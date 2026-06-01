@@ -4,7 +4,7 @@ import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { PreferredDate } from '@pilotage/ui';
+import { Avatar, PreferredDate } from '@pilotage/ui';
 
 import type { StudentAcademicSnapshot } from './StudentAcademicTab';
 import { StudentDetailTabs } from './StudentDetailTabs';
@@ -41,6 +41,8 @@ export interface StudentDetail {
   gender: string | null;
   nationality: string | null;
   address: Record<string, unknown> | null;
+  /** URL de la photo de profil (optionnelle) */
+  photoUrl: string | null;
   medicalNotes: string | null;
   status: 'active' | 'transferred' | 'graduated' | 'withdrawn';
   notes: string | null;
@@ -134,10 +136,13 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
 
       <header className="mt-4 flex flex-wrap items-end justify-between gap-4">
         <div className="flex items-center gap-4">
-          <span className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-indigo-100 via-blue-100 to-cyan-100 text-2xl font-bold text-blue-700 shadow-inner">
-            {(student.firstName[0] ?? '?').toUpperCase()}
-            {(student.lastName[0] ?? '').toUpperCase()}
-          </span>
+          <Avatar
+            src={student.photoUrl}
+            firstName={student.firstName}
+            lastName={student.lastName}
+            size="xl"
+            className="rounded-2xl shadow-inner"
+          />
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">
               {student.lastName.toUpperCase()} {student.firstName}

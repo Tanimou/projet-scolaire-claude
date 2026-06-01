@@ -4,6 +4,8 @@ import { Loader2, Save } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import { Avatar } from '@pilotage/ui';
+
 import { createStudent } from '../actions';
 
 export function StudentForm() {
@@ -16,10 +18,25 @@ export function StudentForm() {
   const [phone, setPhone] = useState('');
   const [gender, setGender] = useState('');
   const [nationality, setNationality] = useState('');
+  const [photoUrl, setPhotoUrl] = useState('');
+  // Adresse structurée
+  const [addrStreet, setAddrStreet] = useState('');
+  const [addrCity, setAddrCity] = useState('');
+  const [addrPostalCode, setAddrPostalCode] = useState('');
+  const [addrCountry, setAddrCountry] = useState('');
   const [medicalNotes, setMedicalNotes] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const buildAddress = (): Record<string, string> | undefined => {
+    const addr: Record<string, string> = {};
+    if (addrStreet.trim()) addr.street = addrStreet.trim();
+    if (addrCity.trim()) addr.city = addrCity.trim();
+    if (addrPostalCode.trim()) addr.postalCode = addrPostalCode.trim();
+    if (addrCountry.trim()) addr.country = addrCountry.trim();
+    return Object.keys(addr).length > 0 ? addr : undefined;
+  };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,6 +51,8 @@ export function StudentForm() {
       phone: phone.trim() || undefined,
       gender: gender || undefined,
       nationality: nationality.toUpperCase() || undefined,
+      photoUrl: photoUrl.trim() || undefined,
+      address: buildAddress(),
       medicalNotes: medicalNotes.trim() || undefined,
       notes: notes.trim() || undefined,
     });
@@ -105,10 +124,32 @@ export function StudentForm() {
             />
           </Field>
         </div>
+
+        {/* Photo de profil avec prévisualisation live */}
+        <div className="mt-4 flex items-center gap-4">
+          <Avatar
+            src={photoUrl || null}
+            firstName={firstName}
+            lastName={lastName}
+            size="lg"
+            className="shrink-0 rounded-xl"
+          />
+          <div className="flex-1">
+            <Field label="URL de la photo de profil">
+              <input
+                type="url"
+                value={photoUrl}
+                onChange={(e) => setPhotoUrl(e.target.value)}
+                placeholder="https://example.com/photo.jpg"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              />
+            </Field>
+          </div>
+        </div>
       </section>
 
       <section className="rounded-2xl bg-white ring-1 ring-slate-200 p-5">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Contact</h3>
+        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Contact & Adresse</h3>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Email">
             <input
@@ -127,6 +168,45 @@ export function StudentForm() {
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
             />
           </Field>
+        </div>
+
+        {/* Adresse structurée */}
+        <div className="mt-4 rounded-xl border border-slate-200 p-4">
+          <div className="mb-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">Adresse</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Rue">
+              <input
+                value={addrStreet}
+                onChange={(e) => setAddrStreet(e.target.value)}
+                placeholder="12 rue de la Paix"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              />
+            </Field>
+            <Field label="Ville">
+              <input
+                value={addrCity}
+                onChange={(e) => setAddrCity(e.target.value)}
+                placeholder="Paris"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              />
+            </Field>
+            <Field label="Code postal">
+              <input
+                value={addrPostalCode}
+                onChange={(e) => setAddrPostalCode(e.target.value)}
+                placeholder="75001"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
+              />
+            </Field>
+            <Field label="Pays">
+              <input
+                value={addrCountry}
+                onChange={(e) => setAddrCountry(e.target.value)}
+                placeholder="France"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              />
+            </Field>
+          </div>
         </div>
       </section>
 
