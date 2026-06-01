@@ -37,13 +37,16 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 }
 
 /**
- * /admin/levels — image-prescribed route alias for `/admin/cycles`.
- * Enriched with KPI cards + PageHeader, then delegates to the existing
- * `CyclesManager` for the interactive list (single source of truth).
+ * /admin/levels — alias de route de la spec (EN-aligned).
+ * Affiche en priorité les **cycles** (blocs pédagogiques de haut niveau),
+ * puis les niveaux sont visibles à l'intérieur de chaque cycle.
+ * Le composant `CyclesManager` reste la source unique de vérité pour
+ * les interactions (création, suppression de cycles et niveaux).
  */
 export default async function LevelsPage() {
   const resp = await safe(api<{ data: CycleItem[] }>('/api/v1/cycles', { cache: 'no-store' }));
-  const cycles = resp?.data ?? [];
+  // Les cycles sont triés par orderIndex pour respecter la hiérarchie définie par l'admin.
+  const cycles = (resp?.data ?? []).sort((a, b) => a.orderIndex - b.orderIndex);
 
   const totalCycles = cycles.length;
   const totalLevels = cycles.reduce((acc, c) => acc + (c._count?.gradeLevels ?? 0), 0);
@@ -64,16 +67,18 @@ export default async function LevelsPage() {
           { label: 'Cycles & niveaux' },
         ]}
         title="Cycles & niveaux"
-        subtitle="Organisez votre établissement en cycles puis créez les niveaux qui contiendront les classes"
+        subtitle="Les cycles sont l'unité de base de votre organisation pédagogique — chaque cycle contient des niveaux, chaque niveau des classes"
       />
 
-      {/* KPI strip */}
+      {/* Bande KPI — les cycles sont affichés en priorité (premier et deuxième blocs) */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/* 1er — Cycles (priorité d'affichage) */}
         <KpiCard icon={Layers} tone="blue" label="CYCLES" value={totalCycles}>
-          Maternelle, Primaire, Collège, Lycée…
+          Unités pédagogiques de haut niveau
         </KpiCard>
+        {/* 2ème — Niveaux (subordonnés aux cycles) */}
         <KpiCard icon={GraduationCap} tone="green" label="NIVEAUX" value={totalLevels}>
-          Niveaux scolaires configurés
+          Niveaux configurés dans les cycles
         </KpiCard>
         <KpiCard
           icon={ListChecks}
@@ -93,11 +98,22 @@ export default async function LevelsPage() {
         </KpiCard>
       </div>
 
+      {/*
+        Explication de la hiérarchie : cycles AVANT niveaux.
+        Les niveaux ne sont accessibles que dans le contexte d'un cycle.
+      */}
       <p className="mt-6 text-sm text-slate-600">
-        Un <strong>cycle</strong> regroupe plusieurs <strong>niveaux</strong>. Chaque niveau
-        accueille ensuite des <strong>classes</strong> rattachées à une année scolaire.
+        Un <strong>cycle</strong> (ex. Collège, Lycée) regroupe plusieurs{' '}
+        <strong>niveaux</strong> (ex. 6ème, 5ème). Chaque niveau accueille ensuite des{' '}
+        <strong>classes</strong> rattachées à une année scolaire.
+        {totalCycles === 0 && (
+          <span className="ml-1 font-semibold text-amber-700">
+            Commencez par créer au moins un cycle.
+          </span>
+        )}
       </p>
 
+      {/* CyclesManager : affiche les cycles en premier, les niveaux à l'intérieur */}
       <div className="mt-6">
         <CyclesManager initial={cycles} />
       </div>
