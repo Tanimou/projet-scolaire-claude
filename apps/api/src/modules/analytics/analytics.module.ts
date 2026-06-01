@@ -7,11 +7,12 @@ import { TeachingModule } from '../teaching/teaching.module';
 
 import { AnalyticsController } from './analytics.controller';
 import { AnalyticsService } from './analytics.service';
+import { SchoolPerformanceDrilldownService } from './school-performance-drilldown.service';
 
 @Module({
   imports: [AuthModule, SchoolStructureModule, TeachingModule, StudentsModule],
   controllers: [AnalyticsController],
-  providers: [AnalyticsService],
-  exports: [AnalyticsService],
+  providers: [AnalyticsService, SchoolPerformanceDrilldownService],
+  exports: [AnalyticsService, SchoolPerformanceDrilldownService],
 })
 export class AnalyticsModule {}

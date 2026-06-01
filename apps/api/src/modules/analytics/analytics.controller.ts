@@ -12,6 +12,7 @@ import { StudentAccessService } from '../students/student-access.service';
 import { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { AnalyticsService } from './analytics.service';
+import { SchoolPerformanceDrilldownService } from './school-performance-drilldown.service';
 
 @ApiTags('analytics')
 @ApiBearerAuth()
@@ -24,6 +25,7 @@ export class AnalyticsController {
     private readonly ctx: SchoolContextService,
     private readonly teachers: TeacherProfileService,
     private readonly studentAccess: StudentAccessService,
+    private readonly drilldown: SchoolPerformanceDrilldownService,
   ) {}
 
   /** Admin dashboard payload — REDESIGN-PLAN §6.2 analytics.dashboard */
@@ -51,6 +53,37 @@ export class AnalyticsController {
     const me = await this.users.ensureUser(jwt);
     const { tenantId, schoolId } = await this.ctx.forUser(me);
     return this.analytics.schoolPerformance({ tenantId, schoolId });
+  }
+
+  /**
+   * Drill-down trimestriel des performances — backs `/admin/analytics`.
+   *
+   * Profondeur progressive selon les paramètres fournis :
+   *   - aucun id            → par cycle (L1)
+   *   - cycleId             → par classe du cycle (L2)
+   *   - classSectionId      → par matière de la classe (L3)
+   *   - classSectionId + subjectId → liste des élèves (L4)
+   * `termId` (optionnel) restreint au trimestre ; sinon toute l'année active.
+   */
+  @Get('school-performance-drilldown')
+  @RequiresPermission('schools.read')
+  async schoolPerformanceDrilldown(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Query('termId') termId?: string,
+    @Query('cycleId') cycleId?: string,
+    @Query('classSectionId') classSectionId?: string,
+    @Query('subjectId') subjectId?: string,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { tenantId, schoolId } = await this.ctx.forUser(me);
+    return this.drilldown.drilldown({
+      tenantId,
+      schoolId,
+      termId: termId || undefined,
+      cycleId: cycleId || undefined,
+      classSectionId: classSectionId || undefined,
+      subjectId: subjectId || undefined,
+    });
   }
 
   /** Teacher dashboard payload — image 6 prescriptive */
