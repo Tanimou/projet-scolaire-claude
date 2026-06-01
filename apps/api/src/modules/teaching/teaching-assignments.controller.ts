@@ -13,7 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsBoolean, IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { ASSIGNMENT_ROLES, type AssignmentRole } from '@pilotage/contracts';
+import { IsBoolean, IsIn, IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -23,17 +24,22 @@ import { RequiresPermission } from '../../shared/auth/requires-permission.decora
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
+import { resolveRoleSync } from './assignment-role.util';
+
 class CreateAssignmentDto {
   @IsUUID() teacherProfileId!: string;
   @IsUUID() classSectionId!: string;
   @IsUUID() subjectId!: string;
   @IsOptional() @IsNumber() @Min(0) @Max(40) weeklyHours?: number;
   @IsOptional() @IsBoolean() isMainTeacher?: boolean;
+  // Rôle de l'enseignant sur l'affectation. `principal` est synchronisé avec `isMainTeacher`.
+  @IsOptional() @IsIn(ASSIGNMENT_ROLES as unknown as string[]) role?: AssignmentRole;
 }
 
 class UpdateAssignmentDto {
   @IsOptional() @IsNumber() @Min(0) @Max(40) weeklyHours?: number;
   @IsOptional() @IsBoolean() isMainTeacher?: boolean;
+  @IsOptional() @IsIn(ASSIGNMENT_ROLES as unknown as string[]) role?: AssignmentRole;
 }
 
 @ApiTags('teaching')
@@ -121,11 +127,19 @@ export class TeachingAssignmentsController {
     });
     if (dup) throw new ConflictException('Cette affectation existe déjà.');
 
-    // Only one main teacher per class — if this one is main, demote others.
-    if (body.isMainTeacher) {
+    // Synchronise role ⇔ isMainTeacher à partir du DTO (défaut : subject_teacher).
+    const synced = resolveRoleSync({
+      role: body.role,
+      isMainTeacher: body.isMainTeacher,
+      current: { role: 'subject_teacher', isMainTeacher: false },
+    }) ?? { role: 'subject_teacher' as AssignmentRole, isMainTeacher: false };
+
+    // Un seul professeur principal par classe : si celle-ci devient PP, on
+    // rétrograde les autres (isMainTeacher=false ET role principal→subject_teacher).
+    if (synced.isMainTeacher) {
       await this.prisma.teachingAssignment.updateMany({
         where: { classSectionId: body.classSectionId, isMainTeacher: true },
-        data: { isMainTeacher: false },
+        data: { isMainTeacher: false, role: 'subject_teacher' },
       });
     }
 
@@ -137,7 +151,8 @@ export class TeachingAssignmentsController {
         subjectId: body.subjectId,
         academicYearId: cls.academicYearId,
         weeklyHours: body.weeklyHours,
-        isMainTeacher: body.isMainTeacher ?? false,
+        isMainTeacher: synced.isMainTeacher,
+        role: synced.role,
       },
       include: {
         teacherProfile: { include: { userProfile: { select: { firstName: true, lastName: true } } } },
@@ -158,17 +173,26 @@ export class TeachingAssignmentsController {
     const a = await this.prisma.teachingAssignment.findUnique({ where: { id } });
     if (!a || a.tenantId !== me.tenantId) throw new NotFoundException();
 
-    if (body.isMainTeacher === true) {
+    // Synchronise role ⇔ isMainTeacher en partant de l'état courant de l'affectation.
+    const synced = resolveRoleSync({
+      role: body.role,
+      isMainTeacher: body.isMainTeacher,
+      current: { role: a.role, isMainTeacher: a.isMainTeacher },
+    });
+
+    // Si cette affectation devient PP, on rétrograde les autres de la classe
+    // (isMainTeacher=false ET role principal→subject_teacher).
+    if (synced?.isMainTeacher) {
       await this.prisma.teachingAssignment.updateMany({
         where: { classSectionId: a.classSectionId, isMainTeacher: true, id: { not: id } },
-        data: { isMainTeacher: false },
+        data: { isMainTeacher: false, role: 'subject_teacher' },
       });
     }
     return this.prisma.teachingAssignment.update({
       where: { id },
       data: {
         ...(body.weeklyHours !== undefined ? { weeklyHours: body.weeklyHours } : {}),
-        ...(body.isMainTeacher !== undefined ? { isMainTeacher: body.isMainTeacher } : {}),
+        ...(synced ? { isMainTeacher: synced.isMainTeacher, role: synced.role } : {}),
       },
     });
   }

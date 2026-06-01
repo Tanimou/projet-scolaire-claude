@@ -1,14 +1,39 @@
 'use client';
 
-import { Crown, Loader2, Plus, Star, Trash2, UserCheck } from 'lucide-react';
+import { Crown, Loader2, Plus, Star, Trash2, UserCheck, UserCog } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 import { createAssignment, deleteAssignment, updateAssignment } from './actions';
-import type { Assignment, ClassOption, SubjectOption, TeacherOption } from './types';
+import type { Assignment, AssignmentRole, ClassOption, SubjectOption, TeacherOption } from './types';
 
 // Re-export so the new `/admin/assignments` page can import types via this module
-export type { Assignment, ClassOption, SubjectOption, TeacherOption } from './types';
+export type { Assignment, AssignmentRole, ClassOption, SubjectOption, TeacherOption } from './types';
+
+/** Libellés FR des rôles d'affectation. */
+const ROLE_LABELS: Record<AssignmentRole, string> = {
+  principal: 'Professeur principal',
+  assistant: 'Assistant',
+  subject_teacher: 'Prof. de matière',
+};
+
+/**
+ * Détecte les cycles primaire / maternelle à partir du nom du cycle (les écoles
+ * nomment librement leurs cycles, mais les libellés usuels contiennent l'un de
+ * ces mots-clés). Sert à exiger un assistant sur ces cycles.
+ */
+export function isPrimaryOrKindergarten(cycleName: string): boolean {
+  const n = cycleName
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+  return (
+    n.includes('matern') ||
+    n.includes('primaire') ||
+    n.includes('elementaire') ||
+    n.includes('prescol')
+  );
+}
 
 export function AssignmentsManager({
   assignments,
@@ -45,6 +70,8 @@ export function AssignmentsManager({
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>
       )}
+
+      <CoveragePanel assignments={assignments} classes={classes} subjects={subjects} />
 
       <div className="flex flex-wrap items-center gap-2">
         <select
@@ -144,9 +171,9 @@ export function AssignmentsManager({
                       if (!res.ok) setError(res.error);
                       else router.refresh();
                     }}
-                    onToggleMain={async () => {
+                    onChangeRole={async (role) => {
                       setBusy(true);
-                      const res = await updateAssignment(a.id, { isMainTeacher: !a.isMainTeacher });
+                      const res = await updateAssignment(a.id, { role });
                       setBusy(false);
                       if (!res.ok) setError(res.error);
                       else router.refresh();
@@ -163,15 +190,38 @@ export function AssignmentsManager({
   );
 }
 
+/** Badge visuel du rôle : principal = couronne ambre, assistant = bleu, matière = neutre. */
+function RoleBadge({ role }: { role: AssignmentRole }) {
+  if (role === 'principal') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-700">
+        <Crown className="h-3 w-3" /> Principal
+      </span>
+    );
+  }
+  if (role === 'assistant') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-blue-700">
+        <UserCog className="h-3 w-3" /> Assistant
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+      <Star className="h-3 w-3" /> Matière
+    </span>
+  );
+}
+
 function Row({
   a,
   onDelete,
-  onToggleMain,
+  onChangeRole,
   busy,
 }: {
   a: Assignment;
   onDelete: () => void;
-  onToggleMain: () => void;
+  onChangeRole: (role: AssignmentRole) => void;
   busy: boolean;
 }) {
   return (
@@ -196,20 +246,22 @@ function Row({
       {a.weeklyHours && (
         <span className="text-[11px] text-slate-500 font-mono">{Number(a.weeklyHours)}h/sem</span>
       )}
-      <button
-        type="button"
-        onClick={onToggleMain}
+      <RoleBadge role={a.role} />
+      <label className="sr-only" htmlFor={`role-${a.id}`}>
+        Rôle de l&apos;enseignant
+      </label>
+      <select
+        id={`role-${a.id}`}
+        value={a.role}
         disabled={busy}
-        title={a.isMainTeacher ? 'Retirer le rôle de professeur principal' : 'Désigner comme professeur principal'}
-        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${
-          a.isMainTeacher
-            ? 'bg-amber-100 text-amber-700'
-            : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
-        }`}
+        onChange={(e) => onChangeRole(e.target.value as AssignmentRole)}
+        title="Changer le rôle de l'enseignant sur cette affectation"
+        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600 disabled:opacity-50"
       >
-        {a.isMainTeacher ? <Crown className="h-3 w-3" /> : <Star className="h-3 w-3" />}
-        PP
-      </button>
+        <option value="principal">{ROLE_LABELS.principal}</option>
+        <option value="assistant">{ROLE_LABELS.assistant}</option>
+        <option value="subject_teacher">{ROLE_LABELS.subject_teacher}</option>
+      </select>
       <button
         type="button"
         onClick={onDelete}
@@ -238,11 +290,17 @@ function NewAssignmentForm({
   onSuccess: () => void;
   onError: (e: string | null) => void;
 }) {
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    teacherProfileId: string;
+    classSectionId: string;
+    subjectId: string;
+    role: AssignmentRole;
+    weeklyHours: string;
+  }>({
     teacherProfileId: teachers[0]?.id ?? '',
     classSectionId: classes.find((c) => c.academicYear.status === 'active')?.id ?? '',
     subjectId: subjects[0]?.id ?? '',
-    isMainTeacher: false,
+    role: 'subject_teacher',
     weeklyHours: '',
   });
   const [busy, setBusy] = useState(false);
@@ -257,7 +315,7 @@ function NewAssignmentForm({
           teacherProfileId: form.teacherProfileId,
           classSectionId: form.classSectionId,
           subjectId: form.subjectId,
-          isMainTeacher: form.isMainTeacher,
+          role: form.role,
           ...(form.weeklyHours ? { weeklyHours: parseFloat(form.weeklyHours) } : {}),
         });
         setBusy(false);
@@ -329,15 +387,24 @@ function NewAssignmentForm({
           />
         </label>
       </div>
-      <label className="mt-3 inline-flex items-center gap-2 text-sm text-slate-700">
-        <input
-          type="checkbox"
-          checked={form.isMainTeacher}
-          onChange={(e) => setForm((f) => ({ ...f, isMainTeacher: e.target.checked }))}
-          className="h-4 w-4 rounded"
-        />
-        Professeur principal (PP) de la classe — un seul par classe
-      </label>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <label className="text-xs font-bold text-slate-700 lg:col-span-2">
+          Rôle
+          <select
+            value={form.role}
+            onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as AssignmentRole }))}
+            className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm"
+          >
+            <option value="subject_teacher">{ROLE_LABELS.subject_teacher} (collège/lycée)</option>
+            <option value="principal">{ROLE_LABELS.principal} (un seul par classe)</option>
+            <option value="assistant">{ROLE_LABELS.assistant} (primaire/maternelle)</option>
+          </select>
+        </label>
+        <p className="self-end text-[11px] text-slate-500 lg:col-span-3">
+          Le professeur principal est unique par classe : désigner un nouveau PP rétrograde
+          l&apos;ancien en prof. de matière.
+        </p>
+      </div>
 
       <div className="mt-4 flex gap-2">
         <button
@@ -357,5 +424,133 @@ function NewAssignmentForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Panneau "alertes de couverture". Trois familles d'alertes :
+ *   1. classe (active) sans professeur principal ;
+ *   2. classe de cycle primaire/maternelle (active) sans assistant ;
+ *   3. matière sans aucun enseignant affecté.
+ * (La surcharge enseignant est traitée dans une autre unité.)
+ */
+function CoveragePanel({
+  assignments,
+  classes,
+  subjects,
+}: {
+  assignments: Assignment[];
+  classes: ClassOption[];
+  subjects: SubjectOption[];
+}) {
+  const alerts = useMemo(() => {
+    const activeClasses = classes.filter(
+      (c) => c.status === 'active' && c.academicYear.status === 'active',
+    );
+
+    // Index des affectations par classe pour les contrôles 1 & 2.
+    const byClass = new Map<string, Assignment[]>();
+    for (const a of assignments) {
+      const list = byClass.get(a.classSection.id);
+      if (list) list.push(a);
+      else byClass.set(a.classSection.id, [a]);
+    }
+
+    const classLabel = (c: ClassOption) => `${c.gradeLevel.cycle.name} · ${c.name}`;
+
+    const noPrincipal = activeClasses
+      .filter((c) => !(byClass.get(c.id) ?? []).some((a) => a.role === 'principal'))
+      .map((c) => classLabel(c));
+
+    const noAssistant = activeClasses
+      .filter((c) => isPrimaryOrKindergarten(c.gradeLevel.cycle.name))
+      .filter((c) => !(byClass.get(c.id) ?? []).some((a) => a.role === 'assistant'))
+      .map((c) => classLabel(c));
+
+    const assignedSubjectIds = new Set(assignments.map((a) => a.subject.id));
+    const subjectsWithoutTeacher = subjects
+      .filter((s) => !assignedSubjectIds.has(s.id))
+      .map((s) => s.name);
+
+    return { noPrincipal, noAssistant, subjectsWithoutTeacher };
+  }, [assignments, classes, subjects]);
+
+  const total =
+    alerts.noPrincipal.length + alerts.noAssistant.length + alerts.subjectsWithoutTeacher.length;
+
+  if (total === 0) {
+    return (
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <span className="font-bold">Couverture complète.</span> Toutes les classes actives ont un
+        professeur principal, les cycles primaire/maternelle ont un assistant, et chaque matière a au
+        moins un enseignant.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-amber-800">
+          Alertes de couverture
+        </h3>
+        <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-900">
+          {total}
+        </span>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-3">
+        <CoverageGroup
+          title="Classes sans professeur principal"
+          items={alerts.noPrincipal}
+          empty="Toutes les classes ont un PP."
+        />
+        <CoverageGroup
+          title="Primaire/maternelle sans assistant"
+          items={alerts.noAssistant}
+          empty="Tous les cycles concernés ont un assistant."
+        />
+        <CoverageGroup
+          title="Matières sans enseignant"
+          items={alerts.subjectsWithoutTeacher}
+          empty="Toutes les matières sont couvertes."
+        />
+      </div>
+    </div>
+  );
+}
+
+function CoverageGroup({
+  title,
+  items,
+  empty,
+}: {
+  title: string;
+  items: string[];
+  empty: string;
+}) {
+  return (
+    <div className="rounded-xl bg-white p-3 ring-1 ring-amber-100">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-slate-700">{title}</span>
+        <span
+          className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+            items.length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+          }`}
+        >
+          {items.length}
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <p className="mt-2 text-[11px] text-slate-400">{empty}</p>
+      ) : (
+        <ul className="mt-2 space-y-1">
+          {items.map((label) => (
+            <li key={label} className="truncate text-xs text-slate-600" title={label}>
+              • {label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

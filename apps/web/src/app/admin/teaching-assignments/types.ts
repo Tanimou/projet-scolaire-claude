@@ -27,9 +27,14 @@ export interface SubjectOption {
   color: string | null;
 }
 
+/** Rôle d'un enseignant sur une affectation (cf. enum Prisma AssignmentRole). */
+export type AssignmentRole = 'principal' | 'assistant' | 'subject_teacher';
+
 export interface Assignment {
   id: string;
   isMainTeacher: boolean;
+  /** principal = PP (couronne), assistant = badge bleu, subject_teacher = neutre. */
+  role: AssignmentRole;
   weeklyHours: string | null;
   teacherProfile: {
     id: string;
