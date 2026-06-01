@@ -1,16 +1,16 @@
 import { Module } from '@nestjs/common';
 
-import { AuthModule } from '../../shared/auth/auth.module';
-import { SchoolStructureModule } from '../school-structure/school-structure.module';
-import { TeachingModule } from '../teaching/teaching.module';
+import { PrismaModule } from '../../prisma/prisma.module';
 
-import { AssessmentsController } from './assessments.controller';
-import { GradesController } from './grades.controller';
 import { GradesService } from './grades.service';
 
+/**
+ * Module exposant le calculateur de moyennes (`GradesService`).
+ * Centralise la résolution des coefficients (3 niveaux) consommée par les
+ * portails enseignant/parent, la génération de bulletins et l'analytics.
+ */
 @Module({
-  imports: [AuthModule, SchoolStructureModule, TeachingModule],
-  controllers: [AssessmentsController, GradesController],
+  imports: [PrismaModule],
   providers: [GradesService],
   exports: [GradesService],
 })
