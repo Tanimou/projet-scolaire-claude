@@ -115,6 +115,7 @@ export const adminSidebarGroups: SidebarGroupConfig[] = [
       { key: 'attendance', icon: CheckSquare, label: 'Présences', href: '/admin/attendance' },
       { key: 'enrollments', icon: UserPlus, label: 'Inscriptions', href: '/admin/enrollments' },
       { key: 'assignments', icon: ClipboardCheck, label: 'Affectations', href: '/admin/assignments' },
+      { key: 'alerts', icon: Bell, label: 'Alertes', href: '/admin/alerts' },
     ],
   },
   {

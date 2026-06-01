@@ -1,13 +1,13 @@
 import {
+  AlertTriangle,
   Bell,
   BookOpen,
   Building2,
   Calendar,
+  CheckCircle2,
   ClipboardList,
-  Download,
-  FileSpreadsheet,
-  FileText,
   GraduationCap,
+  Layers,
   LayoutDashboard,
   Users,
 } from 'lucide-react';
@@ -57,6 +57,15 @@ interface DashboardResponse {
   schoolStructure: {
     academicYears: Array<{ id: string; name: string; status: string }>;
     levels: Array<{ key: string; label: string; count: number }>;
+    cycles: Array<{
+      cycleId: string;
+      cycleName: string;
+      cycleColor: string | null;
+      classCount: number;
+      studentCount: number;
+      teacherCount: number;
+      topSubjects: string[];
+    }>;
     classesByGrade: Array<{ gradeLabel: string; count: number }>;
     topSubjects: Array<{ id: string; name: string; classCount: number }>;
     totals: {
@@ -67,23 +76,30 @@ interface DashboardResponse {
       subjects: number;
     };
   };
-  enrollmentRequests: Array<{
-    id: string;
-    requesterName: string;
-    studentName: string;
-    requestedClassName: string | null;
-    requestType: 'rattachement' | 'inscription';
-    status: 'pending' | 'to_verify' | 'approved' | 'rejected';
-    createdAt: string;
-  }>;
-  teachingAssignmentsSummary: Array<{
-    id: string;
-    teacherName: string;
+  teacherCoverageBySubject: Array<{
+    subjectId: string;
     subjectName: string;
-    classes: string[];
-    weeklyHours: number | null;
-    status: 'active' | 'overcapacity';
+    teacherCount: number;
   }>;
+  teacherCoverageByClass: Array<{
+    classSectionId: string;
+    className: string;
+    teacherCount: number;
+    hasMainTeacher: boolean;
+  }>;
+  gradingRateByClass: Array<{
+    classSectionId: string;
+    className: string;
+    planned: number;
+    graded: number;
+    completionRate: number;
+    status: 'good' | 'medium' | 'late';
+  }>;
+  studentTeacherRatio: {
+    students: number;
+    teachers: number;
+    ratio: number;
+  };
   performance: {
     overall: number | null;
     byCycle: Array<{
@@ -94,13 +110,6 @@ interface DashboardResponse {
       sampleSize: number;
     }>;
   };
-  alertRules: Array<{
-    code: string;
-    label: string;
-    condition: string;
-    severity: 'high' | 'medium' | 'low';
-    status: 'active' | 'inactive';
-  }>;
   recentAudit: Array<{
     id: string;
     actorId: string | null;
@@ -111,14 +120,6 @@ interface DashboardResponse {
     resourceId: string | null;
     detail: string | null;
     createdAt: string;
-  }>;
-  recentExports: Array<{
-    id: string;
-    kind: 'xlsx' | 'pdf' | 'csv';
-    fileName: string;
-    requesterName: string | null;
-    createdAt: string;
-    downloadUrl: string | null;
   }>;
 }
 
@@ -265,128 +266,26 @@ export default async function AdminDashboardPage() {
         </StaggerItem>
       </Stagger>
 
-      {/* ─── Row 2: Structure (2/5) + Demandes (3/5) ─── */}
-      <div className="mt-6 grid gap-6 lg:grid-cols-5">
-        <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm lg:col-span-2">
+      {/* ─── Row 2: Structure de l'établissement (par cycle) ─── */}
+      <div className="mt-6">
+        <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm">
           <SectionHeader
             title="Structure de l'établissement"
             actionLabel="Voir tout"
-            actionHref="/admin/school/structure"
+            actionHref="/admin/levels"
           />
           <StructureGrid structure={dashboard?.schoolStructure} />
         </section>
-
-        <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm lg:col-span-3">
-          <SectionHeader
-            title="Demandes de rattachement / inscriptions"
-            actionLabel="Voir toutes"
-            actionHref="/admin/enrollment-requests"
-          />
-          {(dashboard?.enrollmentRequests?.length ?? 0) === 0 ? (
-            <p className="mt-4 text-sm text-slate-500">Aucune demande en attente actuellement.</p>
-          ) : (
-            <div className="-mx-2 mt-3 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                    <th className="px-2 py-2">Demandeur</th>
-                    <th className="px-2 py-2">Élève</th>
-                    <th className="px-2 py-2">Classe souhaitée</th>
-                    <th className="px-2 py-2">Type de demande</th>
-                    <th className="px-2 py-2">Statut</th>
-                    <th className="px-2 py-2">Date</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {dashboard!.enrollmentRequests.map((r) => (
-                    <tr key={r.id} className="hover:bg-slate-50/60">
-                      <td className="px-2 py-2.5 text-sm font-semibold text-slate-900">
-                        {r.requesterName || '—'}
-                      </td>
-                      <td className="px-2 py-2.5 text-sm text-slate-700">{r.studentName || '—'}</td>
-                      <td className="px-2 py-2.5 text-sm text-slate-700">
-                        {r.requestedClassName ?? '—'}
-                      </td>
-                      <td className="px-2 py-2.5 text-sm capitalize text-slate-700">
-                        {r.requestType === 'rattachement' ? 'Rattachement' : 'Inscription'}
-                      </td>
-                      <td className="px-2 py-2.5">
-                        <StatusBadge status={r.status} size="sm" />
-                      </td>
-                      <td className="px-2 py-2.5 text-xs text-slate-500">
-                        {formatDateShortFr(r.createdAt)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <Link
-            href="/admin/enrollment-requests"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
-          >
-            Voir toutes les demandes
-          </Link>
-        </section>
       </div>
 
-      {/* ─── Row 3: Affectations + Donut + Règles ─── */}
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        {/* Affectations professeurs */}
-        <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm">
-          <SectionHeader
-            title="Affectations professeurs"
-            actionLabel="Voir toutes"
-            actionHref="/admin/teaching-assignments"
-          />
-          {(dashboard?.teachingAssignmentsSummary?.length ?? 0) === 0 ? (
-            <p className="mt-4 text-sm text-slate-500">Aucune affectation pour le moment.</p>
-          ) : (
-            <div className="-mx-2 mt-3 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                    <th className="px-2 py-2">Professeur</th>
-                    <th className="px-2 py-2">Matière</th>
-                    <th className="px-2 py-2">Classe(s)</th>
-                    <th className="px-2 py-2">Charge</th>
-                    <th className="px-2 py-2">Statut</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {dashboard!.teachingAssignmentsSummary.map((a) => (
-                    <tr key={a.id} className="hover:bg-slate-50/60">
-                      <td className="px-2 py-2.5 text-sm font-semibold text-slate-900">
-                        {a.teacherName}
-                      </td>
-                      <td className="px-2 py-2.5 text-sm text-slate-700">{a.subjectName}</td>
-                      <td className="px-2 py-2.5 text-sm text-slate-700">
-                        {a.classes.join(', ')}
-                      </td>
-                      <td className="px-2 py-2.5 text-sm text-slate-700">
-                        {a.weeklyHours != null ? `${a.weeklyHours}h` : '—'}
-                      </td>
-                      <td className="px-2 py-2.5">
-                        <StatusBadge
-                          label={a.status === 'active' ? 'Actif' : 'En surcharge'}
-                          tone={a.status === 'active' ? 'success' : 'danger'}
-                          size="sm"
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <Link
-            href="/admin/teaching-assignments"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
-          >
-            Voir toutes les affectations
-          </Link>
-        </section>
+      {/* ─── Row 3: Couverture enseignants + Donut performances ─── */}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        {/* Synthèse couverture enseignants */}
+        <TeacherCoverageCard
+          bySubject={dashboard?.teacherCoverageBySubject}
+          byClass={dashboard?.teacherCoverageByClass}
+          ratio={dashboard?.studentTeacherRatio}
+        />
 
         {/* Performances donut */}
         <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm">
@@ -428,68 +327,9 @@ export default async function AdminDashboardPage() {
             Voir le tableau de bord analytique
           </Link>
         </section>
-
-        {/* Règles d'alerte */}
-        <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm">
-          <SectionHeader
-            title="Règles d'alerte"
-            actionLabel="Voir toutes"
-            actionHref="/admin/alerts"
-          />
-          <div className="-mx-2 mt-3 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  <th className="px-2 py-2">Code</th>
-                  <th className="px-2 py-2">Nom de la règle</th>
-                  <th className="px-2 py-2">Condition</th>
-                  <th className="px-2 py-2">Sévérité</th>
-                  <th className="px-2 py-2">Statut</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {(dashboard?.alertRules ?? []).map((r) => (
-                  <tr key={r.code} className="hover:bg-slate-50/60">
-                    <td className="px-2 py-2.5 font-mono text-[11px] font-bold uppercase tracking-tight text-slate-700">
-                      {r.code}
-                    </td>
-                    <td className="px-2 py-2.5 text-sm font-semibold text-slate-900">{r.label}</td>
-                    <td className="px-2 py-2.5 text-[12px] text-slate-600">{r.condition}</td>
-                    <td className="px-2 py-2.5">
-                      <StatusBadge
-                        label={
-                          r.severity === 'high'
-                            ? 'Élevée'
-                            : r.severity === 'medium'
-                              ? 'Moyenne'
-                              : 'Faible'
-                        }
-                        tone={r.severity === 'high' ? 'danger' : r.severity === 'medium' ? 'warning' : 'sky'}
-                        size="sm"
-                      />
-                    </td>
-                    <td className="px-2 py-2.5">
-                      <StatusBadge
-                        label={r.status === 'active' ? 'Active' : 'Inactive'}
-                        tone={r.status === 'active' ? 'success' : 'neutral'}
-                        size="sm"
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Link
-            href="/admin/alerts"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold accent-text hover:underline"
-          >
-            Gérer les règles d&apos;alerte
-          </Link>
-        </section>
       </div>
 
-      {/* ─── Row 4: Audit + Exports ─── */}
+      {/* ─── Row 4: Audit + Taux de notation par classe ─── */}
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm lg:col-span-2">
           <SectionHeader
@@ -528,62 +368,219 @@ export default async function AdminDashboardPage() {
           )}
         </section>
 
-        <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm">
-          <SectionHeader
-            title="Exports récents"
-            actionLabel="Voir tous"
-            actionHref="/admin/exports"
-          />
-          {(dashboard?.recentExports?.length ?? 0) === 0 ? (
-            <EmptyState
-              icon={Download}
-              title="Aucun export récent"
-              description="Les exports XLSX/PDF apparaîtront ici dès qu'ils auront été générés."
-              tone="slate"
-              className="mt-3"
-            />
-          ) : (
-            <ul className="mt-3 flex flex-col divide-y divide-slate-100">
-              {dashboard!.recentExports.map((e) => (
-                <li key={e.id} className="flex items-center gap-3 py-3">
-                  <span
-                    className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
-                      e.kind === 'pdf'
-                        ? 'bg-rose-50 text-rose-600'
-                        : e.kind === 'xlsx'
-                          ? 'bg-emerald-50 text-emerald-600'
-                          : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {e.kind === 'pdf' ? (
-                      <FileText className="h-4 w-4" />
-                    ) : (
-                      <FileSpreadsheet className="h-4 w-4" />
-                    )}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-slate-900">{e.fileName}</div>
-                    <div className="text-[11px] text-slate-500">
-                      {formatDateShortFr(e.createdAt)} · {e.requesterName ?? '—'}
-                    </div>
-                  </div>
-                  {e.downloadUrl && (
-                    <a
-                      href={e.downloadUrl}
-                      className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-                      aria-label="Télécharger"
-                    >
-                      <Download className="h-4 w-4" />
-                    </a>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <GradingRateCard rows={dashboard?.gradingRateByClass} />
+      </div>
+    </PortalShell>
+  );
+}
+
+/**
+ * Synthèse couverture enseignants — nb profs/matière, nb profs/classe,
+ * ratio élèves-profs, classes sans prof principal, matières sans prof affecté.
+ */
+function TeacherCoverageCard({
+  bySubject,
+  byClass,
+  ratio,
+}: {
+  bySubject?: DashboardResponse['teacherCoverageBySubject'];
+  byClass?: DashboardResponse['teacherCoverageByClass'];
+  ratio?: DashboardResponse['studentTeacherRatio'];
+}) {
+  const subjects = bySubject ?? [];
+  const classes = byClass ?? [];
+  const classesWithoutMain = classes.filter((c) => !c.hasMainTeacher);
+  const subjectsWithoutTeacher = subjects.filter((s) => s.teacherCount === 0);
+  // Top classes by teacher count for the preview list (most-covered first).
+  const topClasses = [...classes].sort((a, b) => b.teacherCount - a.teacherCount).slice(0, 5);
+
+  return (
+    <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm">
+      <SectionHeader
+        title="Synthèse couverture enseignants"
+        actionLabel="Voir les affectations"
+        actionHref="/admin/assignments"
+      />
+
+      {/* Tuiles de synthèse */}
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <CoverageStat label="Matières couvertes" value={subjects.length} icon={BookOpen} tone="blue" />
+        <CoverageStat label="Classes couvertes" value={classes.length} icon={Users} tone="violet" />
+        <CoverageStat
+          label="Ratio élèves / prof"
+          value={ratio ? `${ratio.ratio}` : '—'}
+          icon={GraduationCap}
+          tone="green"
+        />
+        <CoverageStat
+          label="Classes sans prof principal"
+          value={classesWithoutMain.length}
+          icon={AlertTriangle}
+          tone={classesWithoutMain.length > 0 ? 'rose' : 'green'}
+        />
       </div>
 
-    </PortalShell>
+      {/* Profs par matière */}
+      <div className="mt-5">
+        <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+          Professeurs par matière
+        </h3>
+        {subjects.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">Aucune matière affectée pour le moment.</p>
+        ) : (
+          <ul className="mt-2 space-y-1.5">
+            {subjects.slice(0, 6).map((s) => (
+              <li
+                key={s.subjectId}
+                className="flex items-center justify-between gap-2 text-sm text-slate-700"
+              >
+                <span className="truncate pr-2">{s.subjectName}</span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
+                    {s.teacherCount}
+                  </span>
+                  {s.teacherCount === 0 && (
+                    <StatusBadge label="Sans prof" tone="danger" size="sm" />
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Profs par classe */}
+      <div className="mt-5">
+        <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+          Professeurs par classe
+        </h3>
+        {classes.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">Aucune classe couverte pour le moment.</p>
+        ) : (
+          <ul className="mt-2 space-y-1.5">
+            {topClasses.map((c) => (
+              <li
+                key={c.classSectionId}
+                className="flex items-center justify-between gap-2 text-sm text-slate-700"
+              >
+                <span className="inline-flex items-center gap-1.5 truncate pr-2">
+                  {c.className}
+                  {!c.hasMainTeacher && (
+                    <StatusBadge label="Sans prof principal" tone="warning" size="sm" />
+                  )}
+                </span>
+                <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
+                  {c.teacherCount}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Matières sans prof affecté — rappel explicite */}
+      {subjectsWithoutTeacher.length > 0 && (
+        <p className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600">
+          <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+          {subjectsWithoutTeacher.length} matière{subjectsWithoutTeacher.length > 1 ? 's' : ''} sans
+          professeur affecté
+        </p>
+      )}
+    </section>
+  );
+}
+
+function CoverageStat({
+  label,
+  value,
+  icon: Icon,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  icon: typeof Users;
+  tone: 'blue' | 'violet' | 'green' | 'rose';
+}) {
+  const toneClasses: Record<typeof tone, string> = {
+    blue: 'bg-blue-50 text-blue-600',
+    violet: 'bg-violet-50 text-violet-600',
+    green: 'bg-emerald-50 text-emerald-600',
+    rose: 'bg-rose-50 text-rose-600',
+  };
+  return (
+    <div className="rounded-xl bg-slate-50/70 p-3">
+      <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${toneClasses[tone]}`}>
+        <Icon className="h-4 w-4" aria-hidden />
+      </span>
+      <div className="mt-2 text-xl font-bold tabular-nums text-slate-900">{value}</div>
+      <div className="text-[11px] font-medium leading-tight text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+/**
+ * Taux de notation par classe — classe, évaluations planifiées, notées/publiées,
+ * taux de complétion, statut (bon / moyen / retard).
+ */
+function GradingRateCard({ rows }: { rows?: DashboardResponse['gradingRateByClass'] }) {
+  const data = rows ?? [];
+  // Les classes les plus en retard d'abord pour attirer l'attention de l'admin.
+  const sorted = [...data].sort((a, b) => a.completionRate - b.completionRate).slice(0, 8);
+
+  const statusBadge = (status: 'good' | 'medium' | 'late') => {
+    if (status === 'good') return <StatusBadge label="Bon" tone="success" size="sm" />;
+    if (status === 'medium') return <StatusBadge label="Moyen" tone="warning" size="sm" />;
+    return <StatusBadge label="Retard" tone="danger" size="sm" />;
+  };
+
+  return (
+    <section className="rounded-2xl bg-white p-6 ring-1 ring-slate-200/60 shadow-sm">
+      <SectionHeader
+        title="Taux de notation par classe"
+        actionLabel="Voir les évaluations"
+        actionHref="/admin/assessments"
+      />
+      {sorted.length === 0 ? (
+        <EmptyState
+          icon={CheckCircle2}
+          title="Aucune évaluation planifiée"
+          description="Le taux de notation s'affichera dès qu'une évaluation aura été planifiée."
+          tone="slate"
+          className="mt-3"
+        />
+      ) : (
+        <div className="-mx-2 mt-3 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                <th className="px-2 py-2">Classe</th>
+                <th className="px-2 py-2 text-right">Planifiées</th>
+                <th className="px-2 py-2 text-right">Notées</th>
+                <th className="px-2 py-2 text-right">Taux</th>
+                <th className="px-2 py-2">Statut</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {sorted.map((r) => (
+                <tr key={r.classSectionId} className="hover:bg-slate-50/60">
+                  <td className="px-2 py-2.5 text-sm font-semibold text-slate-900">{r.className}</td>
+                  <td className="px-2 py-2.5 text-right font-mono text-xs tabular-nums text-slate-700">
+                    {r.planned}
+                  </td>
+                  <td className="px-2 py-2.5 text-right font-mono text-xs tabular-nums text-slate-700">
+                    {r.graded}
+                  </td>
+                  <td className="px-2 py-2.5 text-right font-mono text-xs font-bold tabular-nums text-slate-900">
+                    {r.completionRate}%
+                  </td>
+                  <td className="px-2 py-2.5">{statusBadge(r.status)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -595,106 +592,178 @@ function StructureGrid({ structure }: { structure?: DashboardResponse['schoolStr
       </div>
     );
   }
+  const cycles = structure.cycles ?? [];
   return (
-    <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-5 divide-slate-100 sm:grid-cols-4 sm:divide-x">
-      {/* Années scolaires */}
-      <div className="sm:pr-3">
+    <div className="mt-3 space-y-6">
+      {/* Établissement → cycles : carte par cycle avec classes / élèves / profs / matières */}
+      <div>
         <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-          <Calendar className="h-3 w-3" />
-          Années scolaires
+          <Layers className="h-3 w-3" />
+          Par cycle
         </div>
-        <ul className="mt-2 space-y-1">
-          {structure.academicYears.slice(0, 3).map((y) => (
-            <li key={y.id} className="flex items-center justify-between gap-2 text-sm text-slate-700">
-              <span>{y.name}</span>
-              {y.status === 'active' && (
-                <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
-                  En cours
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-        <Link href="/admin/academic-years" className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline">
-          + Ajouter une année
-        </Link>
+        {cycles.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">
+            Aucun cycle renseigné pour l&apos;année en cours.
+          </p>
+        ) : (
+          <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {cycles.map((c) => (
+              <div
+                key={c.cycleId}
+                className="rounded-xl border-l-4 bg-slate-50/70 p-4"
+                style={{ borderLeftColor: c.cycleColor ?? '#2563EB' }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="truncate font-bold text-slate-900">{c.cycleName}</h4>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-slate-600 ring-1 ring-slate-200">
+                    {c.classCount} classe{c.classCount > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <div className="text-base font-bold tabular-nums text-slate-900">
+                      {c.studentCount}
+                    </div>
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                      Élèves
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-base font-bold tabular-nums text-slate-900">
+                      {c.teacherCount}
+                    </div>
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                      Profs
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-base font-bold tabular-nums text-slate-900">
+                      {c.classCount}
+                    </div>
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                      Classes
+                    </div>
+                  </div>
+                </div>
+                {c.topSubjects.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    {c.topSubjects.map((s) => (
+                      <span
+                        key={s}
+                        className="rounded-md bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 ring-1 ring-slate-200"
+                      >
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Niveaux */}
-      <div className="sm:px-3">
-        <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-          <Building2 className="h-3 w-3" />
-          Niveaux
+      {/* Détails complémentaires : années, niveaux, classes/niveau, matières */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-5 divide-slate-100 sm:grid-cols-4 sm:divide-x">
+        {/* Années scolaires */}
+        <div className="sm:pr-3">
+          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            <Calendar className="h-3 w-3" />
+            Années scolaires
+          </div>
+          <ul className="mt-2 space-y-1">
+            {structure.academicYears.slice(0, 3).map((y) => (
+              <li key={y.id} className="flex items-center justify-between gap-2 text-sm text-slate-700">
+                <span>{y.name}</span>
+                {y.status === 'active' && (
+                  <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                    En cours
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          <Link href="/admin/academic-years" className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline">
+            + Ajouter une année
+          </Link>
         </div>
-        <ul className="mt-2 space-y-1">
-          {structure.levels
-            .filter((l) => l.count > 0)
-            .map((l) => (
-              <li key={l.key} className="flex items-center justify-between text-sm text-slate-700">
-                <span>{l.label}</span>
+
+        {/* Niveaux */}
+        <div className="sm:px-3">
+          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            <Building2 className="h-3 w-3" />
+            Niveaux
+          </div>
+          <ul className="mt-2 space-y-1">
+            {structure.levels
+              .filter((l) => l.count > 0)
+              .map((l) => (
+                <li key={l.key} className="flex items-center justify-between text-sm text-slate-700">
+                  <span>{l.label}</span>
+                  <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
+                    {l.count}
+                  </span>
+                </li>
+              ))}
+            <li className="flex items-center justify-between border-t border-slate-100 pt-1 text-sm text-slate-900">
+              <span className="font-semibold">Total</span>
+              <span className="font-mono text-xs font-bold tabular-nums">
+                {structure.totals.gradeLevels}
+              </span>
+            </li>
+          </ul>
+        </div>
+
+        {/* Classes */}
+        <div className="sm:px-3">
+          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            <Users className="h-3 w-3" />
+            Classes
+          </div>
+          <ul className="mt-2 space-y-1">
+            {structure.classesByGrade.map((c) => (
+              <li
+                key={c.gradeLabel}
+                className="flex items-center justify-between text-sm text-slate-700"
+              >
+                <span>{c.gradeLabel}</span>
                 <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
-                  {l.count}
+                  {c.count}
                 </span>
               </li>
             ))}
-          <li className="flex items-center justify-between border-t border-slate-100 pt-1 text-sm text-slate-900">
-            <span className="font-semibold">Total</span>
-            <span className="font-mono text-xs font-bold tabular-nums">
-              {structure.totals.gradeLevels}
-            </span>
-          </li>
-        </ul>
-      </div>
-
-      {/* Classes */}
-      <div className="sm:px-3">
-        <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-          <Users className="h-3 w-3" />
-          Classes
+          </ul>
+          <Link
+            href="/admin/classes"
+            className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline"
+          >
+            Voir toutes les classes
+          </Link>
         </div>
-        <ul className="mt-2 space-y-1">
-          {structure.classesByGrade.map((c) => (
-            <li
-              key={c.gradeLabel}
-              className="flex items-center justify-between text-sm text-slate-700"
-            >
-              <span>{c.gradeLabel}</span>
-              <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
-                {c.count}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <Link
-          href="/admin/classes"
-          className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline"
-        >
-          Voir toutes les classes
-        </Link>
-      </div>
 
-      {/* Matières */}
-      <div className="sm:pl-3">
-        <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-          <BookOpen className="h-3 w-3" />
-          Matières
+        {/* Matières */}
+        <div className="sm:pl-3">
+          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            <BookOpen className="h-3 w-3" />
+            Matières
+          </div>
+          <ul className="mt-2 space-y-1">
+            {structure.topSubjects.map((s) => (
+              <li key={s.id} className="flex items-center justify-between text-sm text-slate-700">
+                <span className="truncate pr-2">{s.name}</span>
+                <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
+                  {s.classCount}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <Link
+            href="/admin/subjects"
+            className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline"
+          >
+            Voir toutes les matières
+          </Link>
         </div>
-        <ul className="mt-2 space-y-1">
-          {structure.topSubjects.map((s) => (
-            <li key={s.id} className="flex items-center justify-between text-sm text-slate-700">
-              <span className="truncate pr-2">{s.name}</span>
-              <span className="font-mono text-xs font-bold tabular-nums text-slate-900">
-                {s.classCount}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <Link
-          href="/admin/subjects"
-          className="mt-2 inline-flex text-[11px] font-bold accent-text hover:underline"
-        >
-          Voir toutes les matières
-        </Link>
       </div>
     </div>
   );
@@ -719,11 +788,4 @@ function pickAuditDotColor(action: string): string {
   if (a.includes('delete') || a.includes('reject') || a.includes('remove')) return 'bg-rose-500';
   if (a.includes('revise') || a.includes('update') || a.includes('patch')) return 'bg-amber-500';
   return 'bg-blue-500';
-}
-
-function formatDateShortFr(input: string | Date | null | undefined): string {
-  if (!input) return '—';
-  const d = typeof input === 'string' ? new Date(input) : input;
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
 }
