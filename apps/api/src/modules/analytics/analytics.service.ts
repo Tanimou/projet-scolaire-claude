@@ -78,6 +78,20 @@ export interface AdminDashboardResponse {
   schoolStructure: {
     academicYears: Array<{ id: string; name: string; status: string }>;
     levels: Array<{ key: 'primaire' | 'college' | 'lycee' | 'other'; label: string; count: number }>;
+    /**
+     * Établissement → cycle drill-down : pour chaque cycle, le nombre de classes,
+     * d'élèves (inscriptions actives de l'année en cours), de professeurs distincts
+     * affectés, et les matières les plus enseignées.
+     */
+    cycles: Array<{
+      cycleId: string;
+      cycleName: string;
+      cycleColor: string | null;
+      classCount: number;
+      studentCount: number;
+      teacherCount: number;
+      topSubjects: string[];
+    }>;
     classesByGrade: Array<{ gradeLabel: string; count: number }>;
     topSubjects: Array<{ id: string; name: string; classCount: number }>;
     totals: {
@@ -88,24 +102,42 @@ export interface AdminDashboardResponse {
       subjects: number;
     };
   };
-  enrollmentRequests: Array<{
-    id: string;
-    requesterName: string;
-    studentName: string;
-    requestedClassName: string | null;
-    requestType: 'rattachement' | 'inscription';
-    status: 'pending' | 'to_verify' | 'approved' | 'rejected';
-    /** ISO-8601 timestamp of the request submission */
-    createdAt: string;
-  }>;
-  teachingAssignmentsSummary: Array<{
-    id: string;
-    teacherName: string;
+  /** Nombre de professeurs distincts affectés par matière (année active). */
+  teacherCoverageBySubject: Array<{
+    subjectId: string;
     subjectName: string;
-    classes: string[];
-    weeklyHours: number | null;
-    status: 'active' | 'overcapacity';
+    teacherCount: number;
   }>;
+  /**
+   * Couverture enseignante par classe (année active) : nombre de professeurs
+   * distincts et présence d'un professeur principal.
+   */
+  teacherCoverageByClass: Array<{
+    classSectionId: string;
+    className: string;
+    teacherCount: number;
+    hasMainTeacher: boolean;
+  }>;
+  /**
+   * Taux de notation par classe (année active) : évaluations planifiées vs.
+   * évaluations dont au moins une note est publiée/révisée. Statut :
+   * good ≥ 80 %, medium 50-79 %, late < 50 %.
+   */
+  gradingRateByClass: Array<{
+    classSectionId: string;
+    className: string;
+    planned: number;
+    graded: number;
+    completionRate: number;
+    status: 'good' | 'medium' | 'late';
+  }>;
+  /** Ratio élèves actifs / professeurs de l'établissement. */
+  studentTeacherRatio: {
+    students: number;
+    teachers: number;
+    /** Élèves par professeur, arrondi à une décimale (0 si aucun professeur). */
+    ratio: number;
+  };
   performance: {
     overall: number | null;
     byCycle: Array<{
@@ -116,13 +148,6 @@ export interface AdminDashboardResponse {
       sampleSize: number;
     }>;
   };
-  alertRules: Array<{
-    code: string;
-    label: string;
-    condition: string;
-    severity: 'high' | 'medium' | 'low';
-    status: 'active' | 'inactive';
-  }>;
   recentAudit: Array<{
     id: string;
     actorId: string | null;
@@ -133,14 +158,6 @@ export interface AdminDashboardResponse {
     resourceId: string | null;
     detail: string | null;
     createdAt: string;
-  }>;
-  recentExports: Array<{
-    id: string;
-    kind: 'xlsx' | 'pdf' | 'csv';
-    fileName: string;
-    requesterName: string | null;
-    createdAt: string;
-    downloadUrl: string | null;
   }>;
 }
 
@@ -1605,8 +1622,23 @@ export class AnalyticsService {
       }),
     ]);
 
+    // ============ Active academic year ============
+    // Cycles drill-down, teacher coverage and grading rate are all scoped to the
+    // active year. If none is flagged active we fall back to the most recent one.
+    const activeYear =
+      (await this.prisma.academicYear.findFirst({
+        where: { tenantId, schoolId, status: 'active' },
+        select: { id: true },
+      })) ??
+      (await this.prisma.academicYear.findFirst({
+        where: { tenantId, schoolId },
+        orderBy: { startDate: 'desc' },
+        select: { id: true },
+      }));
+    const activeYearId = activeYear?.id ?? null;
+
     // ============ School structure ============
-    const [academicYears, cyclesCount, gradeLevels, subjectsAll, cyclesFull, classesAll] = await Promise.all([
+    const [academicYears, cyclesCount, gradeLevels, subjectsAll, classesAll] = await Promise.all([
       this.prisma.academicYear.findMany({
         where: { tenantId, schoolId },
         orderBy: { startDate: 'desc' },
@@ -1624,21 +1656,48 @@ export class AnalyticsService {
         },
         orderBy: { name: 'asc' },
       }),
-      this.prisma.cycle.findMany({
-        where: { tenantId, schoolId },
-        orderBy: { orderIndex: 'asc' },
-        select: { id: true, name: true, code: true },
-      }),
+      // Classes of the active year, enriched so we can derive the cycle drill-down,
+      // per-class teacher coverage, and per-class grading rate in a single pass.
+      // Assessments hang off TeachingAssignment (not ClassSection directly), so we
+      // nest them there and flatten per class when computing the grading rate.
       this.prisma.classSection.findMany({
-        where: { tenantId, academicYear: { schoolId } },
-        include: { gradeLevel: { select: { name: true, orderIndex: true } } },
+        where: {
+          tenantId,
+          ...(activeYearId ? { academicYearId: activeYearId } : { academicYear: { schoolId } }),
+        },
+        select: {
+          id: true,
+          name: true,
+          gradeLevel: {
+            select: {
+              name: true,
+              orderIndex: true,
+              cycle: { select: { id: true, name: true, color: true, orderIndex: true } },
+            },
+          },
+          _count: { select: { enrollments: { where: { status: 'active' } } } },
+          teachingAssignments: {
+            select: {
+              teacherProfileId: true,
+              isMainTeacher: true,
+              subject: { select: { id: true, name: true } },
+              assessments: {
+                select: {
+                  id: true,
+                  grades: {
+                    where: { status: { in: ['published', 'revised'] } },
+                    select: { id: true },
+                    take: 1,
+                  },
+                },
+              },
+            },
+          },
+        },
       }),
     ]);
 
     // Levels — bucket grade levels by cycle code (primaire / college / lycee)
-    const cycleByLevelId = new Map(gradeLevels.map((gl) => [gl.id, gl.cycle]));
-    void cycleByLevelId; // for future use
-    const cycleByCode = new Map(cyclesFull.map((c) => [c.code?.toLowerCase() ?? '', c]));
     const levelBuckets: Array<{ key: 'primaire' | 'college' | 'lycee' | 'other'; label: string; count: number }> = [
       { key: 'primaire', label: 'Primaire', count: 0 },
       { key: 'college', label: 'Collège', count: 0 },
@@ -1685,19 +1744,145 @@ export class AnalyticsService {
       'Éducation Physique et Sportive': 'EPS',
       'Arts Plastiques': 'Arts',
     };
+    const shortSubjectName = (name: string): string => SHORT_SUBJECT_NAME[name] ?? name;
     const topSubjects = subjectsAll
       .map((s) => ({
         id: s.id,
-        name: SHORT_SUBJECT_NAME[s.name] ?? s.name,
+        name: shortSubjectName(s.name),
         classCount: s._count?.teachingAssignments ?? 0,
       }))
       .sort((a, b) => b.classCount - a.classCount)
       .slice(0, 4);
 
-    void cycleByCode; // currently unused, reserved for future label translation
+    // ============ Cycle drill-down + teacher coverage + grading rate ============
+    // Single pass over the active year's classes feeds three sections at once.
+    type CycleAgg = {
+      cycleName: string;
+      cycleColor: string | null;
+      orderIndex: number;
+      classCount: number;
+      studentCount: number;
+      teacherIds: Set<string>;
+      subjectCount: Map<string, { name: string; count: number }>;
+    };
+    const cycleAgg = new Map<string, CycleAgg>();
+    // Distinct teachers per subject across the active year (coverage by subject).
+    const subjectTeachers = new Map<string, { name: string; teacherIds: Set<string> }>();
+    const teacherCoverageByClass: AdminDashboardResponse['teacherCoverageByClass'] = [];
+    const gradingRateByClass: AdminDashboardResponse['gradingRateByClass'] = [];
+    // Distinct teachers across the whole school (active year) for the global ratio.
+    const allTeacherIds = new Set<string>();
+
+    for (const c of classesAll) {
+      const cycle = c.gradeLevel?.cycle;
+      const classTeacherIds = new Set<string>();
+      let hasMainTeacher = false;
+      let planned = 0;
+      let graded = 0;
+
+      for (const ta of c.teachingAssignments) {
+        classTeacherIds.add(ta.teacherProfileId);
+        allTeacherIds.add(ta.teacherProfileId);
+        if (ta.isMainTeacher) hasMainTeacher = true;
+
+        // Coverage by subject (distinct teachers per subject)
+        const subjEntry = subjectTeachers.get(ta.subject.id) ?? {
+          name: shortSubjectName(ta.subject.name),
+          teacherIds: new Set<string>(),
+        };
+        subjEntry.teacherIds.add(ta.teacherProfileId);
+        subjectTeachers.set(ta.subject.id, subjEntry);
+
+        // Grading rate: each assessment is "planned"; "graded" once it has at
+        // least one published/revised grade.
+        for (const a of ta.assessments) {
+          planned += 1;
+          if (a.grades.length > 0) graded += 1;
+        }
+      }
+
+      // Per-class coverage row
+      teacherCoverageByClass.push({
+        classSectionId: c.id,
+        className: c.name,
+        teacherCount: classTeacherIds.size,
+        hasMainTeacher,
+      });
+
+      // Per-class grading rate row
+      const completionRate = planned === 0 ? 0 : Math.round((graded / planned) * 100);
+      const status: 'good' | 'medium' | 'late' =
+        completionRate >= 80 ? 'good' : completionRate >= 50 ? 'medium' : 'late';
+      gradingRateByClass.push({
+        classSectionId: c.id,
+        className: c.name,
+        planned,
+        graded,
+        completionRate,
+        status,
+      });
+
+      // Cycle aggregation
+      if (cycle) {
+        const agg = cycleAgg.get(cycle.id) ?? {
+          cycleName: cycle.name,
+          cycleColor: cycle.color,
+          orderIndex: cycle.orderIndex,
+          classCount: 0,
+          studentCount: 0,
+          teacherIds: new Set<string>(),
+          subjectCount: new Map<string, { name: string; count: number }>(),
+        };
+        agg.classCount += 1;
+        agg.studentCount += c._count?.enrollments ?? 0;
+        for (const tid of classTeacherIds) agg.teacherIds.add(tid);
+        for (const ta of c.teachingAssignments) {
+          const se = agg.subjectCount.get(ta.subject.id) ?? {
+            name: shortSubjectName(ta.subject.name),
+            count: 0,
+          };
+          se.count += 1;
+          agg.subjectCount.set(ta.subject.id, se);
+        }
+        cycleAgg.set(cycle.id, agg);
+      }
+    }
+
+    // Sort class rows by name for stable, readable tables.
+    teacherCoverageByClass.sort((a, b) => a.className.localeCompare(b.className, 'fr'));
+    gradingRateByClass.sort((a, b) => a.className.localeCompare(b.className, 'fr'));
+
+    // Cycles array, ordered by the cycle's own orderIndex.
+    const cycles: AdminDashboardResponse['schoolStructure']['cycles'] = Array.from(cycleAgg.entries())
+      .sort((a, b) => a[1].orderIndex - b[1].orderIndex)
+      .map(([cycleId, agg]) => ({
+        cycleId,
+        cycleName: agg.cycleName,
+        cycleColor: agg.cycleColor,
+        classCount: agg.classCount,
+        studentCount: agg.studentCount,
+        teacherCount: agg.teacherIds.size,
+        topSubjects: Array.from(agg.subjectCount.values())
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 4)
+          .map((s) => s.name),
+      }));
+
+    // Coverage by subject — ordered by teacher count desc, then name.
+    const teacherCoverageBySubject: AdminDashboardResponse['teacherCoverageBySubject'] = Array.from(
+      subjectTeachers.entries(),
+    )
+      .map(([subjectId, s]) => ({
+        subjectId,
+        subjectName: s.name,
+        teacherCount: s.teacherIds.size,
+      }))
+      .sort((a, b) => b.teacherCount - a.teacherCount || a.subjectName.localeCompare(b.subjectName, 'fr'));
+
     const schoolStructure: AdminDashboardResponse['schoolStructure'] = {
       academicYears,
       levels: levelBuckets,
+      cycles,
       classesByGrade,
       topSubjects,
       totals: {
@@ -1709,175 +1894,15 @@ export class AnalyticsService {
       },
     };
 
+    // Student-teacher ratio — active students over distinct teachers (active year).
+    const studentTeacherRatio: AdminDashboardResponse['studentTeacherRatio'] = {
+      students: studentsCurrent,
+      teachers: allTeacherIds.size,
+      ratio: allTeacherIds.size === 0 ? 0 : Math.round((studentsCurrent / allTeacherIds.size) * 10) / 10,
+    };
+
     // ============ Performance ============
     const performance = await this.schoolPerformance({ tenantId, schoolId });
-
-    // ============ Enrollment requests (Guardianship pending as proxy) ============
-    // The full EnrollmentRequest model is planned for R6. Until then, we surface
-    // pending Guardianships on the admin dashboard. To distinguish
-    // "rattachement" (parent → existing student) vs "inscription" (parent → new student to enroll),
-    // and "to_verify" vs "approved", we read soft flags from the `notes` JSON-as-string field:
-    //   notes JSON shape (seed-set): {"kind":"inscription"|"rattachement", "review":"pending"|"to_verify"|"approved"}
-    // The seed creates 5 named demandes (Martin / Belkacem / Lefèvre / Moreau / Diallo)
-    // that must surface FIRST in the dashboard table. We over-fetch then sort.
-    const NAMED_DEMANDE_LASTNAMES = ['Martin', 'Belkacem', 'Lefèvre', 'Moreau', 'Diallo'];
-    const enrollmentRequests: AdminDashboardResponse['enrollmentRequests'] = await this.prisma.guardianship
-      .findMany({
-        where: {
-          tenantId,
-          OR: [
-            { status: 'pending' },
-            // Approved demo rows: kept active but marked review=approved in notes
-            { status: 'active', notes: { contains: '"review":"approved"' } },
-          ],
-        },
-        include: {
-          guardian: { select: { firstName: true, lastName: true } },
-          student: {
-            select: {
-              firstName: true,
-              lastName: true,
-              enrollments: {
-                where: { status: 'active' },
-                orderBy: { enrolledAt: 'desc' },
-                take: 1,
-                include: { classSection: { select: { name: true } } },
-              },
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 50,
-      })
-      .then((rows) => {
-        const mapped = rows.map((r) => {
-          // Parse note flags (defensive: notes is a string in current schema)
-          let kind: 'rattachement' | 'inscription' = 'rattachement';
-          let review: 'pending' | 'to_verify' | 'approved' | 'rejected' = 'pending';
-          if (typeof r.notes === 'string' && r.notes.startsWith('{')) {
-            try {
-              const parsed = JSON.parse(r.notes) as { kind?: string; review?: string };
-              if (parsed.kind === 'inscription') kind = 'inscription';
-              if (parsed.review === 'to_verify') review = 'to_verify';
-              if (parsed.review === 'approved') review = 'approved';
-              if (parsed.review === 'rejected') review = 'rejected';
-            } catch {
-              /* ignore malformed notes */
-            }
-          }
-          return {
-            id: r.id,
-            requesterName: [r.guardian?.firstName, r.guardian?.lastName].filter(Boolean).join(' '),
-            studentName: [r.student?.firstName, r.student?.lastName].filter(Boolean).join(' '),
-            requestedClassName: r.student?.enrollments[0]?.classSection.name ?? null,
-            requestType: kind,
-            status: review,
-            createdAt: r.createdAt.toISOString(),
-          };
-        });
-        // Sort: named guardians first (in defined order), then by recency desc
-        const namedScore = (requesterName: string): number => {
-          const idx = NAMED_DEMANDE_LASTNAMES.findIndex((ln) => requesterName.includes(ln));
-          return idx === -1 ? 1000 : idx;
-        };
-        mapped.sort((a, b) => {
-          const sa = namedScore(a.requesterName);
-          const sb = namedScore(b.requesterName);
-          if (sa !== sb) return sa - sb;
-          return b.createdAt.localeCompare(a.createdAt);
-        });
-        return mapped.slice(0, 6);
-      })
-      .catch(() => []);
-
-    // ============ Teaching assignments summary ============
-    // The seed creates 5 "named" teachers (Laurent / Bernard / Girard / Petit / Robert)
-    // whose pairs we want to surface FIRST in the dashboard's affectations table.
-    // We over-fetch to ~120 rows then prioritise these 5 lastnames in the grouping.
-    const NAMED_TEACHER_LASTNAMES = ['Laurent', 'Bernard', 'Girard', 'Petit', 'Robert'];
-    const teachingAssignmentsSummary: AdminDashboardResponse['teachingAssignmentsSummary'] = await this.prisma.teachingAssignment
-      .findMany({
-        where: { tenantId, classSection: { academicYear: { schoolId } } },
-        include: {
-          teacherProfile: {
-            include: {
-              userProfile: { select: { firstName: true, lastName: true } },
-            },
-          },
-          subject: { select: { name: true } },
-          classSection: {
-            select: {
-              name: true,
-              maxStudents: true,
-              _count: { select: { enrollments: { where: { status: 'active' } } } },
-            },
-          },
-        },
-        take: 200,
-      })
-      .then((rows) => {
-        // Group by (teacher, subject) → list of classes
-        const grouped = new Map<
-          string,
-          {
-            id: string;
-            teacherName: string;
-            subjectName: string;
-            classes: string[];
-            weeklyHours: number;
-            overcapacity: boolean;
-          }
-        >();
-        for (const r of rows) {
-          const key = `${r.teacherProfileId}:${r.subject.name}`;
-          const teacherName = [
-            r.teacherProfile?.userProfile?.firstName,
-            r.teacherProfile?.userProfile?.lastName,
-          ]
-            .filter(Boolean)
-            .join(' ');
-          const isOver =
-            (r.classSection._count?.enrollments ?? 0) > (r.classSection.maxStudents ?? 30);
-          const entry = grouped.get(key) ?? {
-            id: r.id,
-            teacherName,
-            subjectName: r.subject.name,
-            classes: [],
-            weeklyHours: 0,
-            overcapacity: false,
-          };
-          if (!entry.classes.includes(r.classSection.name)) entry.classes.push(r.classSection.name);
-          entry.weeklyHours += Number(r.weeklyHours ?? 0);
-          if (isOver) entry.overcapacity = true;
-          grouped.set(key, entry);
-        }
-        // Sort: named teachers first (in the order defined), then others by hours desc
-        const all = Array.from(grouped.values());
-        const namedScore = (name: string): number => {
-          const idx = NAMED_TEACHER_LASTNAMES.findIndex((ln) => name.includes(ln));
-          return idx === -1 ? 1000 : idx;
-        };
-        all.sort((a, b) => {
-          const sa = namedScore(a.teacherName);
-          const sb = namedScore(b.teacherName);
-          if (sa !== sb) return sa - sb;
-          return b.weeklyHours - a.weeklyHours;
-        });
-        return all.slice(0, 6).map((e) => {
-          // Demo signal: Mme Petit (SVT) is over-quota per target screenshot — flag it
-          // even when raw enrollments don't exceed maxStudents.
-          const isPetitSvt = e.teacherName.includes('Petit') && e.subjectName === 'SVT';
-          return {
-            id: e.id,
-            teacherName: e.teacherName || '—',
-            subjectName: e.subjectName,
-            classes: e.classes,
-            weeklyHours: e.weeklyHours || null,
-            status: (e.overcapacity || isPetitSvt ? 'overcapacity' : 'active') as 'active' | 'overcapacity',
-          };
-        });
-      })
-      .catch(() => []);
 
     // ============ Recent audit (enriched with actorName + detail) ============
     // The `audit_log` table doesn't have a FK constraint on actorId → UserProfile
@@ -1940,34 +1965,6 @@ export class AnalyticsService {
       };
     });
 
-    // ============ Recent exports — real ExportJob rows ============
-    const exportRows = await this.prisma.exportJob
-      .findMany({
-        where: { tenantId },
-        orderBy: { createdAt: 'desc' },
-        take: 3,
-        include: {
-          requester: { select: { firstName: true, lastName: true } },
-        },
-      })
-      .catch(() => []);
-
-    const recentExports: AdminDashboardResponse['recentExports'] = exportRows.map((e) => {
-      const kindUi: 'xlsx' | 'pdf' | 'csv' =
-        e.kind === 'report_card_pdf' ? 'pdf' : e.kind === 'audit_csv' ? 'csv' : 'xlsx';
-      const requesterName = e.requester
-        ? [e.requester.firstName, e.requester.lastName].filter(Boolean).join(' ')
-        : null;
-      return {
-        id: e.id,
-        kind: kindUi,
-        fileName: e.fileName,
-        requesterName,
-        createdAt: e.createdAt.toISOString(),
-        downloadUrl: e.fileUrl,
-      };
-    });
-
     const fmtDelta = (current: number, before: number) => {
       const value = current - before;
       const sign: '+' | '-' | '=' = value > 0 ? '+' : value < 0 ? '-' : '=';
@@ -2010,12 +2007,12 @@ export class AnalyticsService {
         },
       },
       schoolStructure,
-      enrollmentRequests,
-      teachingAssignmentsSummary,
+      teacherCoverageBySubject,
+      teacherCoverageByClass,
+      gradingRateByClass,
+      studentTeacherRatio,
       performance,
-      alertRules: AnalyticsService.DEFAULT_ALERT_RULES,
       recentAudit,
-      recentExports,
     };
   }
 
