@@ -32,6 +32,47 @@ import { RequiresPermission } from '../../shared/auth/requires-permission.decora
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
+import { StudentAccessService } from '../students/student-access.service';
+
+/**
+ * Construit le fragment de `where` Prisma qui applique l'ABAC de visibilité du
+ * calendrier pour un rôle donné. Extrait comme fonction pure pour pouvoir être
+ * testé unitairement (cf. `calendar.access.spec.ts`).
+ *
+ * - **admin** (super_admin / school_admin) : aucune restriction → `{}` (voit tout).
+ * - **teacher** : `visibility ∈ {all, staff_only}` (jamais `admin_only`).
+ * - **parent** : `visibility = all` ET portée pertinente, c.-à-d. soit un
+ *   événement `school_wide`, soit un événement `class_section_scope` ciblant
+ *   l'une des classes (`classSectionIds`) de ses enfants. Les portées
+ *   intermédiaires (cycle / niveau) restent visibles tant qu'elles sont
+ *   `visibility = all` — on ne masque que le bruit `class_section_scope` des
+ *   autres classes. Les events `staff_only` / `admin_only` ne fuient jamais.
+ *
+ * `classSectionIds` n'est consulté que pour la branche parent.
+ */
+export function calendarVisibilityWhere(
+  roles: string[],
+  classSectionIds: string[],
+): Record<string, unknown> {
+  const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
+  if (isAdmin) return {};
+
+  const isStaff = roles.includes('teacher');
+  if (isStaff) {
+    return {
+      visibility: { in: [CalendarEventVisibility.all, CalendarEventVisibility.staff_only] },
+    };
+  }
+
+  // Parent : uniquement le public (`all`), restreint aux portées qui le concernent.
+  return {
+    visibility: CalendarEventVisibility.all,
+    OR: [
+      { scope: { not: CalendarEventScope.class_section_scope } },
+      { classSectionId: { in: classSectionIds } },
+    ],
+  };
+}
 
 const FRENCH_PUBLIC_HOLIDAYS = (year: number): Array<{ title: string; date: string }> => {
   // Easter-anchored: Easter Monday & Pentecost Monday.
@@ -117,6 +158,7 @@ export class CalendarController {
     private readonly prisma: PrismaService,
     private readonly users: UserSyncService,
     private readonly ctx: SchoolContextService,
+    private readonly studentAccess: StudentAccessService,
   ) {}
 
   @Get('events')
@@ -140,17 +182,20 @@ export class CalendarController {
     if (type) where.type = type;
     if (academicYearId) where.academicYearId = academicYearId;
 
-    // Visibility ABAC: parents only see `all`, teachers see `all + staff_only`,
-    // admins see everything. Prevents leaking staff/admin-only events through
-    // the read endpoint even though every role technically has `calendar.read`.
+    // ABAC de visibilité : l'admin voit tout, le teacher voit `all + staff_only`,
+    // le parent ne voit que `all` ET les portées qui le concernent (événements
+    // de l'école entière OU des classes de ses enfants). On résout les classes
+    // des enfants UNIQUEMENT pour un parent (les autres rôles n'en ont pas besoin)
+    // afin d'éviter une requête superflue. Empêche toute fuite des événements
+    // staff_only / admin_only via l'endpoint de lecture, bien que chaque rôle
+    // possède techniquement `calendar.read`.
     const roles = jwt.realm_access?.roles ?? [];
-    const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
-    const isStaff = isAdmin || roles.includes('teacher');
-    if (!isAdmin) {
-      where.visibility = isStaff
-        ? { in: [CalendarEventVisibility.all, CalendarEventVisibility.staff_only] }
-        : CalendarEventVisibility.all;
-    }
+    const isPrivileged =
+      roles.includes('super_admin') || roles.includes('school_admin') || roles.includes('teacher');
+    const classSectionIds = isPrivileged
+      ? []
+      : await this.resolveParentClassSectionIds(me, jwt, schoolId);
+    Object.assign(where, calendarVisibilityWhere(roles, classSectionIds));
 
     const events = await this.prisma.calendarEvent.findMany({
       where,
@@ -271,6 +316,36 @@ export class CalendarController {
       created += 1;
     }
     return { ok: true, created, skipped, year };
+  }
+
+  /**
+   * Renvoie les `classSectionId` des classes actives des enfants du parent.
+   * Réutilise `StudentAccessService.scopeForUser` pour obtenir les `studentIds`
+   * autorisés, puis lit leurs inscriptions (`Enrollment`) actives. Renvoie un
+   * tableau vide si le parent n'a aucun enfant ou aucune inscription active —
+   * `calendarVisibilityWhere` se rabat alors sur les seuls événements
+   * `school_wide`, ce qui est le comportement de repli sûr.
+   */
+  private async resolveParentClassSectionIds(
+    me: { id: string; tenantId: string },
+    jwt: KeycloakJwtPayload,
+    schoolId: string,
+  ): Promise<string[]> {
+    const scope = await this.studentAccess.scopeForUser(me, jwt, schoolId);
+    // `studentIds: null` = aucune restriction (admin/teacher) : non concerné ici.
+    if (scope.studentIds === null || scope.studentIds.length === 0) return [];
+
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: {
+        tenantId: me.tenantId,
+        status: 'active',
+        studentId: { in: scope.studentIds },
+      },
+      select: { classSectionId: true },
+    });
+
+    // Dédoublonne (plusieurs enfants peuvent partager une classe).
+    return [...new Set(enrollments.map((e) => e.classSectionId))];
   }
 
   private async createEvent(

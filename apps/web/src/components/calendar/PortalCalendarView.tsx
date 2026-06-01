@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ClipboardList,
   Flag,
+  GraduationCap,
   Info,
   PartyPopper,
   School,
@@ -38,6 +39,12 @@ export type CalendarEventType =
   | 'meeting'
   | 'ceremony'
   | 'pedagogical_day'
+  // `evaluation` est un type SYNTHÉTIQUE côté client : il n'existe pas dans
+  // l'enum backend `CalendarEventType`. Le portail parent fusionne les
+  // évaluations à venir (issues de `/analytics/parent-upcoming`) dans la même
+  // vue calendrier en les mappant sur ce type. Les portails teacher/admin ne
+  // passent jamais d'événements de ce type.
+  | 'evaluation'
   | 'custom';
 
 export type CalendarEventScope =
@@ -75,6 +82,7 @@ const TYPE_LABEL: Record<CalendarEventType, string> = {
   meeting: 'Réunion',
   ceremony: 'Cérémonie',
   pedagogical_day: 'Journée pédagogique',
+  evaluation: 'Évaluation',
   custom: 'Événement',
 };
 
@@ -85,6 +93,7 @@ const TYPE_TONE: Record<CalendarEventType, string> = {
   meeting: 'bg-blue-50 text-blue-800 border-blue-200',
   ceremony: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   pedagogical_day: 'bg-cyan-50 text-cyan-800 border-cyan-200',
+  evaluation: 'bg-indigo-50 text-indigo-800 border-indigo-200',
   custom: 'bg-slate-50 text-slate-800 border-slate-200',
 };
 
@@ -95,6 +104,7 @@ const TYPE_SOLID: Record<CalendarEventType, string> = {
   meeting: 'bg-blue-500',
   ceremony: 'bg-emerald-500',
   pedagogical_day: 'bg-cyan-500',
+  evaluation: 'bg-indigo-500',
   custom: 'bg-slate-500',
 };
 
@@ -105,6 +115,7 @@ const TYPE_ICON: Record<CalendarEventType, typeof Sun> = {
   meeting: Users,
   ceremony: PartyPopper,
   pedagogical_day: Sparkles,
+  evaluation: GraduationCap,
   custom: CalendarIcon,
 };
 
