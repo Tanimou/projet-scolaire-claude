@@ -376,6 +376,30 @@ export interface ParentDashboardResponse {
     'T2': number | null;
     'T3': number | null;
   }>;
+  /** Professeur en charge de chaque matière suivie (via les affectations de la classe). */
+  subjectTeachers: Array<{
+    subjectId: string;
+    subjectCode: string;
+    subjectName: string;
+    subjectColor: string | null;
+    teacherId: string | null;
+    teacherName: string | null;
+  }>;
+  /** Comparaison de la moyenne générale avec l'année scolaire précédente (N-1 vs N). */
+  previousYearComparison: {
+    previousYearId: string;
+    previousYearName: string;
+    previousAverage: number | null;
+    currentAverage: number | null;
+    delta: number | null;
+    trend: 'up' | 'down' | 'stable';
+  } | null;
+  /** Synthèse de progression sur l'année : meilleure/pire matière + recommandations. */
+  annualProgression: {
+    mostImproved: AnnualSubjectDelta | null;
+    mostDeclined: AnnualSubjectDelta | null;
+    recommendations: string[];
+  };
   recentGrades: Array<{
     id: string;
     date: string;
@@ -399,6 +423,19 @@ export interface ParentDashboardResponse {
   }>;
 }
 
+/** Variation annuelle d'une matière entre le premier et le dernier trimestre noté. */
+export interface AnnualSubjectDelta {
+  subjectId: string;
+  subjectName: string;
+  subjectCode: string;
+  /** Moyenne au premier trimestre noté (/20). */
+  from: number;
+  /** Moyenne au dernier trimestre noté (/20). */
+  to: number;
+  /** Variation `to - from` (signée, en points /20). */
+  delta: number;
+}
+
 /**
  * AnalyticsService — aggregates KPIs for dashboards.
  * All counts are scoped to the (tenant, school) of the caller.
@@ -407,7 +444,10 @@ export interface ParentDashboardResponse {
  */
 @Injectable()
 export class AnalyticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly grades: GradesService,
+  ) {}
 
   /**
    * Parent dashboard payload — image 7 prescriptive.
@@ -612,7 +652,15 @@ export class AnalyticsService {
                 gradeLevel: { select: { id: true, name: true } },
               },
             },
-            academicYear: { select: { id: true, name: true, status: true } },
+            academicYear: {
+              select: {
+                id: true,
+                name: true,
+                status: true,
+                startDate: true,
+                endDate: true,
+              },
+            },
           },
           take: 1,
         },
@@ -722,6 +770,10 @@ export class AnalyticsService {
       };
     });
 
+    // Rang général de l'élève dans sa classe + nombre d'élèves classés.
+    let studentRank: number | null = null;
+    let classRankTotal = 0;
+
     // Compute class averages for each subject (light query: fetch all grades for the class section in this year)
     if (classSectionId && academicYearId) {
       const classGrades = await this.prisma.grade.findMany({
@@ -740,6 +792,8 @@ export class AnalyticsService {
         },
       });
       const classSubjectAgg = new Map<string, { sum: number; n: number; studentIds: Set<string> }>();
+      // Cumul par (élève × matière) pour calculer rang par matière + rang général.
+      const perStudentSubject = new Map<string, Map<string, { sum: number; n: number }>>();
       for (const g of classGrades) {
         if (!g.value) continue;
         const sId = g.assessment.teachingAssignment.subject.id;
@@ -749,12 +803,62 @@ export class AnalyticsService {
         agg.n += 1;
         agg.studentIds.add(g.studentId);
         classSubjectAgg.set(sId, agg);
+
+        if (!perStudentSubject.has(g.studentId)) perStudentSubject.set(g.studentId, new Map());
+        const subjMap = perStudentSubject.get(g.studentId)!;
+        const cur = subjMap.get(sId) ?? { sum: 0, n: 0 };
+        cur.sum += onTwenty;
+        cur.n += 1;
+        subjMap.set(sId, cur);
       }
       const classSize = new Set(classGrades.map((g) => g.studentId)).size;
+
+      // Moyenne simple par (élève × matière), puis moyenne générale par élève
+      // (moyenne des moyennes par matière — cohérent avec `card.studentAverage`).
+      const subjectAvgByStudent = new Map<string, Map<string, number>>();
+      const overallByStudent = new Map<string, number>();
+      for (const [sid, subjMap] of perStudentSubject.entries()) {
+        const avgMap = new Map<string, number>();
+        const subjAvgs: number[] = [];
+        for (const [subjId, { sum, n }] of subjMap.entries()) {
+          if (n === 0) continue;
+          const avg = sum / n;
+          avgMap.set(subjId, avg);
+          subjAvgs.push(avg);
+        }
+        subjectAvgByStudent.set(sid, avgMap);
+        if (subjAvgs.length > 0) {
+          overallByStudent.set(sid, subjAvgs.reduce((a, b) => a + b, 0) / subjAvgs.length);
+        }
+      }
+
+      // Rang par matière de l'élève courant (compétition : ex æquo = même rang).
+      // `classSize` reste le nombre d'élèves de la classe (dénominateur affiché).
       for (const card of subjectPerf) {
         const agg = classSubjectAgg.get(card.subjectId);
         card.classAverage = agg ? agg.sum / agg.n : null;
         card.classSize = classSize;
+
+        const myAvg = subjectAvgByStudent.get(studentId)?.get(card.subjectId);
+        if (myAvg != null) {
+          let higher = 0;
+          for (const avgMap of subjectAvgByStudent.values()) {
+            const v = avgMap.get(card.subjectId);
+            if (v != null && v > myAvg) higher += 1;
+          }
+          card.studentRank = higher + 1;
+        }
+      }
+
+      // Rang général de l'élève courant.
+      classRankTotal = overallByStudent.size;
+      const myOverall = overallByStudent.get(studentId);
+      if (myOverall != null) {
+        let higher = 0;
+        for (const v of overallByStudent.values()) {
+          if (v > myOverall) higher += 1;
+        }
+        studentRank = higher + 1;
       }
     }
 
@@ -889,19 +993,47 @@ export class AnalyticsService {
     const presentAtt = attendance.filter((r) => r.status === 'present').length;
     const attendanceRate = totalAtt === 0 ? null : (presentAtt / totalAtt) * 100;
 
+    // ── Professeur par matière (via les affectations de la classe) ──────────
+    const teacherBySubject =
+      classSectionId && academicYearId
+        ? await this.teacherPerSubject(tenantId, classSectionId, academicYearId)
+        : new Map<string, { teacherId: string; teacherName: string }>();
+    const subjectTeachers = subjectPerf.map((s) => {
+      const t = teacherBySubject.get(s.subjectId);
+      return {
+        subjectId: s.subjectId,
+        subjectCode: s.subjectCode,
+        subjectName: s.subjectName,
+        subjectColor: s.subjectColor,
+        teacherId: t?.teacherId ?? null,
+        teacherName: t?.teacherName ?? null,
+      };
+    });
+
+    // ── Comparaison avec l'année précédente (moyenne générale N-1 vs N) ─────
+    const previousYearComparison = await this.previousYearComparison(
+      tenantId,
+      studentId,
+      activeEnrollment?.academicYear ?? null,
+      overallAvg,
+    );
+
+    // ── Progression annuelle (meilleure/pire matière + recommandations) ─────
+    const annualProgression = this.annualProgression(bySubject);
+
     return {
       student: {
         id: student.id,
         firstName: student.firstName,
         lastName: student.lastName,
-        photoUrl: null,
+        photoUrl: student.photoUrl ?? null,
         classSectionName: activeEnrollment?.classSection.name ?? null,
         gradeLevelName: activeEnrollment?.classSection.gradeLevel?.name ?? null,
         schoolName: student.school?.name ?? null,
         externalRef: student.externalRef,
         birthDate: student.birthDate?.toISOString() ?? null,
-        rank: null,
-        classSize: subjectPerf[0]?.classSize ?? 0,
+        rank: studentRank,
+        classSize: classRankTotal || subjectPerf[0]?.classSize || 0,
       },
       globalPerformance: {
         studentAverage: overallAvg,
@@ -915,9 +1047,159 @@ export class AnalyticsService {
       subjectPerf,
       termEvolution,
       subjectEvolution,
+      subjectTeachers,
+      previousYearComparison,
+      annualProgression,
       recentGrades,
       upcomingAssessments,
     };
+  }
+
+  /**
+   * Résout le professeur en charge de chaque matière d'une classe via les
+   * {@link TeachingAssignment} (filtrées sur l'année scolaire). Retourne une
+   * map `subjectId -> { teacherId, teacherName }`.
+   */
+  private async teacherPerSubject(
+    tenantId: string,
+    classSectionId: string,
+    academicYearId: string,
+  ): Promise<Map<string, { teacherId: string; teacherName: string }>> {
+    const assignments = await this.prisma.teachingAssignment.findMany({
+      where: { tenantId, classSectionId, academicYearId },
+      include: { teacher: { select: { id: true, firstName: true, lastName: true } } },
+    });
+    const map = new Map<string, { teacherId: string; teacherName: string }>();
+    for (const a of assignments) {
+      // En cas d'affectations multiples sur une matière, on garde la première.
+      if (map.has(a.subjectId)) continue;
+      map.set(a.subjectId, {
+        teacherId: a.teacherId,
+        teacherName: `${a.teacher.firstName} ${a.teacher.lastName}`.trim(),
+      });
+    }
+    return map;
+  }
+
+  /**
+   * Compare la moyenne générale de l'année courante à celle de l'année
+   * scolaire précédente (résolue par la date de fin la plus proche avant le
+   * début de l'année courante). Réutilise {@link GradesService.statsForStudent}
+   * pour le calcul de l'an dernier (mêmes règles de coefficients).
+   */
+  private async previousYearComparison(
+    tenantId: string,
+    studentId: string,
+    currentYear: { id: string; name: string; startDate: Date } | null,
+    currentOverallAverage: number | null,
+  ): Promise<ParentDashboardResponse['previousYearComparison']> {
+    if (!currentYear) return null;
+
+    const previousYear = await this.prisma.academicYear.findFirst({
+      where: { tenantId, endDate: { lte: currentYear.startDate } },
+      orderBy: { endDate: 'desc' },
+    });
+    if (!previousYear) return null;
+
+    const previousStats = await this.grades.statsForStudent(studentId, tenantId, {
+      academicYearId: previousYear.id,
+    });
+    const previousAverage = previousStats.overallAverage;
+    // Aucune donnée exploitable l'an dernier : pas de comparaison utile.
+    if (previousAverage === null) return null;
+
+    const current =
+      currentOverallAverage != null ? Math.round(currentOverallAverage * 100) / 100 : null;
+    const delta = current != null ? Math.round((current - previousAverage) * 100) / 100 : null;
+    const trend: 'up' | 'down' | 'stable' =
+      delta === null ? 'stable' : delta > 0.5 ? 'up' : delta < -0.5 ? 'down' : 'stable';
+
+    return {
+      previousYearId: previousYear.id,
+      previousYearName: previousYear.name,
+      previousAverage,
+      currentAverage: current,
+      delta,
+      trend,
+    };
+  }
+
+  /**
+   * Dérive la progression annuelle à partir de l'évolution par trimestre de
+   * chaque matière (premier trimestre noté vs dernier trimestre noté) :
+   * meilleure progression, matière en plus forte baisse et recommandations.
+   */
+  private annualProgression(
+    bySubject: Map<
+      string,
+      {
+        subjectId: string;
+        subjectCode: string;
+        subjectName: string;
+        grades: Array<{ onTwenty: number; termOrder: number }>;
+      }
+    >,
+  ): ParentDashboardResponse['annualProgression'] {
+    const deltas: AnnualSubjectDelta[] = [];
+    for (const s of bySubject.values()) {
+      // Moyenne par trimestre (ordre > 0 : on ignore les notes hors trimestre).
+      const byTerm = new Map<number, { sum: number; n: number }>();
+      for (const g of s.grades) {
+        if (g.termOrder <= 0) continue;
+        const cur = byTerm.get(g.termOrder) ?? { sum: 0, n: 0 };
+        cur.sum += g.onTwenty;
+        cur.n += 1;
+        byTerm.set(g.termOrder, cur);
+      }
+      const orderedTerms = [...byTerm.keys()].sort((a, b) => a - b);
+      // Besoin d'au moins deux trimestres notés pour mesurer une tendance.
+      if (orderedTerms.length < 2) continue;
+      const firstT = byTerm.get(orderedTerms[0])!;
+      const lastT = byTerm.get(orderedTerms[orderedTerms.length - 1])!;
+      const from = Math.round((firstT.sum / firstT.n) * 100) / 100;
+      const to = Math.round((lastT.sum / lastT.n) * 100) / 100;
+      deltas.push({
+        subjectId: s.subjectId,
+        subjectName: s.subjectName,
+        subjectCode: s.subjectCode,
+        from,
+        to,
+        delta: Math.round((to - from) * 100) / 100,
+      });
+    }
+
+    if (deltas.length === 0) {
+      return { mostImproved: null, mostDeclined: null, recommendations: [] };
+    }
+
+    const sorted = [...deltas].sort((a, b) => b.delta - a.delta);
+    const top = sorted[0];
+    const bottom = sorted[sorted.length - 1];
+    const mostImproved = top.delta > 0 ? top : null;
+    const mostDeclined = bottom.delta < 0 ? bottom : null;
+
+    const recommendations: string[] = [];
+    if (mostImproved) {
+      recommendations.push(
+        `Belle progression en ${mostImproved.subjectName} (+${mostImproved.delta.toFixed(
+          1,
+        )} pts) : encourager l'élève à maintenir ses efforts.`,
+      );
+    }
+    if (mostDeclined) {
+      recommendations.push(
+        `Baisse en ${mostDeclined.subjectName} (${mostDeclined.delta.toFixed(
+          1,
+        )} pts) : prévoir un accompagnement ou un point avec le professeur.`,
+      );
+    }
+    if (!mostImproved && !mostDeclined) {
+      recommendations.push(
+        "Résultats stables sur l'année : poursuivre le travail régulier engagé.",
+      );
+    }
+
+    return { mostImproved, mostDeclined, recommendations };
   }
 
   /**

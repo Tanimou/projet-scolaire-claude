@@ -1,4 +1,14 @@
-import { Award, GaugeCircle, LineChart as LineChartIcon, TrendingDown, TrendingUp, Users } from 'lucide-react';
+import {
+  Award,
+  GaugeCircle,
+  History,
+  LineChart as LineChartIcon,
+  Lightbulb,
+  TrendingDown,
+  TrendingUp,
+  UserRound,
+  Users,
+} from 'lucide-react';
 
 import {
   EmptyState,
@@ -6,9 +16,11 @@ import {
   PreferredDate,
   ProgressBar,
   SectionHeader,
+  StatusBadge,
   SubjectPerfCard,
   formatGrade,
   formatPercent,
+  formatSignedDelta,
   trendOfDelta,
   type LineSeries,
   type SubjectMetric,
@@ -36,6 +48,30 @@ export interface StudentAcademicSnapshot {
     badge: string | null;
   }>;
   termEvolution: Array<{ label: string; student: number | null; class: number | null }>;
+  /** Professeur en charge de chaque matière suivie. */
+  subjectTeachers: Array<{
+    subjectId: string;
+    subjectCode: string;
+    subjectName: string;
+    subjectColor: string | null;
+    teacherId: string | null;
+    teacherName: string | null;
+  }>;
+  /** Comparaison de la moyenne générale avec l'année précédente. */
+  previousYearComparison: {
+    previousYearId: string;
+    previousYearName: string;
+    previousAverage: number | null;
+    currentAverage: number | null;
+    delta: number | null;
+    trend: 'up' | 'down' | 'stable';
+  } | null;
+  /** Synthèse de progression annuelle (meilleure/pire matière + reco). */
+  annualProgression: {
+    mostImproved: AnnualSubjectDelta | null;
+    mostDeclined: AnnualSubjectDelta | null;
+    recommendations: string[];
+  };
   recentGrades: Array<{
     id: string;
     date: string;
@@ -51,6 +87,15 @@ export interface StudentAcademicSnapshot {
   }>;
   rank: number | null;
   classSize: number;
+}
+
+export interface AnnualSubjectDelta {
+  subjectId: string;
+  subjectName: string;
+  subjectCode: string;
+  from: number;
+  to: number;
+  delta: number;
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -161,6 +206,7 @@ export function StudentAcademicTab({
           <SectionHeader title="Performance par matière" subtitle="Moyenne de l'élève comparée à la classe" />
           <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {academic.subjectPerf.map((s) => {
+              const teacher = teacherBySubject.get(s.subjectId);
               const metrics: SubjectMetric[] = [
                 { label: 'Moyenne classe', value: formatGrade(s.classAverage, 1) },
                 {
@@ -184,7 +230,14 @@ export function StudentAcademicTab({
                   grade={s.studentAverage}
                   badge={s.badge ?? undefined}
                   metrics={metrics}
-                />
+                >
+                  {teacher?.teacherName && (
+                    <div className="mt-3 flex items-center gap-1.5 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
+                      <UserRound className="h-3.5 w-3.5 text-slate-400" />
+                      <span className="truncate">{teacher.teacherName}</span>
+                    </div>
+                  )}
+                </SubjectPerfCard>
               );
             })}
           </div>
