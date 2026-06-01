@@ -19,7 +19,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { PreferredDate, formatPreferredDate, useDisplayDateFormat } from '@pilotage/ui';
+import { Avatar, PreferredDate, formatPreferredDate, useDisplayDateFormat } from '@pilotage/ui';
 import { useState } from 'react';
 
 import {
@@ -143,6 +143,19 @@ function TabButton({
   );
 }
 
+/** Extrait la rue d'une adresse structurée pour l'affichage condensé. */
+function formatAddress(address: Record<string, unknown> | null): string {
+  if (!address) return '—';
+  const parts: string[] = [];
+  if (typeof address.street === 'string' && address.street) parts.push(address.street);
+  if (typeof address.city === 'string' && address.city) {
+    const zipCity = [address.postalCode, address.city].filter(Boolean).join(' ');
+    parts.push(zipCity);
+  }
+  if (typeof address.country === 'string' && address.country) parts.push(address.country);
+  return parts.length > 0 ? parts.join(', ') : '—';
+}
+
 function IdentityTab({ student }: { student: StudentDetail }) {
   const dateFmt = useDisplayDateFormat();
   const [editing, setEditing] = useState(false);
@@ -154,11 +167,34 @@ function IdentityTab({ student }: { student: StudentDetail }) {
   const [externalRef, setExternalRef] = useState(student.externalRef ?? '');
   const [gender, setGender] = useState(student.gender ?? '');
   const [nationality, setNationality] = useState(student.nationality ?? '');
+  const [photoUrl, setPhotoUrl] = useState(student.photoUrl ?? '');
+  // Adresse structurée : rue, ville, code postal, pays
+  const [addrStreet, setAddrStreet] = useState(
+    typeof student.address?.street === 'string' ? student.address.street : '',
+  );
+  const [addrCity, setAddrCity] = useState(
+    typeof student.address?.city === 'string' ? student.address.city : '',
+  );
+  const [addrPostalCode, setAddrPostalCode] = useState(
+    typeof student.address?.postalCode === 'string' ? student.address.postalCode : '',
+  );
+  const [addrCountry, setAddrCountry] = useState(
+    typeof student.address?.country === 'string' ? student.address.country : '',
+  );
   const [medicalNotes, setMedicalNotes] = useState(student.medicalNotes ?? '');
   const [notes, setNotes] = useState(student.notes ?? '');
   const [status, setStatus] = useState(student.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const buildAddress = (): Record<string, string> | null => {
+    const addr: Record<string, string> = {};
+    if (addrStreet.trim()) addr.street = addrStreet.trim();
+    if (addrCity.trim()) addr.city = addrCity.trim();
+    if (addrPostalCode.trim()) addr.postalCode = addrPostalCode.trim();
+    if (addrCountry.trim()) addr.country = addrCountry.trim();
+    return Object.keys(addr).length > 0 ? addr : null;
+  };
 
   const onSave = async () => {
     setBusy(true);
@@ -172,6 +208,8 @@ function IdentityTab({ student }: { student: StudentDetail }) {
       externalRef: externalRef.trim() || null,
       gender: gender || null,
       nationality: nationality || null,
+      photoUrl: photoUrl.trim() || null,
+      address: buildAddress(),
       medicalNotes: medicalNotes.trim() || null,
       notes: notes.trim() || null,
       status,
@@ -194,20 +232,33 @@ function IdentityTab({ student }: { student: StudentDetail }) {
             <Edit2 className="h-3.5 w-3.5" /> Modifier
           </button>
         </div>
-        <dl className="mt-4 grid gap-4 sm:grid-cols-2">
-          <Row label="Prénom" value={student.firstName} />
-          <Row label="Nom" value={student.lastName} />
-          <Row
-            label="Date de naissance"
-            value={student.birthDate ? formatPreferredDate(student.birthDate, dateFmt) : '—'}
+
+        {/* Photo de profil + identité */}
+        <div className="mt-4 flex items-start gap-4">
+          <Avatar
+            src={student.photoUrl}
+            firstName={student.firstName}
+            lastName={student.lastName}
+            size="lg"
+            className="shrink-0 rounded-xl"
           />
-          <Row label="Sexe" value={student.gender ?? '—'} />
-          <Row label="Matricule" value={student.externalRef ?? '—'} mono />
-          <Row label="Nationalité" value={student.nationality ?? '—'} mono />
-          <Row label="Email" value={student.email ?? '—'} />
-          <Row label="Téléphone" value={student.phone ?? '—'} />
-          <Row label="Statut" value={student.status} />
-        </dl>
+          <dl className="flex-1 grid gap-4 sm:grid-cols-2">
+            <Row label="Prénom" value={student.firstName} />
+            <Row label="Nom" value={student.lastName} />
+            <Row
+              label="Date de naissance"
+              value={student.birthDate ? formatPreferredDate(student.birthDate, dateFmt) : '—'}
+            />
+            <Row label="Sexe" value={student.gender ?? '—'} />
+            <Row label="Matricule" value={student.externalRef ?? '—'} mono />
+            <Row label="Nationalité" value={student.nationality ?? '—'} mono />
+            <Row label="Email" value={student.email ?? '—'} />
+            <Row label="Téléphone" value={student.phone ?? '—'} />
+            <Row label="Statut" value={student.status} />
+            <Row label="Adresse" value={formatAddress(student.address)} />
+          </dl>
+        </div>
+
         {(student.medicalNotes || student.notes) && (
           <div className="mt-6 space-y-3">
             {student.medicalNotes && (
@@ -233,6 +284,27 @@ function IdentityTab({ student }: { student: StudentDetail }) {
   return (
     <section className="rounded-2xl bg-white ring-1 ring-slate-200 p-6 space-y-4">
       {error && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>}
+
+      {/* Prévisualisation de la photo en mode édition */}
+      <div className="flex items-center gap-4">
+        <Avatar
+          src={photoUrl || null}
+          firstName={firstName}
+          lastName={lastName}
+          size="lg"
+          className="shrink-0 rounded-xl"
+        />
+        <Field label="URL de la photo de profil">
+          <input
+            type="url"
+            value={photoUrl}
+            onChange={(e) => setPhotoUrl(e.target.value)}
+            placeholder="https://example.com/photo.jpg"
+            className={inputCls}
+          />
+        </Field>
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Prénom">
           <input value={firstName} onChange={(e) => setFirstName(e.target.value)} className={inputCls} />
@@ -277,6 +349,46 @@ function IdentityTab({ student }: { student: StudentDetail }) {
           </select>
         </Field>
       </div>
+
+      {/* Adresse structurée */}
+      <div>
+        <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-600">Adresse</div>
+        <div className="grid gap-3 sm:grid-cols-2 rounded-xl border border-slate-200 p-4">
+          <Field label="Rue">
+            <input
+              value={addrStreet}
+              onChange={(e) => setAddrStreet(e.target.value)}
+              placeholder="12 rue de la Paix"
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Ville">
+            <input
+              value={addrCity}
+              onChange={(e) => setAddrCity(e.target.value)}
+              placeholder="Paris"
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Code postal">
+            <input
+              value={addrPostalCode}
+              onChange={(e) => setAddrPostalCode(e.target.value)}
+              placeholder="75001"
+              className={`${inputCls} font-mono`}
+            />
+          </Field>
+          <Field label="Pays">
+            <input
+              value={addrCountry}
+              onChange={(e) => setAddrCountry(e.target.value)}
+              placeholder="France"
+              className={inputCls}
+            />
+          </Field>
+        </div>
+      </div>
+
       <Field label="Notes médicales (allergies, infos importantes)">
         <textarea
           value={medicalNotes}

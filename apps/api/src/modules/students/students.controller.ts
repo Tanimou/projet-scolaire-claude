@@ -48,6 +48,8 @@ class CreateStudentDto {
   @IsOptional() @IsString() @Length(1, 1) gender?: string;
   @IsOptional() @IsString() @Length(2, 2) nationality?: string;
   @IsOptional() @IsObject() address?: Record<string, unknown>;
+  /** URL de la photo de profil de l'élève (stockée externement, ex: MinIO). */
+  @IsOptional() @IsString() @MaxLength(2000) photoUrl?: string;
   @IsOptional() @IsString() @MaxLength(2000) medicalNotes?: string;
   @IsOptional() @IsString() @MaxLength(2000) notes?: string;
   @IsOptional() @IsObject() customFields?: Record<string, unknown>;
@@ -63,6 +65,8 @@ class UpdateStudentDto {
   @IsOptional() @IsString() @Length(1, 1) gender?: string;
   @IsOptional() @IsString() @Length(2, 2) nationality?: string;
   @IsOptional() @IsObject() address?: Record<string, unknown>;
+  /** URL de la photo de profil de l'élève (stockée externement, ex: MinIO). */
+  @IsOptional() @IsString() @MaxLength(2000) photoUrl?: string;
   @IsOptional() @IsString() @MaxLength(2000) medicalNotes?: string;
   @IsOptional() @IsString() @MaxLength(2000) notes?: string;
   @IsOptional() @IsEnum(StudentStatus) status?: StudentStatus;
@@ -240,6 +244,7 @@ export class StudentsController {
         gender: body.gender,
         nationality: body.nationality?.toUpperCase(),
         address: body.address as never,
+        photoUrl: body.photoUrl,
         medicalNotes: body.medicalNotes,
         notes: body.notes,
         customFields: (body.customFields ?? {}) as never,
@@ -279,6 +284,7 @@ export class StudentsController {
         ...(body.gender !== undefined ? { gender: body.gender } : {}),
         ...(body.nationality !== undefined ? { nationality: body.nationality?.toUpperCase() } : {}),
         ...(body.address !== undefined ? { address: body.address as never } : {}),
+        ...(body.photoUrl !== undefined ? { photoUrl: body.photoUrl } : {}),
         ...(body.medicalNotes !== undefined ? { medicalNotes: body.medicalNotes } : {}),
         ...(body.notes !== undefined ? { notes: body.notes } : {}),
         ...(body.status !== undefined ? { status: body.status } : {}),
