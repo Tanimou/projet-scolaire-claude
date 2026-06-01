@@ -21,11 +21,19 @@ function bust() {
   revalidatePath('/admin/dashboard');
 }
 
+/** Options pédagogiques : dictionnaire libre clé → valeur. */
+export type ClassOptions = Record<string, unknown>;
+
 export async function createClass(payload: {
   name: string;
   academicYearId: string;
   gradeLevelId: string;
   maxStudents?: number;
+  room?: string;
+  color?: string;
+  icon?: string;
+  options?: ClassOptions;
+  internalNotes?: string;
 }): Promise<Result> {
   try {
     await api('/api/v1/classes', { method: 'POST', body: payload });
@@ -38,11 +46,21 @@ export async function createClass(payload: {
 
 export async function updateClass(
   id: string,
-  patch: { name?: string; maxStudents?: number; status?: 'active' | 'closed' },
+  patch: {
+    name?: string;
+    maxStudents?: number;
+    status?: 'active' | 'closed';
+    room?: string | null;
+    color?: string | null;
+    icon?: string | null;
+    options?: ClassOptions | null;
+    internalNotes?: string | null;
+  },
 ): Promise<Result> {
   try {
     await api(`/api/v1/classes/${id}`, { method: 'PATCH', body: patch });
     bust();
+    revalidatePath(`/admin/classes/${id}`);
     return { ok: true };
   } catch (err) {
     return toError(err);

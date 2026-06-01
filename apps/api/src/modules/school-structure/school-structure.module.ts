@@ -6,6 +6,7 @@ import { AcademicYearsController } from './academic-years.controller';
 import { BrandingController } from './branding.controller';
 import { BrandingService } from './branding.service';
 import { ClassesController } from './classes.controller';
+import { ClassesService } from './classes.service';
 import { CyclesController } from './cycles.controller';
 import { SchoolContextService } from './school-context.service';
 import { SetupController } from './setup.controller';
@@ -23,7 +24,7 @@ import { SubjectsController } from './subjects.controller';
     SetupController,
     StructureController,
   ],
-  providers: [BrandingService, SchoolContextService],
+  providers: [BrandingService, SchoolContextService, ClassesService],
   exports: [BrandingService, SchoolContextService],
 })
 export class SchoolStructureModule {}

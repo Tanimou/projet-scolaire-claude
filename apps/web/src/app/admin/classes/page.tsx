@@ -15,6 +15,7 @@ import {
   StatusBadge,
 } from '@pilotage/ui';
 
+import { ClassInfoEditor } from './ClassInfoEditor';
 import { ClassesPageFilters } from './ClassesPageFilters';
 
 export const metadata: Metadata = { title: 'Gestion des classes' };
@@ -27,6 +28,11 @@ interface ClassItem {
   status: 'active' | 'closed';
   academicYearId: string;
   gradeLevelId: string;
+  room: string | null;
+  color: string | null;
+  icon: string | null;
+  options: Record<string, unknown> | null;
+  internalNotes: string | null;
   gradeLevel: {
     id: string;
     code: string;
@@ -221,6 +227,7 @@ export default async function ClassesPage({
                   <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
                     <th className="px-4 py-3">Nom de la classe</th>
                     <th className="px-4 py-3">Niveau</th>
+                    <th className="px-4 py-3">Salle</th>
                     <th className="px-4 py-3">Année académique</th>
                     <th className="px-4 py-3">Capacité maximale</th>
                     <th className="px-4 py-3">Effectif actuel</th>
@@ -238,14 +245,26 @@ export default async function ClassesPage({
                     return (
                       <tr key={c.id} className="hover:bg-slate-50/60">
                         <td className="px-4 py-3">
-                          <Link
-                            href={`/admin/classes/${c.id}`}
-                            className="text-sm font-bold accent-text hover:underline"
-                          >
-                            {c.name}
-                          </Link>
+                          <div className="flex items-center gap-2">
+                            <span
+                              aria-hidden
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-xs text-white"
+                              style={{ background: c.color ?? c.gradeLevel.cycle.color ?? 'oklch(0.62 0.18 250)' }}
+                            >
+                              {c.icon ?? c.name.slice(0, 1).toUpperCase()}
+                            </span>
+                            <Link
+                              href={`/admin/classes/${c.id}`}
+                              className="text-sm font-bold accent-text hover:underline"
+                            >
+                              {c.name}
+                            </Link>
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-sm text-slate-700">{c.gradeLevel.name}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">
+                          {c.room ?? <span className="text-slate-400">—</span>}
+                        </td>
                         <td className="px-4 py-3 text-sm text-slate-700">{c.academicYear.name}</td>
                         <td className="px-4 py-3 text-sm tabular-nums text-slate-700">
                           {c.maxStudents}
@@ -275,11 +294,27 @@ export default async function ClassesPage({
                             <StatusBadge label="Fermée" tone="neutral" size="sm" withDot />
                           )}
                         </td>
-                        <td className="px-4 py-3 text-right">
-                          <RowActions
-                            viewHref={`/admin/classes/${c.id}`}
-                            editHref={`/admin/classes/${c.id}#edit`}
-                          />
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-1">
+                            <ClassInfoEditor
+                              id={c.id}
+                              initial={{
+                                name: c.name,
+                                maxStudents: c.maxStudents,
+                                room: c.room,
+                                color: c.color,
+                                icon: c.icon,
+                                options: c.options,
+                                internalNotes: c.internalNotes,
+                              }}
+                              trigger={
+                                <span className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50">
+                                  Modifier infos
+                                </span>
+                              }
+                            />
+                            <RowActions viewHref={`/admin/classes/${c.id}`} />
+                          </div>
                         </td>
                       </tr>
                     );

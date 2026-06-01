@@ -13,8 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ClassStatus } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { ClassStatus, Prisma } from '@prisma/client';
+import { IsEnum, IsInt, IsObject, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -24,6 +24,7 @@ import { RequiresPermission } from '../../shared/auth/requires-permission.decora
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
+import { ClassesService } from './classes.service';
 import { SchoolContextService } from './school-context.service';
 
 class CreateClassDto {
@@ -31,12 +32,37 @@ class CreateClassDto {
   @IsUUID() academicYearId!: string;
   @IsUUID() gradeLevelId!: string;
   @IsOptional() @IsInt() @Min(1) @Max(200) maxStudents?: number;
+  // Champs personnalisables.
+  @IsOptional() @IsString() @MaxLength(40) room?: string;
+  @IsOptional() @IsString() @MaxLength(40) color?: string;
+  @IsOptional() @IsString() @MaxLength(40) icon?: string;
+  @IsOptional() @IsObject() options?: Record<string, unknown>;
+  @IsOptional() @IsString() @MaxLength(2000) internalNotes?: string;
 }
 
 class UpdateClassDto {
   @IsOptional() @IsString() @MaxLength(40) name?: string;
   @IsOptional() @IsInt() @Min(1) @Max(200) maxStudents?: number;
   @IsOptional() @IsEnum(ClassStatus) status?: ClassStatus;
+  // Champs personnalisables (null = effacement explicite).
+  @IsOptional() @IsString() @MaxLength(40) room?: string | null;
+  @IsOptional() @IsString() @MaxLength(40) color?: string | null;
+  @IsOptional() @IsString() @MaxLength(40) icon?: string | null;
+  @IsOptional() @IsObject() options?: Record<string, unknown> | null;
+  @IsOptional() @IsString() @MaxLength(2000) internalNotes?: string | null;
+}
+
+/**
+ * Normalise une valeur JSON optionnelle pour Prisma :
+ * - `undefined` → champ ignoré ; `null` → effacement (`Prisma.JsonNull`) ;
+ * - objet → écrit tel quel.
+ */
+function toJsonInput(
+  value: Record<string, unknown> | null | undefined,
+): Prisma.InputJsonValue | typeof Prisma.JsonNull | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return Prisma.JsonNull;
+  return value as Prisma.InputJsonValue;
 }
 
 @ApiTags('school-structure')
@@ -48,6 +74,7 @@ export class ClassesController {
     private readonly prisma: PrismaService,
     private readonly users: UserSyncService,
     private readonly ctx: SchoolContextService,
+    private readonly classes: ClassesService,
   ) {}
 
   @Get()
@@ -96,7 +123,9 @@ export class ClassesController {
   /**
    * Class detail — used by the /admin/classes/[id] page.
    * Surfaces the full relationship chain: cycle → grade level → class →
-   * active roster + subjects applicable at this level with their coefficients.
+   * active roster + subjects applicable at this level with their coefficients,
+   * enrichi des indicateurs agrégés (taux de notation, taux de présence,
+   * performance moyenne), de l'équipe enseignante et des alertes de la classe.
    */
   @Get(':id')
   @RequiresPermission('classes.read')
@@ -164,10 +193,28 @@ export class ClassesController {
       };
     });
 
+    // Indicateurs agrégés + équipe enseignante + alertes (en parallèle).
+    const studentIds = cls.enrollments.map((e) => e.student.id);
+    const [aggregate, teachers, alerts] = await Promise.all([
+      this.classes.detailAggregate({
+        tenantId: me.tenantId,
+        classSectionId: cls.id,
+        studentIds,
+      }),
+      this.classes.classTeachers({ tenantId: me.tenantId, classSectionId: cls.id }),
+      this.classes.classAlerts({ tenantId: me.tenantId, classSectionId: cls.id }),
+    ]);
+
     return {
       ...cls,
       capacity: { current: cls.enrollments.length, max: cls.maxStudents },
       subjects, // subjects merged with effective coefficient
+      teachers,
+      alerts,
+      openAlertsCount: alerts.filter((a) => a.status === 'open').length,
+      gradingRate: aggregate.gradingRate,
+      attendanceRate: aggregate.attendanceRate,
+      performance: aggregate.performance,
     };
   }
 
@@ -206,6 +253,11 @@ export class ClassesController {
         gradeLevelId: body.gradeLevelId,
         name: body.name,
         maxStudents: body.maxStudents ?? 30,
+        room: body.room,
+        color: body.color,
+        icon: body.icon,
+        options: toJsonInput(body.options),
+        internalNotes: body.internalNotes,
       },
     });
   }
@@ -220,7 +272,19 @@ export class ClassesController {
     const me = await this.users.ensureUser(jwt);
     const cls = await this.prisma.classSection.findUnique({ where: { id } });
     if (!cls || cls.tenantId !== me.tenantId) throw new NotFoundException();
-    return this.prisma.classSection.update({ where: { id }, data: body });
+    return this.prisma.classSection.update({
+      where: { id },
+      data: {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.maxStudents !== undefined ? { maxStudents: body.maxStudents } : {}),
+        ...(body.status !== undefined ? { status: body.status } : {}),
+        ...(body.room !== undefined ? { room: body.room } : {}),
+        ...(body.color !== undefined ? { color: body.color } : {}),
+        ...(body.icon !== undefined ? { icon: body.icon } : {}),
+        ...(body.options !== undefined ? { options: toJsonInput(body.options) } : {}),
+        ...(body.internalNotes !== undefined ? { internalNotes: body.internalNotes } : {}),
+      },
+    });
   }
 
   @Delete(':id')
