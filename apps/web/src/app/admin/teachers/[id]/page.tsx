@@ -7,6 +7,7 @@ import {
   GraduationCap,
   Mail,
   School as SchoolIcon,
+  TrendingUp,
   Users,
 } from 'lucide-react';
 import type { Metadata } from 'next';
@@ -60,6 +61,31 @@ interface TeacherDetail {
   }>;
 }
 
+/**
+ * Réponse de GET /teachers/:id/load
+ *
+ * Seuils de charge (documentés ici car utilisés côté client uniquement) :
+ *   - Faible    : loadPct < 5 %   — l'enseignant couvre peu d'élèves de l'établissement
+ *   - Normale   : 5 % ≤ loadPct ≤ 15 % — répartition habituelle dans un lycée (≈ 2458 élèves seed)
+ *   - Surcharge : loadPct > 15 %  — l'enseignant suit plus d'un élève sur six
+ *
+ * Raisonnement sur les seuils : avec 2458 élèves et ~40 enseignants, la charge
+ * moyenne théorique est ≈ 6-10 % (un enseignant de matière commune + plusieurs
+ * niveaux). Un enseignant qui dépasse 15 % (≈ 370 élèves) est en situation de
+ * surcharge avérée.
+ */
+interface TeacherLoad {
+  teacherProfileId: string;
+  activeAcademicYearId: string | null;
+  uniqueStudents: number;
+  totalStudents: number;
+  loadPct: number;
+  distinctClasses: number;
+  distinctSubjects: number;
+  weeklyHours: number;
+  mainTeacherCount: number;
+}
+
 interface ClassOption {
   id: string;
   name: string;
@@ -90,10 +116,11 @@ export default async function TeacherDetailPage({
 }) {
   const { id } = await params;
 
-  const [teacher, classesResp, subjectsResp] = await Promise.all([
+  const [teacher, classesResp, subjectsResp, load] = await Promise.all([
     safe(api<TeacherDetail>(`/api/v1/teachers/${id}`, { cache: 'no-store' })),
     safe(api<{ data: ClassOption[] }>('/api/v1/classes', { cache: 'no-store' })),
     safe(api<{ data: SubjectOption[] }>('/api/v1/subjects', { cache: 'no-store' })),
+    safe(api<TeacherLoad>(`/api/v1/teachers/${id}/load`, { cache: 'no-store' })),
   ]);
 
   if (!teacher) notFound();
@@ -105,15 +132,20 @@ export default async function TeacherDetailPage({
   // years to the form would clutter the picker).
   const activeYearClasses = classes.filter((c) => c.academicYear.status === 'active');
 
-  // KPIs derived from assignments
+  // KPIs derived from assignments (toutes années confondues — pour rétro-compat affichage)
   const assignments = teacher.teachingAssignments ?? [];
-  const distinctClasses = new Set(assignments.map((a) => a.classSection.id)).size;
-  const distinctSubjects = new Set(assignments.map((a) => a.subject.id)).size;
-  const totalWeeklyHours = assignments.reduce(
+  const mainTeacherOf = assignments.filter((a) => a.isMainTeacher).length;
+
+  // KPIs prioritaires issus de l'endpoint /load (année active uniquement)
+  // Fallback sur les données locales si l'endpoint échoue (degraded mode).
+  const distinctClasses = load?.distinctClasses ?? new Set(assignments.map((a) => a.classSection.id)).size;
+  const distinctSubjects = load?.distinctSubjects ?? new Set(assignments.map((a) => a.subject.id)).size;
+  const totalWeeklyHours = load?.weeklyHours ?? assignments.reduce(
     (s, a) => s + Number(a.weeklyHours ?? 0),
     0,
   );
-  const mainTeacherOf = assignments.filter((a) => a.isMainTeacher).length;
+  const uniqueStudents = load?.uniqueStudents ?? null;
+  const loadPct = load?.loadPct ?? null;
 
   const fullName = `${teacher.userProfile.firstName} ${teacher.userProfile.lastName}`.trim();
   const initials = `${teacher.userProfile.firstName[0] ?? ''}${teacher.userProfile.lastName[0] ?? ''}`.toUpperCase();
@@ -207,18 +239,23 @@ export default async function TeacherDetailPage({
       {/* KPI strip */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard icon={Users} tone="blue" label="CLASSES ENSEIGNÉES" value={distinctClasses}>
-          Classes distinctes
+          Classes distinctes (année active)
         </KpiCard>
         <KpiCard icon={BookOpen} tone="violet" label="MATIÈRES" value={distinctSubjects}>
-          Matières enseignées
+          Matières enseignées (année active)
         </KpiCard>
-        <KpiCard icon={GraduationCap} tone="green" label="AFFECTATIONS" value={assignments.length}>
-          Couples (classe × matière)
+        <KpiCard icon={GraduationCap} tone="teal" label="ÉLÈVES SUIVIS" value={uniqueStudents ?? '—'}>
+          Élèves uniques (dédoublonnés)
         </KpiCard>
         <KpiCard icon={Clock} tone="amber" label="HEURES / SEMAINE" value={totalWeeklyHours.toFixed(1)}>
-          Cumul hebdomadaire
+          Cumul hebdomadaire (année active)
         </KpiCard>
       </div>
+
+      {/* KPI charge enseignant */}
+      {loadPct !== null && (
+        <TeacherLoadCard loadPct={loadPct} totalStudents={load?.totalStudents ?? 0} />
+      )}
 
       {/* Tabs */}
       <div className="mt-6">
@@ -311,5 +348,87 @@ function ProfileField({
       </dt>
       <dd className="mt-1 text-sm font-semibold text-slate-900">{value}</dd>
     </div>
+  );
+}
+
+/**
+ * Détermine le niveau de charge de l'enseignant à partir du pourcentage.
+ *
+ * Seuils (justifiés dans l'interface TeacherLoad ci-dessus) :
+ *   - faible    : loadPct < 5 %
+ *   - normale   : 5 % ≤ loadPct ≤ 15 %
+ *   - surcharge : loadPct > 15 %
+ */
+function resolveLoadLevel(loadPct: number): {
+  label: string;
+  tone: 'success' | 'warning' | 'danger';
+  barColor: string;
+} {
+  if (loadPct < 5) {
+    return { label: 'Faible', tone: 'success', barColor: 'bg-emerald-500' };
+  }
+  if (loadPct <= 15) {
+    return { label: 'Normale', tone: 'warning', barColor: 'bg-amber-500' };
+  }
+  return { label: 'Surcharge', tone: 'danger', barColor: 'bg-rose-500' };
+}
+
+/**
+ * Carte KPI « Charge de l'enseignant » — affiche le pourcentage + bande visuelle colorée.
+ */
+function TeacherLoadCard({
+  loadPct,
+  totalStudents,
+}: {
+  loadPct: number;
+  totalStudents: number;
+}) {
+  const { label, tone, barColor } = resolveLoadLevel(loadPct);
+  // On borne la barre à 100 % au cas où le pourcentage dépasserait 100 (anomalie de données)
+  const barWidthPct = Math.min(loadPct, 100);
+
+  return (
+    <section className="mt-4 overflow-hidden rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 shadow-sm">
+            <TrendingUp className="h-5 w-5" />
+          </span>
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Charge de l&apos;enseignant
+            </p>
+            <p className="text-xs text-slate-400">
+              % des élèves actifs de l&apos;établissement ({totalStudents} élèves au total)
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-2xl font-bold text-slate-900 tabular-nums">
+            {loadPct.toFixed(1)} %
+          </span>
+          <StatusBadge label={label} tone={tone} size="sm" withDot />
+        </div>
+      </div>
+
+      {/* Barre visuelle proportionnelle */}
+      <div className="mt-4">
+        <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+            style={{ width: `${barWidthPct}%` }}
+            aria-label={`Charge : ${loadPct.toFixed(1)} %`}
+          />
+        </div>
+        <div className="mt-1.5 flex justify-between text-[10px] text-slate-400">
+          <span>0 %</span>
+          {/* Marqueurs des seuils */}
+          <span className="absolute" style={{ left: '5%' }} aria-hidden />
+          <span>5 % (faible → normale)</span>
+          <span>15 % (normale → surcharge)</span>
+          <span>100 %</span>
+        </div>
+      </div>
+    </section>
   );
 }

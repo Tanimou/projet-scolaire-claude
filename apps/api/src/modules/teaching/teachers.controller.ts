@@ -352,6 +352,102 @@ export class TeachersController {
     return teacher;
   }
 
+  /**
+   * Charge de l'enseignant — KPI de couverture élèves.
+   *
+   * Retourne le pourcentage d'élèves uniques suivis par cet enseignant
+   * (au sens de l'année académique active) par rapport au total des élèves
+   * actifs de l'établissement.
+   *
+   * Métriques complémentaires :
+   *   - uniqueStudents  : nb d'élèves uniques (dédoublonnés) inscrits dans les
+   *                       classes de l'enseignant (via ses TeachingAssignments)
+   *   - totalStudents   : nb total d'élèves actifs de l'école
+   *   - loadPct         : uniqueStudents / totalStudents × 100 (arrondi 1 décimale)
+   *   - distinctClasses : nb de ClassSection distinctes dans l'année active
+   *   - distinctSubjects: nb de matières distinctes dans l'année active
+   *   - weeklyHours     : cumul des heures hebdomadaires (année active)
+   *   - mainTeacherCount: nb de classes où l'enseignant est prof. principal
+   */
+  @Get(':id/load')
+  @RequiresPermission('teachers.read')
+  async getLoad(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId, activeAcademicYearId } = await this.ctx.forUser(me);
+
+    // Vérifier que le profil enseignant appartient bien au tenant du demandeur
+    const teacher = await this.prisma.teacherProfile.findUnique({ where: { id } });
+    if (!teacher || teacher.tenantId !== me.tenantId) throw new NotFoundException();
+
+    // 1. Récupérer les affectations de l'enseignant pour l'année active
+    const assignments = activeAcademicYearId
+      ? await this.prisma.teachingAssignment.findMany({
+          where: {
+            tenantId: me.tenantId,
+            teacherProfileId: id,
+            academicYearId: activeAcademicYearId,
+          },
+          select: {
+            classSectionId: true,
+            subjectId: true,
+            weeklyHours: true,
+            isMainTeacher: true,
+          },
+        })
+      : [];
+
+    const classIds = [...new Set(assignments.map((a) => a.classSectionId))];
+
+    // 2. Compter les élèves uniques suivis par cet enseignant
+    //    (inscrits et actifs dans l'une de ses classes)
+    let uniqueStudents = 0;
+    if (classIds.length > 0 && activeAcademicYearId) {
+      const enrollments = await this.prisma.enrollment.findMany({
+        where: {
+          tenantId: me.tenantId,
+          academicYearId: activeAcademicYearId,
+          status: 'active',
+          classSectionId: { in: classIds },
+        },
+        select: { studentId: true },
+      });
+      uniqueStudents = new Set(enrollments.map((e) => e.studentId)).size;
+    }
+
+    // 3. Compter le total des élèves actifs de l'établissement
+    const totalStudents = await this.prisma.enrollment.count({
+      where: {
+        tenantId: me.tenantId,
+        ...(activeAcademicYearId ? { academicYearId: activeAcademicYearId } : {}),
+        status: 'active',
+        classSection: { schoolId },
+      },
+    });
+
+    // 4. Calculer le pourcentage de charge
+    const loadPct = totalStudents > 0
+      ? Math.round((uniqueStudents / totalStudents) * 1000) / 10  // arrondi à 1 décimale
+      : 0;
+
+    // 5. Métriques complémentaires
+    const distinctClasses = classIds.length;
+    const distinctSubjects = new Set(assignments.map((a) => a.subjectId)).size;
+    const weeklyHours = assignments.reduce((s, a) => s + Number(a.weeklyHours ?? 0), 0);
+    const mainTeacherCount = assignments.filter((a) => a.isMainTeacher).length;
+
+    return {
+      teacherProfileId: id,
+      activeAcademicYearId,
+      uniqueStudents,
+      totalStudents,
+      loadPct,
+      distinctClasses,
+      distinctSubjects,
+      weeklyHours,
+      mainTeacherCount,
+    };
+  }
+
   @Patch(':id')
   @RequiresPermission('teachers.write')
   async update(
