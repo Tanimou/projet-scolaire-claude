@@ -159,6 +159,17 @@ enum GradeStatus {
   revised
 }
 
+/// Rôle d'un enseignant sur une affectation (classe × matière).
+/// Deux modèles d'affectation cohabitent :
+///   - primaire/maternelle : un instituteur `principal` + un ou des `assistant`s ;
+///   - collège/lycée : un `subject_teacher` (prof) par matière.
+/// Règle de synchro : `principal` ⇔ `isMainTeacher = true` (un seul par classe).
+enum AssignmentRole {
+  principal
+  assistant
+  subject_teacher
+}
+
 // ---------------------------------------------------------------------------
 // Phase 5 — sessions, cahier de texte, attendance, announcements
 // ---------------------------------------------------------------------------
@@ -755,17 +766,21 @@ model TeacherProfile {
 /// for different subjects; one subject can have several teachers in the same class
 /// (rare, but supported — e.g. co-teaching). `isMainTeacher` flags the
 /// "professeur principal" of the class (one per class section).
+/// `role` distingue les deux modèles d'affectation (principal / assistant pour
+/// le primaire-maternelle, subject_teacher pour le collège-lycée). Il reste
+/// synchronisé avec `isMainTeacher` : role=principal ⇔ isMainTeacher=true.
 model TeachingAssignment {
-  id               String   @id @default(uuid()) @db.Uuid
-  tenantId         String   @map("tenant_id") @db.Uuid
-  teacherProfileId String   @map("teacher_profile_id") @db.Uuid
-  classSectionId   String   @map("class_section_id") @db.Uuid
-  subjectId        String   @map("subject_id") @db.Uuid
-  academicYearId   String   @map("academic_year_id") @db.Uuid
-  weeklyHours      Decimal? @map("weekly_hours") @db.Decimal(4, 2)
-  isMainTeacher    Boolean  @default(false) @map("is_main_teacher")
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String         @id @default(uuid()) @db.Uuid
+  tenantId         String         @map("tenant_id") @db.Uuid
+  teacherProfileId String         @map("teacher_profile_id") @db.Uuid
+  classSectionId   String         @map("class_section_id") @db.Uuid
+  subjectId        String         @map("subject_id") @db.Uuid
+  academicYearId   String         @map("academic_year_id") @db.Uuid
+  weeklyHours      Decimal?       @map("weekly_hours") @db.Decimal(4, 2)
+  isMainTeacher    Boolean        @default(false) @map("is_main_teacher")
+  role             AssignmentRole @default(subject_teacher)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   teacherProfile TeacherProfile @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
   classSection   ClassSection   @relation(fields: [classSectionId], references: [id], onDelete: Cascade)

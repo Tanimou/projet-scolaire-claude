@@ -18,6 +18,9 @@ export const GUARDIANSHIP_STATUS = ['pending', 'approved', 'rejected', 'revoked'
 
 export const ENROLLMENT_STATUS = ['pending', 'active', 'transferred', 'cancelled'] as const;
 
+export const ASSIGNMENT_ROLES = ['principal', 'assistant', 'subject_teacher'] as const;
+export type AssignmentRole = (typeof ASSIGNMENT_ROLES)[number];
+
 export const ASSESSMENT_TYPE = ['homework', 'quiz', 'test', 'exam', 'composition'] as const;
 export const ASSESSMENT_VISIBILITY = ['hidden', 'parent_visible'] as const;
 
