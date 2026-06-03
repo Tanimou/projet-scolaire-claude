@@ -5,6 +5,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 
 import { evaluateHighAbsence } from '../alerts-rules/high-absence.rule';
 import { evaluateLowSubjectAvg } from '../alerts-rules/low-subject-avg.rule';
+import { evaluateNegativeTrend } from '../alerts-rules/negative-trend.rule';
 import { evaluateRepeatedFailure } from '../alerts-rules/repeated-failure.rule';
 import type { DetectedAlert, RuleContext } from '../alerts-rules/rule-context';
 
@@ -23,6 +24,7 @@ const RULE_FN: Partial<Record<AlertRuleCode, RuleFn>> = {
   LOW_SUBJECT_AVG: evaluateLowSubjectAvg,
   HIGH_ABSENCE: evaluateHighAbsence,
   REPEATED_FAILURE: evaluateRepeatedFailure,
+  NEGATIVE_TREND: evaluateNegativeTrend,
 };
 
 @Injectable()

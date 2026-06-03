@@ -335,7 +335,7 @@ pnpm dev
 | R3 | Admin portal dashboard + 4 pages | ✅ Dashboard + 3 nouvelles pages | 95% |
 | R4 | Teacher portal image 6 | ✅ Dashboard pixel-correct | 90% (saisie inline simplifiée → R6) |
 | R5 | Parent portal image 7 | ✅ Dashboard pixel-correct | 90% (TeacherComment + alerts cards → R6) |
-| R6 | Moteur d'alertes | ⏳ UI stub seulement | 20% |
+| R6 | Moteur d'alertes | 🔄 Moteur live (cron 15 min + evaluator + dedup) · 4/7 règles câblées (LOW_SUBJECT_AVG, HIGH_ABSENCE, REPEATED_FAILURE, **NEGATIVE_TREND**) | ~45% |
 | R7 | Exports async | ⏳ UI stub + deps installées | 25% |
 | R8 | Notifications bell | ✅ Endpoint stub + bell wired | 70% |
 | R9 | Responsive + a11y | ✅ Mobile drawer + smoke a11y | 50% |
