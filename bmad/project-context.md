@@ -47,6 +47,15 @@
 
 UI verification = screenshots **only if the app is already running** at `http://localhost:3100` (desktop 1680×944 + mobile 390×844). Never rebuild the stack just for screenshots.
 
+### 4a. Resource budget (CPU / RAM / disk — hard ceiling)
+
+The Workflow may run **up to 5–6 agents in parallel** (the runtime additionally caps at `cpu-2`). This does **not** raise machine load, because the budget is enforced by *role*, not by count:
+
+- **Exactly ONE agent (Murat, the test-architect gate) runs `pnpm typecheck`** — the single heavy local command — per sprint. No other agent runs typecheck, tests, lint, or any build. Reviewers read the diff (API-bound), they do not invoke the toolchain.
+- **No agent ever builds** (`pnpm build` / `next build` / `docker build` stay forbidden — see §4 above).
+- **Implement agents edit disjoint file sets** — `apps/web` (FE) vs `apps/api`+`apps/worker` (BE) vs `packages/ui` (DS) — so there is **one checkout**, no parallel `node_modules`/`.next`, and zero edit conflicts. Disk and RAM stay flat regardless of how many reviewers run.
+- If the host is under load, prefer fewer concurrent reviewers over skipping the gate — the typecheck gate (Murat) is the one step that must always run.
+
 ## 5. Project state & backlog (prioritize from here)
 
 Redesign **R0→R5 complete** (design system, AppShell, the 3 dashboards). Open backlog by value:
