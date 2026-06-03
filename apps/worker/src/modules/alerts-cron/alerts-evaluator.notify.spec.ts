@@ -65,7 +65,7 @@ describe('AlertsEvaluatorService.notifyGuardiansOfAlert', () => {
 
     expect(count).toBe(2);
     expect(m.notificationCreateMany).toHaveBeenCalledTimes(1);
-    const rows = m.notificationCreateMany.mock.calls[0][0].data;
+    const rows = m.notificationCreateMany.mock.calls[0]![0].data;
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       tenantId: 'tenant-1',
@@ -86,7 +86,7 @@ describe('AlertsEvaluatorService.notifyGuardiansOfAlert', () => {
     ] as const) {
       const m = makePrisma({ guardians: [{ userProfileId: 'u1' }] });
       await callNotify(m.prisma, sev);
-      expect(m.notificationCreateMany.mock.calls[0][0].data[0].severity).toBe(expected);
+      expect(m.notificationCreateMany.mock.calls[0]![0].data[0].severity).toBe(expected);
     }
   });
 
@@ -98,7 +98,7 @@ describe('AlertsEvaluatorService.notifyGuardiansOfAlert', () => {
     const count = await callNotify(m.prisma, 'medium');
 
     expect(count).toBe(1);
-    const rows = m.notificationCreateMany.mock.calls[0][0].data;
+    const rows = m.notificationCreateMany.mock.calls[0]![0].data;
     expect(rows).toHaveLength(1);
     expect(rows[0].userProfileId).toBe('u2');
   });

@@ -210,7 +210,7 @@ export class AlertsService {
       where: { id: args.id, tenantId: args.tenantId },
     });
     if (!row) throw new NotFoundException('Alert not found');
-    return this.prisma.alertInstance.update({
+    const updated = await this.prisma.alertInstance.update({
       where: { id: args.id },
       data: {
         status: 'resolved',
@@ -218,6 +218,21 @@ export class AlertsService {
         resolvedBy: args.userProfileId,
       },
     });
+    // Best-effort: retract the guardian bell notifications for this alert. The
+    // status transition is the source of truth — a notification failure must
+    // never roll it back or surface to the admin (mirrors dispatchEmails).
+    try {
+      await this.notifications.markReadBySource({
+        tenantId: args.tenantId,
+        sourceType: 'alert_instance',
+        sourceId: args.id,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to retract notifications for resolved alert ${args.id} (status unaffected): ${(err as Error).message}`,
+      );
+    }
+    return updated;
   }
 
   async dismiss(args: { tenantId: string; id: string; userProfileId: string }) {
@@ -225,7 +240,7 @@ export class AlertsService {
       where: { id: args.id, tenantId: args.tenantId },
     });
     if (!row) throw new NotFoundException('Alert not found');
-    return this.prisma.alertInstance.update({
+    const updated = await this.prisma.alertInstance.update({
       where: { id: args.id },
       data: {
         status: 'dismissed',
@@ -233,6 +248,20 @@ export class AlertsService {
         resolvedBy: args.userProfileId,
       },
     });
+    // Best-effort retraction (see resolve): a dismissed alert is closed, so its
+    // guardian bell notifications stop ringing. Never blocks the dismiss.
+    try {
+      await this.notifications.markReadBySource({
+        tenantId: args.tenantId,
+        sourceType: 'alert_instance',
+        sourceId: args.id,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to retract notifications for dismissed alert ${args.id} (status unaffected): ${(err as Error).message}`,
+      );
+    }
+    return updated;
   }
 
   // ----- Evaluator -----------------------------------------------------------
