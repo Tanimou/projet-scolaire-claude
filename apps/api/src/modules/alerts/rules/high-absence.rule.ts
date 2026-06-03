@@ -6,8 +6,19 @@ import type { DetectedAlert, RuleContext } from './rule-context';
  */
 export async function evaluateHighAbsence(ctx: RuleContext): Promise<DetectedAlert[]> {
   const params = (ctx.rule.parameters as Record<string, unknown>) ?? {};
-  const count = Number(params.count ?? 5);
-  const windowDays = Number(params.windowDays ?? 30);
+  // Read admin-tunable params defensively (ADR-013 customization layer): the
+  // `parameters` bag is an unvalidated Record. `count` must stay an integer
+  // >= 1 (a 0/negative threshold would fire on every student with any absence,
+  // mass-notifying guardians); `windowDays` must stay an integer in [1, 3650]
+  // (<= 10 years) so `since` is strictly in the past and no Invalid Date reaches
+  // the query — a huge finite value (e.g. 1e9) would overflow setUTCDate to an
+  // Invalid Date and abort the rule. Invalid/NaN/out-of-range values fall back
+  // to the documented defaults (5 / 30 days).
+  const rawCount = Number(params.count ?? 5);
+  const count = Number.isFinite(rawCount) && rawCount >= 1 ? Math.floor(rawCount) : 5;
+  const rawWindow = Number(params.windowDays ?? 30);
+  const windowDays =
+    Number.isFinite(rawWindow) && rawWindow >= 1 && rawWindow <= 3650 ? Math.floor(rawWindow) : 30;
 
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - windowDays);
