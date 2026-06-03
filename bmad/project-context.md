@@ -36,14 +36,15 @@
 
 ## 4. Quality gates (what the automated routine is allowed to run)
 
-| Gate | Command | Use |
+| Gate | Command | Who / when |
 |---|---|---|
-| **Typecheck** (primary) | `pnpm typecheck` | the reliable cheap gate — run on every sprint |
-| Diff hygiene | `git diff --check` | whitespace/conflict markers |
+| **Typecheck** (primary) | `pnpm typecheck` | the **Murat** agent, **once** per sprint — the reliable cheap gate |
+| Diff hygiene | `git diff --check` | Murat, with the typecheck gate |
 | Targeted unit tests | `pnpm --filter @pilotage/api test -- <pattern>` | only for changed behavior |
 | Lint (targeted) | `pnpm --filter <ws> lint` | only if quick & relevant |
+| **Build (v3)** | `pnpm build` (Turbo, **affected** packages) | the **orchestrator session ONCE**, after the Workflow, while it holds the write lock (§4b). NOT the agents. |
 
-**FORBIDDEN in the routine (slow / the user runs these via `scripts/dev.sh` / `scripts/deploy-prod.sh` after batching changes):** `pnpm build`, `next build`, `docker build`, `docker compose build|up --build`, `infra/pilotage.sh update|rebuild|reset`, any full container rebuild.
+**Still FORBIDDEN in the routine (heavy / the user batches these via `scripts/dev.sh` / `scripts/deploy-prod.sh`):** `docker build`, `docker compose build|up --build`, `infra/pilotage.sh update|rebuild|reset`, any full container/image rebuild. Only the single Turbo `pnpm build` above is allowed, and only the orchestrator runs it — **agents never build.**
 
 UI verification = screenshots **only if the app is already running** at `http://localhost:3100` (desktop 1680×944 + mobile 390×844). Never rebuild the stack just for screenshots.
 
@@ -52,9 +53,20 @@ UI verification = screenshots **only if the app is already running** at `http://
 The Workflow may run **up to 5–6 agents in parallel** (the runtime additionally caps at `cpu-2`). This does **not** raise machine load, because the budget is enforced by *role*, not by count:
 
 - **Exactly ONE agent (Murat, the test-architect gate) runs `pnpm typecheck`** — the single heavy local command — per sprint. No other agent runs typecheck, tests, lint, or any build. Reviewers read the diff (API-bound), they do not invoke the toolchain.
-- **No agent ever builds** (`pnpm build` / `next build` / `docker build` stay forbidden — see §4 above).
+- **No agent ever builds.** Builds are done **once per sprint by the orchestrator session**, not by any agent (`docker`/`infra` rebuilds stay forbidden — see §4).
 - **Implement agents edit disjoint file sets** — `apps/web` (FE) vs `apps/api`+`apps/worker` (BE) vs `packages/ui` (DS) — so there is **one checkout**, no parallel `node_modules`/`.next`, and zero edit conflicts. Disk and RAM stay flat regardless of how many reviewers run.
 - If the host is under load, prefer fewer concurrent reviewers over skipping the gate — the typecheck gate (Murat) is the one step that must always run.
+
+### 4b. Concurrency & disk guard (v3 — the build/pileup fix)
+
+Builds are slow, and the routine fires **hourly**, so overlapping runs could pile up builds and exhaust CPU/RAM/disk C:. v3 enforces a **machine-wide lock** via `bmad/scripts/routine-lock.sh` (the runtime-authoritative copy lives outside the repo at `~/.claude/scheduled-tasks/daily-improvement-v2/routine-lock.sh`, so it survives any `git checkout`). Rules:
+
+- **Single writer.** Each run works on a feature branch **inside the main checkout** (no `git worktree add`), serialized by one `write.lock`. So there is **never more than one edit/build at a time**, and build artifacts (`.next`/`dist`/`.turbo`) are **never duplicated across worktrees** → disk C: stays bounded. (The Workflow is invoked with `args.worktree` = the main checkout path; the agents-edit-the-checkout behavior becomes intentional.)
+- **Exactly one `pnpm build` per run**, by the lock-holder, run with the Turbo cache warm (affected packages only).
+- **≤ 2 in-flight routine PRs** (`MAX_INFLIGHT`). A run that finds 2 routine `ci/*` PRs already open **skips** — that is the throttle. Merge one to unblock.
+- **Auto-cleanup.** Each run first deletes routine `ci/*` branches (and any linked worktrees) whose PR is **MERGED/CLOSED**, then prunes — "merge a PR → its branch/worktree disappears next run."
+- **Crash safety.** A crashed run's `write.lock` is reclaimed after `STALE_MIN` (60 min) and its leftover tracked changes are salvaged to a `git stash`.
+- The cron stays **hourly**; ticks that can't get the lock (or hit the in-flight cap) exit in seconds. Tunable via env: `ROUTINE_MAX_INFLIGHT`, `ROUTINE_STALE_MIN`, `ROUTINE_BUILD_WAIT`.
 
 ## 5. Project state & backlog (prioritize from here)
 

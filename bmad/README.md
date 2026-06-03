@@ -16,12 +16,22 @@ implement agents edit disjoint file sets (`apps/web` / `apps/api` / `packages/ui
 | [`daily-improvement-v2.md`](./daily-improvement-v2.md) | The full v2 pipeline spec: base routine + BMAD phases + Workflow orchestration. |
 | [`workflows/sprint.workflow.js`](./workflows/sprint.workflow.js) | The runnable Claude Workflow that drives one BMAD sprint (intake → plan+harden → implement → verify → escalate → land). PR-only, **no builds**. |
 
-## How to run
+## How to run (v3 — build-aware, concurrency-gated)
 
-Trigger the local scheduled task **`daily-improvement-v2`** (Run now, or its cron).
-It creates a fresh worktree, runs `workflows/sprint.workflow.js`, and lands **one
-PR + a summary**. It never builds — **you** run the rebuild once, in one shot,
-via `bash scripts/dev.sh` after reviewing/merging the batched PRs.
+Trigger the local scheduled task **`daily-improvement-v2`** (Run now, or its
+**hourly cron**). Each run: ① acquires the **gate** (`scripts/routine-lock.sh`)
+so only **one writer builds at a time** and at most **2 routine PRs** are in
+flight; ② works on a feature branch **in the main checkout** (no worktree → no
+duplicated build artifacts → bounded disk); ③ runs the 5–6 agent
+`workflows/sprint.workflow.js`; ④ runs **one** `pnpm build` (Turbo affected)
+while holding the lock; ⑤ lands **one PR + a summary** and releases the lock.
+**Docker/infra rebuilds are still yours** — batch them via `bash scripts/dev.sh`
+after reviewing/merging the PRs. See `daily-improvement-v2.md` → *Concurrency* and
+`project-context.md` §4b.
+
+| File | What it is |
+|---|---|
+| [`scripts/routine-lock.sh`](./scripts/routine-lock.sh) | The concurrency + disk guard (single writer, ≤2 in-flight PRs, auto-cleanup of merged branches/worktrees). **Runtime-authoritative copy lives outside the repo** at `~/.claude/scheduled-tasks/daily-improvement-v2/routine-lock.sh` (must run before any `git checkout`); this is a review mirror — keep them in sync. |
 
 > Optional: to also get BMAD's interactive `/bmad-*` slash commands in Claude
 > Code, run `npx bmad-method install --yes --modules bmm --tools claude-code`
