@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
@@ -442,18 +443,25 @@ export class SchoolPerformanceDrilldownService {
   // ---------------------------------------------------------------------------
 
   /** Filtre `where` sur Grade : notes publiées/révisées, présentes, année/trimestre. */
-  private gradeWhere(opts: { tenantId: string; academicYearId: string; termId?: string }) {
+  private gradeWhere(opts: {
+    tenantId: string;
+    academicYearId: string;
+    termId?: string;
+  }): Prisma.GradeWhereInput {
     const { tenantId, academicYearId, termId } = opts;
     return {
       tenantId,
-      status: { in: ['published', 'revised'] as const },
+      status: { in: ['published', 'revised'] },
       isAbsent: false,
       assessment: this.assessmentWhere({ academicYearId, termId }),
     };
   }
 
   /** Filtre `where` sur Assessment : année active (via TA) + trimestre optionnel. */
-  private assessmentWhere(opts: { academicYearId: string; termId?: string }) {
+  private assessmentWhere(opts: {
+    academicYearId: string;
+    termId?: string;
+  }): Prisma.AssessmentWhereInput {
     const { academicYearId, termId } = opts;
     return {
       teachingAssignment: { academicYearId },

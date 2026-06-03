@@ -1,5 +1,5 @@
 import { MoreVertical } from 'lucide-react';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 
 import { cn } from '../lib/cn';
 import { deltaTone, formatGrade } from '../lib/format';
@@ -30,6 +30,8 @@ export interface SubjectPerfCardProps {
   /** Optional click handler / link */
   href?: string;
   className?: string;
+  /** Optional extra content rendered at the bottom of the card (e.g. teacher footer). */
+  children?: ReactNode;
 }
 
 const BADGE_TONE: Record<string, string> = {
@@ -57,6 +59,7 @@ export function SubjectPerfCard({
   onMenuClick,
   href,
   className,
+  children,
 }: SubjectPerfCardProps) {
   const color = subjectColor(subjectCode);
   const finalBadge = badge ?? gradeVerdict(grade);
@@ -143,6 +146,7 @@ export function SubjectPerfCard({
           </div>
         ))}
       </dl>
+      {children}
     </Wrapper>
   );
 }

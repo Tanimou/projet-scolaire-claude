@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { SchoolStatus } from '@prisma/client';
+import { Prisma, SchoolStatus } from '@prisma/client';
 import {
   IsEnum,
   IsObject,
@@ -150,7 +150,9 @@ export class SchoolsController {
       data: {
         ...rest,
         // `null` efface explicitement ; `undefined` = pas de changement d'adresse.
-        ...(address !== undefined ? { address: address === null ? null : (address as object) } : {}),
+        ...(address !== undefined
+          ? { address: address === null ? Prisma.DbNull : (address as object) }
+          : {}),
       },
     });
     return { ...updated, address: parseAddress(updated.address) };

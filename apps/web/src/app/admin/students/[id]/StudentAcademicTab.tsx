@@ -20,7 +20,6 @@ import {
   SubjectPerfCard,
   formatGrade,
   formatPercent,
-  formatSignedDelta,
   trendOfDelta,
   type LineSeries,
   type SubjectMetric,
@@ -205,7 +204,11 @@ export function StudentAcademicTab({
         <section>
           <SectionHeader title="Performance par matière" subtitle="Moyenne de l'élève comparée à la classe" />
           <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {academic.subjectPerf.map((s) => {
+            {(() => {
+              const teacherBySubject = new Map(
+                academic.subjectTeachers.map((t) => [t.subjectId, t] as const),
+              );
+              return academic.subjectPerf.map((s) => {
               const teacher = teacherBySubject.get(s.subjectId);
               const metrics: SubjectMetric[] = [
                 { label: 'Moyenne classe', value: formatGrade(s.classAverage, 1) },
@@ -239,7 +242,8 @@ export function StudentAcademicTab({
                   )}
                 </SubjectPerfCard>
               );
-            })}
+              });
+            })()}
           </div>
         </section>
       )}

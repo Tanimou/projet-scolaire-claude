@@ -15,6 +15,9 @@ interface AcademicDashboardResponse {
   globalPerformance: StudentAcademicSnapshot['globalPerformance'];
   subjectPerf: StudentAcademicSnapshot['subjectPerf'];
   termEvolution: StudentAcademicSnapshot['termEvolution'];
+  subjectTeachers: StudentAcademicSnapshot['subjectTeachers'];
+  previousYearComparison: StudentAcademicSnapshot['previousYearComparison'];
+  annualProgression: StudentAcademicSnapshot['annualProgression'];
   recentGrades: StudentAcademicSnapshot['recentGrades'];
 }
 
@@ -117,6 +120,9 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
         globalPerformance: academicResp.globalPerformance,
         subjectPerf: academicResp.subjectPerf,
         termEvolution: academicResp.termEvolution,
+        subjectTeachers: academicResp.subjectTeachers,
+        previousYearComparison: academicResp.previousYearComparison,
+        annualProgression: academicResp.annualProgression,
         recentGrades: academicResp.recentGrades,
         rank: academicResp.student.rank,
         classSize: academicResp.student.classSize,

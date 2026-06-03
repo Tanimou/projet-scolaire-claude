@@ -2,6 +2,7 @@ import {
   Calendar as CalendarIcon,
   ClipboardList,
   Flag,
+  GraduationCap,
   PartyPopper,
   Sparkles,
   Sun,
@@ -27,6 +28,7 @@ export const CALENDAR_TYPE_LABEL: Record<CalendarEventType, string> = {
   meeting: 'Réunion',
   ceremony: 'Cérémonie',
   pedagogical_day: 'Journée pédagogique',
+  evaluation: 'Évaluation',
   custom: 'Événement',
 };
 
@@ -38,6 +40,7 @@ export const CALENDAR_TYPE_TONE: Record<CalendarEventType, string> = {
   meeting: 'bg-blue-50 text-blue-800 border-blue-200',
   ceremony: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   pedagogical_day: 'bg-cyan-50 text-cyan-800 border-cyan-200',
+  evaluation: 'bg-indigo-50 text-indigo-800 border-indigo-200',
   custom: 'bg-slate-50 text-slate-800 border-slate-200',
 };
 
@@ -49,6 +52,7 @@ export const CALENDAR_TYPE_SOLID: Record<CalendarEventType, string> = {
   meeting: 'bg-blue-500',
   ceremony: 'bg-emerald-500',
   pedagogical_day: 'bg-cyan-500',
+  evaluation: 'bg-indigo-500',
   custom: 'bg-slate-500',
 };
 
@@ -60,6 +64,7 @@ export const CALENDAR_TYPE_ICON: Record<CalendarEventType, LucideIcon> = {
   meeting: Users,
   ceremony: PartyPopper,
   pedagogical_day: Sparkles,
+  evaluation: GraduationCap,
   custom: CalendarIcon,
 };
 

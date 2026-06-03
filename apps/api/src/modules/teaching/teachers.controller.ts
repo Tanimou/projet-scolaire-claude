@@ -420,7 +420,7 @@ export class TeachersController {
         tenantId: me.tenantId,
         ...(activeAcademicYearId ? { academicYearId: activeAcademicYearId } : {}),
         status: 'active',
-        classSection: { schoolId },
+        student: { schoolId },
       },
     });
 

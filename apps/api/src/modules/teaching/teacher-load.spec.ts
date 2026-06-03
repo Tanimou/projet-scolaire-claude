@@ -79,11 +79,11 @@ describe('computeLoadPct — calcul du pourcentage de charge', () => {
     expect(computeLoadPct(5, 0)).toBe(0);
   });
 
-  it('retourne 0 quand l'enseignant ne suit aucun élève', () => {
+  it("retourne 0 quand l'enseignant ne suit aucun élève", () => {
     expect(computeLoadPct(0, 100)).toBe(0);
   });
 
-  it('retourne 100 quand l'enseignant suit tous les élèves', () => {
+  it("retourne 100 quand l'enseignant suit tous les élèves", () => {
     expect(computeLoadPct(200, 200)).toBe(100);
   });
 

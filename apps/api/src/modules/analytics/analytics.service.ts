@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { GradesService } from '../grades/grades.service';
 
 export interface SparklinePoint {
   x: string; // ISO date
@@ -1067,15 +1068,23 @@ export class AnalyticsService {
   ): Promise<Map<string, { teacherId: string; teacherName: string }>> {
     const assignments = await this.prisma.teachingAssignment.findMany({
       where: { tenantId, classSectionId, academicYearId },
-      include: { teacher: { select: { id: true, firstName: true, lastName: true } } },
+      include: {
+        teacherProfile: {
+          select: {
+            id: true,
+            userProfile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
     });
     const map = new Map<string, { teacherId: string; teacherName: string }>();
     for (const a of assignments) {
       // En cas d'affectations multiples sur une matière, on garde la première.
       if (map.has(a.subjectId)) continue;
       map.set(a.subjectId, {
-        teacherId: a.teacherId,
-        teacherName: `${a.teacher.firstName} ${a.teacher.lastName}`.trim(),
+        teacherId: a.teacherProfileId,
+        teacherName:
+          `${a.teacherProfile.userProfile.firstName} ${a.teacherProfile.userProfile.lastName}`.trim(),
       });
     }
     return map;
@@ -1154,8 +1163,8 @@ export class AnalyticsService {
       const orderedTerms = [...byTerm.keys()].sort((a, b) => a - b);
       // Besoin d'au moins deux trimestres notés pour mesurer une tendance.
       if (orderedTerms.length < 2) continue;
-      const firstT = byTerm.get(orderedTerms[0])!;
-      const lastT = byTerm.get(orderedTerms[orderedTerms.length - 1])!;
+      const firstT = byTerm.get(orderedTerms[0]!)!;
+      const lastT = byTerm.get(orderedTerms[orderedTerms.length - 1]!)!;
       const from = Math.round((firstT.sum / firstT.n) * 100) / 100;
       const to = Math.round((lastT.sum / lastT.n) * 100) / 100;
       deltas.push({
@@ -1173,8 +1182,8 @@ export class AnalyticsService {
     }
 
     const sorted = [...deltas].sort((a, b) => b.delta - a.delta);
-    const top = sorted[0];
-    const bottom = sorted[sorted.length - 1];
+    const top = sorted[0]!;
+    const bottom = sorted[sorted.length - 1]!;
     const mostImproved = top.delta > 0 ? top : null;
     const mostDeclined = bottom.delta < 0 ? bottom : null;
 
@@ -1823,7 +1832,13 @@ export class AnalyticsService {
    * Shown on the admin dashboard so the visual block is meaningful even before
    * the alert engine ships.
    */
-  private static DEFAULT_ALERT_RULES: AdminDashboardResponse['alertRules'] = [
+  private static DEFAULT_ALERT_RULES: ReadonlyArray<{
+    code: string;
+    label: string;
+    condition: string;
+    severity: string;
+    status: string;
+  }> = [
     {
       code: 'LOW_SUBJECT_AVG',
       label: 'Moyenne faible matière',

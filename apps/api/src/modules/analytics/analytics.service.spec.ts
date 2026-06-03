@@ -176,7 +176,8 @@ function makeService(overrides?: {
     },
   };
 
-  const service = new AnalyticsService(prisma as never);
+  const grades = { statsForStudent: jest.fn().mockResolvedValue(null) };
+  const service = new AnalyticsService(prisma as never, grades as never);
   return { service, prisma };
 }
 
@@ -292,7 +293,7 @@ describe('AnalyticsService.adminDashboard — U1 reorg', () => {
     const { service } = makeService();
     const res = await service.adminDashboard({ tenantId: TENANT, schoolId: SCHOOL });
 
-    const payload = res as Record<string, unknown>;
+    const payload = res as unknown as Record<string, unknown>;
     expect(payload.enrollmentRequests).toBeUndefined();
     expect(payload.teachingAssignmentsSummary).toBeUndefined();
     expect(payload.alertRules).toBeUndefined();

@@ -393,6 +393,11 @@ model ClassSection {
   gradeLevelId   String      @map("grade_level_id") @db.Uuid
   name           String
   maxStudents    Int         @default(30) @map("max_students")
+  room           String?
+  color          String?
+  icon           String?
+  options        Json?
+  internalNotes  String?     @map("internal_notes")
   status         ClassStatus @default(active)
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
