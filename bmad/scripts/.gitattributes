@@ -1,0 +1,2 @@
+# Keep shell scripts LF so the mirror stays runnable on MINGW/Git-Bash
+*.sh text eol=lf

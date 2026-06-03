@@ -1,12 +1,14 @@
-# Daily Improvement v2 — BMAD-augmented, Workflow-orchestrated
+# Daily Improvement v2/v3 — BMAD-augmented, Workflow-orchestrated, build-aware
 
 > **Base = the original `daily-improvement` routine** (mission, product
-> priorities, UI/UX & feature mandates, sprint discipline, **lightweight-only
-> verification / NO builds**, conventional-commit PR, summary-as-context).
+> priorities, UI/UX & feature mandates, sprint discipline, conventional-commit
+> PR, summary-as-context).
 > **Augmentation = the BMAD method** (named-agent phases, gated transitions,
 > self-contained-story context engineering, adversarial review, plan hardening,
 > risk-tier routing) **executed with the Claude Workflow feature** (up to 5–6
 > parallel agents). Nothing in the base is dropped — only made more robust.
+> **v3 adds** a bounded local **build verification** and a hard **concurrency +
+> disk guard** (see "Concurrency" below and project-context §4b).
 >
 > Read `bmad/project-context.md` and `bmad/agents.md` before running.
 
@@ -14,11 +16,25 @@
 
 - **Scheduled / manual:** the local scheduled task **`daily-improvement-v2`**
   (`~/.claude/scheduled-tasks/daily-improvement-v2/SKILL.md`) — trigger via
-  **Run now** or let it fire on its cron. It is the runnable entry point.
-- **What it does:** invokes the Workflow script `bmad/workflows/sprint.workflow.js`
-  to drive one BMAD sprint, then lands a PR and a summary. **It never builds** —
-  you (the human) run the rebuild once, in one shot, via `bash scripts/dev.sh`
-  (or `infra/pilotage.sh update`) after reviewing/merging the batched PRs.
+  **Run now** or let it fire on its **hourly cron**. It is the runnable entry point.
+- **What it does:** ① acquires the **concurrency gate** (`bmad/scripts/routine-lock.sh gate`);
+  ② on a feature branch **in the main checkout**, invokes the Workflow
+  `bmad/workflows/sprint.workflow.js` to drive one BMAD sprint; ③ runs **one
+  `pnpm build`** (Turbo affected) while holding the lock; ④ lands a PR + summary;
+  ⑤ releases the lock. **Docker/infra rebuilds are still NOT run** — you (the
+  human) batch those once via `bash scripts/dev.sh` / `scripts/deploy-prod.sh`
+  after reviewing/merging the PRs.
+
+## Concurrency (v3 — why builds can't pile up)
+
+Hourly fires + slow builds + a shared checkout could spawn many stuck building
+sessions and fill disk C:. The gate prevents it (full detail in project-context §4b):
+**single writer** (one `write.lock`; each run uses a feature branch in the main
+checkout, never a worktree, so build artifacts aren't duplicated), **exactly one
+`pnpm build` per run**, **≤ 2 in-flight routine PRs** (a 3rd tick skips), and
+**auto-cleanup** of merged/closed routine branches+worktrees every run. A crashed
+lock self-heals after 60 min. Knobs: `ROUTINE_MAX_INFLIGHT`, `ROUTINE_STALE_MIN`,
+`ROUTINE_BUILD_WAIT`.
 
 ## The pipeline (BMAD phases → Workflow stages)
 
@@ -99,12 +115,22 @@ Murat (test-architect)* — that must reach **consensus** that the change is saf
 Any dissent forces either a Phase-4 fix or a "needs human review — do not
 auto-merge" stamp on the PR. Low-risk sprints skip this phase entirely.
 
-### Phase 6 — Land (PR, no build) · *Amelia + Paige*
+### Phase 5b — Build verification (v3) · *orchestrator session, NOT an agent*
+After the Workflow returns (and typecheck passed), the **lock-holding orchestrator
+session** runs **exactly one** `pnpm build` (Turbo, **affected** packages, warm
+cache) — the single heavy command, protected by the `write.lock` so no two runs
+build at once. On failure: diagnose at the right layer, fix, rebuild **once**; if
+still failing, open the PR prefixed "⚠️ build failing — needs human review" with
+the error excerpt. **No docker/infra rebuild here** — that stays the human's batch.
+
+### Phase 6 — Land (PR + build result) · *Amelia + Paige*
 Conventional commit (`feat(parent): …`, `polish(admin): …`, `ui(teacher): …`),
 push branch **`ci/YYYY-MM-DD-short-feature`**, open a PR whose body is a
 **Checkpoint-Preview**: 1-line intent, scope metrics, concern-grouped walkthrough,
-the tagged high-risk spots, and 2–5 manual things to try. **No force-push.**
-Risk-tier `[auth]/[security]` PRs are flagged "needs human review — do not auto-merge."
+the tagged high-risk spots, **the build result**, and 2–5 manual things to try.
+**No force-push.** Risk-tier `[auth]/[security]` PRs are flagged "needs human
+review — do not auto-merge." **Merging is the human's job** (a later run
+auto-deletes the branch once its PR merges).
 
 ### Phase 7 — Summary & memory · *Paige*
 Emit the base routine's required summary (sprint title, portals, what/why, files,
@@ -112,7 +138,21 @@ checks run, screenshots if app running, worktree created/cleaned, commit hash,
 PR link, remaining risks, **recommended next sprint**). Treat it as context for
 the next run. Update `docs/spec/REDESIGN-PROGRESS.md` if a redesign item advanced.
 
-## Start & worktree steps (preserved from the base, reconciled)
+## Start steps (v3 — gate-first, single writer in the main checkout)
+
+1. **Gate first:** `bash bmad/scripts/routine-lock.sh gate` (runtime copy:
+   `~/.claude/scheduled-tasks/daily-improvement-v2/routine-lock.sh`). It cleans
+   merged/closed routine branches+worktrees, checks the ≤2 in-flight cap,
+   acquires the single `write.lock`, ensures a clean up-to-date `main`, and prints
+   `GATE=OK|FULL|BUSY`. If not `OK` → **stop**, do nothing else.
+2. On `GATE=OK`, create the sprint branch **in the main checkout** (no worktree):
+   `git checkout -b ci/YYYY-MM-DD-short-feature`. Invoke the Workflow with
+   `args.worktree` = the main checkout path. Build once (Phase 5b). Land the PR.
+3. **Always release:** `git checkout main` + `bash …/routine-lock.sh release`
+   (on the happy path and on every abort). The legacy worktree flow below is
+   retired — v3 never creates a worktree.
+
+<details><summary>Legacy worktree steps (pre-v3, retained for reference)</summary>
 
 1. `cd C:\Users\HP\Downloads\pilotage-scolaire-claude` · `git fetch --all --prune`.
 2. `git worktree list`; clean **clean+merged** `ci/*` worktrees under
@@ -121,6 +161,8 @@ the next run. Update `docs/spec/REDESIGN-PROGRESS.md` if a redesign item advance
 3. Create a fresh worktree off latest `origin/main`:
    branch `ci/YYYY-MM-DD-short-feature`, folder
    `.claude/worktrees/ci-YYYY-MM-DD-short-feature`. Do all coding there.
+
+</details>
 
 ## Relation to the real BMAD toolkit (optional)
 
