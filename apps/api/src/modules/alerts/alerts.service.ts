@@ -195,14 +195,29 @@ export class AlertsService {
       where: { id: args.id, tenantId: args.tenantId },
     });
     if (!row) throw new NotFoundException('Alert not found');
-    return this.prisma.alertInstance.update({
+    const didTransition = row.status === 'open';
+    const updated = await this.prisma.alertInstance.update({
       where: { id: args.id },
       data: {
-        status: row.status === 'open' ? 'acknowledged' : row.status,
+        status: didTransition ? 'acknowledged' : row.status,
         acknowledgedAt: row.acknowledgedAt ?? new Date(),
         acknowledgedBy: row.acknowledgedBy ?? args.userProfileId,
       },
     });
+    // Best-effort, post-update audit trail. Only logged when acknowledge is a
+    // real transition (open -> acknowledged); a no-op acknowledge writes no row
+    // so the append-only trail stays meaningful. Never rolls back the status.
+    if (didTransition) {
+      await this.writeAuditEntry({
+        tenantId: args.tenantId,
+        alertId: args.id,
+        actorId: args.userProfileId,
+        action: 'alert.acknowledge',
+        beforeStatus: row.status,
+        afterStatus: 'acknowledged',
+      });
+    }
+    return updated;
   }
 
   async resolve(args: { tenantId: string; id: string; userProfileId: string }) {
@@ -232,6 +247,15 @@ export class AlertsService {
         `Failed to retract notifications for resolved alert ${args.id} (status unaffected): ${(err as Error).message}`,
       );
     }
+    // Best-effort, post-update audit trail (independent of the retraction above).
+    await this.writeAuditEntry({
+      tenantId: args.tenantId,
+      alertId: args.id,
+      actorId: args.userProfileId,
+      action: 'alert.resolve',
+      beforeStatus: row.status,
+      afterStatus: 'resolved',
+    });
     return updated;
   }
 
@@ -261,7 +285,55 @@ export class AlertsService {
         `Failed to retract notifications for dismissed alert ${args.id} (status unaffected): ${(err as Error).message}`,
       );
     }
+    // Best-effort, post-update audit trail (independent of the retraction above).
+    await this.writeAuditEntry({
+      tenantId: args.tenantId,
+      alertId: args.id,
+      actorId: args.userProfileId,
+      action: 'alert.dismiss',
+      beforeStatus: row.status,
+      afterStatus: 'dismissed',
+    });
     return updated;
+  }
+
+  /**
+   * Append-only audit row for an alert lifecycle transition. Best-effort and
+   * post-update: a write failure is logged and swallowed, never rolling back the
+   * status change nor surfacing to the controller (mirrors the notification
+   * retraction). Tenant-scoped — `tenantId` always carries `args.tenantId`, and
+   * the alert id has already been confirmed in-tenant by the caller's findFirst.
+   * Uses the established inline `prisma.auditLog.create` convention (no shared
+   * AuditService exists). `hash`/`prevHash` are left unset, matching every other
+   * call site.
+   */
+  private async writeAuditEntry(args: {
+    tenantId: string;
+    alertId: string;
+    actorId: string;
+    action: 'alert.acknowledge' | 'alert.resolve' | 'alert.dismiss';
+    beforeStatus: string;
+    afterStatus: string;
+  }): Promise<void> {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: args.tenantId,
+          actorId: args.actorId,
+          actorRole: 'school_admin',
+          portal: 'admin',
+          action: args.action,
+          resourceType: 'alert_instance',
+          resourceId: args.alertId,
+          before: { status: args.beforeStatus } as Prisma.InputJsonValue,
+          after: { status: args.afterStatus } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write audit entry ${args.action} for alert ${args.alertId} (status unaffected): ${(err as Error).message}`,
+      );
+    }
   }
 
   // ----- Evaluator -----------------------------------------------------------

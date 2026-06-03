@@ -5,8 +5,8 @@ const TENANT = 't1';
 const ALERT_ID = 'alert-1';
 const USER = 'admin-1';
 
-function makeService() {
-  const updatedRow = { id: ALERT_ID, tenantId: TENANT, status: 'open' as string };
+function makeService(initialStatus: string = 'open') {
+  const updatedRow = { id: ALERT_ID, tenantId: TENANT, status: initialStatus };
   const prisma = {
     alertInstance: {
       findFirst: jest.fn().mockResolvedValue({ ...updatedRow }),
@@ -14,6 +14,9 @@ function makeService() {
         ...updatedRow,
         ...data,
       })),
+    },
+    auditLog: {
+      create: jest.fn().mockResolvedValue({ id: 'audit-1' }),
     },
   };
   const notifications = {
@@ -79,5 +82,131 @@ describe('AlertsService notification retraction on lifecycle close', () => {
     const result = await service.dismiss({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
 
     expect(result.status).toBe('dismissed');
+  });
+});
+
+describe('AlertsService append-only audit on lifecycle transitions', () => {
+  it('T1 — resolve writes one audit row with pinned fields (open -> resolved)', async () => {
+    const { service, prisma } = makeService('open');
+
+    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+
+    expect(result.status).toBe('resolved');
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        tenantId: TENANT,
+        actorId: USER,
+        actorRole: 'school_admin',
+        portal: 'admin',
+        action: 'alert.resolve',
+        resourceType: 'alert_instance',
+        resourceId: ALERT_ID,
+        before: { status: 'open' },
+        after: { status: 'resolved' },
+      },
+    });
+  });
+
+  it('T1 — dismiss writes one audit row with action alert.dismiss (open -> dismissed)', async () => {
+    const { service, prisma } = makeService('open');
+
+    const result = await service.dismiss({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+
+    expect(result.status).toBe('dismissed');
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'alert.dismiss',
+        resourceType: 'alert_instance',
+        resourceId: ALERT_ID,
+        tenantId: TENANT,
+        actorId: USER,
+        before: { status: 'open' },
+        after: { status: 'dismissed' },
+      }),
+    });
+  });
+
+  it('T1 — acknowledge on an OPEN alert writes one audit row (open -> acknowledged)', async () => {
+    const { service, prisma } = makeService('open');
+
+    const result = await service.acknowledge({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+    });
+
+    expect(result.status).toBe('acknowledged');
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'alert.acknowledge',
+        resourceType: 'alert_instance',
+        resourceId: ALERT_ID,
+        before: { status: 'open' },
+        after: { status: 'acknowledged' },
+      }),
+    });
+  });
+
+  it('T2 — no-op acknowledge (already acknowledged) writes ZERO audit rows', async () => {
+    const { service, prisma } = makeService('acknowledged');
+
+    const result = await service.acknowledge({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+    });
+
+    expect(result.status).toBe('acknowledged');
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('T2 — no-op acknowledge (already resolved) writes ZERO audit rows', async () => {
+    const { service, prisma } = makeService('resolved');
+
+    const result = await service.acknowledge({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+    });
+
+    expect(result.status).toBe('resolved');
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('T3 — auditLog.create rejection still returns the resolved row and does not throw', async () => {
+    const { service, prisma } = makeService('open');
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('audit table down'));
+
+    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+
+    expect(result.status).toBe('resolved');
+  });
+
+  it('T3 — auditLog.create rejection still returns the acknowledged row and does not throw', async () => {
+    const { service, prisma } = makeService('open');
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('audit table down'));
+
+    const result = await service.acknowledge({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+    });
+
+    expect(result.status).toBe('acknowledged');
+  });
+
+  it('T4 — audit and notification-retraction failures are independent (both attempted)', async () => {
+    const { service, prisma, notifications } = makeService('open');
+    notifications.markReadBySource.mockRejectedValueOnce(new Error('notif down'));
+
+    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+
+    expect(result.status).toBe('resolved');
+    // Retraction failed, yet the audit write was still attempted.
+    expect(notifications.markReadBySource).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 });

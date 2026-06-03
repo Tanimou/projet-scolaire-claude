@@ -5,6 +5,30 @@
 
 ---
 
+## 🆕 Sprint Alert Lifecycle Audit Trail (continuous-improvement)
+
+Combler une **lacune de conformité R6** signalée comme dette dans les deux derniers run summaries : `AlertsService.acknowledge`/`resolve`/`dismiss` muent le statut d'une `AlertInstance` **sans écrire aucune entrée d'audit**, alors que le cahier de charges impose un audit **append-only sur toute action sensible** (DoD §14.2, project-context §2.5). Les transitions de cycle de vie d'alerte étaient donc invisibles dans le journal d'audit admin.
+
+### Livré
+- **`apps/api/src/modules/alerts/alerts.service.ts`** : nouvelle méthode privée `writeAuditEntry({ tenantId, alertId, actorId, action, beforeStatus, afterStatus })` qui fait un `prisma.auditLog.create` **inline** (réutilise la convention maison — il n'existe pas de `AuditService` partagé : voir `roles.controller.ts`, `imports.service.ts`, `academic-years.controller.ts`). Champs : `action` ∈ `alert.acknowledge|alert.resolve|alert.dismiss`, `resourceType: 'alert_instance'` (identique au littéral source déjà utilisé pour la rétraction de notification), `resourceId`, `before:{status}` → `after:{status}`, `actorRole:'school_admin'` + `portal:'admin'` (hardcodés comme tous les autres call sites), `hash`/`prevHash` laissés nuls.
+- **Best-effort + post-update** : chaque écriture est encapsulée dans son propre try/catch (`logger.error` puis swallow), placée **après** l'`alertInstance.update` et indépendante de la rétraction de notification — une panne du journal d'audit ne rollback jamais la transition de statut ni ne remonte au contrôleur (réplique de la sémantique `markReadBySource`).
+- **Garde de transition réelle sur `acknowledge`** : refactor en `const didTransition = row.status === 'open'` ; l'audit n'est écrit **que** sur la vraie transition `open → acknowledged`. Un re-acknowledge d'une alerte déjà close écrit **zéro ligne** → le journal append-only reste signifiant.
+- **Tenant-scoping préservé** : `tenantId` porte toujours `args.tenantId` (dérivé du JWT côté contrôleur) ; l'id d'alerte est déjà confirmé in-tenant par le `findFirst({ where:{ id, tenantId } })` du caller (404 sur un id cross-tenant avant toute écriture).
+- **Tests** : `alerts.service.spec.ts` étendu (+133) — `makeService(initialStatus)` paramétrable + mock `auditLog.create`. Matrice T1 (happy paths resolve/dismiss/acknowledge, assertion sur les champs exacts), T2 (no-op acknowledge sur `acknowledged`/`resolved` → zéro ligne), T3 (rejet de `auditLog.create` → la méthode renvoie quand même la ligne, ne throw pas), T4 (panne audit ⫫ panne rétraction notification, indépendantes). **13/13 verts.**
+
+### Décision de cadrage (assumée, autonome)
+- **`prisma.auditLog.create` inline, PAS de `AuditService`** : introduire une abstraction transverse serait une nouvelle décision d'archi (ADR requis) hors scope — Winston a tranché PASS sans ADR.
+- **Best-effort, pas transactionnel** : Winston notait que `academic-years`/`imports` écrivent l'audit *dans* le `$transaction` (garantie plus forte). Choix conscient ici de la **disponibilité** (une panne d'audit ne doit pas empêcher un admin de résoudre une alerte), aligné sur la sémantique best-effort déjà en place pour la rétraction de notification dans ce même fichier. Documenté.
+- **`actorRole`/`portal` hardcodés** (dette signalée) : exacts aujourd'hui (les 3 endpoints sont admin-only derrière `@RequiresPermission('alerts.write')`), mais **asseverés et non dérivés du JWT**. Le panel (Sentinel + Winston) note que si un chemin worker-cron / `grade.publish` / rôle custom non-admin pilote un jour ces transitions, le trail append-only attribuera à tort l'action à un `school_admin` — non corrigeable. À traiter au prochain sprint.
+- **Hors scope volontaire** : garde `didTransition` sur `resolve`/`dismiss` (un double-resolve écrit aujourd'hui une ligne no-op `before===after` — bruit P2, pas une faille), le hash-chain `hash`/`prevHash`, l'extraction du littéral `'alert_instance'` en constante partagée.
+
+### État technique
+- ✅ Typecheck `@pilotage/api` (tsc --noEmit) propre · ✅ 13/13 tests ciblés · ✅ `git diff --check` propre · ✅ **`pnpm --filter @pilotage/api build` (nest build) OK**
+- ✅ Seam disjoint = `apps/api` uniquement (2 fichiers) · aucune migration, aucun changement schéma/contracts/controller/module/UI/scoping tenant
+- ⚠️ PR taguée **P1 / needs-human-review** (`[audit][security]`) : panel PASS/GO à l'unanimité (Winston + Sentinel + Murat), le seul point à valider côté humain est l'honnêteté de provenance `actorRole`/`portal`.
+
+---
+
 ## 🆕 Sprint Alert-Rule Parameter Hardening (continuous-improvement)
 
 Durcir le parsing des paramètres admin-tunables des règles d'alerte R6 contre le **JSONB non validé** `AlertRule.parameters` (couche de customisation ADR-013). Deux règles lisaient encore leurs seuils via un `Number(...)` brut sans garde finie/entière/positive : une valeur `0`, négative, NaN ou hors-échelle saisie par un admin pouvait **désactiver silencieusement** une règle ou **déclencher une alerte sur toute la cohorte** (+ notification de tous les tuteurs sur le chemin cron R8).
