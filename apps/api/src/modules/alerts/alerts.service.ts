@@ -190,7 +190,13 @@ export class AlertsService {
     return { data: rows.map((r) => this.toDto(r as AlertInstanceFull)), total };
   }
 
-  async acknowledge(args: { tenantId: string; id: string; userProfileId: string }) {
+  async acknowledge(args: {
+    tenantId: string;
+    id: string;
+    userProfileId: string;
+    actorRole: string | null;
+    portal: string | null;
+  }) {
     const row = await this.prisma.alertInstance.findFirst({
       where: { id: args.id, tenantId: args.tenantId },
     });
@@ -215,12 +221,20 @@ export class AlertsService {
         action: 'alert.acknowledge',
         beforeStatus: row.status,
         afterStatus: 'acknowledged',
+        actorRole: args.actorRole,
+        portal: args.portal,
       });
     }
     return updated;
   }
 
-  async resolve(args: { tenantId: string; id: string; userProfileId: string }) {
+  async resolve(args: {
+    tenantId: string;
+    id: string;
+    userProfileId: string;
+    actorRole: string | null;
+    portal: string | null;
+  }) {
     const row = await this.prisma.alertInstance.findFirst({
       where: { id: args.id, tenantId: args.tenantId },
     });
@@ -255,11 +269,19 @@ export class AlertsService {
       action: 'alert.resolve',
       beforeStatus: row.status,
       afterStatus: 'resolved',
+      actorRole: args.actorRole,
+      portal: args.portal,
     });
     return updated;
   }
 
-  async dismiss(args: { tenantId: string; id: string; userProfileId: string }) {
+  async dismiss(args: {
+    tenantId: string;
+    id: string;
+    userProfileId: string;
+    actorRole: string | null;
+    portal: string | null;
+  }) {
     const row = await this.prisma.alertInstance.findFirst({
       where: { id: args.id, tenantId: args.tenantId },
     });
@@ -293,6 +315,8 @@ export class AlertsService {
       action: 'alert.dismiss',
       beforeStatus: row.status,
       afterStatus: 'dismissed',
+      actorRole: args.actorRole,
+      portal: args.portal,
     });
     return updated;
   }
@@ -305,7 +329,10 @@ export class AlertsService {
    * the alert id has already been confirmed in-tenant by the caller's findFirst.
    * Uses the established inline `prisma.auditLog.create` convention (no shared
    * AuditService exists). `hash`/`prevHash` are left unset, matching every other
-   * call site.
+   * call site. `actorRole`/`portal` are now derived from the authenticated
+   * caller's JWT by the controller (see `deriveAlertActorProvenance`) instead of
+   * being hardcoded `school_admin`/`admin`; both are nullable to mirror the
+   * `AuditLog` `String?` columns when the caller holds no known realm role.
    */
   private async writeAuditEntry(args: {
     tenantId: string;
@@ -314,14 +341,16 @@ export class AlertsService {
     action: 'alert.acknowledge' | 'alert.resolve' | 'alert.dismiss';
     beforeStatus: string;
     afterStatus: string;
+    actorRole: string | null;
+    portal: string | null;
   }): Promise<void> {
     try {
       await this.prisma.auditLog.create({
         data: {
           tenantId: args.tenantId,
           actorId: args.actorId,
-          actorRole: 'school_admin',
-          portal: 'admin',
+          actorRole: args.actorRole,
+          portal: args.portal,
           action: args.action,
           resourceType: 'alert_instance',
           resourceId: args.alertId,

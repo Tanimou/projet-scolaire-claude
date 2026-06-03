@@ -5,6 +5,27 @@
 
 ---
 
+## 🆕 Sprint Alert Audit Provenance (continuous-improvement)
+
+Fermer la **dette P1 explicitement reportée** par le sprint précédent (Lifecycle Audit Trail, PR #98) : `writeAuditEntry` **asseverait** `actorRole:'school_admin'` + `portal:'admin'` en dur au lieu de les **dériver** du vrai appelant. Comme `alerts.write` est détenu par `school_admin` **et** `super_admin` (qui hérite de toutes les permissions), et qu'un rôle custom `teacher` (ADR-015) peut aussi le porter, le journal append-only attribuait à tort ces actions à un `school_admin` — atteinte à l'honnêteté de provenance (cahier de charges §2.5).
+
+### Livré
+- **`apps/api/src/modules/alerts/alert-provenance.ts`** (NEW) : mapper pur `deriveAlertActorProvenance(jwt) → { actorRole, portal }`. Lit les rôles realm via l'idiome maison `jwt.realm_access?.roles ?? []` (identique à `PermissionsGuard`), résout le rôle **le plus privilégié** par précédence `super_admin > school_admin > teacher > parent` (indépendant de l'ordre → attribution déterministe), mappe vers un portail, et retombe sur `{ realmRoles[0] ?? null, portal: null }` pour un appelant inconnu. Ne throw jamais → sûr dans le chemin audit best-effort.
+- **`apps/api/.../alerts.controller.ts`** : les 3 endpoints de cycle de vie (`acknowledge`/`resolve`/`dismiss`) dérivent `{ actorRole, portal }` du JWT et les passent au service, à côté de `tenantId`/`userProfileId` inchangés (issus de `ensureUser(jwt)`).
+- **`apps/api/.../alerts.service.ts`** : signatures `acknowledge/resolve/dismiss` + `writeAuditEntry` étendues avec `actorRole/portal: string | null` ; les littéraux en dur remplacés par les valeurs passées. **Tous les invariants préservés** : tenant-scoping (`args.tenantId`, `findFirst` in-tenant avant mutation), best-effort try/catch (une panne d'audit ne rollback jamais la transition), garde `didTransition` (no-op → zéro ligne), `hash`/`prevHash` nuls.
+- **Tests (30/30 verts)** : `alert-provenance.spec.ts` (NEW, matrice de précédence + fallbacks inconnu/vide/absent) ; `alerts.controller.spec.ts` (**NEW — ferme l'unique condition de merge du panel verify** : prouve que le contrôleur câble réellement `deriveAlertActorProvenance(jwt)` vers le service — teacher→teacher/teacher, super_admin→super_admin/admin, rôle inconnu→rôle brut/null, + sûreté tenant) ; `alerts.service.spec.ts` étendu (T5-T7 pass-through provenance incl. null).
+
+### Décision de cadrage (assumée, autonome)
+- **Path A (Winston)** : dérivation **locale au module alerts**, réutilisant le pattern « contrôleur dérive le contexte puis le passe au service » (déjà la norme : `me`/`schoolId`). **Pas de nouvel `AuditService` partagé, pas d'ADR** — généraliser aux 7 autres call sites (`invite`, `roles`, `academic-years`, `subjects`, `imports`, `assessments`) serait une nouvelle décision d'archi (ADR-019) hors scope. Documenté comme dette : le `audit_log` a désormais une sémantique de provenance **incohérente selon le writer** jusqu'au backfill.
+- **FR2 > Critic** : sur appelant inconnu, `actorRole = realmRoles[0] ?? null` + `portal: null` (colonnes `String?` nullables) plutôt qu'un sentinel `'unknown'` — la spec FR2/AC4 fait autorité.
+
+### État technique
+- ✅ Typecheck `@pilotage/api` propre (Murat) · ✅ `nest build` OK · ✅ 30/30 tests alerts · ✅ `git diff --check` propre
+- ✅ Seam disjoint = module `alerts` uniquement (6 fichiers) · aucune migration, aucun changement schéma/contracts/UI/scoping tenant
+- ⚠️ PR #99 taguée **P1 / needs-human-review** (`[auth][audit]`) : panel PASS (CONCERNS) à l'unanimité ; les 2 points humains sont (a) promouvoir le helper + ADR-019 + backfill des 7 autres sites, ou accepter la dette cadrée ; (b) nit cosmétique du rôle technique Keycloak brut écrit en `actorRole`.
+
+---
+
 ## 🆕 Sprint Alert Lifecycle Audit Trail (continuous-improvement)
 
 Combler une **lacune de conformité R6** signalée comme dette dans les deux derniers run summaries : `AlertsService.acknowledge`/`resolve`/`dismiss` muent le statut d'une `AlertInstance` **sans écrire aucune entrée d'audit**, alors que le cahier de charges impose un audit **append-only sur toute action sensible** (DoD §14.2, project-context §2.5). Les transitions de cycle de vie d'alerte étaient donc invisibles dans le journal d'audit admin.
