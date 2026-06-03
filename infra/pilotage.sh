@@ -3,8 +3,8 @@
 # Pilotage Scolaire — platform container manager
 # -----------------------------------------------------------------------------
 # Single entry point to build / start / restart / update the dockerised stack.
-# Docker data lives in the WSL2 distro on the E: drive (Docker Desktop setting),
-# so nothing here writes to C:.
+# Docker data lives in the WSL2 distro at the default Docker Desktop location
+# on the C: drive (project moved back from E: to C: on 2026-06-02).
 #
 # Usage:
 #   bash infra/pilotage.sh <command> [services...]

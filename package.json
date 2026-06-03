@@ -21,7 +21,13 @@
     "docker:up": "docker compose --env-file .env -f infra/docker-compose.yml up -d",
     "docker:down": "docker compose --env-file .env -f infra/docker-compose.yml down",
     "docker:logs": "docker compose --env-file .env -f infra/docker-compose.yml logs -f",
-    "docker:reset": "docker compose --env-file .env -f infra/docker-compose.yml down -v && docker compose --env-file .env -f infra/docker-compose.yml up -d"
+    "docker:reset": "docker compose --env-file .env -f infra/docker-compose.yml down -v && docker compose --env-file .env -f infra/docker-compose.yml up -d",
+    "dev:start": "bash scripts/dev.sh",
+    "dev:infra": "bash scripts/dev.sh --infra",
+    "dev:reset": "bash scripts/dev.sh --reset",
+    "deploy:prod": "bash scripts/deploy-prod.sh",
+    "deploy:prod:rebuild": "bash scripts/deploy-prod.sh --rebuild",
+    "deploy:prod:down": "bash scripts/deploy-prod.sh --down"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
