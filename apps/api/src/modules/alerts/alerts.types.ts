@@ -42,9 +42,9 @@ export const RULE_DEFAULTS: Record<
   },
   MISSING_ASSESSMENT: {
     label: 'Évaluation manquante',
-    description: 'Absence non justifiée sur une évaluation',
+    description: 'Élève absent·e sur >= 1 évaluation publiée (rattrapage à prévoir)',
     severity: 'medium',
-    parameters: {},
+    parameters: { count: 1, windowDays: 30 },
   },
   HIGH_ABSENCE: {
     label: 'Absences répétées',
