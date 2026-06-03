@@ -15,6 +15,7 @@ function makeService() {
         created.push(...data);
         return { count: data.length };
       }),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     userProfile: {
       // Echo a deterministic email per requested id so dispatch can resolve them.
@@ -166,5 +167,45 @@ describe('NotificationsService.createMany — email channel (R8.2)', () => {
 
     expect(res.created).toBe(1);
     expect(created).toHaveLength(1);
+  });
+});
+
+describe('NotificationsService.markReadBySource — source retraction', () => {
+  it('runs a tenant-scoped updateMany keyed by source + readAt:null, returns count', async () => {
+    const { service, prisma } = makeService();
+    prisma.notification.updateMany.mockResolvedValueOnce({ count: 2 });
+
+    const count = await service.markReadBySource({
+      tenantId: 't1',
+      sourceType: 'alert_instance',
+      sourceId: 'a1',
+    });
+
+    expect(count).toBe(2);
+    expect(prisma.notification.updateMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.notification.updateMany.mock.calls[0]![0];
+    // AC4 tenant isolation + AC5 idempotency guard + source pinning.
+    expect(arg.where).toEqual({
+      tenantId: 't1',
+      sourceType: 'alert_instance',
+      sourceId: 'a1',
+      readAt: null,
+    });
+    // Cleared across ALL guardians — never scoped to a single recipient.
+    expect(arg.where).not.toHaveProperty('userProfileId');
+    expect(arg.data).toEqual({ readAt: expect.any(Date) });
+  });
+
+  it('is idempotent / a no-op when no unread rows match (returns 0)', async () => {
+    const { service, prisma } = makeService();
+    prisma.notification.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const count = await service.markReadBySource({
+      tenantId: 't1',
+      sourceType: 'alert_instance',
+      sourceId: 'a-none',
+    });
+
+    expect(count).toBe(0);
   });
 });

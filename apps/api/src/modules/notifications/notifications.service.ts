@@ -290,6 +290,36 @@ export class NotificationsService {
     return res.count;
   }
 
+  /**
+   * Retract every unread notification that points at a single source event,
+   * across ALL recipients in the tenant. Used when a source's lifecycle closes
+   * (e.g. an admin resolves/dismisses an AlertInstance) so the parent bell stops
+   * surfacing notifications for something no longer active.
+   *
+   * Unlike `markRead`/`markAllRead`, this is keyed by the source pair
+   * `(sourceType, sourceId)` — NOT by `userProfileId` — so it clears the row for
+   * every guardian who was notified. It is tenant-scoped (always filters
+   * `tenantId`) and idempotent: the `readAt: null` guard means a re-invocation
+   * marks zero additional rows and is a safe no-op (double-resolve, or the
+   * cron-vs-admin race). Returns the number of rows newly marked read.
+   */
+  async markReadBySource(args: {
+    tenantId: string;
+    sourceType: string;
+    sourceId: string;
+  }): Promise<number> {
+    const res = await this.prisma.notification.updateMany({
+      where: {
+        tenantId: args.tenantId,
+        sourceType: args.sourceType,
+        sourceId: args.sourceId,
+        readAt: null,
+      },
+      data: { readAt: new Date() },
+    });
+    return res.count;
+  }
+
   private toDto(row: Notification): NotificationDto {
     return {
       id: row.id,
