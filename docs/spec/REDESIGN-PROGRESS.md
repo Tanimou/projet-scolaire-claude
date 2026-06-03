@@ -5,6 +5,27 @@
 
 ---
 
+## 🆕 Sprint Alert Resolution → Notification Retraction (continuous-improvement)
+
+Fermer la **boucle de cycle de vie R6 → R8** côté lecture : quand un admin **résout** ou **rejette** une `AlertInstance`, les notifications cloche déjà émises vers les tuteurs (`sourceType='alert_instance'`, `sourceId=alertId`) restaient **non-lues à vie**. La cloche parent continuait donc d'afficher des alertes pour des événements clos (alors que `listForStudent` ne renvoie déjà plus que `open`/`acknowledged`).
+
+### Livré
+- **`apps/api/src/modules/notifications/notifications.service.ts`** : nouvelle méthode publique `markReadBySource({ tenantId, sourceType, sourceId })` — `updateMany` tenant-scopé, clé par la paire source `(sourceType, sourceId)` (et **non** par `userProfileId`, donc rétracte chez **tous** les tuteurs notifiés), garde `readAt: null` → idempotent (no-op sûr au double-resolve / à la course cron↔admin). Renvoie le nombre de lignes nouvellement lues.
+- **`apps/api/src/modules/alerts/alerts.service.ts`** : `resolve` et `dismiss` appellent `markReadBySource` en **best-effort** (try/catch propre + `logger.error`) **après** la transition de statut — une panne de notification ne rollback jamais le changement de cycle de vie (réplique de la sémantique `dispatchEmails`). `acknowledge` reste **intentionnellement intact** (l'alerte est encore active → la cloche doit continuer de sonner).
+- **Tests** : nouveau `alerts.service.spec.ts` (resolve/dismiss invoquent avec la clé source exacte, acknowledge non, rejet best-effort renvoie quand même la ligne mise à jour) + extension de `notifications.service.spec.ts` (where tenant-scopé, absence de `userProfileId`, no-op idempotent). 16/16 verts.
+- **Fix annexe** : 3 erreurs strict-null pré-existantes (TS2532) dans `apps/worker/.../alerts-evaluator.notify.spec.ts` (`mock.calls[0]![0]`) → typecheck monorepo de nouveau vert (11/11).
+
+### Décision de cadrage (assumée, autonome)
+- **Asymétrie de cycle de vie volontaire** : seuls `resolve`/`dismiss` rétractent ; `acknowledge` garde la cloche allumée.
+- **Pas d'entrée d'audit** sur la rétraction (différé en follow-up) et **pas de constante partagée** pour `'alert_instance'` (3 littéraux indépendants) — signalés comme dette à durcir au prochain sprint. Aucune migration, aucun changement de schéma/contracts/controller/wiring.
+
+### État technique
+- ✅ Typecheck monorepo 11/11 · ✅ 16/16 tests ciblés · ✅ `git diff --check` propre
+- ✅ Seam disjoint = `apps/api` (+1 spec worker) · ✅ Réutilise `Notification` + `NotificationsService` déjà injecté
+- ⚠️ PR taguée **P1 / needs-human-review** : `markReadBySource` est une mutation bulk cross-destinataires sans authz propre (correcte pour son unique appelant admin de confiance) ; à confirmer côté humain + l'absence d'audit trail.
+
+---
+
 ## 🆕 Sprint Alert Cron → Parent Notification (continuous-improvement)
 
 Fermer la boucle **R6 (moteur d'alertes) → R8 (notifications)** sur le chemin de production. Le moteur tourne en réel via un cron worker toutes les 15 min (`apps/worker/src/modules/alerts-cron/`), mais ce chemin créait des `AlertInstance` **sans jamais notifier les parents** : seul le bouton admin « Évaluer maintenant » (chemin API `AlertsService.evaluateAll` → `notifyGuardiansOfAlert`) déclenchait la cloche famille. En production, les alertes périodiques étaient donc silencieuses.
