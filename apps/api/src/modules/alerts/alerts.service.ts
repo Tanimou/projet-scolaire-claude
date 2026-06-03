@@ -21,6 +21,7 @@ import {
 } from './alerts.types';
 import { evaluateHighAbsence } from './rules/high-absence.rule';
 import { evaluateLowSubjectAvg } from './rules/low-subject-avg.rule';
+import { evaluateNegativeTrend } from './rules/negative-trend.rule';
 import { evaluateRepeatedFailure } from './rules/repeated-failure.rule';
 import type { DetectedAlert, RuleContext } from './rules/rule-context';
 
@@ -38,7 +39,8 @@ const RULE_FN: Partial<Record<AlertRuleCode, RuleFn>> = {
   LOW_SUBJECT_AVG: evaluateLowSubjectAvg,
   HIGH_ABSENCE: evaluateHighAbsence,
   REPEATED_FAILURE: evaluateRepeatedFailure,
-  // NEGATIVE_TREND, MISSING_ASSESSMENT, TEACHER_COMMENT_FLAG, BEHAVIOR_ALERT
+  NEGATIVE_TREND: evaluateNegativeTrend,
+  // MISSING_ASSESSMENT, TEACHER_COMMENT_FLAG, BEHAVIOR_ALERT
   // remain stubs — they will be wired in subsequent iterations.
 };
 
