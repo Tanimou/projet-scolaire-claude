@@ -5,6 +5,11 @@ const TENANT = 't1';
 const ALERT_ID = 'alert-1';
 const USER = 'admin-1';
 
+// Default lifecycle-call provenance: the common case (school_admin via the admin
+// portal), now passed explicitly by the controller rather than hardcoded in the
+// service. Tests that exercise other roles override these.
+const SCHOOL_ADMIN = { actorRole: 'school_admin', portal: 'admin' } as const;
+
 function makeService(initialStatus: string = 'open') {
   const updatedRow = { id: ALERT_ID, tenantId: TENANT, status: initialStatus };
   const prisma = {
@@ -33,7 +38,12 @@ describe('AlertsService notification retraction on lifecycle close', () => {
   it('AC1 — resolve flips status to resolved AND retracts the source notifications', async () => {
     const { service, notifications, prisma } = makeService();
 
-    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.resolve({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('resolved');
     expect(prisma.alertInstance.update).toHaveBeenCalledTimes(1);
@@ -48,7 +58,12 @@ describe('AlertsService notification retraction on lifecycle close', () => {
   it('AC2 — dismiss flips status to dismissed AND retracts the source notifications', async () => {
     const { service, notifications } = makeService();
 
-    const result = await service.dismiss({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.dismiss({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('dismissed');
     expect(notifications.markReadBySource).toHaveBeenCalledWith({
@@ -61,7 +76,12 @@ describe('AlertsService notification retraction on lifecycle close', () => {
   it('AC3 — acknowledge does NOT retract (alert is still open/active)', async () => {
     const { service, notifications } = makeService();
 
-    await service.acknowledge({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    await service.acknowledge({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(notifications.markReadBySource).not.toHaveBeenCalled();
   });
@@ -70,7 +90,12 @@ describe('AlertsService notification retraction on lifecycle close', () => {
     const { service, notifications } = makeService();
     notifications.markReadBySource.mockRejectedValueOnce(new Error('db down'));
 
-    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.resolve({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('resolved');
   });
@@ -79,7 +104,12 @@ describe('AlertsService notification retraction on lifecycle close', () => {
     const { service, notifications } = makeService();
     notifications.markReadBySource.mockRejectedValueOnce(new Error('db down'));
 
-    const result = await service.dismiss({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.dismiss({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('dismissed');
   });
@@ -89,7 +119,12 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
   it('T1 — resolve writes one audit row with pinned fields (open -> resolved)', async () => {
     const { service, prisma } = makeService('open');
 
-    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.resolve({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('resolved');
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
@@ -111,7 +146,12 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
   it('T1 — dismiss writes one audit row with action alert.dismiss (open -> dismissed)', async () => {
     const { service, prisma } = makeService('open');
 
-    const result = await service.dismiss({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.dismiss({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('dismissed');
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
@@ -122,6 +162,8 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
         resourceId: ALERT_ID,
         tenantId: TENANT,
         actorId: USER,
+        actorRole: 'school_admin',
+        portal: 'admin',
         before: { status: 'open' },
         after: { status: 'dismissed' },
       }),
@@ -135,6 +177,7 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
       tenantId: TENANT,
       id: ALERT_ID,
       userProfileId: USER,
+      ...SCHOOL_ADMIN,
     });
 
     expect(result.status).toBe('acknowledged');
@@ -144,6 +187,8 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
         action: 'alert.acknowledge',
         resourceType: 'alert_instance',
         resourceId: ALERT_ID,
+        actorRole: 'school_admin',
+        portal: 'admin',
         before: { status: 'open' },
         after: { status: 'acknowledged' },
       }),
@@ -157,6 +202,7 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
       tenantId: TENANT,
       id: ALERT_ID,
       userProfileId: USER,
+      ...SCHOOL_ADMIN,
     });
 
     expect(result.status).toBe('acknowledged');
@@ -170,6 +216,7 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
       tenantId: TENANT,
       id: ALERT_ID,
       userProfileId: USER,
+      ...SCHOOL_ADMIN,
     });
 
     expect(result.status).toBe('resolved');
@@ -180,7 +227,12 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
     const { service, prisma } = makeService('open');
     prisma.auditLog.create.mockRejectedValueOnce(new Error('audit table down'));
 
-    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.resolve({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('resolved');
   });
@@ -193,6 +245,7 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
       tenantId: TENANT,
       id: ALERT_ID,
       userProfileId: USER,
+      ...SCHOOL_ADMIN,
     });
 
     expect(result.status).toBe('acknowledged');
@@ -202,11 +255,81 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
     const { service, prisma, notifications } = makeService('open');
     notifications.markReadBySource.mockRejectedValueOnce(new Error('notif down'));
 
-    const result = await service.resolve({ tenantId: TENANT, id: ALERT_ID, userProfileId: USER });
+    const result = await service.resolve({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
 
     expect(result.status).toBe('resolved');
     // Retraction failed, yet the audit write was still attempted.
     expect(notifications.markReadBySource).toHaveBeenCalledTimes(1);
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AlertsService audit provenance is derived from the caller (not hardcoded)', () => {
+  it('T5 — a teacher caller records actorRole "teacher" and portal "teacher" (AC2 core fix)', async () => {
+    const { service, prisma } = makeService('open');
+
+    await service.resolve({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      actorRole: 'teacher',
+      portal: 'teacher',
+    });
+
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorRole: 'teacher',
+        portal: 'teacher',
+        action: 'alert.resolve',
+      }),
+    });
+  });
+
+  it('T6 — a super_admin caller records actorRole "super_admin" and portal "admin" (AC3)', async () => {
+    const { service, prisma } = makeService('open');
+
+    await service.acknowledge({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      actorRole: 'super_admin',
+      portal: 'admin',
+    });
+
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorRole: 'super_admin',
+        portal: 'admin',
+        action: 'alert.acknowledge',
+      }),
+    });
+  });
+
+  it('T7 — an unknown/empty role writes null actorRole/portal without throwing (AC4)', async () => {
+    const { service, prisma } = makeService('open');
+
+    const result = await service.dismiss({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      actorRole: null,
+      portal: null,
+    });
+
+    expect(result.status).toBe('dismissed');
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorRole: null,
+        portal: null,
+        action: 'alert.dismiss',
+        tenantId: TENANT,
+      }),
+    });
   });
 });

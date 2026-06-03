@@ -24,6 +24,7 @@ import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
 
+import { deriveAlertActorProvenance } from './alert-provenance';
 import { AlertsService } from './alerts.service';
 import { EvaluateAlertsDto, RULE_CODES, UpdateAlertRuleDto } from './alerts.types';
 
@@ -96,21 +97,42 @@ export class AlertsController {
   @RequiresPermission('alerts.write')
   async acknowledge(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
     const me = await this.users.ensureUser(jwt);
-    return this.alerts.acknowledge({ tenantId: me.tenantId, id, userProfileId: me.id });
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    return this.alerts.acknowledge({
+      tenantId: me.tenantId,
+      id,
+      userProfileId: me.id,
+      actorRole,
+      portal,
+    });
   }
 
   @Post('instances/:id/resolve')
   @RequiresPermission('alerts.write')
   async resolve(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
     const me = await this.users.ensureUser(jwt);
-    return this.alerts.resolve({ tenantId: me.tenantId, id, userProfileId: me.id });
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    return this.alerts.resolve({
+      tenantId: me.tenantId,
+      id,
+      userProfileId: me.id,
+      actorRole,
+      portal,
+    });
   }
 
   @Post('instances/:id/dismiss')
   @RequiresPermission('alerts.write')
   async dismiss(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
     const me = await this.users.ensureUser(jwt);
-    return this.alerts.dismiss({ tenantId: me.tenantId, id, userProfileId: me.id });
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    return this.alerts.dismiss({
+      tenantId: me.tenantId,
+      id,
+      userProfileId: me.id,
+      actorRole,
+      portal,
+    });
   }
 
   @Post('evaluate')
