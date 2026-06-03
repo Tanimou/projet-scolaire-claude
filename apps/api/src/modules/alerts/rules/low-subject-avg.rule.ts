@@ -6,9 +6,17 @@ import type { DetectedAlert, RuleContext } from './rule-context';
  * `threshold` parameter (default 10/20).
  */
 export async function evaluateLowSubjectAvg(ctx: RuleContext): Promise<DetectedAlert[]> {
-  const threshold = Number(
-    (ctx.rule.parameters as Record<string, unknown>)?.threshold ?? 10,
-  );
+  const params = (ctx.rule.parameters as Record<string, unknown>) ?? {};
+  // Read admin-tunable params defensively (ADR-013 customization layer): the
+  // `parameters` bag is an unvalidated Record. `threshold` is a grade on the
+  // 0–20 scale, so the valid range is finite AND > 0 AND <= 20: a 0/negative
+  // threshold would silently disable the rule (avg < 0 never matches), and a
+  // > 20 typo would fire a low-average alert on every student. Invalid/NaN/
+  // out-of-range values fall back to the documented default (10 / 20). Unlike
+  // the integer counts, `threshold` is NOT floored — a 9.5/20 seuil is valid.
+  const rawThreshold = Number(params.threshold ?? 10);
+  const threshold =
+    Number.isFinite(rawThreshold) && rawThreshold > 0 && rawThreshold <= 20 ? rawThreshold : 10;
   if (!ctx.academicYearId) return [];
 
   // Pull all published grades in the active year, for the right tenant / school.

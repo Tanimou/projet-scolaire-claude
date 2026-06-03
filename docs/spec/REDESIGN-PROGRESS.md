@@ -5,6 +5,28 @@
 
 ---
 
+## 🆕 Sprint Alert-Rule Parameter Hardening (continuous-improvement)
+
+Durcir le parsing des paramètres admin-tunables des règles d'alerte R6 contre le **JSONB non validé** `AlertRule.parameters` (couche de customisation ADR-013). Deux règles lisaient encore leurs seuils via un `Number(...)` brut sans garde finie/entière/positive : une valeur `0`, négative, NaN ou hors-échelle saisie par un admin pouvait **désactiver silencieusement** une règle ou **déclencher une alerte sur toute la cohorte** (+ notification de tous les tuteurs sur le chemin cron R8).
+
+### Livré
+- **`high-absence.rule.ts`** (copies API + worker) : `count` → fini + entier (`Math.floor`) + `>= 1` (défaut 5) ; `windowDays` → fini + entier + **borné `[1, 3650]`** (défaut 30). La borne supérieure évite qu'une valeur énorme mais finie (ex. `1e9`) ne fasse déborder `setUTCDate` en **Invalid Date** → Prisma rejetterait la requête et avorterait la règle sur le cron. Sans la borne, `count: 0` produirait `having gte: 0` (toute la cohorte).
+- **`low-subject-avg.rule.ts`** (copies API + worker) : `threshold` → fini + `> 0` + `<= 20` (échelle de note, défaut 10), **non arrondi** (un seuil `9.5/20` est légitime). Ferme les deux modes : `<= 0` désactive silencieusement la règle (`avg < 0` ne matche jamais) ; `> 20` la déclenche sur tous les élèves.
+- **Commentaires explicatifs** (rationale ADR-013) au-dessus de chaque garde, calqués sur le pattern déjà présent dans `missing-assessment.rule.ts` / `negative-trend.rule.ts`, pour qu'aucun lecteur ne réintroduise un `Number()` brut.
+- **Parité** : les copies API et worker de chaque règle restent **byte-identiques** (vérifié par `git diff --no-index`) — le chemin manuel « Évaluer maintenant » (API) et le cron 15 min (worker) ne peuvent pas diverger.
+- **Tests** : 2 nouveaux specs ciblés (`high-absence.rule.spec.ts`, `low-subject-avg.rule.spec.ts`, Prisma mocké, sans DB) en table : `0` / négatif / NaN / fractionnaire / hors-échelle / énorme-fini → défaut, et les valeurs valides passent inchangées. Assertion sur la valeur réellement remise à `groupBy` (HAVING) / au `context` de l'alerte. **21/21 verts.**
+
+### Décision de cadrage (assumée, autonome)
+- **Garde par-paramètre, pas uniforme** : `threshold` est borné `(0, 20]` (suivant AC1/AC5 du spec, qui exigent `threshold:0→10` et `threshold:25→10`) tandis que `count`/`windowDays` sont entiers `>= 1`. La borne supérieure `windowDays <= 3650` a été ajoutée au-delà du spec d'origine pour clore la dernière faille « Invalid Date » signalée par le gate (finding mineur folé avant merge).
+- **Hors scope volontaire** : `repeated-failure.rule.ts` (déjà gardé), la dé-duplication de moteur API↔worker (extraction `@pilotage/alerts-core` différée), l'asymétrie email/préférences du chemin cron.
+
+### État technique
+- ✅ Typecheck monorepo 11/11 (api + worker recompilés) · ✅ 21/21 tests ciblés · ✅ `git diff --check` propre · ✅ parité API/worker confirmée
+- ✅ Seam disjoint = 4 fichiers de règles (api + worker) + 2 specs · aucune migration, aucun changement schéma/contracts/controller/UI/scoping tenant
+- R6 reste à **5/7 règles câblées** (ce sprint durcit l'existant, ne câble pas de nouvelle règle — les 2 restantes, `TEACHER_COMMENT_FLAG` / `BEHAVIOR_ALERT`, nécessitent un nouveau modèle Prisma absent)
+
+---
+
 ## 🆕 Sprint Alert Resolution → Notification Retraction (continuous-improvement)
 
 Fermer la **boucle de cycle de vie R6 → R8** côté lecture : quand un admin **résout** ou **rejette** une `AlertInstance`, les notifications cloche déjà émises vers les tuteurs (`sourceType='alert_instance'`, `sourceId=alertId`) restaient **non-lues à vie**. La cloche parent continuait donc d'afficher des alertes pour des événements clos (alors que `listForStudent` ne renvoie déjà plus que `open`/`acknowledged`).
