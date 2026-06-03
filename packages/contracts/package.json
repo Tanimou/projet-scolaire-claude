@@ -3,16 +3,28 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./enums": "./src/enums/index.ts",
-    "./dto": "./src/dto/index.ts",
-    "./events": "./src/events/index.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./enums": {
+      "types": "./src/enums/index.ts",
+      "default": "./dist/enums/index.js"
+    },
+    "./dto": {
+      "types": "./src/dto/index.ts",
+      "default": "./dist/dto/index.js"
+    },
+    "./events": {
+      "types": "./src/events/index.ts",
+      "default": "./dist/events/index.js"
+    }
   },
   "scripts": {
-    "build": "echo 'no build — TS source consumed directly'",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },

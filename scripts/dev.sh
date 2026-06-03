@@ -39,13 +39,13 @@ command -v pnpm >/dev/null 2>&1 || die "pnpm introuvable sur le PATH."
 # consommés en SOURCE TS (main: src/index.ts) ; Node ≥ 23 (TS natif/ESM strict)
 # rejette leurs barrels de dossier au runtime → l'app locale ne démarre pas.
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-if [ "$NODE_MAJOR" -gt 22 ] 2>/dev/null; then
-  printf '\n\033[1;33m⚠ Node %s détecté — le projet est pinné sur Node 22 (.nvmrc).\033[0m\n' "$(node -v)"
-  printf '   L'\''app locale (pnpm dev) échoue sur Node ≥ 23. Deux options :\n'
-  printf '     1) Installer/activer Node 22  (nvm install 22 && nvm use 22)\n'
-  printf '     2) Tout faire tourner en Docker (recommandé ici) :\n'
-  printf '        \033[1mbash infra/pilotage.sh up\033[0m   (build + run api/worker/web en conteneurs)\n\n'
-  die "Node ≥ 23 incompatible avec le run local. Voir options ci-dessus."
+if [ "$NODE_MAJOR" -gt 22 ] 2>/dev/null && [ "$INFRA_ONLY" = "0" ]; then
+  printf '\n\033[1;33m⚠ Node %s détecté — le projet est pinné sur Node 22 (.nvmrc) ; le run LOCAL (pnpm dev) ne fonctionne pas sur Node ≥ 23\033[0m\n' "$(node -v)"
+  printf '   (les packages workspace sont consommés en source TS → barrels de dossier rejetés par le loader ESM natif).\n'
+  printf '   \033[1m→ Bascule sur le stack Docker complet (api/worker/web en conteneurs, Node 22 interne).\033[0m\n'
+  printf '     Pour le dev hybride hot-reload : installe Node 22 (nvm use 22) puis relance ce script.\n\n'
+  docker info >/dev/null 2>&1 || die "Docker ne répond pas. Démarre Docker Desktop puis relance."
+  exec bash "$ROOT/infra/pilotage.sh" up
 fi
 docker info >/dev/null 2>&1 || die "Docker ne répond pas. Démarre Docker Desktop puis relance.
 (Si Docker reste bloqué à l'init 'Inference manager', un reboot le règle — voir C:\\Users\\HP\\Downloads\\FINIR-DOCKER-reboot.md)"

@@ -1,6 +1,21 @@
 # =============================================================================
 # Docker ignore — réduit drastiquement le contexte de build
 # =============================================================================
+# Root-level entries (BuildKit's **/ glob does NOT match the repo-root dir,
+# so the huge root node_modules must be listed explicitly).
+node_modules
+.next
+.turbo
+dist
+build
+coverage
+.cache
+# Docker WSL distro disks must NEVER end up in the context (a misconfigured
+# CustomWslDistroDir once wrote them here: disk/docker_data.vhdx + main/ext4.vhdx).
+disk
+main
+*.vhdx
+# …and the same nested anywhere in the workspace
 **/node_modules
 **/.next
 **/.turbo
