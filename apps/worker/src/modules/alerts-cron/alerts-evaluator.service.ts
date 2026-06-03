@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { AlertRuleCode, Prisma } from '@prisma/client';
+import type { AlertRuleCode, AlertSeverity, NotificationSeverity, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
@@ -48,7 +48,12 @@ export class AlertsEvaluatorService {
   async evaluateTenant(args: {
     tenantId: string;
     schoolId?: string | null;
-  }): Promise<{ rulesRun: number; detected: number; createdInstances: number }> {
+  }): Promise<{
+    rulesRun: number;
+    detected: number;
+    createdInstances: number;
+    notified: number;
+  }> {
     const rules = await this.prisma.alertRule.findMany({
       where: {
         tenantId: args.tenantId,
@@ -56,7 +61,8 @@ export class AlertsEvaluatorService {
         ...(args.schoolId ? { schoolId: args.schoolId } : {}),
       },
     });
-    if (rules.length === 0) return { rulesRun: 0, detected: 0, createdInstances: 0 };
+    if (rules.length === 0)
+      return { rulesRun: 0, detected: 0, createdInstances: 0, notified: 0 };
 
     const activeYear = await this.prisma.academicYear.findFirst({
       where: {
@@ -70,6 +76,7 @@ export class AlertsEvaluatorService {
 
     let detected = 0;
     let created = 0;
+    let notified = 0;
     const since = new Date();
     since.setUTCDate(since.getUTCDate() - DEDUP_WINDOW_DAYS);
 
@@ -100,7 +107,7 @@ export class AlertsEvaluatorService {
           select: { id: true },
         });
         if (recent) continue;
-        await this.prisma.alertInstance.create({
+        const instance = await this.prisma.alertInstance.create({
           data: {
             tenantId: args.tenantId,
             schoolId: args.schoolId ?? null,
@@ -118,14 +125,112 @@ export class AlertsEvaluatorService {
           },
         });
         created++;
+
+        // Fan out a parent-facing in-app notification for the freshly-created
+        // alert — the manual API path (AlertsService.evaluateAll) already does
+        // this; without it, cron-detected alerts never ring the parent's bell.
+        // Best-effort: a failure here must never roll back the AlertInstance
+        // above nor abort the rest of the evaluation pass.
+        notified += await this.notifyGuardiansOfAlert({
+          tenantId: args.tenantId,
+          studentId: d.studentId,
+          alertId: instance.id,
+          severity: rule.severity,
+          title: d.title,
+          body: d.body,
+        });
       }
     }
 
     if (detected > 0 || created > 0) {
       this.logger.log(
-        `tenant=${args.tenantId} — ${rules.length} rules, ${detected} detected, ${created} new`,
+        `tenant=${args.tenantId} — ${rules.length} rules, ${detected} detected, ${created} new, ${notified} guardians notified`,
       );
     }
-    return { rulesRun: rules.length, detected, createdInstances: created };
+    return { rulesRun: rules.length, detected, createdInstances: created, notified };
+  }
+
+  /**
+   * For a freshly-created AlertInstance, create one in-app `Notification` per
+   * active guardian linked to the student via `Guardianship`. Mirrors the API
+   * side `AlertsService.notifyGuardiansOfAlert`, but the worker has no
+   * `NotificationsService` (only an email *consumer* lives here), so it inserts
+   * directly via Prisma.
+   *
+   * SCOPE — IN-APP ONLY. The email channel (BullMQ `dispatchEmails`) and the
+   * per-user notification-preference gate are owned by the API's
+   * `NotificationsService`; replicating that plumbing in the worker is
+   * deliberately deferred to a follow-up. Email is opt-in / off by default, so
+   * cron-path alerts simply skip it for now; the manual "Evaluate now" path
+   * still emails. This asymmetry is intentional and tracked.
+   *
+   * Best-effort: every failure is caught and logged so a notification problem
+   * never rolls back the already-committed AlertInstance nor aborts the loop.
+   * Returns the number of notification rows created (for telemetry only).
+   */
+  private async notifyGuardiansOfAlert(args: {
+    tenantId: string;
+    studentId: string;
+    alertId: string;
+    severity: AlertSeverity;
+    title: string;
+    body: string;
+  }): Promise<number> {
+    try {
+      const guardianships = await this.prisma.guardianship.findMany({
+        where: {
+          tenantId: args.tenantId,
+          studentId: args.studentId,
+          status: 'active',
+          guardian: { userProfileId: { not: null } },
+        },
+        include: { guardian: { select: { userProfileId: true } } },
+      });
+      const recipients = guardianships
+        .map((g) => g.guardian.userProfileId)
+        .filter((id): id is string => !!id);
+      if (recipients.length === 0) return 0;
+
+      // Source-dedup so a re-tick / concurrent pass never double-pings the same
+      // guardian for the same alert (mirrors NotificationsService.createMany).
+      const existing = await this.prisma.notification.findMany({
+        where: {
+          tenantId: args.tenantId,
+          sourceType: 'alert_instance',
+          sourceId: args.alertId,
+          userProfileId: { in: recipients },
+        },
+        select: { userProfileId: true },
+      });
+      const already = new Set(existing.map((e) => e.userProfileId));
+      const toInsert = recipients.filter((id) => !already.has(id));
+      if (toInsert.length === 0) return 0;
+
+      const severityMap: Record<AlertSeverity, NotificationSeverity> = {
+        low: 'info',
+        medium: 'warning',
+        high: 'danger',
+      };
+
+      const res = await this.prisma.notification.createMany({
+        data: toInsert.map((userProfileId) => ({
+          tenantId: args.tenantId,
+          userProfileId,
+          kind: 'alert' as const,
+          severity: severityMap[args.severity],
+          title: args.title,
+          body: args.body,
+          link: `/parent/recommendations?studentId=${args.studentId}`,
+          sourceType: 'alert_instance',
+          sourceId: args.alertId,
+        })),
+      });
+      return res.count;
+    } catch (err) {
+      this.logger.error(
+        `notifyGuardiansOfAlert failed (alert=${args.alertId}, student=${args.studentId}): ${(err as Error).message}`,
+      );
+      return 0;
+    }
   }
 }

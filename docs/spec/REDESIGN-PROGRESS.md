@@ -5,6 +5,32 @@
 
 ---
 
+## 🆕 Sprint Alert Cron → Parent Notification (continuous-improvement)
+
+Fermer la boucle **R6 (moteur d'alertes) → R8 (notifications)** sur le chemin de production. Le moteur tourne en réel via un cron worker toutes les 15 min (`apps/worker/src/modules/alerts-cron/`), mais ce chemin créait des `AlertInstance` **sans jamais notifier les parents** : seul le bouton admin « Évaluer maintenant » (chemin API `AlertsService.evaluateAll` → `notifyGuardiansOfAlert`) déclenchait la cloche famille. En production, les alertes périodiques étaient donc silencieuses.
+
+### Livré
+- **`apps/worker/src/modules/alerts-cron/alerts-evaluator.service.ts`** : après chaque nouvelle `AlertInstance` créée (uniquement sur le chemin `created++`, pas sur le skip de dédup), fan-out d'une notification in-app par tuteur actif de l'élève — réplique de la sémantique API :
+  - Tuteurs via `guardianship.findMany` scoping `tenantId` + `status:'active'` + `guardian.userProfileId != null`
+  - Map sévérité `AlertSeverity → NotificationSeverity` : `low→info`, `medium→warning`, `high→danger`
+  - Source-dédup `(tenantId, sourceType='alert_instance', sourceId=alertId, userProfileId∈destinataires)` pour ne jamais doubler une cloche au re-tick
+  - Lien profond `/parent/recommendations?studentId=…`, `kind:'alert'`
+  - **Best-effort** : tout `notifyGuardiansOfAlert` est encapsulé en try/catch + `logger.error` → une panne de notification ne rollback jamais l'`AlertInstance` et n'avorte jamais la boucle d'évaluation
+  - `evaluateTenant` renvoie désormais `notified` (télémetrie) ; `alerts-cron.service.ts` l'agrège dans son log de tick
+- **Test** `alerts-evaluator.notify.spec.ts` (6 cas, ts-jest, Prisma mocké, aucune DB) : map sévérité, fan-out + lien, source-dédup, skip tuteur sans compte, no-op si tous déjà notifiés, best-effort sur échec Prisma.
+
+### Décision de cadrage (assumée, autonome)
+- **Canal IN-APP uniquement.** Le canal **email** (BullMQ `dispatchEmails`) et le gate `NotificationPreference` restent **propriété de l'API** (`NotificationsService`). Les répliquer dans le worker dupliquerait la plomberie email et le store de préférences → différé en follow-up. L'email étant opt-in/désactivé par défaut, l'impact réel du chemin cron sans email est négligeable pour v1, et le chemin manuel continue d'emailer. Asymétrie **intentionnelle et documentée** (commentaire de code + ce log).
+
+### État technique
+- ✅ Typecheck worker (`tsc --noEmit`) propre
+- ✅ 6/6 tests unitaires verts
+- ✅ `git diff --check` propre
+- ✅ Aucune migration Prisma, aucun changement `packages/contracts` (réutilise `Notification` + `Guardianship`)
+- ✅ Seam disjoint = `apps/worker` uniquement (aucune touche `apps/api` / `apps/web`)
+
+---
+
 ## 🆕 Sprint Teacher Messaging Center (continuous-improvement)
 
 Combler le canal manquant **enseignant → familles**. Jusqu'ici `/teacher/messages` était un stub avec 4 KPI vides et un message « en cours de développement ». Pourtant le backend `announcement` supportait déjà `authorRoleHint=teacher` et le rôle Keycloak `teacher` avait la permission `announcements.write`.
@@ -335,7 +361,7 @@ pnpm dev
 | R3 | Admin portal dashboard + 4 pages | ✅ Dashboard + 3 nouvelles pages | 95% |
 | R4 | Teacher portal image 6 | ✅ Dashboard pixel-correct | 90% (saisie inline simplifiée → R6) |
 | R5 | Parent portal image 7 | ✅ Dashboard pixel-correct | 90% (TeacherComment + alerts cards → R6) |
-| R6 | Moteur d'alertes | 🔄 Moteur live (cron 15 min + evaluator + dedup) · 5/7 règles câblées (LOW_SUBJECT_AVG, HIGH_ABSENCE, REPEATED_FAILURE, NEGATIVE_TREND, **MISSING_ASSESSMENT**) | ~55% |
+| R6 | Moteur d'alertes | 🔄 Moteur live (cron 15 min + evaluator + dedup) · 5/7 règles câblées (LOW_SUBJECT_AVG, HIGH_ABSENCE, REPEATED_FAILURE, NEGATIVE_TREND, **MISSING_ASSESSMENT**) · **fan-out notification parent câblé sur le chemin cron** (les alertes périodiques allument enfin la cloche famille) | ~58% |
 | R7 | Exports async | ⏳ UI stub + deps installées | 25% |
 | R8 | Notifications bell | ✅ Endpoint stub + bell wired | 70% |
 | R9 | Responsive + a11y | ✅ Mobile drawer + smoke a11y | 50% |

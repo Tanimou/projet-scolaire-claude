@@ -54,17 +54,19 @@ export class AlertsCronService implements OnApplicationBootstrap, OnModuleDestro
       }
       let detected = 0;
       let created = 0;
+      let notified = 0;
       for (const tenantId of tenants) {
         try {
           const r = await this.evaluator.evaluateTenant({ tenantId, schoolId: null });
           detected += r.detected;
           created += r.createdInstances;
+          notified += r.notified;
         } catch (err) {
           this.logger.error(`Evaluator failed for tenant ${tenantId}: ${(err as Error).message}`);
         }
       }
       this.logger.log(
-        `Tick complete in ${Date.now() - start}ms — ${tenants.length} tenants, ${detected} detected, ${created} new alerts`,
+        `Tick complete in ${Date.now() - start}ms — ${tenants.length} tenants, ${detected} detected, ${created} new alerts, ${notified} guardians notified`,
       );
     } finally {
       this.running = false;
