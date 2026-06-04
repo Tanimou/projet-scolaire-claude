@@ -9,8 +9,8 @@
 |---|---|---|---|
 | S1 | Parent ack / mark-handled / dismiss (guardianship ABAC) | **shipped** | [#103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) |
 | S2 | "What should I do?" panel on the alert | **shipped** (needs human review) | — |
-| S3 | Request a meeting / callback intent → teacher/admin action center | **next** → implement | — |
-| S4 | Weekly parent digest (opt-in) | not started | — |
+| S3 | Request a meeting / callback intent → teacher/admin action center | **shipped** (needs human review) | — |
+| S4 | Weekly parent digest (opt-in) | **→ next** | — |
 
 ## Decisions carried across slices
 - **No new tables for the action loop so far.** S1's status history *is* the append-only
@@ -62,7 +62,50 @@
   rests on the integrity of the Keycloak `realm_access.roles` claim. Keep the negative test in mind:
   a parent holding a stale/forged `teacher` role must still 403 on a non-guarded child.
 
-## Current slice
-**→ S3** — Request a meeting / callback intent surfaced in the teacher/admin action center +
-notification, promoting the S2 `alert.meeting_intent` audit row into a queryable `MeetingRequest`
-model. *(api + web + worker notif; `[schema]` tag — first migration of the epic.)*
+## S3 — shipped (needs human review)
+**Request a meeting / callback** intent, promoting the S2 `alert.meeting_intent` audit row into a
+queryable `MeetingRequest` Prisma model (first migration of the epic). *(api + web; `[schema][auth]` tag.)*
+
+Self-contained story spec: [`stories/S3-meeting-request.md`](./stories/S3-meeting-request.md). What landed:
+- **New `MeetingRequest` model + `MeetingRequestStatus` enum** (`apps/api/prisma/schema.prisma`): snake_case
+  `@map`, `tenant_id`-first indexes, `onDelete` Cascade (alert/student/requester) / SetNull (subject/assignee),
+  back-relations on Subject/Student/UserProfile/AlertInstance. Closes all three carried S3 debts:
+  (1) `@@unique([tenantId, alertId, requestedBy])` makes idempotency a **DB invariant** (supersedes S2's racy
+  `findFirst`; P2002 caught → one row, one notification under concurrent POSTs); (2) `meetingRequestedAt`
+  wired back into the parent alert DTO via `loadMeetingRequestedAt` (parent confirmation now persists across
+  reloads); (3) `scopeFromRoles` role-precedence kept under test.
+- **Create path unchanged route/gate**: same `POST /alerts/:id/meeting-intent` + `authorizeParentAlertAction`
+  guardianship ABAC from S2 — now creates a `MeetingRequest` (server-resolved assignee: subject teacher →
+  main teacher → null) AND keeps the append-only audit row, both best-effort.
+- **New role-scoped action center**: `GET /meeting-requests` + `PATCH /meeting-requests/:id/resolve`, gated on
+  **dedicated `meeting_requests.read|write`** permissions (granted to teacher + admin, NOT the broad `alerts.*`
+  — avoids teacher privilege escalation into rule config/evaluator). Teacher scope = `assignedTo = me ∪ null`;
+  out-of-scope id → 404. Teacher/admin list+resolve UI + sidebar entries + dashboard chip.
+- **In-app assignee notification** via `NotificationsService.createMany` (no new BullMQ queue, no email/push).
+
+## Decisions carried across slices (S3 additions)
+- **First schema migration of the epic.** S3 breaks the "no new tables" streak deliberately — promoting the
+  intent into a notifiable, triageable queue requires a first-class row. Ships via `prisma db push` (this repo
+  has no migration files — established convention). No new ADR: reuses existing audit + notification patterns.
+- **Dedicated `meeting_requests.*` permissions, not `alerts.*`.** Least-privilege; the teacher realm-role grant
+  is effective on restart (PermissionsGuard reads `REALM_ROLE_PERMISSIONS` directly), but the **permission seed
+  must be re-run** so the two new catalog entries land in the DB.
+- **Application-level tenant scoping (no RLS backstop on `meeting_request`).** Consistent with `AlertsService`/
+  `NotificationsService` (not a regression) — isolation rests on the explicit `where: { tenantId }` on every
+  query, which is why the cross-teacher/cross-tenant isolation spec is load-bearing.
+
+## Carried gaps / debt for S4 (or a follow-up — flagged by the verify panel, do NOT lose)
+- **Prisma client regen / `db push` is a required pre-merge operator step.** The schema edit is committed but no
+  regenerated client / migration is in the diff; typecheck only passes after `prisma generate` + `prisma db push`.
+- **« Clôturer » is a mislabel.** The FE sends `{ status: 'cancelled' }` but the BE `resolve` controller takes no
+  `@Body` and hardcodes `status: 'resolved'` — clicking « Clôturer » resolves (not cancels); the `cancelled` enum
+  value + the "Clôturées sans suite" KPI are unreachable. Fix: accept `{ status?: 'resolved' | 'cancelled' }`,
+  validate the open→terminal transition, stamp the audit `after` from the chosen status.
+- **CRON-raised alerts (schoolId=null) are invisible in the action center.** The list always pins
+  `schoolId = <concrete>`, but cron stamps `MeetingRequest.schoolId = null`. Backfill the schoolId from the
+  student's enrollment, or let the admin scope tolerate `schoolId: null` within the tenant.
+- **Count/list scope mismatch.** `analytics.teacherActionCenter` omits `schoolId` from the pending-count `where`
+  while the list page adds it — the dashboard chip can over-count in a multi-school tenant.
+- **a11y: two `text-slate-400` text nodes fail WCAG AA contrast** (`MeetingRequestList.tsx:316` relative time,
+  `MeetingRequestActions.tsx:40` em-dash) — bump to `text-slate-500`+. The error `aria-live` region is gated
+  behind `error &&` (mount-at-announce is unreliable) — keep it always mounted, toggle text only.

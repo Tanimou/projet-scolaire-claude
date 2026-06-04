@@ -6,11 +6,13 @@ import { StudentsModule } from '../students/students.module';
 
 import { AlertsController } from './alerts.controller';
 import { AlertsService } from './alerts.service';
+import { MeetingRequestsController } from './meeting-requests.controller';
+import { MeetingRequestsService } from './meeting-requests.service';
 
 @Module({
   imports: [AuthModule, SchoolStructureModule, StudentsModule],
-  controllers: [AlertsController],
-  providers: [AlertsService],
+  controllers: [AlertsController, MeetingRequestsController],
+  providers: [AlertsService, MeetingRequestsService],
   exports: [AlertsService],
 })
 export class AlertsModule {}

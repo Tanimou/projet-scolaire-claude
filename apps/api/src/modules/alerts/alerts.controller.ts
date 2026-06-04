@@ -160,7 +160,15 @@ export class AlertsController {
     const allowed = await this.studentAccess.canAccessStudent(me, jwt, studentId, schoolId);
     if (!allowed) throw new ForbiddenException('Forbidden');
     return {
-      data: await this.alerts.listForStudent({ tenantId: me.tenantId, studentId, limit: 50 }),
+      // Thread the caller's userProfileId so listForStudent can stamp the parent's
+      // OWN meeting-request marker (meetingRequestedAt) per alert — keyed on
+      // requestedBy = me.id (no co-guardian leak). E1-S3 carried debt #2.
+      data: await this.alerts.listForStudent({
+        tenantId: me.tenantId,
+        studentId,
+        userProfileId: me.id,
+        limit: 50,
+      }),
     };
   }
 

@@ -231,6 +231,12 @@ export interface TeacherActionCenterResponse {
     lessonsToFill: number;
     homeworkToCollect: number;
     classesAtRisk: number;
+    /**
+     * Open meeting requests (E1-S3) routed to this teacher: assigned to them OR
+     * unassigned (admin-overflow), mirroring the action-center scope. Drives the
+     * "meeting requests" chip on the teacher dashboard digest.
+     */
+    meetingRequestsPending: number;
   };
 }
 
@@ -1331,9 +1337,15 @@ export class AnalyticsService {
   async teacherActionCenter(opts: {
     tenantId: string;
     teacherProfileId: string;
+    /**
+     * The teacher's UserProfile id — `MeetingRequest.assignedToId` references
+     * `UserProfile` (set to `teacherProfile.userProfileId` on creation), NOT the
+     * TeacherProfile id, so the pending-meeting count must scope on this.
+     */
+    userProfileId: string;
     academicYearId?: string;
   }): Promise<TeacherActionCenterResponse> {
-    const { tenantId, teacherProfileId, academicYearId } = opts;
+    const { tenantId, teacherProfileId, userProfileId, academicYearId } = opts;
     const now = new Date();
     const sevenDaysAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
@@ -1351,6 +1363,18 @@ export class AnalyticsService {
     });
     const assignmentIds = assignments.map((a) => a.id);
 
+    // Open meeting requests routed to this teacher: their own queue OR
+    // unassigned (admin-overflow) — mirrors `MeetingRequestsService` scope.
+    // Computed even when the teacher has no classes, since a request can still
+    // be assigned to them directly.
+    const meetingRequestsPending = await this.prisma.meetingRequest.count({
+      where: {
+        tenantId,
+        status: 'open',
+        OR: [{ assignedToId: userProfileId }, { assignedToId: null }],
+      },
+    });
+
     // No classes assigned yet — nothing to surface.
     if (assignmentIds.length === 0) {
       return {
@@ -1366,6 +1390,7 @@ export class AnalyticsService {
           lessonsToFill: 0,
           homeworkToCollect: 0,
           classesAtRisk: 0,
+          meetingRequestsPending,
         },
       };
     }
@@ -1823,6 +1848,7 @@ export class AnalyticsService {
         lessonsToFill: missingLessonCount,
         homeworkToCollect: homeworkDueCount,
         classesAtRisk: atRiskClasses.length,
+        meetingRequestsPending,
       },
     };
   }

@@ -1,4 +1,8 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+// `Prisma` is imported as a runtime value (used for `instanceof
+// Prisma.PrismaClientKnownRequestError` in the P2002 idempotency catch) as well
+// as for its `Prisma.*` type helpers.
+import { Prisma } from '@prisma/client';
 import type {
   AlertInstance,
   AlertRule,
@@ -6,7 +10,6 @@ import type {
   AlertSeverity,
   AlertStatus,
   NotificationSeverity,
-  Prisma,
 } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -187,6 +190,8 @@ export class AlertsService {
       }),
       this.prisma.alertInstance.count({ where }),
     ]);
+    // Admin list does not surface a per-caller meeting-request marker (it is a
+    // parent-confirmation read-path concern); pass an empty map → null field.
     return { data: rows.map((r) => this.toDto(r as AlertInstanceFull)), total };
   }
 
@@ -356,21 +361,24 @@ export class AlertsService {
 
   /**
    * Record a parent's "talk to the teacher" meeting-request intent for an alert
-   * (E1-S2). Unlike the lifecycle methods this does NOT touch
+   * (E1-S2, promoted in E1-S3). Unlike the lifecycle methods this does NOT touch
    * `AlertInstance.status` — a meeting request is orthogonal to
    * ack/resolve/dismiss, so the alert stays open/acknowledged and listed.
    *
-   * Persistence reuses the established append-only `AuditLog`-as-record
-   * convention (S1 set the precedent: the audit row IS the durable record, no new
-   * table — the queryable `MeetingRequest` model is deferred to E1-S3). Exactly
-   * ONE row is written per (tenant, alert, actor): the write is idempotent on
-   * `(tenantId, resourceType, resourceId, action, actorId)` so a parent's
-   * double-click — or a deliberate re-request — creates no duplicate row and
-   * returns `alreadyRequested: true` with the original `requestedAt`. The alert
-   * id has already been confirmed in-tenant and guardianship-checked by the
-   * controller (`authorizeParentAlertAction`); the studentId/code/subjectId in
-   * the `after` payload are re-read here under the same `{ id, tenantId }` guard,
-   * never trusted from the client.
+   * S3 promotes the S2 append-only audit row into a queryable `MeetingRequest`
+   * model. This now (a) creates ONE `MeetingRequest` (status `open`) with a
+   * server-resolved `assignedToId` (subject teacher → main teacher → null —
+   * never client-supplied), (b) STILL writes the append-only
+   * `alert.meeting_intent` `AuditLog` row alongside (durable provenance — the
+   * audit trail is non-negotiable), and (c) fires ONE in-app notification to the
+   * assignee. Idempotency is a DB invariant: the `@@unique(tenantId, alertId,
+   * requestedBy)` constraint + a P2002 catch guarantee one row + one notification
+   * even under two concurrent POSTs (a re-request returns `alreadyRequested:true`
+   * with the original `createdAt` and notifies no one). The alert id has already
+   * been confirmed in-tenant and guardianship-checked by the controller
+   * (`authorizeParentAlertAction`); studentId/code/subjectId/schoolId are re-read
+   * here under the same `{ id, tenantId }` guard, never trusted from the client.
+   * The return shape `{ ok, alreadyRequested, requestedAt }` is unchanged from S2.
    */
   async recordMeetingIntent(args: {
     tenantId: string;
@@ -381,24 +389,28 @@ export class AlertsService {
   }): Promise<{ ok: true; alreadyRequested: boolean; requestedAt: string }> {
     const row = await this.prisma.alertInstance.findFirst({
       where: { id: args.id, tenantId: args.tenantId },
-      select: { studentId: true, code: true, subjectId: true },
+      select: {
+        studentId: true,
+        code: true,
+        subjectId: true,
+        schoolId: true,
+        title: true,
+        student: { select: { firstName: true, lastName: true } },
+      },
     });
     if (!row) throw new NotFoundException('Alert not found');
 
-    // Idempotency guard: one intent per (tenant, alert, actor). A second intent
-    // by the same actor on the same alert is a no-op that echoes the original
-    // timestamp — never a duplicate append-only row (mirrors the lifecycle
-    // one-row-per-real-action discipline; no duplicate downstream teacher pings
-    // in S3+).
-    const existing = await this.prisma.auditLog.findFirst({
+    // Fast-path idempotency check (friendly echo). The DB `@@unique` is the real
+    // guarantee — the create below catches P2002 so two concurrent POSTs still
+    // yield exactly one row + one notification (closes carried debt #3).
+    const existing = await this.prisma.meetingRequest.findUnique({
       where: {
-        tenantId: args.tenantId,
-        resourceType: 'alert_instance',
-        resourceId: args.id,
-        action: 'alert.meeting_intent',
-        actorId: args.userProfileId,
+        tenantId_alertId_requestedBy: {
+          tenantId: args.tenantId,
+          alertId: args.id,
+          requestedBy: args.userProfileId,
+        },
       },
-      orderBy: { createdAt: 'asc' },
       select: { createdAt: true },
     });
     if (existing) {
@@ -409,28 +421,177 @@ export class AlertsService {
       };
     }
 
-    const created = await this.prisma.auditLog.create({
-      data: {
-        tenantId: args.tenantId,
-        actorId: args.userProfileId,
-        actorRole: args.actorRole,
-        portal: args.portal,
-        action: 'alert.meeting_intent',
-        resourceType: 'alert_instance',
-        resourceId: args.id,
-        after: {
-          studentId: row.studentId,
-          alertCode: row.code,
-          subjectId: row.subjectId ?? null,
-        } as Prisma.InputJsonValue,
-      },
-      select: { createdAt: true },
+    // Resolve the assignee server-side (never trusted from the client). The
+    // request is ALWAYS created even when no assignee resolves (best-effort).
+    const assignedToId = await this.resolveMeetingAssignee({
+      tenantId: args.tenantId,
+      studentId: row.studentId,
+      subjectId: row.subjectId ?? null,
     });
+
+    let created: { id: string; createdAt: Date };
+    try {
+      created = await this.prisma.meetingRequest.create({
+        data: {
+          tenantId: args.tenantId,
+          schoolId: row.schoolId ?? null,
+          alertId: args.id,
+          studentId: row.studentId,
+          subjectId: row.subjectId ?? null,
+          alertCode: row.code,
+          requestedBy: args.userProfileId,
+          assignedToId,
+          status: 'open',
+        },
+        select: { id: true, createdAt: true },
+      });
+    } catch (err) {
+      // Concurrency: a parallel POST won the @@unique race. Treat as
+      // already-requested (read the original row's createdAt) — one row, one
+      // notification. Any other error propagates.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const winner = await this.prisma.meetingRequest.findUnique({
+          where: {
+            tenantId_alertId_requestedBy: {
+              tenantId: args.tenantId,
+              alertId: args.id,
+              requestedBy: args.userProfileId,
+            },
+          },
+          select: { createdAt: true },
+        });
+        return {
+          ok: true,
+          alreadyRequested: true,
+          requestedAt: (winner?.createdAt ?? new Date()).toISOString(),
+        };
+      }
+      throw err;
+    }
+
+    // Keep the append-only audit trail unbroken (S1/S2 promise) — written only
+    // on a genuine new create, alongside the queryable model. Best-effort.
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: args.tenantId,
+          actorId: args.userProfileId,
+          actorRole: args.actorRole,
+          portal: args.portal,
+          action: 'alert.meeting_intent',
+          resourceType: 'alert_instance',
+          resourceId: args.id,
+          after: {
+            studentId: row.studentId,
+            alertCode: row.code,
+            subjectId: row.subjectId ?? null,
+            meetingRequestId: created.id,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write alert.meeting_intent audit row for meeting request ${created.id} (request unaffected): ${(err as Error).message}`,
+      );
+    }
+
+    // Notify the assignee on a NEW request only (never on the idempotent path).
+    // Best-effort: a notification failure must never roll back the create.
+    if (assignedToId) {
+      const studentName =
+        `${row.student.firstName} ${row.student.lastName}`.trim() || 'Un élève';
+      try {
+        await this.notifications.createMany([
+          {
+            tenantId: args.tenantId,
+            userProfileId: assignedToId,
+            kind: 'alert',
+            severity: 'warning',
+            title: 'Demande de rendez-vous d’un parent',
+            body: `${studentName} — ${row.title}`,
+            link: '/teacher/meeting-requests',
+            sourceType: 'meeting_request',
+            sourceId: created.id,
+          },
+        ]);
+      } catch (err) {
+        this.logger.error(
+          `Failed to notify assignee ${assignedToId} of meeting request ${created.id} (request unaffected): ${(err as Error).message}`,
+        );
+      }
+    }
+
     return {
       ok: true,
       alreadyRequested: false,
       requestedAt: created.createdAt.toISOString(),
     };
+  }
+
+  /**
+   * Resolve the teacher/admin a meeting request routes to, deterministically:
+   *   1. subject teacher — active `TeachingAssignment` for the student's current
+   *      class section + the alert's subjectId (active academic year), or
+   *   2. main teacher (`isMainTeacher`) of the student's current class section, or
+   *   3. null (unassigned → visible to school admins in the action center).
+   *
+   * "Current class section" = the student's active `Enrollment` in the active
+   * academic year. Best-effort: any lookup failure → null; NEVER throws, so the
+   * meeting request is always created (carried pre-mortem PM-3).
+   */
+  private async resolveMeetingAssignee(args: {
+    tenantId: string;
+    studentId: string;
+    subjectId: string | null;
+  }): Promise<string | null> {
+    try {
+      const enrollment = await this.prisma.enrollment.findFirst({
+        where: {
+          tenantId: args.tenantId,
+          studentId: args.studentId,
+          status: 'active',
+          academicYear: { status: 'active' },
+        },
+        orderBy: { enrolledAt: 'desc' },
+        select: { classSectionId: true, academicYearId: true },
+      });
+      if (!enrollment) return null;
+
+      // 1. Subject teacher for (current class section, subject) in the active year.
+      if (args.subjectId) {
+        const subjectAssignment = await this.prisma.teachingAssignment.findFirst({
+          where: {
+            tenantId: args.tenantId,
+            classSectionId: enrollment.classSectionId,
+            subjectId: args.subjectId,
+            academicYearId: enrollment.academicYearId,
+          },
+          select: { teacherProfile: { select: { userProfileId: true } } },
+        });
+        const subjectTeacherId = subjectAssignment?.teacherProfile.userProfileId ?? null;
+        if (subjectTeacherId) return subjectTeacherId;
+      }
+
+      // 2. Main teacher of the current class section.
+      const mainAssignment = await this.prisma.teachingAssignment.findFirst({
+        where: {
+          tenantId: args.tenantId,
+          classSectionId: enrollment.classSectionId,
+          academicYearId: enrollment.academicYearId,
+          isMainTeacher: true,
+        },
+        select: { teacherProfile: { select: { userProfileId: true } } },
+      });
+      return mainAssignment?.teacherProfile.userProfileId ?? null;
+    } catch (err) {
+      this.logger.error(
+        `Failed to resolve meeting assignee for student ${args.studentId} (request will be unassigned): ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -648,10 +809,18 @@ export class AlertsService {
    * Alerts visible by a parent for a given student. The caller MUST have
    * already passed `StudentAccessService.canAccessStudent` before invoking
    * this — the service trusts its inputs.
+   *
+   * E1-S3 (carried debt #2): when `userProfileId` is provided, batch-load the
+   * caller's OWN open `MeetingRequest` per alert (keyed on `requestedBy =
+   * userProfileId`) in ONE query and stamp `meetingRequestedAt` on each DTO so
+   * the parent's "Demande envoyée" confirmation persists across reloads. Keyed
+   * on the caller's own `requestedBy`, never a co-guardian's — no cross-guardian
+   * leak. No per-row N+1: a single `findMany` over the page's alert ids.
    */
   async listForStudent(args: {
     tenantId: string;
     studentId: string;
+    userProfileId?: string;
     limit?: number;
   }): Promise<AlertInstanceDto[]> {
     const rows = await this.prisma.alertInstance.findMany({
@@ -668,12 +837,54 @@ export class AlertsService {
       orderBy: { detectedAt: 'desc' },
       take: args.limit ?? 10,
     });
-    return rows.map((r) => this.toDto(r as AlertInstanceFull));
+
+    const requestedAtByAlert = await this.loadMeetingRequestedAt({
+      tenantId: args.tenantId,
+      alertIds: rows.map((r) => r.id),
+      userProfileId: args.userProfileId,
+    });
+
+    return rows.map((r) => this.toDto(r as AlertInstanceFull, requestedAtByAlert));
+  }
+
+  /**
+   * Batch-load the caller's own meeting-request timestamp per alert id, in one
+   * query. Returns an empty map when no caller is provided (admin list path) or
+   * there are no alerts. Best-effort: a lookup failure degrades to "not
+   * requested" rather than failing the alert list (the confirmation is a UX hint,
+   * not load-bearing).
+   */
+  private async loadMeetingRequestedAt(args: {
+    tenantId: string;
+    alertIds: string[];
+    userProfileId?: string;
+  }): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    if (!args.userProfileId || args.alertIds.length === 0) return map;
+    try {
+      const requests = await this.prisma.meetingRequest.findMany({
+        where: {
+          tenantId: args.tenantId,
+          alertId: { in: args.alertIds },
+          requestedBy: args.userProfileId,
+        },
+        select: { alertId: true, createdAt: true },
+      });
+      for (const r of requests) map.set(r.alertId, r.createdAt.toISOString());
+    } catch (err) {
+      this.logger.error(
+        `Failed to load meeting-request markers (parent confirmation degrades to CTA): ${(err as Error).message}`,
+      );
+    }
+    return map;
   }
 
   // -- helpers --------------------------------------------------------------
 
-  private toDto(row: AlertInstanceFull): AlertInstanceDto {
+  private toDto(
+    row: AlertInstanceFull,
+    requestedAtByAlert?: Map<string, string>,
+  ): AlertInstanceDto {
     return {
       id: row.id,
       code: row.code,
@@ -692,6 +903,7 @@ export class AlertsService {
       detectedAt: row.detectedAt.toISOString(),
       acknowledgedAt: row.acknowledgedAt?.toISOString() ?? null,
       resolvedAt: row.resolvedAt?.toISOString() ?? null,
+      meetingRequestedAt: requestedAtByAlert?.get(row.id) ?? null,
     };
   }
 

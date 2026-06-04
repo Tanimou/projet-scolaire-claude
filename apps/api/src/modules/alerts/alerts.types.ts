@@ -115,4 +115,39 @@ export interface AlertInstanceDto {
   detectedAt: string;
   acknowledgedAt: string | null;
   resolvedAt: string | null;
+  /**
+   * E1-S3: ISO timestamp of the *caller's own* meeting request for this alert,
+   * if any (keyed on the requesting parent's `requestedBy` — never a co-guardian's).
+   * Populated only on the parent-scoped `listForStudent` read-path so the
+   * "Demande envoyée" confirmation persists across reloads. `null` everywhere else.
+   */
+  meetingRequestedAt: string | null;
+}
+
+/** Meeting-request lifecycle (E1-S3), mirrors `@pilotage/contracts`. */
+export type MeetingRequestStatus = 'open' | 'resolved' | 'cancelled';
+
+/**
+ * One row of the teacher/admin meeting-request action center. Joined +
+ * tenant-scoped, built in one query (no N+1). Field names mirror the
+ * `MeetingRequestDto` Zod schema in `@pilotage/contracts`.
+ */
+export interface MeetingRequestDto {
+  id: string;
+  status: MeetingRequestStatus;
+  alertId: string;
+  alertCode: AlertRuleCode;
+  alertSeverity: AlertSeverity;
+  alertTitle: string;
+  studentId: string;
+  studentName: string;
+  classSectionName: string | null;
+  subjectId: string | null;
+  subjectCode: string | null;
+  subjectName: string | null;
+  requestedByName: string | null;
+  assignedToId: string | null;
+  assignedToName: string | null;
+  requestedAt: string;
+  resolvedAt: string | null;
 }

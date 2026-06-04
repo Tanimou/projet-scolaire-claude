@@ -21,7 +21,7 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` (in-progress; **S1 + S2 shipped** — S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA, same guardianship-ABAC gate, no schema change). Next: **S3** (Request a meeting / callback intent → teacher/admin action center, promoting the S2 `alert.meeting_intent` audit row into a queryable `MeetingRequest` model). The codebase was already past the roadmap's "epic-spec first" assumption (admin lifecycle endpoints + parent read shipped), so the first E1 run was an **epic-slice**, not a spec run; the `docs/spec/features/e1/` spec-kit is being backfilled one story per slice.
+**Current focus →** `E1 — Parent Alert Action Loop` (in-progress; **S1 + S2 + S3 shipped** — S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model (first migration of the epic) promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification). Next: **S4** (Weekly parent digest, opt-in — worker job + `NotificationPreference`). The codebase was already past the roadmap's "epic-spec first" assumption (admin lifecycle endpoints + parent read shipped), so the first E1 run was an **epic-slice**, not a spec run; the `docs/spec/features/e1/` spec-kit is being backfilled one story per slice.
 
 ---
 
@@ -44,9 +44,11 @@ alerts but are **read-only** — they cannot act. This makes the dashboard actua
   `POST /api/v1/alerts/:id/meeting-intent` (guardianship ABAC, append-only idempotent
   `alert.meeting_intent` audit row, status-neutral) + pure `deriveAlertActions` deep-link
   derivation + the `AlertNextSteps` panel. *(web + small api; [auth] tag)*
-- [ ] **S3** — **Request a meeting / callback** intent: a lightweight `MeetingRequest` record
-  (parent → child's teacher/admin) surfaced in the teacher/admin action center + notification.
-  *(api + web + worker notif)*
+- [x] **S3** — **Request a meeting / callback** intent: the S2 `alert.meeting_intent` audit row is
+  promoted into a queryable `MeetingRequest` Prisma model (`@@unique([tenantId, alertId, requestedBy])`
+  idempotency, server-resolved assignee), surfaced in role-scoped teacher/admin action-center pages
+  (`GET /meeting-requests` + `PATCH /meeting-requests/:id/resolve` on dedicated `meeting_requests.read|write`
+  permissions) + an in-app assignee notification. *(api + web; [schema][auth] tag — first migration of the epic)*
 - [ ] **S4** — **Weekly parent digest** (opt-in): worker job emails each guardian a 1-screen
   weekly summary (global trend, new alerts, upcoming assessments, recommended action), honoring
   `NotificationPreference`. Net-new UX that drives weekly engagement. *(worker + api + prefs UI)*

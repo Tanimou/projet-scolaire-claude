@@ -301,37 +301,89 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
   });
 });
 
-describe('AlertsService.recordMeetingIntent (E1-S2 — append-only, idempotent, status-neutral)', () => {
+describe('AlertsService.recordMeetingIntent (E1-S3 — MeetingRequest model + audit + assignee notif)', () => {
   const PARENT = { actorRole: 'parent', portal: 'parent' } as const;
   const REQUESTED_AT = new Date('2026-06-04T10:00:00.000Z');
+  const MR_ID = 'mr-1';
+
+  function p2002(): Error {
+    // Minimal Prisma.PrismaClientKnownRequestError stand-in. The service checks
+    // `err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'`;
+    // jest cannot easily construct the real class, so we tag a plain Error and
+    // patch the prototype chain for the instanceof check.
+    const { Prisma } = require('@prisma/client');
+    const err = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    return err;
+  }
 
   function makeIntentService(opts: {
-    alert?: { studentId: string; code: string; subjectId: string | null } | null;
+    alert?:
+      | {
+          studentId: string;
+          code: string;
+          subjectId: string | null;
+          schoolId?: string | null;
+          title?: string;
+          student?: { firstName: string; lastName: string };
+        }
+      | null;
     existing?: { createdAt: Date } | null;
+    createThrows?: Error;
+    assignee?: string | null;
   }) {
     const alert =
       opts.alert === undefined
-        ? { studentId: 'stu-1', code: 'LOW_SUBJECT_AVG', subjectId: 'subj-1' }
+        ? {
+            studentId: 'stu-1',
+            code: 'LOW_SUBJECT_AVG',
+            subjectId: 'subj-1',
+            schoolId: 'school-1',
+            title: 'Moyenne faible',
+            student: { firstName: 'Léa', lastName: 'Martin' },
+          }
         : opts.alert;
+    // Resolve assignee via enrollment + teaching assignment lookups.
+    const assignee = opts.assignee === undefined ? 'teacher-up-1' : opts.assignee;
     const prisma = {
       alertInstance: {
         findFirst: jest.fn().mockResolvedValue(alert),
         update: jest.fn(),
       },
+      meetingRequest: {
+        findUnique: jest.fn().mockResolvedValue(opts.existing ?? null),
+        create: opts.createThrows
+          ? jest.fn().mockRejectedValue(opts.createThrows)
+          : jest.fn().mockResolvedValue({ id: MR_ID, createdAt: REQUESTED_AT }),
+      },
+      enrollment: {
+        findFirst: jest.fn().mockResolvedValue(
+          assignee ? { classSectionId: 'cs-1', academicYearId: 'ay-1' } : null,
+        ),
+      },
+      teachingAssignment: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(assignee ? { teacherProfile: { userProfileId: assignee } } : null),
+      },
       auditLog: {
-        findFirst: jest.fn().mockResolvedValue(opts.existing ?? null),
-        create: jest.fn().mockResolvedValue({ createdAt: REQUESTED_AT }),
+        create: jest.fn().mockResolvedValue({ id: 'audit-1' }),
       },
     };
-    const notifications = { markReadBySource: jest.fn() };
+    const notifications = {
+      markReadBySource: jest.fn(),
+      createMany: jest.fn().mockResolvedValue({ created: 1 }),
+    };
     const service = new AlertsService(
       prisma as never,
       notifications as unknown as NotificationsService,
     );
-    return { service, prisma };
+    return { service, prisma, notifications };
   }
 
-  it('writes exactly ONE audit row with action alert.meeting_intent and the {studentId,alertCode,subjectId} payload', async () => {
+  it('creates ONE MeetingRequest (open) AND writes the append-only audit row', async () => {
     const { service, prisma } = makeIntentService({});
 
     const result = await service.recordMeetingIntent({
@@ -346,19 +398,28 @@ describe('AlertsService.recordMeetingIntent (E1-S2 — append-only, idempotent, 
       alreadyRequested: false,
       requestedAt: REQUESTED_AT.toISOString(),
     });
+    expect(prisma.meetingRequest.create).toHaveBeenCalledTimes(1);
+    expect(prisma.meetingRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tenantId: TENANT,
+          alertId: ALERT_ID,
+          studentId: 'stu-1',
+          alertCode: 'LOW_SUBJECT_AVG',
+          requestedBy: 'parent-1',
+          status: 'open',
+        }),
+      }),
+    );
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        tenantId: TENANT,
-        actorId: 'parent-1',
-        actorRole: 'parent',
-        portal: 'parent',
         action: 'alert.meeting_intent',
         resourceType: 'alert_instance',
         resourceId: ALERT_ID,
-        after: { studentId: 'stu-1', alertCode: 'LOW_SUBJECT_AVG', subjectId: 'subj-1' },
+        actorRole: 'parent',
+        portal: 'parent',
       }),
-      select: { createdAt: true },
     });
   });
 
@@ -375,8 +436,47 @@ describe('AlertsService.recordMeetingIntent (E1-S2 — append-only, idempotent, 
     expect(prisma.alertInstance.update).not.toHaveBeenCalled();
   });
 
-  it('is idempotent: a second intent by the same actor writes NO new row and returns alreadyRequested:true with the original timestamp', async () => {
-    const { service, prisma } = makeIntentService({ existing: { createdAt: REQUESTED_AT } });
+  it('notifies the resolved assignee exactly once on a new request (kind alert, sourceId = request id)', async () => {
+    const { service, notifications } = makeIntentService({ assignee: 'teacher-up-1' });
+
+    await service.recordMeetingIntent({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: 'parent-1',
+      ...PARENT,
+    });
+
+    expect(notifications.createMany).toHaveBeenCalledTimes(1);
+    expect(notifications.createMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        tenantId: TENANT,
+        userProfileId: 'teacher-up-1',
+        kind: 'alert',
+        sourceType: 'meeting_request',
+        sourceId: MR_ID,
+      }),
+    ]);
+  });
+
+  it('an unresolvable assignee still creates the request and notifies no one', async () => {
+    const { service, prisma, notifications } = makeIntentService({ assignee: null });
+
+    const result = await service.recordMeetingIntent({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: 'parent-1',
+      ...PARENT,
+    });
+
+    expect(result.alreadyRequested).toBe(false);
+    expect(prisma.meetingRequest.create).toHaveBeenCalledTimes(1);
+    expect(notifications.createMany).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent (fast path): an existing request returns alreadyRequested:true, no create, no notif', async () => {
+    const { service, prisma, notifications } = makeIntentService({
+      existing: { createdAt: REQUESTED_AT },
+    });
 
     const result = await service.recordMeetingIntent({
       tenantId: TENANT,
@@ -390,27 +490,48 @@ describe('AlertsService.recordMeetingIntent (E1-S2 — append-only, idempotent, 
       alreadyRequested: true,
       requestedAt: REQUESTED_AT.toISOString(),
     });
+    expect(prisma.meetingRequest.create).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(notifications.createMany).not.toHaveBeenCalled();
   });
 
-  it('serialises a null subjectId (subject-less alert) without a broken payload', async () => {
-    const { service, prisma } = makeIntentService({
-      alert: { studentId: 'stu-9', code: 'HIGH_ABSENCE', subjectId: null },
-    });
+  it('is idempotent under concurrency: a P2002 on create returns alreadyRequested:true (one row)', async () => {
+    const { service, prisma, notifications } = makeIntentService({ createThrows: p2002() });
+    // After the losing create, the service re-reads the winner.
+    prisma.meetingRequest.findUnique
+      .mockResolvedValueOnce(null) // fast-path miss
+      .mockResolvedValueOnce({ createdAt: REQUESTED_AT }); // winner read
 
-    await service.recordMeetingIntent({
+    const result = await service.recordMeetingIntent({
       tenantId: TENANT,
       id: ALERT_ID,
       userProfileId: 'parent-1',
       ...PARENT,
     });
 
-    expect(prisma.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        after: { studentId: 'stu-9', alertCode: 'HIGH_ABSENCE', subjectId: null },
-      }),
-      select: { createdAt: true },
+    expect(result).toEqual({
+      ok: true,
+      alreadyRequested: true,
+      requestedAt: REQUESTED_AT.toISOString(),
     });
+    // No audit row, no notification on the idempotent (lost-race) path.
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(notifications.createMany).not.toHaveBeenCalled();
+  });
+
+  it('a notification failure never rolls back the create (best-effort)', async () => {
+    const { service, notifications } = makeIntentService({});
+    notifications.createMany.mockRejectedValueOnce(new Error('notif down'));
+
+    const result = await service.recordMeetingIntent({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: 'parent-1',
+      ...PARENT,
+    });
+
+    expect(result.alreadyRequested).toBe(false);
+    expect(result.requestedAt).toBe(REQUESTED_AT.toISOString());
   });
 
   it('throws NotFound (and writes nothing) for an alert absent from the tenant', async () => {
@@ -424,7 +545,7 @@ describe('AlertsService.recordMeetingIntent (E1-S2 — append-only, idempotent, 
         ...PARENT,
       }),
     ).rejects.toThrow('Alert not found');
-    expect(prisma.auditLog.findFirst).not.toHaveBeenCalled();
+    expect(prisma.meetingRequest.create).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
@@ -491,5 +612,87 @@ describe('AlertsService audit provenance is derived from the caller (not hardcod
         tenantId: TENANT,
       }),
     });
+  });
+});
+
+describe('AlertsService.listForStudent meetingRequestedAt read-path (E1-S3 carried debt #2)', () => {
+  const ALERT_A = 'alert-a';
+  const ALERT_B = 'alert-b';
+  const PARENT = 'parent-1';
+
+  function makeListService(opts: {
+    meetingRows?: { alertId: string; createdAt: Date }[];
+  }) {
+    const alertRows = [
+      {
+        id: ALERT_A,
+        code: 'LOW_SUBJECT_AVG',
+        severity: 'high',
+        status: 'open',
+        studentId: 'stu-1',
+        student: { firstName: 'Léa', lastName: 'Martin' },
+        subject: { id: 'subj-1', name: 'Maths', code: 'MATH' },
+        classSection: { id: 'cs-1', name: '6e B' },
+        title: 'T',
+        body: 'B',
+        recommendation: null,
+        detectedAt: new Date('2026-06-01T00:00:00.000Z'),
+        acknowledgedAt: null,
+        resolvedAt: null,
+      },
+      {
+        id: ALERT_B,
+        code: 'HIGH_ABSENCE',
+        severity: 'medium',
+        status: 'open',
+        studentId: 'stu-1',
+        student: { firstName: 'Léa', lastName: 'Martin' },
+        subject: null,
+        classSection: null,
+        title: 'T2',
+        body: 'B2',
+        recommendation: null,
+        detectedAt: new Date('2026-06-02T00:00:00.000Z'),
+        acknowledgedAt: null,
+        resolvedAt: null,
+      },
+    ];
+    const prisma = {
+      alertInstance: { findMany: jest.fn().mockResolvedValue(alertRows) },
+      meetingRequest: { findMany: jest.fn().mockResolvedValue(opts.meetingRows ?? []) },
+    };
+    const notifications = {};
+    const service = new AlertsService(
+      prisma as never,
+      notifications as unknown as NotificationsService,
+    );
+    return { service, prisma };
+  }
+
+  it('stamps meetingRequestedAt on the alert the caller has requested (keyed on their own requestedBy)', async () => {
+    const at = new Date('2026-06-03T09:00:00.000Z');
+    const { service, prisma } = makeListService({ meetingRows: [{ alertId: ALERT_A, createdAt: at }] });
+
+    const dtos = await service.listForStudent({
+      tenantId: TENANT,
+      studentId: 'stu-1',
+      userProfileId: PARENT,
+    });
+
+    expect(prisma.meetingRequest.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT, alertId: { in: [ALERT_A, ALERT_B] }, requestedBy: PARENT },
+      select: { alertId: true, createdAt: true },
+    });
+    expect(dtos.find((d) => d.id === ALERT_A)?.meetingRequestedAt).toBe(at.toISOString());
+    expect(dtos.find((d) => d.id === ALERT_B)?.meetingRequestedAt).toBeNull();
+  });
+
+  it('does not query meeting requests when no caller is provided (admin path) → all null', async () => {
+    const { service, prisma } = makeListService({});
+
+    const dtos = await service.listForStudent({ tenantId: TENANT, studentId: 'stu-1' });
+
+    expect(prisma.meetingRequest.findMany).not.toHaveBeenCalled();
+    expect(dtos.every((d) => d.meetingRequestedAt === null)).toBe(true);
   });
 });
