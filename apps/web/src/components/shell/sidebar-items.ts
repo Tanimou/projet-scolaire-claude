@@ -23,6 +23,7 @@ import {
   MessageCircle,
   MessageSquare,
   MessageSquarePlus,
+  MessagesSquare,
   PenTool,
   School,
   Send,
@@ -165,6 +166,16 @@ export const teacherSidebarItems: SidebarItemConfig[] = [
   { key: 'calendar', icon: Calendar, label: 'Emploi du temps', href: '/teacher/calendar' },
   { key: 'documents', icon: FolderOpen, label: 'Ressources', href: '/teacher/documents' },
   { key: 'messages', icon: MessageSquare, label: 'Messagerie', href: '/teacher/messages' },
+  {
+    key: 'conversations',
+    icon: MessagesSquare,
+    label: 'Conversations parents',
+    href: '/teacher/conversations',
+    // Distinct from the teacher→family Announcements surface (/teacher/messages):
+    // the parent-initiated conversation inbox (E2-S3). Stay active on the thread
+    // view subroutes.
+    matches: /^\/teacher\/conversations(\/|$)/,
+  },
   { key: 'reports', icon: BarChart3, label: 'Rapports', href: '/teacher/reports' },
   { key: 'notifications', icon: Bell, label: 'Notifications', href: '/teacher/notifications' },
   { key: 'settings', icon: Settings, label: 'Paramètres', href: '/teacher/settings' },
@@ -252,6 +263,7 @@ export {
   MessageCircle,
   MessageSquare,
   MessageSquarePlus,
+  MessagesSquare,
   PenTool,
   School,
   Send,

@@ -21,7 +21,7 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1 and E2-S2 are now shipped; next slice → E2-S3** (teacher inbox).
+**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1, E2-S2 and E2-S3 are now shipped; next slice → E2-S4** (moderation / safety + optional email channel).
 
 ---
 
@@ -80,8 +80,13 @@ real-time deferred (ADR-019 tripwire). **S1 + S2 shipped; next slice → S3.**
   inbox + `:id` + `:id/messages` paged + `PATCH :id/read`), `alertContext` seed exposed end-to-end
   (re-checked, strict subset, null on mismatch), inbox/thread/`/new` UI, and the E1 `AlertNextSteps`
   CTA rewired to the alert-seeded thread (E1 `MeetingRequest` intent preserved). No schema. *(api + web)*
-- [ ] **S3** — Teacher inbox: parent conversations separated from announcements; reply + mark-read.
-  *(api + web)*
+- [x] **S3** — Teacher inbox: parent conversations separated from announcements; reply + mark-read.
+  Shipped (needs human review): a teacher `/teacher/conversations` inbox + thread view (paged history,
+  reply composer, mark-read, alert-context header) that are thin clients over the already-walled S1/S2
+  endpoints (`GET /conversations`, `:id`, `:id/messages`, `PATCH :id/read`, `POST :id/messages`); two
+  in-app notification deep-links retargeted `/teacher/messages` → `/teacher/conversations`; a distinct
+  "Conversations parents" sidebar item. No schema, no new endpoint, no controller/permission change —
+  the teacher-side wall is the existing S2 participant + `teacherId = me` scoping (unchanged). *(api + web)*
 - [ ] **S4** — Moderation/safety: report, admin oversight, rate-limit, non-stigmatising guardrails;
   optional email channel. *(api + worker)*
 
