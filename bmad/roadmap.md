@@ -21,22 +21,23 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` (start here; mode = epic-spec on its first run).
+**Current focus →** `E1 — Parent Alert Action Loop` (in-progress; **S1 shipped** in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC). Next: **S2** ("What should I do?" panel) — but first the S2-bundled route/copy/contrast hardening noted there. The codebase was already past the roadmap's "epic-spec first" assumption (admin lifecycle endpoints + parent read shipped), so the first E1 run was an **epic-slice**, not a spec run; no `docs/spec/features/e1/` spec-kit was written.
 
 ---
 
 ## Tier 1 — Close the core loop (information → action)
 
-### E1 — Parent Alert Action Loop · `next` · ~M
+### E1 — Parent Alert Action Loop · `in-progress` · ~M
 **Why (incontournable):** the cahier's defining promise. Today parents *see* explainable
 alerts but are **read-only** — they cannot act. This makes the dashboard actually actionable.
 **Audit:** action loop ~65% (info visible, downstream actions missing). No schema change needed
 (reuse `AlertInstance.status`), so low risk, high value.
 **Vertical slices (ship in order):**
-- [ ] **S1** — Parent can **acknowledge / mark-handled / dismiss** an alert: parent-scoped
+- [x] **S1** — Parent can **acknowledge / mark-handled / dismiss** an alert: parent-scoped
   ABAC endpoints (`PATCH /api/v1/alerts/:id/ack|resolve|dismiss` guarded by guardianship),
-  status + `alert_status_history`, audit; alert card gains the actions; retract the bell
-  notification on resolve (already wired). *(api + web; [auth] tag)*
+  status + audit (the append-only `AuditLog` row **is** the status history — no
+  `alert_status_history` table was added), action buttons on the recommendations surface,
+  bell retraction on resolve/dismiss. Shipped in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103). *(api + web; [auth] tag)*
 - [ ] **S2** — **"What should I do?"** panel on the alert: expand recommendation into concrete
   next steps (reinforce subject → deep-link to the subject view; talk to teacher → CTA that
   opens E2 messaging once available, else a "request meeting" intent record). *(web + small api)*
