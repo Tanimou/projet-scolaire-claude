@@ -110,6 +110,7 @@ export class AnalyticsController {
     return this.analytics.teacherActionCenter({
       tenantId: me.tenantId,
       teacherProfileId: teacher.id,
+      userProfileId: me.id,
       academicYearId: activeAcademicYearId ?? undefined,
     });
   }

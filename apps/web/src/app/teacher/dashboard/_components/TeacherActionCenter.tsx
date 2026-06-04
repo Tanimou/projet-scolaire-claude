@@ -7,6 +7,7 @@ import {
   FileEdit,
   LifeBuoy,
   type LucideIcon,
+  MessageSquarePlus,
   NotebookPen,
   Sparkles,
   UserX,
@@ -23,7 +24,8 @@ export interface TeacherActionItem {
     | 'unjustified-absences'
     | 'missing-lessons'
     | 'homework-to-collect'
-    | 'classes-at-risk';
+    | 'classes-at-risk'
+    | 'meeting-requests';
   label: string;
   count: number;
   severity: 'critical' | 'warning' | 'info';
@@ -42,6 +44,12 @@ export interface TeacherActionDigest {
   lessonsToFill: number;
   homeworkToCollect: number;
   classesAtRisk: number;
+  /**
+   * Open meeting requests routed to the teacher (E1-S3). Optional so a stale /
+   * cached BE response without the field does not crash the chip (we coalesce to
+   * 0 at the render site); the live BE always populates it.
+   */
+  meetingRequestsPending?: number;
 }
 
 export interface TeacherActionData {
@@ -60,6 +68,7 @@ const ICON_BY_KEY: Record<TeacherActionItem['key'], LucideIcon> = {
   'missing-lessons': NotebookPen,
   'homework-to-collect': ClipboardCheck,
   'classes-at-risk': TrendingDown,
+  'meeting-requests': MessageSquarePlus,
 };
 
 const SEVERITY_STYLES: Record<
@@ -202,6 +211,12 @@ export function TeacherActionCenter({ data }: { data: TeacherActionData | null }
               value={digest.classesAtRisk}
               tone="rose"
               hidden={digest.classesAtRisk === 0}
+            />
+            <DigestChip
+              label="rendez-vous"
+              value={digest.meetingRequestsPending ?? 0}
+              tone="amber"
+              hidden={!digest.meetingRequestsPending}
             />
           </div>
         )}

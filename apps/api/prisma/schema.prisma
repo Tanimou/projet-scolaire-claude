@@ -361,6 +361,7 @@ model Subject {
   coefficients        SubjectCoefficient[]
   teachingAssignments TeachingAssignment[]
   alertInstances      AlertInstance[]
+  meetingRequests     MeetingRequest[]
 
   @@unique([schoolId, code])
   @@index([tenantId, schoolId])
@@ -448,6 +449,7 @@ model Student {
   attendanceRecords AttendanceRecord[]
   announcements     Announcement[]
   alertInstances    AlertInstance[]
+  meetingRequests   MeetingRequest[]
 
   @@unique([schoolId, externalRef])
   @@index([tenantId, schoolId])
@@ -669,6 +671,8 @@ model UserProfile {
   exportJobs              ExportJob[]
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
+  meetingRequestsMade     MeetingRequest[]         @relation("MeetingRequestRequester")
+  meetingRequestsAssigned MeetingRequest[]         @relation("MeetingRequestAssignee")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1251,8 +1255,65 @@ model AlertInstance {
   student      Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
   subject      Subject?     @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   classSection ClassSection? @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
+  meetingRequests MeetingRequest[]
 
   @@index([tenantId, status, severity, detectedAt])
   @@index([studentId, status, detectedAt])
   @@map("alert_instance")
+}
+
+// ---------------------------------------------------------------------------
+// Meeting requests (E1-S3) — parent "talk to the teacher" intent promoted into
+// a queryable, tenant-scoped record + teacher/admin action center.
+// ---------------------------------------------------------------------------
+
+enum MeetingRequestStatus {
+  open
+  resolved
+  cancelled
+}
+
+/// A parent's "I'd like to talk to the teacher about this alert" request,
+/// promoted from the E1-S2 append-only `alert.meeting_intent` audit row into a
+/// queryable, tenant-scoped record. Created via the guardianship-ABAC path
+/// (parent → their child's current teacher/admin); triaged + resolved in the
+/// teacher/admin action center. The append-only `AuditLog` row is still written
+/// alongside (durable provenance); THIS table is the queryable surface.
+model MeetingRequest {
+  id           String               @id @default(uuid()) @db.Uuid
+  tenantId     String               @map("tenant_id") @db.Uuid
+  schoolId     String?              @map("school_id") @db.Uuid
+  alertId      String               @map("alert_id") @db.Uuid
+  studentId    String               @map("student_id") @db.Uuid
+  subjectId    String?              @map("subject_id") @db.Uuid
+  alertCode    AlertRuleCode        @map("alert_code")
+  /// The parent UserProfile that made the request (audit actorId parity).
+  requestedBy  String               @map("requested_by") @db.Uuid
+  /// The teacher/admin this request is routed to (see assignment rule).
+  /// Nullable: when no main teacher / subject teacher can be resolved it stays
+  /// unassigned and is visible to every admin of the school.
+  assignedToId String?              @map("assigned_to_id") @db.Uuid
+  status       MeetingRequestStatus @default(open)
+  /// Optional short free-text note (UNUSED in S3 — reserved so a follow-up can
+  /// add a message without a second migration).
+  note         String?
+  resolvedAt   DateTime?            @map("resolved_at") @db.Timestamptz(6)
+  resolvedBy   String?              @map("resolved_by") @db.Uuid
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  alert      AlertInstance @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  student    Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject    Subject?      @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  requester  UserProfile   @relation("MeetingRequestRequester", fields: [requestedBy], references: [id], onDelete: Cascade)
+  assignedTo UserProfile?  @relation("MeetingRequestAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  // Idempotency is now a DB invariant, not an application-level
+  // findFirst-then-create. One request per (tenant, alert, requesting parent) —
+  // matches the S2 audit-row idempotency key (tenantId, resourceId=alertId,
+  // actorId). The create catches P2002 on this constraint for concurrency safety.
+  @@unique([tenantId, alertId, requestedBy])
+  @@index([tenantId, schoolId, status, createdAt])
+  @@index([assignedToId, status, createdAt])
+  @@map("meeting_request")
 }
