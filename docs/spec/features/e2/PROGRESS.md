@@ -13,7 +13,17 @@
 > `GET /conversations/:id/messages`, `PATCH /conversations/:id/read`), the `alertContext` seed
 > exposed end-to-end (re-checked, strict subset, null on mismatch), and the E1 `AlertNextSteps`
 > CTA rewired to open the alert-seeded thread (the E1 `MeetingRequest` intent path preserved).
-> No schema change. **Next run → implement S3** (teacher inbox, separated from announcements + reply).
+> No schema change.
+> **S3 shipped (this run, needs human review).** Teachers now have a `/teacher/conversations` inbox
+> (parent-initiated threads, separated from the `/teacher/messages` Announcements surface, with a
+> distinct "Conversations parents" sidebar item) and a thread view (paged history, reply composer,
+> mark-read, alert-context header) — all thin clients over the already-walled S1/S2 endpoints. The only
+> backend deltas are two in-app notification deep-links retargeted `/teacher/messages` →
+> `/teacher/conversations`; no schema, no new endpoint, no controller/permission change. Three new
+> service specs lock the notification deep-link payloads. The teacher reply path goes live for the
+> first time (the `sendMessage` teacher branch was code-complete + ABAC-walled since S1).
+> **Next run → implement S4** (moderation / safety: report, admin oversight, rate-limit,
+> non-stigmatising guardrails + optional email channel).
 > Predecessor **E1 — Parent Alert Action Loop** is `shipped` (S1–S4).
 
 | Slice | Title | Status | PR |
@@ -21,7 +31,7 @@
 | — | Epic-spec kit | **written** | — |
 | S1 | Conversation models + ABAC core + create/send | **shipped** (needs human review) | — |
 | S2 | Parent messages surface + alert-seeded threads | **shipped** (needs human review) | — |
-| S3 | Teacher inbox (separated from announcements) + reply | `proposed` | — |
+| S3 | Teacher inbox (separated from announcements) + reply | **shipped** (needs human review) | — |
 | S4 | Moderation / safety + optional email channel | `proposed` | — |
 
 > A self-contained `story` spec is authored under `stories/S<n>-*.md` on each slice run

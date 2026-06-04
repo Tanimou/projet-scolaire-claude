@@ -375,7 +375,9 @@ export class MessagingService {
       recipientId: args.teacherId,
       conversationId,
       senderName: `${student.firstName} ${student.lastName}`.trim(),
-      portalLink: '/teacher/messages',
+      // Deep-link the teacher to the conversation inbox (E2-S3), NOT the
+      // teacher→family Announcements surface at /teacher/messages.
+      portalLink: '/teacher/conversations',
     });
 
     return {
@@ -485,7 +487,10 @@ export class MessagingService {
       conversationId: conv.id,
       sourceId: message.id,
       senderName: `${message.sender.firstName} ${message.sender.lastName}`.trim(),
-      portalLink: senderRole === 'parent' ? '/teacher/messages' : '/parent/messages',
+      // Teacher recipient → conversation inbox (E2-S3); parent recipient → parent
+      // messages. The teacher link is /teacher/conversations (the parent-initiated
+      // thread inbox), NEVER the /teacher/messages Announcements surface.
+      portalLink: senderRole === 'parent' ? '/teacher/conversations' : '/parent/messages',
     });
 
     return {

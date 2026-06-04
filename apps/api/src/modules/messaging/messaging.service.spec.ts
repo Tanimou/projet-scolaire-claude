@@ -212,6 +212,25 @@ describe('MessagingService.createConversation (dual-wall ABAC)', () => {
       service.createConversation({ ...baseCreate, alertId: 'alert-1' }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  // ---------------------------------------------------------------------------
+  // E2-S3 / PM-2 (P0). On create, the teacher in-app notification must deep-link
+  // to the conversation inbox (/teacher/conversations), NEVER the teacher→family
+  // Announcements surface (/teacher/messages). A regression here lands a notified
+  // teacher on the wrong page.
+  // ---------------------------------------------------------------------------
+  it('notifies the teacher with a /teacher/conversations deep-link (not /teacher/messages)', async () => {
+    const { service, notifications } = makeService();
+    await service.createConversation(baseCreate);
+    const payload = (notifications.createMany as jest.Mock).mock.calls[0][0][0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        userProfileId: TEACHER,
+        kind: 'message',
+        link: '/teacher/conversations',
+      }),
+    );
+  });
 });
 
 describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
@@ -224,7 +243,7 @@ describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
     /** Guardianship-wall outcome for a parent sender (defaults to true). */
     guardian?: boolean;
   }) {
-    const { service, prisma, studentAccess } = makeService({
+    const { service, prisma, studentAccess, notifications } = makeService({
       teaches: opts.teaches,
       guardian: opts.guardian ?? true,
     });
@@ -257,7 +276,7 @@ describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
         conversation: { update: jest.fn(async () => ({})) },
       }),
     );
-    return { service, prisma, studentAccess };
+    return { service, prisma, studentAccess, notifications };
   }
 
   const teacherJwt = { realm_access: { roles: ['teacher'] } } as never;
@@ -334,6 +353,46 @@ describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
   it('403 when the thread is already read_only', async () => {
     const { service } = makeSendService({ teaches: true, status: 'read_only' });
     await expect(service.sendMessage(sendArgs)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  // ---------------------------------------------------------------------------
+  // E2-S3 / PM-12 (P1). A teacher reply must notify the PARENT, deep-linking to
+  // /parent/messages (this path goes live with S3's first teacher-sent messages).
+  // ---------------------------------------------------------------------------
+  it('teacher reply notifies the parent with a /parent/messages deep-link', async () => {
+    const { service, notifications } = makeSendService({ teaches: true });
+    await service.sendMessage(sendArgs);
+    const payload = (notifications.createMany as jest.Mock).mock.calls[0][0][0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        userProfileId: PARENT,
+        kind: 'message',
+        link: '/parent/messages',
+        sourceType: 'conversation',
+        sourceId: 'msg-1',
+      }),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // E2-S3 / PM-2 (P0). A parent send notifies the TEACHER, and the deep-link is
+  // /teacher/conversations (the parent-initiated inbox), NOT /teacher/messages.
+  // ---------------------------------------------------------------------------
+  it('parent send notifies the teacher with a /teacher/conversations deep-link', async () => {
+    const { service, notifications } = makeSendService({
+      senderRole: 'parent',
+      guardian: true,
+      teaches: true,
+    });
+    await service.sendMessage(parentSendArgs);
+    const payload = (notifications.createMany as jest.Mock).mock.calls[0][0][0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        userProfileId: TEACHER,
+        kind: 'message',
+        link: '/teacher/conversations',
+      }),
+    );
   });
 });
 
