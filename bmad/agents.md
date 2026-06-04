@@ -15,10 +15,11 @@ PR-only continuous-improvement loop.
 
 | # | BMAD persona | Pipeline role | Phase (parallel width) | Owns / outputs |
 |---|---|---|---|---|
-| 1 | **Mary** — Analyst | **Backlog & Intake** | 0 — Analysis (1) | prioritized backlog, ONE picked sprint, a *compressed, contradiction-free* intent |
-| 2 | **John** — Product Manager | **Spec author** | 1 — Planning (≤5) | a self-contained `story` spec: goal, FRs, acceptance criteria, portals, files, `touchesUi/touchesBackend` |
-| 3 | **Winston** — Architect | **Consistency guardian** | 1 — Planning (≤5) | ADR/convention ruling; flags any new architectural decision → requires an ADR; PASS/CONCERNS/FAIL readiness verdict |
-| 4 | **Sally** — UX (optional) | **UX critic** | 1 — Planning (≤5) | premium/colorful/responsive/a11y requirements; only when the sprint touches UI |
+| 0 | **Victor** — Product Strategist / Visionary | **Roadmap & ambition** | 0 — Analysis (1, w/ Mary) | reads `bmad/roadmap.md` + the cahier de charges; picks the current **epic** + the next **vertical slice**; decides the run **mode** (epic-spec / epic-slice / polish); injects net-new UX that makes the product *incontournable* (alert→action loop, weekly parent digest, remediation tracking) |
+| 1 | **Mary** — Analyst | **Backlog & Intake** | 0 — Analysis (1) | turns Victor's pick into a **compressed, contradiction-free intent**; reads the in-flight epic's `PROGRESS.md`; routes to the smallest *shippable slice* (not the smallest change) |
+| 2 | **John** — Product Manager | **Spec author** | 1 — Planning (≤5) | epic-spec run → `spec.md` (vision/users/scenarios/**acceptance**/non-goals) + `tasks.md` slice backlog; slice run → a self-contained `story` spec for THIS slice with `touchesUi/touchesBackend` |
+| 3 | **Winston** — Architect | **Consistency guardian** | 1 — Planning (≤5) | ADR/convention ruling + PASS/CONCERNS/FAIL; epic-spec run → `data-model.md` (Prisma migration plan) + `contracts/openapi.yaml`; any new architectural decision → a new `docs/adr/` ADR |
+| 4 | **Sally** — UX (optional) | **UX critic** | 1 — Planning (≤5) | premium/colorful/responsive/**WCAG-AA**, mobile-first (parent <2 s) spec for the slice; only when the slice touches UI |
 | 5 | **Critic** — Pre-mortem | **Plan hardener** | 1 — Planning (≤5) | pre-mortem + inversion → failure modes that become extra acceptance criteria |
 | 6 | **Murat (plan)** — Test Architect | **Test design** | 1 — Planning (≤5) | early P0–P3 risk pre-assessment + the single most valuable targeted test |
 | 7 | **Amelia (FE)** — Developer | **Frontend dev** | 2 — Implement (≤3, disjoint) | Next.js/`@pilotage/ui` changes under `apps/web` |
@@ -35,6 +36,8 @@ PR-only continuous-improvement loop.
 
 ## Operating rules (BMAD quality mechanisms, distilled)
 
+- **Epic-driven ambition (the point of v4)** — the routine builds **medium-to-large, meaningful features**, not just polish. Ambition comes from **sequencing**: pick one epic from `bmad/roadmap.md`, write its spec-kit once (epic-spec run), then ship it **one vertical slice per run** (each slice = DB + API + UI + worker for a real capability, landing as a single reviewable PR). Bigger value, same safe PR size. Polish is the *fallback* when no epic slice is ready — never the default. Tie every epic back to the cahier de charges' core promise: a parent dashboard that **turns information into action**.
+- **Vertical slices, not horizontal layers** — a slice must be demoable end-to-end (a parent/teacher can *do* the new thing), not "all the DB this run, all the UI next run." Order slices so the earliest ones already deliver visible value.
 - **Context engineering** — the Phase-1 `story` spec is *complete and self-contained*: the dev agents implement from it alone, so parallel agents stay aligned. (BMAD: "each document becomes context for the next phase.")
 - **Adversarial review + triage** — Quinn must find problems, but a triage step grades each finding by confidence/severity *before* it blocks the PR (BMAD warns the skeptic produces false positives — never let it stall the loop on imagined issues).
 - **Diagnose at the right layer** — on a failed check, decide whether the *intent* (Mary), the *spec* (John), or the *code* (Amelia) was wrong and re-enter at that layer. Do **not** blind-retry the same implementation (that is how loops thrash). Persist a graded evidence note (forensic discipline) so later runs don't re-walk dead ends.

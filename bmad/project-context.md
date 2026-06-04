@@ -70,13 +70,20 @@ Builds are slow, and the routine fires **hourly**, so overlapping runs could pil
 
 ## 5. Project state & backlog (prioritize from here)
 
-Redesign **R0→R5 complete** (design system, AppShell, the 3 dashboards). Open backlog by value:
-- **R6 — Alert engine (~20%)**: UI stub only. Needs `AlertRule`/`AlertInstance` Prisma models + BullMQ evaluation engine + the 7 documented rules.
-- **R7 — Async exports (~25%)**: deps installed, `ExportJob` model exists, worker not built. XLSX/PDF generation.
-- **R8 — Notifications (~70%)**: bell works off `AnnouncementReceipt`; needs a dedicated `Notification` dispatcher + parent email on published grades/alerts/absences.
-- **R9 — Accessibility (~50%)** WCAG 2.2 AA · **R10 — E2E (~30%)** Playwright (smoke + a11y only).
-- Per-portal polish + customization (school branding, themes, density, dashboard prefs) per the routine's UI/UX mandate.
-Source of truth: `PLAN.md`, `docs/spec/REDESIGN-PROGRESS.md`, `docs/spec/REDESIGN-PLAN.md`, the cahier de charges PDF.
+> **North star (from the cahier de charges).** Pilotage Scolaire is a *decision-oriented* school-monitoring platform, **not** a digital gradebook. The **parent dashboard is the core**: it must answer five questions in <2 s — *where is my child overall, which subjects are struggling, which are improving, which assessments are coming, and what concrete action should I take?* The platform's defining promise is **"turn information into action"**: every alert is explainable (rule, subject, threshold, trend) and leads to a next step (contact the teacher, reinforce a subject, find tutoring). Tone is factual, kind, non-stigmatising — it manipulates children's data, so RGPD-level governance, minimal access, and append-only audit are non-negotiable. Build the **modular monolith** out toward the future modules (messaging, tutoring, payments, student portal, OneRoster/LTI) without premature microservices.
+
+**Ambition source = [`bmad/roadmap.md`](./roadmap.md)** — the prioritized backlog of **medium-to-large epics** derived from the cahier de charges. The routine advances ONE epic at a time via **vertical slices** (each slice = one shippable PR spanning DB + API + UI + worker). Prefer epic slices over polish; polish is filler.
+
+Current state (redesign **R0→R5 complete** — design system, AppShell, 3 dashboards). Foundation backlog still relevant:
+- **R6 — Alert engine**: the 7 explainable rules + BullMQ evaluation engine on `GradePublished`/recompute, admin-configurable thresholds, parent action.
+- **R7 — Async exports**: `ExportJob` worker → XLSX/PDF (parent term-summary, class grid, bulletins) to MinIO, audited.
+- **R8 — Notifications**: dedicated dispatcher (email/push) + channels + digest + per-user preferences; parent email on published grades/alerts/absences.
+- **R9 — Accessibility** WCAG 2.2 AA · **R10 — E2E** Playwright (smoke + a11y).
+- Per-portal polish + customization (branding, themes, density, dashboard prefs).
+
+**Spec-kit convention (BMAD spec-driven).** A new epic gets a spec folder `docs/spec/features/<epic-id>/` with `spec.md` (vision/users/scenarios/acceptance/non-goals), `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `tasks.md` (slice backlog), `quickstart.md`, `PROGRESS.md`. The routine writes this on the epic's **spec run**, then implements slices from `tasks.md`.
+
+Source of truth: `bmad/roadmap.md`, the cahier de charges PDF (`~/Downloads/rapport_pilotage_scolaire_detaille.pdf`), `PLAN.md`, `docs/spec/REDESIGN-PROGRESS.md`, `docs/spec/data-model.md`.
 
 ## 6. Git & PR workflow (reconciled — use these exact values)
 

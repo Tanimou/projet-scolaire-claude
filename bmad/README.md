@@ -1,4 +1,4 @@
-# BMAD integration — Daily Improvement v2
+# BMAD integration — Daily Improvement (v4: epic-driven)
 
 This folder makes the autonomous continuous-improvement routine **robust** by
 overlaying the [BMAD Method](https://docs.bmad-method.org/) (named-agent phases,
@@ -9,12 +9,19 @@ agents**, capped by the runtime at `cpu-2`). Wider parallelism stays light on th
 machine: only the test-architect runs `pnpm typecheck`, no agent builds, and the
 implement agents edit disjoint file sets (`apps/web` / `apps/api` / `packages/ui`).
 
+**v4 ambition:** the routine now ships **medium-to-large, meaningful features**, not
+just polish — by **sequencing**. Victor (Product Strategist) reads
+[`roadmap.md`](./roadmap.md), picks one **epic**, writes its spec-kit once
+(`docs/spec/features/<epic>/`), then ships it **one vertical slice per run**
+(DB + API + UI + worker → one reviewable PR). Same safe PR size, far bigger value.
+
 | File | What it is |
 |---|---|
-| [`project-context.md`](./project-context.md) | **The guardrail.** Stack, conventions, ADRs, quality gates. Every agent reads it first so parallel agents never diverge. (= BMAD's `_bmad-output/project-context.md`.) |
-| [`agents.md`](./agents.md) | The BMAD named-agent roster (Mary/John/Winston/Sally/Critic/Amelia/DS-Guardian/Quinn/Sentinel/Edge-Hunter/A11y/Drift/Murat/Paige) mapped to the pipeline. |
-| [`daily-improvement-v2.md`](./daily-improvement-v2.md) | The full v2 pipeline spec: base routine + BMAD phases + Workflow orchestration. |
-| [`workflows/sprint.workflow.js`](./workflows/sprint.workflow.js) | The runnable Claude Workflow that drives one BMAD sprint (intake → plan+harden → implement → verify → escalate → land). PR-only, **no builds**. |
+| [`roadmap.md`](./roadmap.md) | **The ambition compass.** Prioritized backlog of medium-to-large **epics** (from the cahier de charges + codebase audit). Victor picks the current epic + next slice from here each run. |
+| [`project-context.md`](./project-context.md) | **The guardrail.** North star, stack, conventions, ADRs, quality gates, spec-kit convention. Every agent reads it first so parallel agents never diverge. |
+| [`agents.md`](./agents.md) | The BMAD named-agent roster (Victor/Mary/John/Winston/Sally/Critic/Amelia/DS-Guardian/Quinn/Sentinel/Edge-Hunter/A11y/Drift/Murat/Paige) mapped to the pipeline. |
+| [`daily-improvement-v2.md`](./daily-improvement-v2.md) | The full pipeline spec: base routine + BMAD phases + **Ambition (epic-driven, vertical slices)** + Concurrency + Workflow orchestration. |
+| [`workflows/sprint.workflow.js`](./workflows/sprint.workflow.js) | The runnable epic-aware Workflow: Intake (Victor) decides mode → **epic-spec** (write the spec-kit, docs-only) OR **epic-slice/polish** (plan → implement → verify → escalate → land). PR-only, **no builds**. |
 
 ## How to run (v3 — build-aware, concurrency-gated)
 
