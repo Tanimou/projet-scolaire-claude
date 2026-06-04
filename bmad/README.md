@@ -31,7 +31,9 @@ so only **one writer builds at a time** and at most **2 routine PRs** are in
 flight; ② works on a feature branch **in the main checkout** (no worktree → no
 duplicated build artifacts → bounded disk); ③ runs the 5–6 agent
 `workflows/sprint.workflow.js`; ④ runs **one** `pnpm build` (Turbo affected)
-while holding the lock; ⑤ lands **one PR + a summary** and releases the lock.
+while holding the lock; ⑤ opens **one PR + a summary**, **auto-merges it to `main`
+when green** (typecheck+build pass, no blockers — any risk tier; only red PRs are
+held open), and releases the lock. Auto-merge ≠ auto-deploy.
 **Docker/infra rebuilds are still yours** — batch them via `bash scripts/dev.sh`
 after reviewing/merging the PRs. See `daily-improvement-v2.md` → *Concurrency* and
 `project-context.md` §4b.

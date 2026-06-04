@@ -88,6 +88,7 @@ Source of truth: `bmad/roadmap.md`, the cahier de charges PDF (`~/Downloads/rapp
 ## 6. Git & PR workflow (reconciled — use these exact values)
 
 - Remote `origin` → `github.com/Tanimou/projet-scolaire-claude`, default branch **`main`**. PRs are squash-merged.
+- **Auto-land policy.** The routine **auto-merges EVERY green PR** to `main` (squash) — green = typecheck + build pass, no blockers — **regardless of risk tier** (operator preference). High-risk green PRs merge too, just title-prefixed `[high-risk]`. Only **red** PRs (typecheck/build failed) are left **open** for human review, so `main` always builds. Auto-merge ≠ auto-deploy (the human still rebuilds); every auto-landed change is a one-commit squash → easy revert. The `≤ 2 in-flight` throttle counts only **held (failed)** PRs.
 - **Branch prefix `ci/YYYY-MM-DD-short-feature`** (this is what the history actually uses — *not* `continuous-improvement/`).
 - **Worktrees live under `.claude/worktrees/`** in the repo (the old `E:\projects\pilotage-scolaire-worktrees\*` path is gone — project moved back to `C:\Users\HP\Downloads\pilotage-scolaire-claude` on 2026-06-02). Keep ≤ 5; never delete a dirty worktree; `git worktree prune` after removals.
 - **Login (demo) for screenshots**: admin `mme.dupont@voltaire.fr` / `Demo!2024Pilotage` (full `voltaire-demo` data). Simple per-portal: `admin|teacher|parent@pilotage.local` / `Changeme123!`.

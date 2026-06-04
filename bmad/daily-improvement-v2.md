@@ -147,14 +147,28 @@ build at once. On failure: diagnose at the right layer, fix, rebuild **once**; i
 still failing, open the PR prefixed "⚠️ build failing — needs human review" with
 the error excerpt. **No docker/infra rebuild here** — that stays the human's batch.
 
-### Phase 6 — Land (PR + build result) · *Amelia + Paige*
+### Phase 6 — Land (PR, then auto-merge when green) · *Amelia + Paige*
 Conventional commit (`feat(parent): …`, `polish(admin): …`, `ui(teacher): …`),
 push branch **`ci/YYYY-MM-DD-short-feature`**, open a PR whose body is a
 **Checkpoint-Preview**: 1-line intent, scope metrics, concern-grouped walkthrough,
 the tagged high-risk spots, **the build result**, and 2–5 manual things to try.
-**No force-push.** Risk-tier `[auth]/[security]` PRs are flagged "needs human
-review — do not auto-merge." **Merging is the human's job** (a later run
-auto-deletes the branch once its PR merges).
+**No force-push.**
+
+**Auto-land (so the routine never stalls while the human is away):** the
+orchestrator session **auto-merges EVERY green PR to `main`** (squash), regardless
+of risk tier (operator preference 2026-06-04):
+- **green** (typecheck+build pass, no blockers) → **squash-merge** now
+  (`gh pr merge --squash --delete-branch`). High-risk green PRs are merged too, just
+  title-prefixed `[high-risk]` (+ escalation-panel notes) so they're easy to spot.
+- **NOT green** (typecheck/build failed, or an unresolved blocker) → leave the PR
+  **open**, flagged "build/typecheck failing — needs human review." Broken code
+  never lands on `main`.
+
+Auto-merge to `main` is **not** auto-deploy — the human still runs the rebuild, and
+a green change has already passed typecheck + build + the 6-lens review — so `main`
+always builds. Every auto-landed change is a one-commit squash → trivial revert.
+The `≤ 2 in-flight` throttle now counts only **held (failed)** PRs, so the loop
+essentially never waits.
 
 ### Phase 7 — Summary & memory · *Paige*
 Emit the base routine's required summary (sprint title, portals, what/why, files,
