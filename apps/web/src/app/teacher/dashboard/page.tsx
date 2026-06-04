@@ -16,7 +16,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { api, isNextNavigationSignal } from '@/lib/api-client';
 import { fetchMe } from '@/lib/me';
 import {
   ActivityTimeline,
@@ -84,8 +84,14 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
   try {
     return await p;
   } catch (err) {
-    if (err instanceof ApiError) return null;
-    throw err;
+    // Preserve Next.js redirect()/notFound() control-flow (e.g. the api-client
+    // 401 → login redirect) — these must propagate uncaught.
+    if (isNextNavigationSignal(err)) throw err;
+    // Expected API errors (4xx/5xx) AND transient network failures (the API
+    // restarting → ECONNRESET / "fetch failed") both degrade to "no data" so
+    // the page renders an empty state instead of a server-side exception.
+    console.error('[teacher-dashboard] data fetch failed → empty state:', err);
+    return null;
   }
 }
 
