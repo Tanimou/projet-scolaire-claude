@@ -226,4 +226,24 @@ export class AlertsController {
     const auth = await this.authorizeParentAlertAction(jwt, id);
     return this.alerts.dismiss({ ...auth, id });
   }
+
+  /**
+   * Parent records a lightweight "I want to talk to the teacher about this
+   * alert" intent (E1-S2). This does NOT mutate the alert's status — the alert
+   * stays open/acknowledged in the parent's list — it only appends ONE
+   * idempotent, append-only AuditLog row (action `alert.meeting_intent`) via the
+   * same guardianship-ABAC gate as the lifecycle routes. E2 messaging is not yet
+   * built; S3 will promote this intent into a queryable MeetingRequest surface.
+   * Returns `{ ok, alreadyRequested, requestedAt }` so the UI can render a
+   * one-shot, non-duplicating confirmation.
+   */
+  @Post(':id/meeting-intent')
+  @RequiresPermission('profile.read.self')
+  @ApiOperation({
+    summary: 'Parent records a meeting-request intent for their child’s alert (guardianship ABAC)',
+  })
+  async meetingIntentByParent(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
+    const auth = await this.authorizeParentAlertAction(jwt, id);
+    return this.alerts.recordMeetingIntent({ ...auth, id });
+  }
 }

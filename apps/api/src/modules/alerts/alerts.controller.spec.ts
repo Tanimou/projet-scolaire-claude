@@ -26,6 +26,9 @@ function makeController() {
     acknowledge: jest.fn().mockResolvedValue({ id: ALERT_ID, status: 'acknowledged' }),
     resolve: jest.fn().mockResolvedValue({ id: ALERT_ID, status: 'resolved' }),
     dismiss: jest.fn().mockResolvedValue({ id: ALERT_ID, status: 'dismissed' }),
+    recordMeetingIntent: jest
+      .fn()
+      .mockResolvedValue({ ok: true, alreadyRequested: false, requestedAt: '2026-06-04T10:00:00.000Z' }),
     findStudentIdForAlert: jest.fn().mockResolvedValue('student-A'),
   };
   // ensureUser is the ONLY source of tenantId/userProfileId — derived from the
@@ -181,4 +184,58 @@ describe('AlertsController — parent-scoped lifecycle (ABAC, not alerts.write)'
       expect(alerts.dismiss).not.toHaveBeenCalled();
     },
   );
+});
+
+// E1-S2: the meeting-intent route (POST :id/meeting-intent) runs through the
+// SAME authorizeParentAlertAction gate as the lifecycle routes, but it landed
+// without controller coverage — and it is a WRITE (an append-only audit row)
+// on minors' data. A refactor could drop its 404/403 gate while every other
+// test stayed green, exposing the write on another family's child. These pin
+// the guardianship-ABAC contract for that seam (Murat's required test).
+describe('AlertsController — parent meeting-intent (ABAC write, status-neutral)', () => {
+  const PARENT_JWT = jwtWithRoles(['parent']);
+
+  it('a guardian parent passes ABAC and records the intent with parent provenance', async () => {
+    const { controller, alerts, studentAccess } = makeController();
+
+    const res = await controller.meetingIntentByParent(PARENT_JWT, ALERT_ID);
+
+    // ABAC ran against the alert's in-tenant studentId before the write.
+    expect(alerts.findStudentIdForAlert).toHaveBeenCalledWith({ tenantId: TENANT, id: ALERT_ID });
+    expect(studentAccess.canAccessStudent).toHaveBeenCalledWith(
+      { id: USER, tenantId: TENANT },
+      PARENT_JWT,
+      'student-A',
+      'school-1',
+    );
+    expect(alerts.recordMeetingIntent).toHaveBeenCalledWith({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      actorRole: 'parent',
+      portal: 'parent',
+    });
+    expect(res).toEqual({ ok: true, alreadyRequested: false, requestedAt: '2026-06-04T10:00:00.000Z' });
+  });
+
+  it('a non-guardian parent (canAccessStudent=false) gets 403 and records NO intent', async () => {
+    const { controller, alerts, studentAccess } = makeController();
+    (studentAccess.canAccessStudent as jest.Mock).mockResolvedValue(false);
+
+    await expect(controller.meetingIntentByParent(PARENT_JWT, ALERT_ID)).rejects.toThrow('Forbidden');
+
+    expect(alerts.recordMeetingIntent).not.toHaveBeenCalled();
+  });
+
+  it('an alert id absent from the caller tenant yields 404, no ABAC bypass, no write', async () => {
+    const { controller, alerts, studentAccess } = makeController();
+    (alerts.findStudentIdForAlert as jest.Mock).mockResolvedValue(null);
+
+    await expect(controller.meetingIntentByParent(PARENT_JWT, 'cross-tenant-id')).rejects.toThrow(
+      'Alert not found',
+    );
+
+    expect(studentAccess.canAccessStudent).not.toHaveBeenCalled();
+    expect(alerts.recordMeetingIntent).not.toHaveBeenCalled();
+  });
 });

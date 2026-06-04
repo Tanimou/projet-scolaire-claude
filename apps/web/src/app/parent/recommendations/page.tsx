@@ -24,6 +24,7 @@ import {
 import { ChildSelector } from '../_components/ChildSelector';
 
 import { AlertActions } from './AlertActions';
+import { AlertNextSteps } from './AlertNextSteps';
 import { RecommendationsFilters } from './RecommendationsFilters';
 import type {
   AcknowledgedFilter,
@@ -379,6 +380,16 @@ export default async function ParentRecommendationsPage({
                               </div>
                             </div>
                           )}
+                          <AlertNextSteps
+                            alertId={a.id}
+                            code={a.code}
+                            studentId={activeStudentId}
+                            subjectId={a.subjectId}
+                            subjectCode={a.subjectCode}
+                            subjectName={a.subjectName}
+                            title={a.title}
+                            meetingRequestedAt={a.meetingRequestedAt}
+                          />
                           <p className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                             <span>Détectée le {formatDateLong(a.detectedAt)}</span>
                             <span className="text-slate-300">·</span>

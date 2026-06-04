@@ -355,6 +355,85 @@ export class AlertsService {
   }
 
   /**
+   * Record a parent's "talk to the teacher" meeting-request intent for an alert
+   * (E1-S2). Unlike the lifecycle methods this does NOT touch
+   * `AlertInstance.status` — a meeting request is orthogonal to
+   * ack/resolve/dismiss, so the alert stays open/acknowledged and listed.
+   *
+   * Persistence reuses the established append-only `AuditLog`-as-record
+   * convention (S1 set the precedent: the audit row IS the durable record, no new
+   * table — the queryable `MeetingRequest` model is deferred to E1-S3). Exactly
+   * ONE row is written per (tenant, alert, actor): the write is idempotent on
+   * `(tenantId, resourceType, resourceId, action, actorId)` so a parent's
+   * double-click — or a deliberate re-request — creates no duplicate row and
+   * returns `alreadyRequested: true` with the original `requestedAt`. The alert
+   * id has already been confirmed in-tenant and guardianship-checked by the
+   * controller (`authorizeParentAlertAction`); the studentId/code/subjectId in
+   * the `after` payload are re-read here under the same `{ id, tenantId }` guard,
+   * never trusted from the client.
+   */
+  async recordMeetingIntent(args: {
+    tenantId: string;
+    id: string;
+    userProfileId: string;
+    actorRole: string | null;
+    portal: string | null;
+  }): Promise<{ ok: true; alreadyRequested: boolean; requestedAt: string }> {
+    const row = await this.prisma.alertInstance.findFirst({
+      where: { id: args.id, tenantId: args.tenantId },
+      select: { studentId: true, code: true, subjectId: true },
+    });
+    if (!row) throw new NotFoundException('Alert not found');
+
+    // Idempotency guard: one intent per (tenant, alert, actor). A second intent
+    // by the same actor on the same alert is a no-op that echoes the original
+    // timestamp — never a duplicate append-only row (mirrors the lifecycle
+    // one-row-per-real-action discipline; no duplicate downstream teacher pings
+    // in S3+).
+    const existing = await this.prisma.auditLog.findFirst({
+      where: {
+        tenantId: args.tenantId,
+        resourceType: 'alert_instance',
+        resourceId: args.id,
+        action: 'alert.meeting_intent',
+        actorId: args.userProfileId,
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { createdAt: true },
+    });
+    if (existing) {
+      return {
+        ok: true,
+        alreadyRequested: true,
+        requestedAt: existing.createdAt.toISOString(),
+      };
+    }
+
+    const created = await this.prisma.auditLog.create({
+      data: {
+        tenantId: args.tenantId,
+        actorId: args.userProfileId,
+        actorRole: args.actorRole,
+        portal: args.portal,
+        action: 'alert.meeting_intent',
+        resourceType: 'alert_instance',
+        resourceId: args.id,
+        after: {
+          studentId: row.studentId,
+          alertCode: row.code,
+          subjectId: row.subjectId ?? null,
+        } as Prisma.InputJsonValue,
+      },
+      select: { createdAt: true },
+    });
+    return {
+      ok: true,
+      alreadyRequested: false,
+      requestedAt: created.createdAt.toISOString(),
+    };
+  }
+
+  /**
    * Append-only audit row for an alert lifecycle transition. Best-effort and
    * post-update: a write failure is logged and swallowed, never rolling back the
    * status change nor surfacing to the controller (mirrors the notification

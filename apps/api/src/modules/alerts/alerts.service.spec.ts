@@ -301,6 +301,134 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
   });
 });
 
+describe('AlertsService.recordMeetingIntent (E1-S2 — append-only, idempotent, status-neutral)', () => {
+  const PARENT = { actorRole: 'parent', portal: 'parent' } as const;
+  const REQUESTED_AT = new Date('2026-06-04T10:00:00.000Z');
+
+  function makeIntentService(opts: {
+    alert?: { studentId: string; code: string; subjectId: string | null } | null;
+    existing?: { createdAt: Date } | null;
+  }) {
+    const alert =
+      opts.alert === undefined
+        ? { studentId: 'stu-1', code: 'LOW_SUBJECT_AVG', subjectId: 'subj-1' }
+        : opts.alert;
+    const prisma = {
+      alertInstance: {
+        findFirst: jest.fn().mockResolvedValue(alert),
+        update: jest.fn(),
+      },
+      auditLog: {
+        findFirst: jest.fn().mockResolvedValue(opts.existing ?? null),
+        create: jest.fn().mockResolvedValue({ createdAt: REQUESTED_AT }),
+      },
+    };
+    const notifications = { markReadBySource: jest.fn() };
+    const service = new AlertsService(
+      prisma as never,
+      notifications as unknown as NotificationsService,
+    );
+    return { service, prisma };
+  }
+
+  it('writes exactly ONE audit row with action alert.meeting_intent and the {studentId,alertCode,subjectId} payload', async () => {
+    const { service, prisma } = makeIntentService({});
+
+    const result = await service.recordMeetingIntent({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: 'parent-1',
+      ...PARENT,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      alreadyRequested: false,
+      requestedAt: REQUESTED_AT.toISOString(),
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: TENANT,
+        actorId: 'parent-1',
+        actorRole: 'parent',
+        portal: 'parent',
+        action: 'alert.meeting_intent',
+        resourceType: 'alert_instance',
+        resourceId: ALERT_ID,
+        after: { studentId: 'stu-1', alertCode: 'LOW_SUBJECT_AVG', subjectId: 'subj-1' },
+      }),
+      select: { createdAt: true },
+    });
+  });
+
+  it('does NOT mutate the alert status (no alertInstance.update)', async () => {
+    const { service, prisma } = makeIntentService({});
+
+    await service.recordMeetingIntent({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: 'parent-1',
+      ...PARENT,
+    });
+
+    expect(prisma.alertInstance.update).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent: a second intent by the same actor writes NO new row and returns alreadyRequested:true with the original timestamp', async () => {
+    const { service, prisma } = makeIntentService({ existing: { createdAt: REQUESTED_AT } });
+
+    const result = await service.recordMeetingIntent({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: 'parent-1',
+      ...PARENT,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      alreadyRequested: true,
+      requestedAt: REQUESTED_AT.toISOString(),
+    });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('serialises a null subjectId (subject-less alert) without a broken payload', async () => {
+    const { service, prisma } = makeIntentService({
+      alert: { studentId: 'stu-9', code: 'HIGH_ABSENCE', subjectId: null },
+    });
+
+    await service.recordMeetingIntent({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: 'parent-1',
+      ...PARENT,
+    });
+
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        after: { studentId: 'stu-9', alertCode: 'HIGH_ABSENCE', subjectId: null },
+      }),
+      select: { createdAt: true },
+    });
+  });
+
+  it('throws NotFound (and writes nothing) for an alert absent from the tenant', async () => {
+    const { service, prisma } = makeIntentService({ alert: null });
+
+    await expect(
+      service.recordMeetingIntent({
+        tenantId: TENANT,
+        id: ALERT_ID,
+        userProfileId: 'parent-1',
+        ...PARENT,
+      }),
+    ).rejects.toThrow('Alert not found');
+    expect(prisma.auditLog.findFirst).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('AlertsService audit provenance is derived from the caller (not hardcoded)', () => {
   it('T5 — a teacher caller records actorRole "teacher" and portal "teacher" (AC2 core fix)', async () => {
     const { service, prisma } = makeService('open');
