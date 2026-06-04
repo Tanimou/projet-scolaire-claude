@@ -23,6 +23,7 @@ import {
 
 import { ChildSelector } from '../_components/ChildSelector';
 
+import { AlertActions } from './AlertActions';
 import { RecommendationsFilters } from './RecommendationsFilters';
 import type {
   AcknowledgedFilter,
@@ -392,6 +393,11 @@ export default async function ParentRecommendationsPage({
                               </>
                             )}
                           </p>
+                          <AlertActions
+                            alertId={a.id}
+                            status={a.status}
+                            title={a.title}
+                          />
                         </div>
                       </div>
                     </li>

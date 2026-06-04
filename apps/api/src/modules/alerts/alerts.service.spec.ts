@@ -209,6 +209,38 @@ describe('AlertsService append-only audit on lifecycle transitions', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
+  it('T2b — no-op resolve (already dismissed) is idempotent: no update, no audit, no retraction', async () => {
+    const { service, prisma, notifications } = makeService('dismissed');
+
+    const result = await service.resolve({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
+
+    expect(result.status).toBe('dismissed');
+    expect(prisma.alertInstance.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(notifications.markReadBySource).not.toHaveBeenCalled();
+  });
+
+  it('T2c — no-op dismiss (already resolved) is idempotent: no update, no audit, no retraction', async () => {
+    const { service, prisma, notifications } = makeService('resolved');
+
+    const result = await service.dismiss({
+      tenantId: TENANT,
+      id: ALERT_ID,
+      userProfileId: USER,
+      ...SCHOOL_ADMIN,
+    });
+
+    expect(result.status).toBe('resolved');
+    expect(prisma.alertInstance.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(notifications.markReadBySource).not.toHaveBeenCalled();
+  });
+
   it('T2 — no-op acknowledge (already resolved) writes ZERO audit rows', async () => {
     const { service, prisma } = makeService('resolved');
 

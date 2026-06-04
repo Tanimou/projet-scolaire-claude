@@ -190,6 +190,26 @@ export class AlertsService {
     return { data: rows.map((r) => this.toDto(r as AlertInstanceFull)), total };
   }
 
+  /**
+   * Resolve the `studentId` an alert instance belongs to, scoped to the caller's
+   * tenant. Used by the parent-scoped lifecycle endpoints to run the
+   * `StudentAccessService` guardianship ABAC check BEFORE mutating — the alert's
+   * studentId is never trusted from the client; it is read here under the same
+   * `where: { id, tenantId }` guard the lifecycle methods use, so a cross-tenant
+   * id yields `null` (→ 404 at the controller) and never leaks another tenant's
+   * student linkage. Returns `null` when the alert does not exist in this tenant.
+   */
+  async findStudentIdForAlert(args: {
+    tenantId: string;
+    id: string;
+  }): Promise<string | null> {
+    const row = await this.prisma.alertInstance.findFirst({
+      where: { id: args.id, tenantId: args.tenantId },
+      select: { studentId: true },
+    });
+    return row?.studentId ?? null;
+  }
+
   async acknowledge(args: {
     tenantId: string;
     id: string;
@@ -239,6 +259,14 @@ export class AlertsService {
       where: { id: args.id, tenantId: args.tenantId },
     });
     if (!row) throw new NotFoundException('Alert not found');
+    // Idempotent terminal transition: only open/acknowledged alerts may move to
+    // resolved. A second resolve (or a resolve of an already-dismissed alert) is
+    // a no-op — it must NOT re-stamp resolvedAt/resolvedBy nor write a duplicate
+    // audit row, keeping the append-only trail one-row-per-real-transition and
+    // preventing status regression / provenance pollution (e.g. a parent
+    // double-click or "resolving" a dismissed alert).
+    const didTransition = row.status === 'open' || row.status === 'acknowledged';
+    if (!didTransition) return row;
     const updated = await this.prisma.alertInstance.update({
       where: { id: args.id },
       data: {
@@ -286,6 +314,11 @@ export class AlertsService {
       where: { id: args.id, tenantId: args.tenantId },
     });
     if (!row) throw new NotFoundException('Alert not found');
+    // Idempotent terminal transition: only open/acknowledged alerts may move to
+    // dismissed. A second dismiss (or dismissing an already-resolved alert) is a
+    // no-op — no re-stamp, no duplicate audit row (see resolve for rationale).
+    const didTransition = row.status === 'open' || row.status === 'acknowledged';
+    if (!didTransition) return row;
     const updated = await this.prisma.alertInstance.update({
       where: { id: args.id },
       data: {
