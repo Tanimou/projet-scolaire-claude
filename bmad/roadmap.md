@@ -21,13 +21,13 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` (in-progress; **S1 + S2 + S3 shipped** — S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model (first migration of the epic) promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification). Next: **S4** (Weekly parent digest, opt-in — worker job + `NotificationPreference`). The codebase was already past the roadmap's "epic-spec first" assumption (admin lifecycle endpoints + parent read shipped), so the first E1 run was an **epic-slice**, not a spec run; the `docs/spec/features/e1/` spec-kit is being backfilled one story per slice.
+**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** (proposed; needs an **epic-spec** run first — no `docs/spec/features/e2/spec.md` yet). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice.
 
 ---
 
 ## Tier 1 — Close the core loop (information → action)
 
-### E1 — Parent Alert Action Loop · `in-progress` · ~M
+### E1 — Parent Alert Action Loop · `shipped` · ~M
 **Why (incontournable):** the cahier's defining promise. Today parents *see* explainable
 alerts but are **read-only** — they cannot act. This makes the dashboard actually actionable.
 **Audit:** action loop ~65% (info visible, downstream actions missing). No schema change needed
@@ -49,9 +49,13 @@ alerts but are **read-only** — they cannot act. This makes the dashboard actua
   idempotency, server-resolved assignee), surfaced in role-scoped teacher/admin action-center pages
   (`GET /meeting-requests` + `PATCH /meeting-requests/:id/resolve` on dedicated `meeting_requests.read|write`
   permissions) + an in-app assignee notification. *(api + web; [schema][auth] tag — first migration of the epic)*
-- [ ] **S4** — **Weekly parent digest** (opt-in): worker job emails each guardian a 1-screen
+- [x] **S4** — **Weekly parent digest** (opt-in): worker job emails each guardian a 1-screen
   weekly summary (global trend, new alerts, upcoming assessments, recommended action), honoring
-  `NotificationPreference`. Net-new UX that drives weekly engagement. *(worker + api + prefs UI)*
+  `NotificationPreference`. Net-new UX that drives weekly engagement. Shipped (needs human review):
+  additive `weekly_digest` `NotificationKind` (no new table — idempotency marker rides
+  `Notification.sourceId`), email-only opt-in wired through the shared `PreferencesPanel`, and a new
+  `apps/worker/src/modules/parent-digest/*` cron (structural parity with `AlertsCronService`).
+  *(worker + api + prefs UI; [schema][auth] tag)*
 
 ### E2 — Parent ↔ Teacher Messaging (Conversations) · `proposed` · ~M-L
 **Why:** unblocks parent→teacher contact (today only teacher→family announcements exist). The
