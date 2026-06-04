@@ -10,6 +10,9 @@ export const NOTIFICATION_KINDS: ReadonlyArray<NotificationKind> = [
   'enrollment_status',
   'lesson_published',
   'system',
+  // E1-S4 — keep last so the digest reads as a distinct "summary" concept,
+  // after the per-event kinds. Email-only opt-in (emailEnabled default false).
+  'weekly_digest',
 ];
 
 /** Display labels for the settings UI. */
@@ -20,6 +23,7 @@ export const NOTIFICATION_KIND_LABEL: Record<NotificationKind, string> = {
   enrollment_status: 'Inscriptions',
   lesson_published: 'Cahier de texte',
   system: 'Messages système',
+  weekly_digest: 'Récapitulatif hebdomadaire',
 };
 
 export const NOTIFICATION_KIND_DESCRIPTION: Record<NotificationKind, string> = {
@@ -29,6 +33,8 @@ export const NOTIFICATION_KIND_DESCRIPTION: Record<NotificationKind, string> = {
   enrollment_status: "Inscription confirmée, transfert, fin d'inscription.",
   lesson_published: 'Mises à jour du cahier de texte (incl. devoirs maison).',
   system: 'Messages techniques et administratifs.',
+  weekly_digest:
+    'Un récapitulatif chaque lundi matin : tendance globale, nouvelles alertes, évaluations à venir et l’action recommandée. Envoyé par email uniquement.',
 };
 
 export interface PreferenceDto {

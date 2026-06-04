@@ -10,7 +10,8 @@ export type NotificationKindCode =
   | 'grade_published'
   | 'enrollment_status'
   | 'lesson_published'
-  | 'system';
+  | 'system'
+  | 'weekly_digest';
 
 export interface UpdatePreferencePatch {
   inAppEnabled?: boolean;

@@ -21,6 +21,7 @@ const KIND_META: Record<NotificationKind, { label: string; emoji: string }> = {
   enrollment_status: { label: 'Inscription', emoji: '🎓' },
   lesson_published: { label: 'Cahier de texte', emoji: '📚' },
   system: { label: 'Information', emoji: 'ℹ️' },
+  weekly_digest: { label: 'Récapitulatif hebdomadaire', emoji: '📊' },
 };
 
 /** Accent colour per severity (also used for the header bar + CTA button). */

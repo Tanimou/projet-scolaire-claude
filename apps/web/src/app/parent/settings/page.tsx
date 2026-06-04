@@ -165,6 +165,10 @@ export default async function ParentSettingsPage() {
                         <span className="text-violet-600">•</span> Ne manquez plus les annonces
                         importantes de l&apos;établissement
                       </li>
+                      <li className="flex gap-1.5">
+                        <span className="text-violet-600">•</span> Recevez chaque lundi un résumé
+                        clair de la semaine — sans ouvrir l&apos;application
+                      </li>
                     </ul>
                   </div>
                 </div>

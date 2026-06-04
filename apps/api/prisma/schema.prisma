@@ -1167,6 +1167,11 @@ enum NotificationKind {
   enrollment_status
   lesson_published
   system
+  // E1-S4 — opt-in weekly parent digest channel (email-only concept). Additive
+  // enum value; no new table. The worker reads NotificationPreference rows with
+  // kind=weekly_digest & emailEnabled=true to resolve digest recipients, and
+  // writes a Notification(kind=weekly_digest, readAt set) as the weekly sent-marker.
+  weekly_digest
 }
 
 enum NotificationSeverity {

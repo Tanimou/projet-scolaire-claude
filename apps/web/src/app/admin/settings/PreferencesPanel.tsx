@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, Loader2, Mail, Smartphone } from 'lucide-react';
+import { Bell, CalendarClock, Loader2, Mail, Smartphone } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
 import {
@@ -59,8 +59,6 @@ export function PreferencesPanel({
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  const kinds = rows.map((r) => r.kind);
-
   function flipCell(kind: NotificationKindCode, channel: Channel) {
     if (busy) return;
     const row = rows.find((r) => r.kind === kind);
@@ -85,11 +83,16 @@ export function PreferencesPanel({
     if (busy) return;
     const before = rows;
     const cellId = `bulk:${channel}`;
-    setRows((prev) => prev.map((r) => ({ ...r, [channel]: enabled })));
+    // The weekly digest is email-only — exclude it from In-app / Push bulk toggles.
+    const targetKinds = rows
+      .filter((r) => channel === 'emailEnabled' || r.kind !== 'weekly_digest')
+      .map((r) => r.kind);
+    const isTarget = (kind: NotificationKindCode) => targetKinds.includes(kind);
+    setRows((prev) => prev.map((r) => (isTarget(r.kind) ? { ...r, [channel]: enabled } : r)));
     setBusy(cellId);
     setError(null);
     startTransition(async () => {
-      const res = await setChannelForKindsAction(kinds, channel, enabled);
+      const res = await setChannelForKindsAction(targetKinds, channel, enabled);
       if (!res.ok) {
         // Partial failure: keep the channel value only for kinds that actually
         // landed server-side, revert the rest to their pre-bulk value.
@@ -129,8 +132,13 @@ export function PreferencesPanel({
         </div>
         <div className="flex items-start gap-3">
           {CHANNELS.map((ch) => {
-            const count = rows.filter((r) => r[ch.key]).length;
-            const total = rows.length;
+            // The weekly digest is email-only: it doesn't count toward the
+            // In-app / Push column totals or their bulk "tout activer".
+            const applicable = rows.filter(
+              (r) => ch.key === 'emailEnabled' || r.kind !== 'weekly_digest',
+            );
+            const count = applicable.filter((r) => r[ch.key]).length;
+            const total = applicable.length;
             const allOn = total > 0 && count === total;
             const Icon = ch.icon;
             const bulkBusy = busy === `bulk:${ch.key}`;
@@ -185,46 +193,91 @@ export function PreferencesPanel({
       )}
 
       <div className="divide-y divide-slate-100">
-        {rows.map((row) => (
-          <div key={row.kind} className="flex items-center gap-4 px-6 py-4">
-            <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-bold text-slate-900">{row.label}</h3>
-              <p className="text-xs text-slate-500">{row.description}</p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              {CHANNELS.map((ch) => {
-                const active = row[ch.key];
-                const cellBusy = busy === `${row.kind}:${ch.key}` || busy === `bulk:${ch.key}`;
-                return (
-                  <div key={ch.key} className={`flex justify-center ${COL}`}>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={active}
-                      aria-label={`${ch.label} pour ${row.label}`}
-                      disabled={!!busy || ch.comingSoon}
-                      onClick={() => flipCell(row.kind, ch.key)}
-                      title={ch.comingSoon ? 'Canal disponible prochainement' : undefined}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                        active ? 'bg-blue-600' : 'bg-slate-300'
-                      }`}
+        {rows.map((row) => {
+          // The weekly digest is an email-only concept: it has no in-app surface,
+          // so the In-app / Push cells render a muted, accessible "—" placeholder
+          // and only the Email switch is interactive. The row also gets a subtle
+          // violet accent + calendar chip so it reads as the "summary" feature.
+          const isDigest = row.kind === 'weekly_digest';
+          return (
+            <div
+              key={row.kind}
+              className={`flex items-center gap-4 px-6 py-4 ${
+                isDigest ? 'border-l-[3px] border-violet-400 bg-violet-50/30' : ''
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  {isDigest && (
+                    <span
+                      aria-hidden
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600 ring-1 ring-violet-100"
                     >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-                          active ? 'translate-x-6' : 'translate-x-1'
+                      <CalendarClock className="h-3.5 w-3.5" />
+                    </span>
+                  )}
+                  <h3 className="text-sm font-bold text-slate-900">{row.label}</h3>
+                  {isDigest && row.emailEnabled && (
+                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-100">
+                      Activé · prochain envoi lundi
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">{row.description}</p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {CHANNELS.map((ch) => {
+                  // In-app / Push are not applicable to the email-only digest.
+                  if (isDigest && ch.key !== 'emailEnabled') {
+                    return (
+                      <div key={ch.key} className={`flex justify-center ${COL}`}>
+                        <span
+                          className="text-sm font-bold text-slate-400"
+                          aria-label={`${ch.label} non applicable : le résumé est envoyé par email`}
+                          title="Le résumé est envoyé par email"
+                        >
+                          —
+                        </span>
+                      </div>
+                    );
+                  }
+                  const active = row[ch.key];
+                  const cellBusy = busy === `${row.kind}:${ch.key}` || busy === `bulk:${ch.key}`;
+                  const ariaLabel =
+                    isDigest && ch.key === 'emailEnabled'
+                      ? 'Recevoir le résumé hebdomadaire par email'
+                      : `${ch.label} pour ${row.label}`;
+                  return (
+                    <div key={ch.key} className={`flex justify-center ${COL}`}>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={active}
+                        aria-label={ariaLabel}
+                        disabled={!!busy || ch.comingSoon}
+                        onClick={() => flipCell(row.kind, ch.key)}
+                        title={ch.comingSoon ? 'Canal disponible prochainement' : undefined}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                          active ? 'bg-blue-600' : 'bg-slate-300'
                         }`}
-                      />
-                      {cellBusy && (
-                        <Loader2 className="absolute inset-0 m-auto h-3 w-3 animate-spin text-white" />
-                      )}
-                    </button>
-                  </div>
-                );
-              })}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                            active ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                        {cellBusy && (
+                          <Loader2 className="absolute inset-0 m-auto h-3 w-3 animate-spin text-white" />
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="border-t border-slate-100 bg-slate-50 px-6 py-3 text-[11px] text-slate-500">

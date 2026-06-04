@@ -1,5 +1,9 @@
 # E1 — Parent Alert Action Loop · PROGRESS
 
+> **Epic status: `shipped`** (all slices S1–S4 landed; S2/S3/S4 flagged *needs human review*).
+> **Next epic → E2 — Parent ↔ Teacher Messaging**, which needs an **epic-spec** run first
+> (no `docs/spec/features/e2/spec.md` yet).
+
 > Spec-kit was **not** written on E1's first run (the codebase was already past the
 > "epic-spec first" assumption — admin lifecycle endpoints + parent read shipped), so the
 > first E1 run was an **epic-slice**, not a spec run. This folder is being backfilled
@@ -10,7 +14,9 @@
 | S1 | Parent ack / mark-handled / dismiss (guardianship ABAC) | **shipped** | [#103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) |
 | S2 | "What should I do?" panel on the alert | **shipped** (needs human review) | — |
 | S3 | Request a meeting / callback intent → teacher/admin action center | **shipped** (needs human review) | — |
-| S4 | Weekly parent digest (opt-in) | **→ next** | — |
+| S4 | Weekly parent digest (opt-in) | **shipped** (needs human review) | — |
+
+> **S4 is the last slice → epic E1 is `shipped`.** Next run targets the **E2** epic-spec.
 
 ## Decisions carried across slices
 - **No new tables for the action loop so far.** S1's status history *is* the append-only
@@ -109,3 +115,71 @@ Self-contained story spec: [`stories/S3-meeting-request.md`](./stories/S3-meetin
 - **a11y: two `text-slate-400` text nodes fail WCAG AA contrast** (`MeetingRequestList.tsx:316` relative time,
   `MeetingRequestActions.tsx:40` em-dash) — bump to `text-slate-500`+. The error `aria-live` region is gated
   behind `error &&` (mount-at-announce is unreliable) — keep it always mounted, toggle text only.
+
+## S4 — shipped (needs human review)
+**Weekly parent digest (opt-in)**: a `apps/worker` cron emails each opted-in guardian a 1-screen Monday-morning
+summary (global trend, new alerts, upcoming assessments, one recommended action per child), honoring
+`NotificationPreference`. *(worker + api + prefs UI; `[schema][auth]` tag.)*
+
+Self-contained story spec: [`stories/S4-weekly-digest.md`](./stories/S4-weekly-digest.md). What landed:
+- **Additive `weekly_digest` `NotificationKind`** (`apps/api/prisma/schema.prisma`) — **no new table**. Idempotency
+  rides a deterministic v5-shaped marker UUID stuffed into the existing `Notification.sourceId @db.Uuid` with
+  `readAt` pre-set (so the marker never increments the unread bell count). Consistent with E1's "reuse status/audit,
+  minimize schema" line. **Requires a pre-merge `prisma:generate` + `db push`** (no migration file in the diff —
+  established repo convention; the routine gate compiled against a stale client until regenerated).
+- **Email-only opt-in wired end-to-end**: `NOTIFICATION_KINDS`/labels/descriptions (api `preferences.service.ts`),
+  the email KIND_META (worker `notification-email.template.ts`), and the shared `PreferencesPanel` — which now
+  excludes the digest from In-app/Push bulk toggles + column totals and renders the In-app/Push cells as a muted
+  `—` placeholder (email switch only). Parent settings copy + a violet "summary" accent row. Opt-in defaults OFF
+  (RGPD-aligned).
+- **New worker module `apps/worker/src/modules/parent-digest/*`**: cron (`setInterval` + `running` re-entrancy
+  guard + `OnApplicationBootstrap/OnModuleDestroy` — byte-for-byte parity with `AlertsCronService`, no
+  `@nestjs/schedule`/BullMQ → no ADR), tenant-scoped aggregate service, ISO-week helpers, a branded email template,
+  types, and 2 spec files. Recipients resolve through `NotificationPreference(weekly_digest, emailEnabled) →
+  active Guardianship → Student`, all hard-scoped by `tenantId`; a non-guardian who opts in resolves zero children
+  and is skipped (no leak). Per-tenant/per-guardian loops are best-effort isolated; a send failure writes **no**
+  marker so the next tick retries.
+
+## Decisions carried across slices (S4 additions)
+- **No new table for the digest.** S4 returns to the "minimize schema" line (S3 was the deliberate exception):
+  the weekly sent-marker is a deterministic-UUID `Notification` row, not a new model — idempotency is an
+  application-level check-then-act keyed on `digestMarkerId(tenant, profile, isoWeek)`.
+- **Cron parity over new infra.** The digest reuses the exact `AlertsCronService` shape rather than introducing
+  `@nestjs/schedule` or a BullMQ schedule — no new architectural decision, so **no ADR**.
+- **Worker assumed single-instance.** The idempotency marker is process-local (`running` guard + check-then-act,
+  **no DB unique constraint** on `Notification(tenantId, userProfileId, sourceId)`), so multi-replica workers can
+  double-send. Safe as a single instance; see carried debt below before scaling out.
+
+## Carried gaps / debt for E2 (or a follow-up — flagged by the escalation panel, do NOT lose)
+- **RED GATE — two blockers were resolved in post-verify hardening, must be re-confirmed by the operator.**
+  (A) the stale `@prisma/client` (regenerated via `pnpm --filter @pilotage/api prisma:generate`; **not wired into
+  the typecheck/build gate** — re-run before merge/deploy), and (B) a genuine `noUncheckedIndexedAccess` null-safety
+  bug at `digest-email.template.ts:172` (`input.children[0]` unguarded → fixed by destructuring + a
+  `childCount === 1 && firstChild` guard). Re-run `pnpm typecheck` after regen to confirm green.
+- **Multi-replica double-send (the #1 human-attention item).** No DB unique guard on the weekly marker; two worker
+  replicas (or a restart mid-window) can both pass `findFirst` → both `send` → both `create`. Fix before scaling
+  out: a partial unique index on `Notification(tenant_id, user_profile_id, source_id) where source_type='weekly_digest'`
+  (turns idempotency into a DB invariant), or move the marker `create` to a fail-closed pre-send write.
+- **Digest average diverges from the parent dashboard it links to (Quinn, major ×2).**
+  `digest-aggregate.service.ts:71-108` filters grades `status: 'published'` only and applies **no active-academic-year
+  scoping**, whereas the canonical dashboard average uses `status: { in: ['published','revised'] }` scoped to the
+  active `academicYearId`. A corrected/`revised` grade is dropped from the digest but counted on the dashboard, and
+  prior-year grades leak in — so the email's "where is my child overall" number can contradict the dashboard CTA
+  target (single-source-of-truth violation). Fix: mirror the dashboard query (status set + active-year scope) in
+  both the global-average and the window-trend source set.
+- **Weekly marker surfaces as a phantom "read" item in the notification list (Quinn, major).** The bell *count* is
+  unaffected (filters `readAt:null`), but `NotificationCenter` fetches the full list (no `unreadOnly`), so the marker
+  shows as a label-less pill (`weekly_digest` is not in the web-local hand-maintained `KIND_LABEL`/`KIND_ICON`/filter
+  union) every week, forever. Fix: give the marker an out-of-band `sourceType` the list query excludes (preferred), or
+  add `weekly_digest` to the web union + maps.
+- **Cron drift / restart can silently skip a whole week (Edge Hunter, minor).** The send gate is an exact 1-hour band
+  (`getUTCHours()===SEND_HOUR`) with a 1h interval; `setInterval` forward-drift or a restart past the window misses the
+  week with no catch-up. Fix: send on `SEND_DOW && getUTCHours() >= SEND_HOUR && no marker this week` (the marker already
+  prevents double-send).
+- **Bad `DIGEST_SEND_DOW`/`DIGEST_SEND_HOUR` env silently disables the feature (Edge Hunter, minor).** `Number(...)`→`NaN`
+  makes every gate false with no warning. Fix: validate at bootstrap (range-check, fall back + `logger.warn`).
+- **a11y: the In-app/Push `—` placeholder fails WCAG 2.2 AA contrast (A11y, minor).** `text-slate-400` (#94a3b8) on the
+  near-white digest row is ~2.7:1 (< 4.5:1 required, and the story's own AC). Fix: bump to `text-slate-500`/`-600`; keep
+  the existing `aria-label`/`title`.
+- **`WEB_PUBLIC_URL` default is dev-port-wrong** (`http://localhost:3000`; app runs on 3100) — pre-existing parity with
+  `notifications-email.processor.ts`, cosmetic, not introduced here.
