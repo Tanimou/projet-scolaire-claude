@@ -32,6 +32,13 @@ export interface AlertItem {
   subjectCode: string | null;
   detectedAt: string;
   acknowledgedAt: string | null;
+  /**
+   * E1-S2: ISO timestamp of the parent's existing "request a meeting" intent
+   * for this alert, if any. Optional — when the aggregate endpoint surfaces it,
+   * the "Que puis-je faire ?" panel renders the confirmation instead of the CTA
+   * (prevents re-offering after a refresh). Absent ⇒ treated as not requested.
+   */
+  meetingRequestedAt?: string | null;
 }
 
 export interface SubjectOption {

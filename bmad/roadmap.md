@@ -21,7 +21,7 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` (in-progress; **S1 shipped** in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC). Next: **S2** ("What should I do?" panel) — but first the S2-bundled route/copy/contrast hardening noted there. The codebase was already past the roadmap's "epic-spec first" assumption (admin lifecycle endpoints + parent read shipped), so the first E1 run was an **epic-slice**, not a spec run; no `docs/spec/features/e1/` spec-kit was written.
+**Current focus →** `E1 — Parent Alert Action Loop` (in-progress; **S1 + S2 shipped** — S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA, same guardianship-ABAC gate, no schema change). Next: **S3** (Request a meeting / callback intent → teacher/admin action center, promoting the S2 `alert.meeting_intent` audit row into a queryable `MeetingRequest` model). The codebase was already past the roadmap's "epic-spec first" assumption (admin lifecycle endpoints + parent read shipped), so the first E1 run was an **epic-slice**, not a spec run; the `docs/spec/features/e1/` spec-kit is being backfilled one story per slice.
 
 ---
 
@@ -38,9 +38,12 @@ alerts but are **read-only** — they cannot act. This makes the dashboard actua
   status + audit (the append-only `AuditLog` row **is** the status history — no
   `alert_status_history` table was added), action buttons on the recommendations surface,
   bell retraction on resolve/dismiss. Shipped in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103). *(api + web; [auth] tag)*
-- [ ] **S2** — **"What should I do?"** panel on the alert: expand recommendation into concrete
+- [x] **S2** — **"What should I do?"** panel on the alert: expand recommendation into concrete
   next steps (reinforce subject → deep-link to the subject view; talk to teacher → CTA that
-  opens E2 messaging once available, else a "request meeting" intent record). *(web + small api)*
+  opens E2 messaging once available, else a "request meeting" intent record). Shipped:
+  `POST /api/v1/alerts/:id/meeting-intent` (guardianship ABAC, append-only idempotent
+  `alert.meeting_intent` audit row, status-neutral) + pure `deriveAlertActions` deep-link
+  derivation + the `AlertNextSteps` panel. *(web + small api; [auth] tag)*
 - [ ] **S3** — **Request a meeting / callback** intent: a lightweight `MeetingRequest` record
   (parent → child's teacher/admin) surfaced in the teacher/admin action center + notification.
   *(api + web + worker notif)*
