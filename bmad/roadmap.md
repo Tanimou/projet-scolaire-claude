@@ -21,7 +21,7 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** (proposed; needs an **epic-spec** run first — no `docs/spec/features/e2/spec.md` yet). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice.
+**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice.
 
 ---
 
@@ -57,11 +57,17 @@ alerts but are **read-only** — they cannot act. This makes the dashboard actua
   `apps/worker/src/modules/parent-digest/*` cron (structural parity with `AlertsCronService`).
   *(worker + api + prefs UI; [schema][auth] tag)*
 
-### E2 — Parent ↔ Teacher Messaging (Conversations) · `proposed` · ~M-L
+### E2 — Parent ↔ Teacher Messaging (Conversations) · `in-progress` (specced) · ~M-L
 **Why:** unblocks parent→teacher contact (today only teacher→family announcements exist). The
 natural target of E1's "message the teacher" action. Prepares the future Messagerie module.
 **Audit:** messaging ~25%; no `Conversation` model yet.
-**Vertical slices (outline — refine in spec):**
+**Spec-kit:** ✅ landed `docs/spec/features/e2/` (this run, epic-spec). Key decisions: dual-wall ABAC
+(guardianship ∩ teaching-assignment, re-checked at create AND every send → lapsed teaching flips
+thread to `read_only`); optional `Conversation.alertId` seed (alert-seeded threads, never widens
+access); idempotent `@@unique([tenantId, parentId, teacherId, studentId])`; append-only messages;
+reuse `NotificationsService.createMany` (no new queue); `messaging.read|write|moderate` perms;
+real-time deferred (ADR-019 tripwire). **Next slice → S1.**
+**Vertical slices (refined in `docs/spec/features/e2/tasks.md`):**
 - [ ] **S1** — `Conversation` + `ConversationMessage` Prisma models (participants, thread, read
   receipts) + migration; ABAC: a parent may only open a thread with a teacher **currently**
   teaching their child (via `teaching_assignment` ∩ `guardianship`). *(schema [schema] tag)*

@@ -1,0 +1,457 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — E2 Parent ↔ Teacher Messaging (Conversations)
+  version: 0.1.0
+  description: >
+    REST contract for the E2 messaging epic. All routes are mounted under the global
+    `/api/v1` prefix (NestJS). Every route is tenant-scoped (the tenant is resolved
+    server-side from the Keycloak JWT — never trusted from the client). AuthZ is RBAC
+    (`messaging.read|write|moderate` permissions) PLUS ABAC: a parent may only converse
+    with a teacher who CURRENTLY teaches their child (guardianship ∩ teaching), re-checked
+    at create AND every send. Messages are append-only (no edit/delete). 404-before-403:
+    an out-of-tenant or non-existent id returns 404 (never leak existence); an in-tenant
+    resource the caller may not access returns 403.
+servers:
+  - url: /api/v1
+
+tags:
+  - name: conversations
+    description: Parent ↔ teacher threads + messages
+  - name: messaging-meta
+    description: Compose helpers (eligible teachers)
+  - name: moderation
+    description: Reporting + admin oversight (S4)
+
+paths:
+  /messaging/eligible-teachers:
+    get:
+      tags: [messaging-meta]
+      operationId: listEligibleTeachers
+      summary: Teachers the parent may message about a given child (server-filtered).
+      description: >
+        Returns the teachers CURRENTLY teaching `studentId` (active-year TeachingAssignment
+        on the child's active Enrollment class section), intersected with the caller's
+        guardianship on that child. Used to populate the compose picker so a parent can
+        never select an ineligible teacher. RBAC `messaging.read` + ABAC guardianship.
+      parameters:
+        - name: studentId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Eligible teachers (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/EligibleTeacher' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }   # not a guardian of studentId
+        '404': { $ref: '#/components/responses/NotFound' }    # studentId out of tenant / unknown
+      security: [{ bearerAuth: [] }]
+
+  /conversations:
+    get:
+      tags: [conversations]
+      operationId: listConversations
+      summary: The caller's conversation inbox (aggregate — no client N+1).
+      description: >
+        Role-aware. Parent → threads where `parentId = me`. Teacher → threads where
+        `teacherId = me`. Newest first (by `lastMessageAt`). Returns denormalised inbox
+        rows (topic, last message preview, unread count) in ONE query. RBAC `messaging.read`.
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ConversationStatus' }
+          description: Filter by status (default = active + read_only, excludes archived/blocked).
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Inbox page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Conversation' }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+      security: [{ bearerAuth: [] }]
+    post:
+      tags: [conversations]
+      operationId: createConversation
+      summary: Open (or reuse) a thread with an eligible teacher about the caller's child.
+      description: >
+        PARENT ONLY. ABAC: guardianship(me, studentId, active) ∩ teacher CURRENTLY teaches
+        studentId — both re-checked here. Idempotent: if a thread already exists for
+        (tenant, me, teacherId, studentId) it is REUSED (200 with the existing thread),
+        else created (201). The first message body is required (a thread always starts with
+        a message). Optional `alertId` seeds alert context: it must reference an alert the
+        caller can already access (guardianship) AND whose student == studentId — otherwise
+        it is rejected (it NEVER widens access). Notifies the teacher (in-app). RBAC
+        `messaging.write` + ABAC.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateConversationRequest' }
+      responses:
+        '200':
+          description: Existing thread reused (idempotent re-open); first message appended if new body differs is NOT done — body is ignored on reuse, returns the existing thread.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        '201':
+          description: Thread + first message created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        '400': { $ref: '#/components/responses/BadRequest' }   # empty body, or alertId.student != studentId
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }    # not guardian OR teacher not teaching the child
+        '404': { $ref: '#/components/responses/NotFound' }     # studentId/teacherId/alertId out of tenant
+        '429': { $ref: '#/components/responses/RateLimited' }  # send rate-limit (S4)
+      security: [{ bearerAuth: [] }]
+
+  /conversations/{id}:
+    get:
+      tags: [conversations]
+      operationId: getConversation
+      summary: Thread header (participants, child, optional alert context, status, unread).
+      description: >
+        Only a participant (the thread's parent or teacher) — or an admin via moderation
+        (S4) — may read. RBAC `messaging.read` + participant check. 404 if out of tenant /
+        not a participant (no existence leak).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Thread header.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+      security: [{ bearerAuth: [] }]
+
+  /conversations/{id}/messages:
+    get:
+      tags: [conversations]
+      operationId: listMessages
+      summary: Paged messages of a thread, time order.
+      description: >
+        Participant-only (or admin moderation, S4). Index-covered paging by createdAt.
+        RBAC `messaging.read` + participant check.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: before
+          in: query
+          schema: { type: string, format: date-time }
+          description: Cursor — return messages created strictly before this timestamp (older page).
+      responses:
+        '200':
+          description: Messages page (oldest→newest within the page).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ConversationMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+      security: [{ bearerAuth: [] }]
+    post:
+      tags: [conversations]
+      operationId: sendMessage
+      summary: Append a message to a thread.
+      description: >
+        Participant-only. ABAC RE-CHECKED at send: a parent sender must still guard the
+        child; a teacher sender must STILL teach the child — if the teaching wall no longer
+        holds, the thread is `read_only` and the send is 403 (history preserved). Message is
+        immutable once written. Bumps `lastMessageAt`/`lastMessageById`, notifies the OTHER
+        participant (in-app; optional email per NotificationPreference, S4). Rate-limited.
+        RBAC `messaging.write` + participant + ABAC.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendMessageRequest' }
+      responses:
+        '201':
+          description: Message appended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationMessage' }
+        '400': { $ref: '#/components/responses/BadRequest' }   # empty body
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }    # not a participant OR teaching wall lapsed (read_only)
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+      security: [{ bearerAuth: [] }]
+
+  /conversations/{id}/read:
+    patch:
+      tags: [conversations]
+      operationId: markConversationRead
+      summary: Mark the thread read up to now for the calling participant.
+      description: >
+        Bumps the caller's ConversationParticipant.lastReadAt to now (read-receipt anchor).
+        Idempotent. Participant-only. RBAC `messaging.write` + participant check.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Updated participant read state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  lastReadAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+      security: [{ bearerAuth: [] }]
+
+  /conversations/{id}/report:
+    post:
+      tags: [moderation]
+      operationId: reportConversation
+      summary: Report a thread for safety review (S4).
+      description: >
+        Either participant may report. Idempotent while open (one open report per reporter
+        per thread — DB `@@unique`). Creates a ConversationReport + an append-only AuditLog
+        row. RBAC `messaging.write` + participant check. (S4 slice.)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        '201':
+          description: Report recorded (or existing open report returned, idempotent).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+      security: [{ bearerAuth: [] }]
+
+  /conversations/reports:
+    get:
+      tags: [moderation]
+      operationId: listConversationReports
+      summary: Admin oversight — reported threads in the tenant/school (S4).
+      description: >
+        ADMIN ONLY. RBAC `messaging.moderate` (granted to school_admin/super_admin only,
+        NOT teacher/parent). Tenant- + school-scoped. Read-only oversight; admins are never
+        thread participants. Reading a thread for moderation writes an append-only audit row.
+        (S4 slice.)
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ConversationReportStatus' }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Reports page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ConversationReport' }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+      security: [{ bearerAuth: [] }]
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak access token; tenant + realm roles resolved server-side.
+
+  responses:
+    BadRequest:
+      description: Validation error.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing/invalid token.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Authenticated but not permitted (RBAC permission or ABAC wall failed).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Resource not found or out of tenant (no existence leak).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    RateLimited:
+      description: Send rate-limit exceeded (S4).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    ConversationStatus:
+      type: string
+      enum: [active, read_only, archived, blocked]
+    ConversationParticipantRole:
+      type: string
+      enum: [parent, teacher]
+    ConversationReportStatus:
+      type: string
+      enum: [open, reviewed, dismissed]
+
+    EligibleTeacher:
+      type: object
+      description: A teacher the parent may message about the child.
+      required: [userProfileId, displayName]
+      properties:
+        userProfileId: { type: string, format: uuid }
+        displayName: { type: string }
+        subjects:
+          type: array
+          description: Subjects this teacher teaches the child (display hint).
+          items:
+            type: object
+            properties:
+              subjectId: { type: string, format: uuid }
+              name: { type: string }
+        isMainTeacher: { type: boolean }
+        existingConversationId:
+          type: [string, 'null']
+          format: uuid
+          description: If a thread already exists with this teacher about the child, its id (so the UI deep-links instead of re-creating).
+
+    AlertContext:
+      type: object
+      nullable: true
+      description: Strict subset of the seeding alert's already-parent-visible facts. Never more than the alert card shows.
+      properties:
+        alertId: { type: string, format: uuid }
+        code: { type: string, description: AlertRuleCode (rule chip) }
+        title: { type: string }
+        subjectName: { type: [string, 'null'] }
+
+    Conversation:
+      type: object
+      required: [id, studentId, parentId, teacherId, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        studentId: { type: string, format: uuid }
+        studentName: { type: string, description: Child display name (always visible to both participants — already within the wall). }
+        parentId: { type: string, format: uuid }
+        parentName: { type: string }
+        teacherId: { type: string, format: uuid }
+        teacherName: { type: string }
+        subjectId: { type: [string, 'null'], format: uuid }
+        subjectName: { type: [string, 'null'] }
+        alertContext: { $ref: '#/components/schemas/AlertContext' }
+        status: { $ref: '#/components/schemas/ConversationStatus' }
+        topic: { type: [string, 'null'] }
+        lastMessageAt: { type: [string, 'null'], format: date-time }
+        lastMessagePreview: { type: [string, 'null'], description: Short excerpt for the inbox row. }
+        unreadCount: { type: integer, description: Messages newer than the caller's lastReadAt. }
+        createdAt: { type: string, format: date-time }
+
+    ConversationMessage:
+      type: object
+      required: [id, conversationId, senderId, senderRole, body, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        senderId: { type: string, format: uuid }
+        senderRole: { $ref: '#/components/schemas/ConversationParticipantRole' }
+        senderName: { type: string }
+        body: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    ConversationReport:
+      type: object
+      required: [id, conversationId, reportedBy, reason, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        reportedBy: { type: string, format: uuid }
+        reason: { type: string }
+        status: { $ref: '#/components/schemas/ConversationReportStatus' }
+        reviewedBy: { type: [string, 'null'], format: uuid }
+        reviewedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    CreateConversationRequest:
+      type: object
+      required: [studentId, teacherId, body]
+      properties:
+        studentId:
+          type: string
+          format: uuid
+          description: The child the thread is about (guardianship anchor).
+        teacherId:
+          type: string
+          format: uuid
+          description: UserProfile id of an ELIGIBLE teacher (must currently teach the child).
+        body:
+          type: string
+          minLength: 1
+          maxLength: 5000
+          description: First message (a thread always starts with a message).
+        subjectId:
+          type: [string, 'null']
+          format: uuid
+          description: Optional subject context (display only).
+        alertId:
+          type: [string, 'null']
+          format: uuid
+          description: >
+            Optional E1 alert seed (the visionary hook). Must reference an alert the caller
+            can already access (guardianship) AND whose student == studentId. Context only —
+            never widens access.
+
+    SendMessageRequest:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 5000 }
+
+    Error:
+      type: object
+      properties:
+        statusCode: { type: integer }
+        message: { oneOf: [ { type: string }, { type: array, items: { type: string } } ] }
+        error: { type: string }
