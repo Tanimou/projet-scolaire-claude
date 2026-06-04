@@ -4,6 +4,7 @@ import {
   DefaultValuePipe,
   ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   ParseEnumPipe,
   ParseIntPipe,
@@ -161,5 +162,68 @@ export class AlertsController {
     return {
       data: await this.alerts.listForStudent({ tenantId: me.tenantId, studentId, limit: 50 }),
     };
+  }
+
+  // ----- Parent: scoped lifecycle (ABAC, NOT alerts.write) -------------------
+  //
+  // A parent acts on their own child's alert from the recommendations surface.
+  // Authorization is guardianship-ABAC via StudentAccessService.canAccessStudent
+  // (the same gate as the read above), NOT the admin `alerts.write` permission —
+  // these routes are guarded by `profile.read.self`, which parents hold and which
+  // is insufficient for the admin POST /alerts/instances/:id/* routes. The alert's
+  // studentId is resolved in-tenant first (never trusted from the client) and the
+  // guardianship check runs BEFORE any mutation, so a parent can only transition
+  // an alert for a child they have an active Guardianship for. Admin/teacher tokens
+  // (scope studentIds:null) pass the ABAC check unrestricted, matching the read.
+
+  /**
+   * Resolve the alert's in-tenant studentId and enforce the guardianship ABAC
+   * gate, throwing 404 (cross-tenant / unknown id) or 403 (no access) before any
+   * lifecycle mutation. Returns the JWT-derived audit provenance for the write.
+   */
+  private async authorizeParentAlertAction(
+    jwt: KeycloakJwtPayload,
+    id: string,
+  ): Promise<{
+    tenantId: string;
+    userProfileId: string;
+    actorRole: string | null;
+    portal: string | null;
+  }> {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    const studentId = await this.alerts.findStudentIdForAlert({
+      tenantId: me.tenantId,
+      id,
+    });
+    if (!studentId) throw new NotFoundException('Alert not found');
+    const allowed = await this.studentAccess.canAccessStudent(me, jwt, studentId, schoolId);
+    if (!allowed) throw new ForbiddenException('Forbidden');
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    return { tenantId: me.tenantId, userProfileId: me.id, actorRole, portal };
+  }
+
+  @Patch(':id/ack')
+  @RequiresPermission('profile.read.self')
+  @ApiOperation({ summary: 'Parent acknowledges one of their child’s alerts (guardianship ABAC)' })
+  async ackByParent(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
+    const auth = await this.authorizeParentAlertAction(jwt, id);
+    return this.alerts.acknowledge({ ...auth, id });
+  }
+
+  @Patch(':id/resolve')
+  @RequiresPermission('profile.read.self')
+  @ApiOperation({ summary: 'Parent marks one of their child’s alerts handled (guardianship ABAC)' })
+  async resolveByParent(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
+    const auth = await this.authorizeParentAlertAction(jwt, id);
+    return this.alerts.resolve({ ...auth, id });
+  }
+
+  @Patch(':id/dismiss')
+  @RequiresPermission('profile.read.self')
+  @ApiOperation({ summary: 'Parent dismisses one of their child’s alerts (guardianship ABAC)' })
+  async dismissByParent(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
+    const auth = await this.authorizeParentAlertAction(jwt, id);
+    return this.alerts.dismiss({ ...auth, id });
   }
 }

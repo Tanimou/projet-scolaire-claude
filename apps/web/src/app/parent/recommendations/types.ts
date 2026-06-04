@@ -17,6 +17,8 @@ export type AlertCodeFilter = '' | AlertCode;
 
 export type AcknowledgedFilter = '' | 'open' | 'acknowledged';
 
+export type AlertLifecycleAction = 'ack' | 'resolve' | 'dismiss';
+
 export interface AlertItem {
   id: string;
   code: AlertCode;

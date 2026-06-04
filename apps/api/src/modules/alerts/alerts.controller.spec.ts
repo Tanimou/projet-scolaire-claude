@@ -26,6 +26,7 @@ function makeController() {
     acknowledge: jest.fn().mockResolvedValue({ id: ALERT_ID, status: 'acknowledged' }),
     resolve: jest.fn().mockResolvedValue({ id: ALERT_ID, status: 'resolved' }),
     dismiss: jest.fn().mockResolvedValue({ id: ALERT_ID, status: 'dismissed' }),
+    findStudentIdForAlert: jest.fn().mockResolvedValue('student-A'),
   };
   // ensureUser is the ONLY source of tenantId/userProfileId — derived from the
   // verified JWT, never from a request param. The provenance, by contrast, comes
@@ -33,15 +34,19 @@ function makeController() {
   const users = {
     ensureUser: jest.fn().mockResolvedValue({ id: USER, tenantId: TENANT }),
   };
-  const ctx = {} as unknown as SchoolContextService;
-  const studentAccess = {} as unknown as StudentAccessService;
+  const ctx = {
+    forUser: jest.fn().mockResolvedValue({ schoolId: 'school-1' }),
+  } as unknown as SchoolContextService;
+  const studentAccess = {
+    canAccessStudent: jest.fn().mockResolvedValue(true),
+  } as unknown as StudentAccessService;
   const controller = new AlertsController(
     alerts as unknown as AlertsService,
     users as unknown as UserSyncService,
     ctx,
     studentAccess,
   );
-  return { controller, alerts, users };
+  return { controller, alerts, users, ctx, studentAccess };
 }
 
 describe('AlertsController — audit provenance wiring (controller -> service)', () => {
@@ -104,4 +109,76 @@ describe('AlertsController — audit provenance wiring (controller -> service)',
       portal: 'admin',
     });
   });
+});
+
+// The parent-scoped lifecycle routes (PATCH :id/{ack,resolve,dismiss}) are the
+// E1-S1 surface. They are guarded by `profile.read.self` + guardianship ABAC —
+// NOT `alerts.write` — and MUST resolve the alert's in-tenant studentId and run
+// canAccessStudent BEFORE delegating to the lifecycle service. These tests pin
+// the IDOR / tenant / provenance contract that the verify panel flagged P0.
+describe('AlertsController — parent-scoped lifecycle (ABAC, not alerts.write)', () => {
+  const PARENT_JWT = jwtWithRoles(['parent']);
+
+  it.each([
+    ['ackByParent' as const, 'acknowledge' as const],
+    ['resolveByParent' as const, 'resolve' as const],
+    ['dismissByParent' as const, 'dismiss' as const],
+  ])(
+    '%s: a guardian parent passes ABAC and delegates with parent provenance',
+    async (route, serviceMethod) => {
+      const { controller, alerts, studentAccess } = makeController();
+
+      await controller[route](PARENT_JWT, ALERT_ID);
+
+      // ABAC ran against the alert's in-tenant studentId before any mutation.
+      expect(alerts.findStudentIdForAlert).toHaveBeenCalledWith({
+        tenantId: TENANT,
+        id: ALERT_ID,
+      });
+      expect(studentAccess.canAccessStudent).toHaveBeenCalledWith(
+        { id: USER, tenantId: TENANT },
+        PARENT_JWT,
+        'student-A',
+        'school-1',
+      );
+      expect(alerts[serviceMethod]).toHaveBeenCalledWith({
+        tenantId: TENANT,
+        id: ALERT_ID,
+        userProfileId: USER,
+        actorRole: 'parent',
+        portal: 'parent',
+      });
+    },
+  );
+
+  it.each([['ackByParent' as const], ['resolveByParent' as const], ['dismissByParent' as const]])(
+    '%s: a non-guardian parent (canAccessStudent=false) gets 403 and never mutates',
+    async (route) => {
+      const { controller, alerts, studentAccess } = makeController();
+      (studentAccess.canAccessStudent as jest.Mock).mockResolvedValue(false);
+
+      await expect(controller[route](PARENT_JWT, ALERT_ID)).rejects.toThrow('Forbidden');
+
+      expect(alerts.acknowledge).not.toHaveBeenCalled();
+      expect(alerts.resolve).not.toHaveBeenCalled();
+      expect(alerts.dismiss).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([['ackByParent' as const], ['resolveByParent' as const], ['dismissByParent' as const]])(
+    '%s: an alert id absent from the caller tenant yields 404, no ABAC bypass, no mutation',
+    async (route) => {
+      const { controller, alerts, studentAccess } = makeController();
+      (alerts.findStudentIdForAlert as jest.Mock).mockResolvedValue(null);
+
+      await expect(controller[route](PARENT_JWT, 'cross-tenant-id')).rejects.toThrow(
+        'Alert not found',
+      );
+
+      expect(studentAccess.canAccessStudent).not.toHaveBeenCalled();
+      expect(alerts.acknowledge).not.toHaveBeenCalled();
+      expect(alerts.resolve).not.toHaveBeenCalled();
+      expect(alerts.dismiss).not.toHaveBeenCalled();
+    },
+  );
 });
