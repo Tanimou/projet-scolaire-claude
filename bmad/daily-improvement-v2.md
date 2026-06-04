@@ -25,6 +25,25 @@
   human) batch those once via `bash scripts/dev.sh` / `scripts/deploy-prod.sh`
   after reviewing/merging the PRs.
 
+## Ambition (v4 — epic-driven, vertical-slice delivery)
+
+The routine must ship **medium-to-large, meaningful features** that move the product toward the cahier de charges vision (a parent dashboard that **turns information into action**) — not only refinements. It does this **without** giant PRs or breaking the safety model: ambition comes from **sequencing**.
+
+- **One epic at a time.** `bmad/roadmap.md` holds the prioritized backlog of medium-to-large **epics** (e.g. complete alert engine, parent↔teacher messaging, remediation/tutoring loop, async exports & bulletins, advanced notifications, student portal). Victor (the Product Strategist) picks the current epic and the next slice.
+- **Spec-kit once per epic.** The epic's first run is an **epic-spec run**: it writes `docs/spec/features/<epic-id>/` (`spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `tasks.md`, `quickstart.md`, `PROGRESS.md`). Docs-only → no build, lands as a cheap PR. This is the BMAD/spec-kit backbone from the cahier §12.
+- **Then one vertical slice per run.** Each subsequent **epic-slice run** implements the next item in `tasks.md` as a **vertical slice** — DB migration + API endpoint(s) + UI (+ worker) for ONE real capability — landing as a single reviewable PR (medium-sized, not a tweak). The run updates `PROGRESS.md` and ticks the slice in `roadmap.md`.
+- **Run modes** (Victor decides in Intake):
+
+  | Mode | When | Output | Build? |
+  |---|---|---|---|
+  | **epic-spec** | current epic has no `spec.md` | the spec-kit folder | no (docs) |
+  | **epic-slice** | epic spec exists + slices remain | one vertical slice → PR | yes (1×) |
+  | **polish** | no epic slice ready, or a quick high-value fix | the old small-improvement behavior | yes (1×) |
+
+  **Bias: prefer epic-slice ≫ epic-spec ≫ polish.** Polish is the fallback, not the habit.
+- **Slice sizing.** A slice is "one thing a user can now *do*", demoable end-to-end, that still fits one PR + one build + the ≤2-in-flight throttle. If a slice is too big for one PR, split it in `tasks.md` and ship the first half. Never widen a PR to "finish the feature" — sequence it.
+- **Experiment.** Victor is explicitly licensed to propose net-new UX that makes the platform *incontournable* (alert→action: message the teacher / request a meeting / find tutoring straight from an alert; a weekly parent digest email; a remediation tracker; a teacher "class radar"). New cross-cutting ideas still need an ADR (Winston) before they land.
+
 ## Concurrency (v3 — why builds can't pile up)
 
 Hourly fires + slow builds + a shared checkout could spawn many stuck building
@@ -51,12 +70,17 @@ that touches `origin/main`.
 > `apps/api`+`apps/worker` vs `packages/ui`), so there is one checkout and zero
 > edit conflicts. Memory/disk stay flat regardless of agent count.
 
-### Phase 0 — Intake & Backlog · *Mary (Analyst)* · 1 agent
-Read `PLAN.md`, `docs/spec/REDESIGN-PROGRESS.md`, ADRs, recent `git log`, open PRs
-(`gh pr list`), the previous run's summary, and `bmad/project-context.md §5`.
-Produce: a prioritized backlog and **ONE** sprint, with a **compressed,
-contradiction-free intent** (BMAD Quick-Dev step 1). Route to the smallest safe
-path: trivial polish → light spec; risky/multi-file → full spec + gate.
+### Phase 0 — Intake & Roadmap · *Victor (Strategist) + Mary (Analyst)* · 1 agent
+Read `bmad/roadmap.md`, the in-flight epic's `docs/spec/features/<epic>/PROGRESS.md`
+(if any), `bmad/project-context.md §5`, `docs/spec/REDESIGN-PROGRESS.md`, ADRs,
+recent `git log`, open PRs (`gh pr list`) and the previous run's summary.
+**Victor** picks the current **epic** + decides the **mode**:
+- no `spec.md` for the top epic → **epic-spec** (this run writes the spec-kit);
+- spec exists + `tasks.md` has unstarted slices → **epic-slice** (pick the next slice);
+- nothing epic-ready → **polish** (a quick high-value fix).
+Bias **epic-slice ≫ epic-spec ≫ polish.** **Mary** compresses the pick into a
+**contradiction-free intent** (BMAD Quick-Dev step 1) scoped to ONE shippable
+slice that fits one PR + one build. Output the chosen `mode`, `epic`, `slice`.
 
 ### Phase 1 — Plan & harden the spec · *John + Winston + Sally + Critic + Murat* · ≤ 5 agents (parallel)
 - **John (PM)** writes a **self-contained `story` spec**: goal, functional

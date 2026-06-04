@@ -1,0 +1,137 @@
+# Product Roadmap — medium-to-large epics
+
+> **What this file is.** The **ambition compass** for the Daily-Improvement routine.
+> It is the prioritized backlog of **medium-to-large, meaningful epics** derived from
+> the cahier de charges (`~/Downloads/rapport_pilotage_scolaire_detaille.pdf`) and the
+> 2026-06-04 codebase audit. The routine builds the platform toward the cahier's core
+> promise — **a parent dashboard that turns information into action** — one epic at a
+> time, **one vertical slice per run**. This is NOT a polish list; polish is the fallback.
+>
+> **How Victor (Product Strategist) uses it each run:**
+> 1. Pick the **current epic** = the highest-priority epic whose `status` is `in-progress`,
+>    else the highest `next`, else promote a `proposed` one.
+> 2. Choose the **mode**: no `docs/spec/features/<id>/spec.md` yet → **epic-spec** (write the
+>    spec-kit this run); spec exists + unstarted slices in its `tasks.md` → **epic-slice**
+>    (ship the next slice); nothing epic-ready → **polish**.
+> 3. A **slice** = one capability a parent/teacher can now *do*, demoable end-to-end
+>    (DB + API + UI + worker), fitting ONE PR + ONE build. If too big, split in `tasks.md`.
+> 4. On Land: tick the slice here, update `docs/spec/features/<id>/PROGRESS.md`, set the
+>    epic `status`. When all slices ship → `status: shipped`, advance to the next epic.
+>
+> **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
+> Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
+
+**Current focus →** `E1 — Parent Alert Action Loop` (start here; mode = epic-spec on its first run).
+
+---
+
+## Tier 1 — Close the core loop (information → action)
+
+### E1 — Parent Alert Action Loop · `next` · ~M
+**Why (incontournable):** the cahier's defining promise. Today parents *see* explainable
+alerts but are **read-only** — they cannot act. This makes the dashboard actually actionable.
+**Audit:** action loop ~65% (info visible, downstream actions missing). No schema change needed
+(reuse `AlertInstance.status`), so low risk, high value.
+**Vertical slices (ship in order):**
+- [ ] **S1** — Parent can **acknowledge / mark-handled / dismiss** an alert: parent-scoped
+  ABAC endpoints (`PATCH /api/v1/alerts/:id/ack|resolve|dismiss` guarded by guardianship),
+  status + `alert_status_history`, audit; alert card gains the actions; retract the bell
+  notification on resolve (already wired). *(api + web; [auth] tag)*
+- [ ] **S2** — **"What should I do?"** panel on the alert: expand recommendation into concrete
+  next steps (reinforce subject → deep-link to the subject view; talk to teacher → CTA that
+  opens E2 messaging once available, else a "request meeting" intent record). *(web + small api)*
+- [ ] **S3** — **Request a meeting / callback** intent: a lightweight `MeetingRequest` record
+  (parent → child's teacher/admin) surfaced in the teacher/admin action center + notification.
+  *(api + web + worker notif)*
+- [ ] **S4** — **Weekly parent digest** (opt-in): worker job emails each guardian a 1-screen
+  weekly summary (global trend, new alerts, upcoming assessments, recommended action), honoring
+  `NotificationPreference`. Net-new UX that drives weekly engagement. *(worker + api + prefs UI)*
+
+### E2 — Parent ↔ Teacher Messaging (Conversations) · `proposed` · ~M-L
+**Why:** unblocks parent→teacher contact (today only teacher→family announcements exist). The
+natural target of E1's "message the teacher" action. Prepares the future Messagerie module.
+**Audit:** messaging ~25%; no `Conversation` model yet.
+**Vertical slices (outline — refine in spec):**
+- [ ] **S1** — `Conversation` + `ConversationMessage` Prisma models (participants, thread, read
+  receipts) + migration; ABAC: a parent may only open a thread with a teacher **currently**
+  teaching their child (via `teaching_assignment` ∩ `guardianship`). *(schema [schema] tag)*
+- [ ] **S2** — Parent `/parent/messages`: thread list + thread view + compose, notification on new
+  message. *(api + web)*
+- [ ] **S3** — Teacher inbox: parent conversations separated from announcements; reply + mark-read.
+  *(api + web)*
+- [ ] **S4** — Moderation/safety: report, admin oversight, rate-limit, non-stigmatising guardrails;
+  optional email channel. *(api + worker)*
+
+---
+
+## Tier 2 — Complete the MVP pillars (R6/R7/R8)
+
+### E3 — Complete the Alert Engine (7 rules + admin config + email) · `proposed` · ~M
+**Audit:** 58% — 5/7 rules live (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`,
+`NEGATIVE_TREND`, `MISSING_ASSESSMENT`); cron every 15 min with in-app fan-out.
+- [ ] **S1** — `TEACHER_COMMENT_FLAG` rule: teacher can flag a grade/comment as concerning
+  (small `TeacherComment`/flag field) → evaluator in **both** api + worker (byte-parity). *(schema+rules)*
+- [ ] **S2** — 7th rule (e.g. `BEHAVIOR_ALERT` or `IMPROVEMENT` positive signal) + evaluator.
+- [ ] **S3** — Admin **rule-config UI**: thresholds, severity, period, notify on/off, per-school
+  (API exists, UI partial). *(web)*
+- [ ] **S4** — **Email on the cron path**: cron-raised alerts email guardians honoring prefs
+  (today only in-app bell) — share the dispatcher with the API path. *(worker)*
+
+### E4 — Async Exports & Bulletins — wire the UI · `proposed` · ~S-M (high ROI)
+**Audit:** exports backend is **100% done** (`ExportJob` + worker + 5 XLSX/PDF generators + S3 +
+audit). Only the **frontend is unwired** ("Available soon").
+- [ ] **S1** — Admin `/admin/exports`: real "generate" buttons → `ExportJob` + job-status polling +
+  signed download links. *(web)*
+- [ ] **S2** — **Parent term-summary PDF**: one-click "download my child's report" → `report_card_pdf`
+  job → download, audited. The cahier's "synthèse parent PDF par enfant et période." *(web + small api)*
+- [ ] **S3** — Teacher class grade-grid export from the gradebook. *(web)*
+
+### E5 — Advanced Notifications (dispatcher + digest + prefs) · `proposed` · ~M
+**Audit:** 70% — `Notification`+`NotificationPreference` models, bell, email **queue stub**.
+- [ ] **S1** — Finish the **email dispatcher** end-to-end (worker consumes the queue, renders
+  templates, honors prefs, MinIO/Maildev). *(worker)*
+- [ ] **S2** — **Digest & grouping** to fight notification fatigue (the cahier's explicit ask). *(worker+api)*
+- [ ] **S3** — Parent/teacher **notification preferences UI** (channels, frequency, mute). *(web)*
+
+---
+
+## Tier 3 — Scale & new surfaces
+
+### E6 — Analytics Snapshots & pre-computation · `proposed` · ~M
+**Why:** a **non-functional requirement** — parent dashboard <2 s at scale. Today analytics are
+computed live (40%). Add materialized `student_subject_snapshot` / `student_global_snapshot` /
+class distributions, recomputed by the worker on `GradePublished`/`GradeRevised`/coefficient change,
+read by the dashboards. (ERD + §6.1 of the cahier.)
+
+### E7 — Remediation & Tutoring loop · `proposed` · ~L
+**Why:** closes alert → diagnosis → **resource**: turn a recommendation into a real booking.
+New models (Tutor, Availability, Booking, RemediationPlan), catalogue + booking UI, alert deep-link.
+The most ambitious epic — spec it carefully, slice thin.
+
+### E8 — Student Portal · `proposed` · ~M
+**Why:** the cahier's future "Portail élève." New Keycloak `student` role + read-only student views
+(my grades, assessments, attendance, announcements) with student ABAC. Net-new surface.
+
+---
+
+## Tier 4 — Foundation, quality & interop (interleave as filler)
+
+- **E9 — Enrollment self-service UI** · `proposed` · ~S — parent child-claim form + admin approval
+  page (backend 90% ready). Completes the cahier's parent→admin validation workflow.
+- **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `proposed` · ongoing — Playwright journeys
+  (grade publish → parent alert; parent claims child; messaging) + fix axe-core violations on
+  authenticated pages. Maps to R9/R10.
+- **E11 — Standards interop (OneRoster/LTI) + async imports** · `proposed` · ~M — move bulk import
+  to the worker (today blocking in-request) + OneRoster roster sync. Interoperability per the cahier.
+- **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
+  card data, PSP later. Out of MVP; do not start without explicit go.
+
+---
+
+## Guardrails for every epic (from the cahier de charges)
+- **Parent dashboard is the core**; answer the five questions in <2 s; mobile-first.
+- **Explainable, kind, non-stigmatising** — every alert states rule + subject + threshold + trend +
+  suggested action; never compare a child by name to peers.
+- **Tenant + RLS + RBAC/ABAC + append-only audit** on every backend change (children's data).
+- **Reuse `@pilotage/ui`**, aggregate endpoints (no client N+1), `packages/contracts` for shared types.
+- A new architectural decision ⇒ a new `docs/adr/` ADR (Winston gate).
