@@ -21,6 +21,7 @@ const KIND_META: Record<NotificationKind, { label: string; emoji: string }> = {
   enrollment_status: { label: 'Inscription', emoji: '🎓' },
   lesson_published: { label: 'Cahier de texte', emoji: '📚' },
   system: { label: 'Information', emoji: 'ℹ️' },
+  message: { label: 'Messagerie', emoji: '💬' },
   weekly_digest: { label: 'Récapitulatif hebdomadaire', emoji: '📊' },
 };
 

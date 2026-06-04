@@ -16,6 +16,7 @@ import { HealthController } from './modules/health/health.controller';
 import { IdentityModule } from './modules/identity/identity.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { LessonsModule } from './modules/lessons/lessons.module';
+import { MessagingModule } from './modules/messaging/messaging.module';
 import { SchoolsModule } from './modules/schools/schools.module';
 import { SchoolStructureModule } from './modules/school-structure/school-structure.module';
 import { StudentsModule } from './modules/students/students.module';
@@ -46,6 +47,7 @@ import { PrismaModule } from './shared/prisma/prisma.module';
     NotificationsModule,
     ExportsModule,
     AlertsModule,
+    MessagingModule,
   ],
   controllers: [HealthController],
 })
