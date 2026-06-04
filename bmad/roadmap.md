@@ -66,11 +66,15 @@ natural target of E1's "message the teacher" action. Prepares the future Message
 thread to `read_only`); optional `Conversation.alertId` seed (alert-seeded threads, never widens
 access); idempotent `@@unique([tenantId, parentId, teacherId, studentId])`; append-only messages;
 reuse `NotificationsService.createMany` (no new queue); `messaging.read|write|moderate` perms;
-real-time deferred (ADR-019 tripwire). **Next slice → S1.**
+real-time deferred (ADR-019 tripwire). **S1 shipped; next slice → S2.**
 **Vertical slices (refined in `docs/spec/features/e2/tasks.md`):**
-- [ ] **S1** — `Conversation` + `ConversationMessage` Prisma models (participants, thread, read
-  receipts) + migration; ABAC: a parent may only open a thread with a teacher **currently**
-  teaching their child (via `teaching_assignment` ∩ `guardianship`). *(schema [schema] tag)*
+- [x] **S1** — `Conversation` + `ConversationParticipant` + `ConversationMessage` Prisma models
+  (participants, thread, read receipts) + dual-wall ABAC: a parent may only open a thread with a
+  teacher **currently** teaching their child (via `teaching_assignment` ∩ `guardianship`),
+  re-checked at create AND every send (lapsed teaching → thread `read_only`). Parent-only create at
+  the controller, `messaging.read|write` perms, append-only audit, idempotent
+  `@@unique([tenantId, parentId, teacherId, studentId])`, additive `message` `NotificationKind`,
+  parent compose surface. Shipped (needs human review — P1 `[schema][auth]`). *(schema [schema][auth] tag)*
 - [ ] **S2** — Parent `/parent/messages`: thread list + thread view + compose, notification on new
   message. *(api + web)*
 - [ ] **S3** — Teacher inbox: parent conversations separated from announcements; reply + mark-read.

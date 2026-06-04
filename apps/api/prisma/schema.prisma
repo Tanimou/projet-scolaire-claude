@@ -362,6 +362,7 @@ model Subject {
   teachingAssignments TeachingAssignment[]
   alertInstances      AlertInstance[]
   meetingRequests     MeetingRequest[]
+  conversations       Conversation[]
 
   @@unique([schoolId, code])
   @@index([tenantId, schoolId])
@@ -450,6 +451,7 @@ model Student {
   announcements     Announcement[]
   alertInstances    AlertInstance[]
   meetingRequests   MeetingRequest[]
+  conversations     Conversation[]
 
   @@unique([schoolId, externalRef])
   @@index([tenantId, schoolId])
@@ -673,6 +675,13 @@ model UserProfile {
   notificationPreferences NotificationPreference[]
   meetingRequestsMade     MeetingRequest[]         @relation("MeetingRequestRequester")
   meetingRequestsAssigned MeetingRequest[]         @relation("MeetingRequestAssignee")
+  // E2-S1 — parent ↔ teacher messaging. A UserProfile participates as the parent
+  // OR the teacher of a thread; the participant rows carry per-side read state;
+  // sent messages are attributed back here. (ConversationReport relation is S4.)
+  conversationsAsParent     Conversation[]            @relation("ConversationParent")
+  conversationsAsTeacher    Conversation[]            @relation("ConversationTeacher")
+  conversationParticipants  ConversationParticipant[]
+  conversationMessages      ConversationMessage[]     @relation("ConversationMessageSender")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1172,6 +1181,10 @@ enum NotificationKind {
   // kind=weekly_digest & emailEnabled=true to resolve digest recipients, and
   // writes a Notification(kind=weekly_digest, readAt set) as the weekly sent-marker.
   weekly_digest
+  // E2-S1 — parent ↔ teacher messaging. Additive enum value; no new table. A new
+  // ConversationMessage notifies the OTHER participant in-app via
+  // NotificationsService.createMany(kind=message, sourceType=conversation).
+  message
 }
 
 enum NotificationSeverity {
@@ -1261,6 +1274,7 @@ model AlertInstance {
   subject      Subject?     @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   classSection ClassSection? @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
   meetingRequests MeetingRequest[]
+  conversations   Conversation[]
 
   @@index([tenantId, status, severity, detectedAt])
   @@index([studentId, status, detectedAt])
@@ -1321,4 +1335,128 @@ model MeetingRequest {
   @@index([tenantId, schoolId, status, createdAt])
   @@index([assignedToId, status, createdAt])
   @@map("meeting_request")
+}
+
+// ---------------------------------------------------------------------------
+// Conversations (E2-S1) — parent ↔ teacher messaging. Dual-wall ABAC: a thread
+// exists only for a (parent, teacher, child) where the parent guards the child
+// AND the teacher currently teaches that child. Re-checked at create AND every
+// send; a lapsed teaching wall flips the thread to read_only (history preserved).
+// (ConversationReport + ConversationReportStatus land in S4 — not added here.)
+// ---------------------------------------------------------------------------
+
+/// Role of a participant within a conversation thread. MVP: exactly one parent +
+/// one teacher per thread (admins read via moderation, never as participants).
+enum ConversationParticipantRole {
+  parent
+  teacher
+}
+
+/// Lifecycle of a thread. `active` = open for messages; `read_only` = a wall check
+/// failed (teacher no longer teaches the child) so history is preserved but no new
+/// message is allowed; `archived` = either party archived it; `blocked` = admin
+/// moderation froze it (S4). Messages are NEVER deleted — status gates writes only.
+enum ConversationStatus {
+  active
+  read_only
+  archived
+  blocked
+}
+
+/// A thread scoped to exactly one (parent, teacher, child) triple. The
+/// `@@unique([tenantId, parentId, teacherId, studentId])` makes "open or reuse
+/// the thread" idempotent — clicking the compose CTA twice reuses the same thread
+/// (mirrors the MeetingRequest @@unique idempotency from E1-S3).
+model Conversation {
+  id          String             @id @default(uuid()) @db.Uuid
+  tenantId    String             @map("tenant_id") @db.Uuid
+  schoolId    String?            @map("school_id") @db.Uuid
+  /// The child the thread is about. The guardianship ∩ teaching ABAC is anchored here.
+  studentId   String             @map("student_id") @db.Uuid
+  /// Denormalised participant ids (also rows in ConversationParticipant) so the
+  /// uniqueness/idempotency key and the cheap "my threads" query need no join.
+  parentId    String             @map("parent_id") @db.Uuid
+  teacherId   String             @map("teacher_id") @db.Uuid
+  /// Optional subject context (e.g. the alert's subject) — display only.
+  subjectId   String?            @map("subject_id") @db.Uuid
+  /// The visionary seed (optional). When a thread is opened from an E1 alert, the
+  /// alert id is stored for context. Optional, SetNull on alert delete. NEVER
+  /// widens access — the create path re-checks guardianship + that the alert
+  /// concerns `studentId`. (Full alertContext exposure on the DTO is S2.)
+  alertId     String?            @map("alert_id") @db.Uuid
+  status      ConversationStatus @default(active)
+  /// Short server-rendered subject line (first message excerpt / alert title) for
+  /// the inbox list — avoids a message join on the list query.
+  topic       String?
+  /// Denormalised for cheap inbox ordering + unread math (set on each new message).
+  lastMessageAt   DateTime?      @map("last_message_at") @db.Timestamptz(6)
+  lastMessageById String?        @map("last_message_by_id") @db.Uuid
+  createdBy   String             @map("created_by") @db.Uuid
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  student      Student                   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  parent       UserProfile               @relation("ConversationParent", fields: [parentId], references: [id], onDelete: Cascade)
+  teacher      UserProfile               @relation("ConversationTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  subject      Subject?                  @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  alert        AlertInstance?            @relation(fields: [alertId], references: [id], onDelete: SetNull)
+  participants ConversationParticipant[]
+  messages     ConversationMessage[]
+
+  /// Idempotency: one thread per (tenant, parent, teacher, child). Reuse on re-open.
+  @@unique([tenantId, parentId, teacherId, studentId])
+  /// Inbox queries: "my threads, newest first", tenant- + school-scoped.
+  @@index([tenantId, schoolId, status, lastMessageAt])
+  @@index([parentId, status, lastMessageAt])
+  @@index([teacherId, status, lastMessageAt])
+  @@index([studentId])
+  @@map("conversation")
+}
+
+/// Per-side mutable state of a thread (read receipts, archive, mute). One row per
+/// (thread, user). Keeps the model forward-compatible with multi-participant
+/// threads without a destructive reshape.
+model ConversationParticipant {
+  id             String                      @id @default(uuid()) @db.Uuid
+  tenantId       String                      @map("tenant_id") @db.Uuid
+  conversationId String                      @map("conversation_id") @db.Uuid
+  userProfileId  String                      @map("user_profile_id") @db.Uuid
+  role           ConversationParticipantRole
+  /// Read-receipt anchor: every message with createdAt <= lastReadAt is "read"
+  /// by this participant. Unread count = messages newer than this.
+  lastReadAt     DateTime?                   @map("last_read_at") @db.Timestamptz(6)
+  archivedAt     DateTime?                   @map("archived_at") @db.Timestamptz(6)
+  muted          Boolean                     @default(false)
+  createdAt      DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userProfile  UserProfile  @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  /// One participant row per (thread, user).
+  @@unique([conversationId, userProfileId])
+  @@index([tenantId])
+  @@index([userProfileId, archivedAt])
+  @@map("conversation_participant")
+}
+
+/// An immutable (append-only) message. No edit, no soft-delete in the MVP —
+/// safety is handled by report (S4) + thread status=blocked, not by deletion.
+model ConversationMessage {
+  id             String                      @id @default(uuid()) @db.Uuid
+  tenantId       String                      @map("tenant_id") @db.Uuid
+  conversationId String                      @map("conversation_id") @db.Uuid
+  /// Author UserProfile (must be one of the thread's participants — enforced in service).
+  senderId       String                      @map("sender_id") @db.Uuid
+  senderRole     ConversationParticipantRole @map("sender_role")
+  body           String                      @db.Text
+  createdAt      DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       UserProfile  @relation("ConversationMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  /// Thread view = messages of a conversation in time order (paged). tenant-first.
+  @@index([tenantId, conversationId, createdAt])
+  @@index([senderId, createdAt])
+  @@map("conversation_message")
 }

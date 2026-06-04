@@ -1,15 +1,19 @@
 # E2 — Parent ↔ Teacher Messaging (Conversations) · PROGRESS
 
-> **Epic status: `proposed` → spec written (this run).** The epic-spec kit is now in place
-> (`spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `tasks.md`, `quickstart.md`).
-> **Next run → implement S1** (Conversation models + dual-wall ABAC + create/send spine).
+> **Epic status: `in-progress` — S1 shipped (this run, needs human review).** The epic-spec kit is
+> in place (`spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `tasks.md`, `quickstart.md`)
+> and the **Conversations spine** (S1) is now implemented: 3 new Prisma models + 2 enums, dual-wall
+> ABAC (guardianship ∩ teaching-assignment, re-checked at create AND every send), parent-only create,
+> append-only audit, idempotent thread reuse, `messaging.read|write` perms, additive `message`
+> `NotificationKind`, and the parent compose surface.
+> **Next run → implement S2** (parent thread list + thread view, notification on new message).
 > Predecessor **E1 — Parent Alert Action Loop** is `shipped` (S1–S4).
 
 | Slice | Title | Status | PR |
 |---|---|---|---|
-| — | Epic-spec kit (this run) | **written** | — |
-| S1 | Conversation models + ABAC core + create/send | `next` | — |
-| S2 | Parent messages surface + alert-seeded threads | `proposed` | — |
+| — | Epic-spec kit | **written** | — |
+| S1 | Conversation models + ABAC core + create/send | **shipped** (needs human review) | — |
+| S2 | Parent messages surface + alert-seeded threads | `next` | — |
 | S3 | Teacher inbox (separated from announcements) + reply | `proposed` | — |
 | S4 | Moderation / safety + optional email channel | `proposed` | — |
 

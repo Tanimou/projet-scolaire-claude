@@ -10,6 +10,9 @@ export const NOTIFICATION_KINDS: ReadonlyArray<NotificationKind> = [
   'enrollment_status',
   'lesson_published',
   'system',
+  // E2-S1 — parent ↔ teacher messaging. A per-event kind (new message in a
+  // thread), so it sits with the other per-event kinds, before the digest.
+  'message',
   // E1-S4 — keep last so the digest reads as a distinct "summary" concept,
   // after the per-event kinds. Email-only opt-in (emailEnabled default false).
   'weekly_digest',
@@ -23,6 +26,7 @@ export const NOTIFICATION_KIND_LABEL: Record<NotificationKind, string> = {
   enrollment_status: 'Inscriptions',
   lesson_published: 'Cahier de texte',
   system: 'Messages système',
+  message: 'Messagerie (parent ↔ enseignant)',
   weekly_digest: 'Récapitulatif hebdomadaire',
 };
 
@@ -33,6 +37,8 @@ export const NOTIFICATION_KIND_DESCRIPTION: Record<NotificationKind, string> = {
   enrollment_status: "Inscription confirmée, transfert, fin d'inscription.",
   lesson_published: 'Mises à jour du cahier de texte (incl. devoirs maison).',
   system: 'Messages techniques et administratifs.',
+  message:
+    "Quand un enseignant (ou un parent) vous envoie un nouveau message dans une conversation.",
   weekly_digest:
     'Un récapitulatif chaque lundi matin : tendance globale, nouvelles alertes, évaluations à venir et l’action recommandée. Envoyé par email uniquement.',
 };

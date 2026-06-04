@@ -186,6 +186,7 @@ export const parentSidebarItems: SidebarItemConfig[] = [
   { key: 'comments', icon: MessageCircle, label: 'Commentaires', href: '/parent/comments' },
   { key: 'recommendations', icon: Lightbulb, label: 'Recommandations', href: '/parent/recommendations' },
   { key: 'announcements', icon: Megaphone, label: 'Annonces', href: '/parent/announcements' },
+  { key: 'messages', icon: MessageSquare, label: 'Messages', href: '/parent/messages' },
   { key: 'notifications', icon: Bell, label: 'Notifications', href: '/parent/notifications' },
   { key: 'calendar', icon: Calendar, label: 'Emploi du temps', href: '/parent/calendar' },
   { key: 'documents', icon: FolderOpen, label: 'Documents', href: '/parent/documents' },
