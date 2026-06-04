@@ -5,6 +5,9 @@ import { MessagingService } from './messaging.service';
 import { StudentAccessService } from '../students/student-access.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
+/** Mirror of the service-private participant role union (not exported). */
+type ParticipantRole = 'parent' | 'teacher';
+
 const TENANT = 'tenant-1';
 const SCHOOL = 'school-1';
 const PARENT = 'parent-up-1';
@@ -212,8 +215,19 @@ describe('MessagingService.createConversation (dual-wall ABAC)', () => {
 });
 
 describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
-  function makeSendService(opts: { teaches: boolean; status?: string; participant?: boolean }) {
-    const { service, prisma } = makeService({ teaches: opts.teaches });
+  function makeSendService(opts: {
+    teaches: boolean;
+    status?: string;
+    participant?: boolean;
+    /** The caller's participant role on the thread (defaults to 'teacher'). */
+    senderRole?: ParticipantRole;
+    /** Guardianship-wall outcome for a parent sender (defaults to true). */
+    guardian?: boolean;
+  }) {
+    const { service, prisma, studentAccess } = makeService({
+      teaches: opts.teaches,
+      guardian: opts.guardian ?? true,
+    });
     (prisma.conversation.findFirst as jest.Mock).mockResolvedValue(
       opts.participant === false
         ? null
@@ -223,7 +237,7 @@ describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
             studentId: STUDENT,
             parentId: PARENT,
             teacherId: TEACHER,
-            participants: [{ role: 'teacher' }],
+            participants: [{ role: opts.senderRole ?? 'teacher' }],
           },
     );
     // sendMessage's tx uses conversationMessage.create returning sender info.
@@ -243,7 +257,7 @@ describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
         conversation: { update: jest.fn(async () => ({})) },
       }),
     );
-    return { service, prisma };
+    return { service, prisma, studentAccess };
   }
 
   const teacherJwt = { realm_access: { roles: ['teacher'] } } as never;
@@ -275,9 +289,275 @@ describe('MessagingService.sendMessage (re-check + read_only lapse)', () => {
     await expect(service.sendMessage(sendArgs)).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  // ---------------------------------------------------------------------------
+  // LOAD-BEARING ACCESS-WIDENING GUARD (P1, [auth]). The slice's core promise is
+  // "dual-wall ABAC re-checked at create AND every send; a lapsed teaching wall
+  // flips the thread to read_only" (plan.md risk table: "Stale teaching wall →
+  // re-check on every send"). The TEACHER-send path is covered above. This pins
+  // the symmetric PARENT-send path: when the teacher has stopped teaching the
+  // child, a parent (whose guardianship still holds) must NOT keep reaching that
+  // teacher — the send must 403 and freeze the thread, exactly like a teacher
+  // send. Without this, a parent silently messages (and re-notifies) a teacher
+  // who no longer teaches their child until the teacher happens to send again.
+  // ---------------------------------------------------------------------------
+  const parentSendArgs = {
+    me: { id: PARENT, tenantId: TENANT },
+    jwt,
+    schoolId: SCHOOL,
+    conversationId: 'conv-1',
+    body: 'Bonjour',
+  };
+
+  it('parent send re-checks the TEACHING wall: 403 + flips to read_only when the teacher no longer teaches the child', async () => {
+    // Parent sender, guardianship intact, but teaching has lapsed.
+    const { service, prisma } = makeSendService({
+      senderRole: 'parent',
+      guardian: true,
+      teaches: false,
+    });
+    await expect(service.sendMessage(parentSendArgs)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.conversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: 'read_only' } }),
+    );
+  });
+
+  it('parent send succeeds when BOTH walls hold (guardian + teacher still teaches)', async () => {
+    const { service } = makeSendService({
+      senderRole: 'parent',
+      guardian: true,
+      teaches: true,
+    });
+    const dto = await service.sendMessage(parentSendArgs);
+    expect(dto.id).toBe('msg-1');
+  });
+
   it('403 when the thread is already read_only', async () => {
     const { service } = makeSendService({ teaches: true, status: 'read_only' });
     await expect(service.sendMessage(sendArgs)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 — read/state surface: inbox aggregate (scope + no-N+1 + alertContext),
+// getConversation participant gate, markRead idempotency.
+// ---------------------------------------------------------------------------
+
+const ALERT = 'alert-1';
+
+/**
+ * A focused Prisma double for the S2 read methods. `conversation.findMany`
+ * returns the caller's page (seeded so one thread carries an alert, one does
+ * not); `conversationMessage.findMany` returns the unread tuples used by the
+ * single grouped unread pass.
+ */
+function makeReadService(opts: {
+  rows?: Array<Record<string, unknown>>;
+  unreadRows?: Array<{ conversationId: string; createdAt: Date }>;
+  participantFound?: boolean;
+  markCount?: number;
+} = {}) {
+  const seededAlert = {
+    id: ALERT,
+    code: 'LOW_SUBJECT_AVG',
+    title: 'Moyenne basse en Maths',
+    studentId: STUDENT,
+    subject: { name: 'Mathématiques' },
+  };
+  const baseRow = (id: string, alert: unknown) => ({
+    id,
+    studentId: STUDENT,
+    parentId: PARENT,
+    teacherId: TEACHER,
+    subjectId: null,
+    alertId: alert ? ALERT : null,
+    status: 'active',
+    topic: 'Bonjour',
+    lastMessageAt: new Date('2026-06-04T10:00:00Z'),
+    createdAt: new Date('2026-06-04T09:00:00Z'),
+    student: { firstName: 'Léa', lastName: 'Martin' },
+    parent: { firstName: 'Marie', lastName: 'Martin' },
+    teacher: { firstName: 'Paul', lastName: 'Diallo' },
+    subject: null,
+    alert,
+    participants: [{ lastReadAt: null }],
+  });
+
+  const rows = opts.rows ?? [
+    baseRow('conv-seeded', seededAlert),
+    baseRow('conv-plain', null),
+  ];
+
+  const findManyCount = { conversation: 0, message: 0 };
+
+  const prisma = {
+    conversation: {
+      count: jest.fn(async () => rows.length),
+      findMany: jest.fn(async () => {
+        findManyCount.conversation += 1;
+        return rows;
+      }),
+      findFirst: jest.fn(async () =>
+        opts.participantFound === false
+          ? null
+          : {
+              id: 'conv-1',
+              parentId: PARENT,
+              teacherId: TEACHER,
+              participants: [
+                { userProfileId: PARENT, lastReadAt: null },
+                { userProfileId: TEACHER, lastReadAt: new Date('2026-06-04T12:00:00Z') },
+              ],
+            },
+      ),
+      findUniqueOrThrow: jest.fn(async () => ({
+        id: 'conv-seeded',
+        studentId: STUDENT,
+        parentId: PARENT,
+        teacherId: TEACHER,
+        subjectId: null,
+        status: 'active',
+        topic: 'Bonjour',
+        lastMessageAt: new Date('2026-06-04T10:00:00Z'),
+        createdAt: new Date('2026-06-04T09:00:00Z'),
+        student: { firstName: 'Léa', lastName: 'Martin' },
+        parent: { firstName: 'Marie', lastName: 'Martin' },
+        teacher: { firstName: 'Paul', lastName: 'Diallo' },
+        subject: null,
+        alert: seededAlert,
+        participants: [{ lastReadAt: null }],
+        messages: [{ body: 'Bonjour' }],
+      })),
+    },
+    conversationParticipant: {
+      findFirst: jest.fn(async () =>
+        opts.participantFound === false ? null : { id: 'cp-1' },
+      ),
+      updateMany: jest.fn(async () => ({ count: opts.markCount ?? 1 })),
+    },
+    conversationMessage: {
+      count: jest.fn(async () => 0),
+      findMany: jest.fn(async () => {
+        findManyCount.message += 1;
+        return (
+          opts.unreadRows ?? [
+            { conversationId: 'conv-seeded', createdAt: new Date('2026-06-04T10:00:00Z') },
+          ]
+        );
+      }),
+    },
+  };
+
+  const studentAccess = { canAccessStudent: jest.fn(async () => true) } as unknown as StudentAccessService;
+  const notifications = { createMany: jest.fn(async () => ({ created: 1 })) } as unknown as NotificationsService;
+  const service = new MessagingService(prisma as never, studentAccess, notifications);
+  return { service, prisma, findManyCount };
+}
+
+describe('MessagingService.listConversations (inbox scope + alertContext + no-N+1)', () => {
+  it('parent sees own threads; seeded thread carries alertContext, plain carries null', async () => {
+    const { service } = makeReadService();
+    const res = await service.listConversations({ me, role: 'parent', limit: 50, offset: 0 });
+    expect(res.total).toBe(2);
+    expect(res.data).toHaveLength(2);
+    const seeded = res.data.find((c) => c.id === 'conv-seeded')!;
+    const plain = res.data.find((c) => c.id === 'conv-plain')!;
+    expect(seeded.alertContext).toEqual({
+      alertId: ALERT,
+      code: 'LOW_SUBJECT_AVG',
+      title: 'Moyenne basse en Maths',
+      subjectName: 'Mathématiques',
+    });
+    expect(plain.alertContext).toBeNull();
+    expect(seeded.unreadCount).toBe(1);
+  });
+
+  it('computes unread for ALL rows in ONE grouped message query (no N+1)', async () => {
+    const { service, findManyCount } = makeReadService();
+    await service.listConversations({ me, role: 'parent', limit: 50, offset: 0 });
+    // Exactly one conversation page query + one unread message query, regardless
+    // of row count (AC1 / PM-7).
+    expect(findManyCount.conversation).toBe(1);
+    expect(findManyCount.message).toBe(1);
+  });
+
+  it('scopes parent on parentId=me / teacher on teacherId=me (never via access-scope)', async () => {
+    const { service, prisma } = makeReadService();
+    await service.listConversations({ me, role: 'teacher', limit: 50, offset: 0 });
+    expect((prisma.conversation.findMany as jest.Mock).mock.calls[0][0].where).toEqual(
+      expect.objectContaining({ tenantId: TENANT, teacherId: PARENT }),
+    );
+  });
+
+  it('a caller with no messaging role gets an empty inbox', async () => {
+    const { service, prisma } = makeReadService();
+    const res = await service.listConversations({ me, role: null, limit: 50, offset: 0 });
+    expect(res).toEqual({ data: [], total: 0 });
+    expect(prisma.conversation.findMany).not.toHaveBeenCalled();
+  });
+
+  it('alertContext degrades to null when the alert concerns a different student', async () => {
+    const { service } = makeReadService({
+      rows: [
+        {
+          id: 'conv-x',
+          studentId: STUDENT,
+          parentId: PARENT,
+          teacherId: TEACHER,
+          subjectId: null,
+          alertId: ALERT,
+          status: 'active',
+          topic: 'Bonjour',
+          lastMessageAt: new Date('2026-06-04T10:00:00Z'),
+          createdAt: new Date('2026-06-04T09:00:00Z'),
+          student: { firstName: 'Léa', lastName: 'Martin' },
+          parent: { firstName: 'Marie', lastName: 'Martin' },
+          teacher: { firstName: 'Paul', lastName: 'Diallo' },
+          subject: null,
+          alert: { id: ALERT, code: 'X', title: 'X', studentId: 'OTHER', subject: null },
+          participants: [{ lastReadAt: null }],
+        },
+      ],
+      unreadRows: [],
+    });
+    const res = await service.listConversations({ me, role: 'parent', limit: 50, offset: 0 });
+    expect(res.data[0]!.alertContext).toBeNull();
+  });
+});
+
+describe('MessagingService.getConversation (participant gate)', () => {
+  it('returns the thread DTO when the caller is a participant', async () => {
+    const { service } = makeReadService();
+    const dto = await service.getConversation({ me, conversationId: 'conv-seeded' });
+    expect(dto.id).toBe('conv-seeded');
+    expect(dto.alertContext?.alertId).toBe(ALERT);
+  });
+
+  it('404 when the caller is NOT a participant (foreign / cross-tenant id)', async () => {
+    const { service } = makeReadService({ participantFound: false });
+    await expect(
+      service.getConversation({ me, conversationId: 'conv-foreign' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('MessagingService.markRead (idempotent, participant-only)', () => {
+  it('bumps the caller lastReadAt → subsequent unread reads as 0', async () => {
+    const { service, prisma } = makeReadService();
+    const res = await service.markRead({ me, conversationId: 'conv-1' });
+    expect(res).toEqual({ ok: true });
+    const call = (prisma.conversationParticipant.updateMany as jest.Mock).mock.calls[0][0];
+    expect(call.where).toEqual(
+      expect.objectContaining({ conversationId: 'conv-1', userProfileId: PARENT }),
+    );
+    // server now() — not a client value
+    expect(call.data.lastReadAt).toBeInstanceOf(Date);
+  });
+
+  it('404 when the caller is not a participant of the thread', async () => {
+    const { service } = makeReadService({ markCount: 0 });
+    await expect(
+      service.markRead({ me, conversationId: 'conv-foreign' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 

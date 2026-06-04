@@ -44,6 +44,10 @@ function makeController() {
       .mockResolvedValue({ conversation: { id: 'conv-1' }, created: true }),
     sendMessage: jest.fn().mockResolvedValue({ id: 'msg-1' }),
     listEligibleTeachers: jest.fn().mockResolvedValue([]),
+    listConversations: jest.fn().mockResolvedValue({ data: [], total: 0 }),
+    getConversation: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+    listMessages: jest.fn().mockResolvedValue({ data: [], hasMore: false, counterpartLastReadAt: null }),
+    markRead: jest.fn().mockResolvedValue({ ok: true }),
   };
   // ensureUser is the ONLY source of tenantId/userProfileId — derived from the
   // verified JWT, never from a request param.
@@ -158,6 +162,76 @@ describe('MessagingController.listEligibleTeachers', () => {
     expect(messaging.listEligibleTeachers).toHaveBeenCalledWith(
       expect.objectContaining({ schoolId: 'school-1', studentId: STUDENT }),
     );
+  });
+});
+
+describe('MessagingController S2 read/state routes', () => {
+  it('listConversations resolves the caller role from the JWT (parent → parentId scope)', async () => {
+    const { controller, messaging } = makeController();
+    await controller.listConversations(jwtWithRoles(['parent']), {});
+    expect(messaging.listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ me: { id: USER, tenantId: TENANT }, role: 'parent', limit: 50, offset: 0 }),
+    );
+  });
+
+  it('listConversations passes role=teacher for a teacher caller', async () => {
+    const { controller, messaging } = makeController();
+    await controller.listConversations(jwtWithRoles(['teacher']), {});
+    expect(messaging.listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'teacher' }),
+    );
+  });
+
+  it('listConversations passes role=null for a non-messaging caller (empty inbox downstream)', async () => {
+    const { controller, messaging } = makeController();
+    await controller.listConversations(jwtWithRoles(['school_admin']), {});
+    expect(messaging.listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ role: null }),
+    );
+  });
+
+  it('listConversations rejects an invalid status (400) before the service', async () => {
+    const { controller, messaging } = makeController();
+    await expect(
+      controller.listConversations(jwtWithRoles(['parent']), { status: 'bogus' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(messaging.listConversations).not.toHaveBeenCalled();
+  });
+
+  it('getConversation delegates with the JWT tenant + path id', async () => {
+    const { controller, messaging } = makeController();
+    await controller.getConversation(jwtWithRoles(['parent']), 'conv-1');
+    expect(messaging.getConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ me: { id: USER, tenantId: TENANT }, conversationId: 'conv-1' }),
+    );
+  });
+
+  it('listMessages caps an over-large limit (400) and otherwise delegates with the before cursor', async () => {
+    const { controller, messaging } = makeController();
+    await expect(
+      controller.listMessages(jwtWithRoles(['parent']), 'conv-1', { limit: '999' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(messaging.listMessages).not.toHaveBeenCalled();
+
+    await controller.listMessages(jwtWithRoles(['parent']), 'conv-1', {
+      before: '2026-06-04T10:00:00.000Z',
+    });
+    expect(messaging.listMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        limit: 50,
+        before: '2026-06-04T10:00:00.000Z',
+      }),
+    );
+  });
+
+  it('markRead delegates with the JWT tenant + path id', async () => {
+    const { controller, messaging } = makeController();
+    const out = await controller.markRead(jwtWithRoles(['parent']), 'conv-1');
+    expect(messaging.markRead).toHaveBeenCalledWith(
+      expect.objectContaining({ me: { id: USER, tenantId: TENANT }, conversationId: 'conv-1' }),
+    );
+    expect(out).toEqual({ ok: true });
   });
 });
 

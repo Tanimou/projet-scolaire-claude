@@ -6,14 +6,21 @@
 > ABAC (guardianship ∩ teaching-assignment, re-checked at create AND every send), parent-only create,
 > append-only audit, idempotent thread reuse, `messaging.read|write` perms, additive `message`
 > `NotificationKind`, and the parent compose surface.
-> **Next run → implement S2** (parent thread list + thread view, notification on new message).
+> **S2 shipped (this run, needs human review).** The parent now has a real `/parent/messages`
+> inbox (thread list with unread badges + alert chips), a thread view (paged history, reply,
+> mark-read, alert-context header), the relocated `/parent/messages/new` compose, four new
+> aggregate read/state endpoints (`GET /conversations`, `GET /conversations/:id`,
+> `GET /conversations/:id/messages`, `PATCH /conversations/:id/read`), the `alertContext` seed
+> exposed end-to-end (re-checked, strict subset, null on mismatch), and the E1 `AlertNextSteps`
+> CTA rewired to open the alert-seeded thread (the E1 `MeetingRequest` intent path preserved).
+> No schema change. **Next run → implement S3** (teacher inbox, separated from announcements + reply).
 > Predecessor **E1 — Parent Alert Action Loop** is `shipped` (S1–S4).
 
 | Slice | Title | Status | PR |
 |---|---|---|---|
 | — | Epic-spec kit | **written** | — |
 | S1 | Conversation models + ABAC core + create/send | **shipped** (needs human review) | — |
-| S2 | Parent messages surface + alert-seeded threads | `next` | — |
+| S2 | Parent messages surface + alert-seeded threads | **shipped** (needs human review) | — |
 | S3 | Teacher inbox (separated from announcements) + reply | `proposed` | — |
 | S4 | Moderation / safety + optional email channel | `proposed` | — |
 
@@ -62,6 +69,15 @@
   is NOT in the diff → `pnpm typecheck` is red until regen — identical to E1-S3/S4).
 - Re-run the permission seed so `messaging.read|write` (S1) / `messaging.moderate` (S4) land in
   the DB (identical to E1-S3's `meeting_requests.*`).
+
+## Pre-merge operator step (S2 — contracts-only, NO schema)
+- **Rebuild `packages/contracts`** (`pnpm --filter @pilotage/contracts build`, or the orchestrator's
+  single `pnpm build`). S2 adds new exported schemas (`ConversationInboxQuerySchema`,
+  `ConversationMessagesQuerySchema`, `ConversationMessagePageSchema`, `ConversationInboxResponseSchema`)
+  consumed by the NestJS controller at runtime via the CJS `dist/`. Until the rebuild, the contracts
+  `dist/` is stale → the 5 `messaging.controller.spec` cases that parse these query schemas fail with a
+  `TypeError` (the symbol is `undefined` in the old build). Source transpiles cleanly (verified); this is
+  the contracts analogue of S1's `prisma generate` regen step. No `db push` (schema-free slice).
 
 ## Non-goals (epic-level — see spec §6)
 Group threads · teacher cold-start · attachments · real-time/typing · message edit/delete ·

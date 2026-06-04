@@ -1,24 +1,23 @@
-import { MessagesSquare, UserRoundX } from 'lucide-react';
+import { MessageSquarePlus, MessagesSquare, UserRoundX } from 'lucide-react';
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { EmptyState, PageHeader } from '@pilotage/ui';
+import type { ConversationDto, ConversationInboxResponse } from '@pilotage/contracts';
+import { buttonVariants, EmptyState, PageHeader } from '@pilotage/ui';
 
-import { ComposeForm, type ComposeChild } from './ComposeForm';
+import { ThreadList } from './ThreadList';
 
 export const metadata: Metadata = { title: 'Messages' };
 export const dynamic = 'force-dynamic';
 
 interface ChildEnrollment {
-  classSection: { name: string; gradeLevel?: { name: string } };
   academicYear: { status: string };
 }
 
 interface Child {
   id: string;
-  firstName: string;
-  lastName: string;
   enrollments: ChildEnrollment[];
 }
 
@@ -31,41 +30,35 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
   }
 }
 
-function classLabel(c: Child): string | null {
-  const active = c.enrollments.find((e) => e.academicYear.status === 'active');
-  if (!active) return null;
-  const grade = active.classSection.gradeLevel?.name;
-  return grade ? `${active.classSection.name} · ${grade}` : active.classSection.name;
-}
-
 /**
- * Parent Messages — the E2-S1 thin compose entry (the only new UI this slice
- * ships; the full inbox/thread list lands in S2). The shell is intentionally
- * minimal so S2 can fill the body with the inbox without churning this markup.
+ * Parent Messages — the E2-S2 inbox (thread list). Replaces the S1 compose-only
+ * shell with the real inbox: server-fetches the role-aware aggregate
+ * `GET /api/v1/conversations` (ONE call — unread counts + previews computed
+ * server-side, no client N+1) and renders the thread rows. The "Nouveau
+ * message" entry routes to `/parent/messages/new` (the relocated S1 compose).
  *
- * The page fetches the parent's guarded children server-side (same scoped
- * `/api/v1/students` aggregate the children page reads — no client N+1) and
- * hands them to the client `ComposeForm`, which lazily loads the
- * server-filtered eligible-teacher list per child. The dual-wall ABAC
- * (guardianship ∩ teaching) is enforced entirely by the backend; this surface
- * only ever offers eligible teachers.
+ * Three terminal states (all kind, non-stigmatising per the cahier tone):
+ *  - no child rattaché → the S1 `UserRoundX` EmptyState (unchanged);
+ *  - no thread yet → a `MessagesSquare` EmptyState whose action is "Nouveau
+ *    message";
+ *  - threads → the `ThreadList` with unread badges + alert chips.
+ *
+ * The dual-wall ABAC + tenant scoping are enforced entirely by the backend; this
+ * surface only ever shows the caller's own participant threads.
  */
-export default async function ParentMessagesPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ studentId?: string }>;
-}) {
-  const sp = await searchParams;
-  const initialStudentId = sp.studentId ?? null;
-
-  const resp = await safe(
+export default async function ParentMessagesPage() {
+  // Does the parent guard any child? (drives the "no child" EmptyState — same
+  // scoped `/students` aggregate the children page reads, no client N+1).
+  const studentsResp = await safe(
     api<{ data: Child[] }>('/api/v1/students', { cache: 'no-store' }),
   );
-  const children: ComposeChild[] = (resp?.data ?? []).map((c) => ({
-    id: c.id,
-    name: `${c.firstName} ${c.lastName}`.trim(),
-    classLabel: classLabel(c),
-  }));
+  const hasChild = (studentsResp?.data ?? []).length > 0;
+
+  const inbox = await safe(
+    api<ConversationInboxResponse>('/api/v1/conversations', { cache: 'no-store' }),
+  );
+  const conversations: ConversationDto[] = inbox?.data ?? [];
+  const loadFailed = inbox === null && hasChild;
 
   return (
     <PortalShell portal="parent">
@@ -75,7 +68,15 @@ export default async function ParentMessagesPage({
           { label: 'Messages' },
         ]}
         title="Messages"
-        subtitle="Échangez avec les enseignant·e·s de votre enfant"
+        subtitle="Vos échanges avec les enseignant·e·s de votre enfant"
+        actions={
+          hasChild ? (
+            <Link href="/parent/messages/new" className={`${buttonVariants()} min-h-11`}>
+              <MessageSquarePlus className="h-4 w-4" aria-hidden />
+              Nouveau message
+            </Link>
+          ) : undefined
+        }
       />
 
       <div className="mt-6 max-w-2xl space-y-6">
@@ -89,15 +90,30 @@ export default async function ParentMessagesPage({
           </p>
         </section>
 
-        {children.length === 0 ? (
+        {!hasChild ? (
           <EmptyState
             icon={UserRoundX}
             tone="slate"
             title="Aucun enfant rattaché"
             description="La messagerie s'ouvre une fois un enfant rattaché à votre compte. Contactez l'administration de l'établissement pour rattacher le dossier de votre enfant."
           />
+        ) : loadFailed ? (
+          <p
+            role="alert"
+            className="rounded-lg bg-rose-100/80 px-3 py-2 text-sm font-medium text-rose-800"
+          >
+            Vos conversations n’ont pas pu être chargées. Veuillez réessayer dans un instant.
+          </p>
+        ) : conversations.length === 0 ? (
+          <EmptyState
+            icon={MessagesSquare}
+            tone="violet"
+            title="Aucune conversation pour le moment"
+            description="Démarrez un échange avec un·e enseignant·e qui suit votre enfant pour poser une question ou demander un point."
+            action={{ label: 'Nouveau message', href: '/parent/messages/new' }}
+          />
         ) : (
-          <ComposeForm students={children} initialStudentId={initialStudentId} />
+          <ThreadList conversations={conversations} />
         )}
       </div>
     </PortalShell>

@@ -20,8 +20,9 @@ import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
  *    idempotent create-or-reuse on the @@unique(parent,teacher,student) tuple
  *    and appends the first message; ABAC is re-checked server-side at create.
  *
- * The full inbox/thread view + alert-seeded CTA rewire are deferred to S2 — this
- * action set deliberately exposes only create + the compose picker.
+ * This action set backs the compose surface (`/parent/messages/new`): create +
+ * the eligible-teacher picker. The inbox/thread read surface lives in
+ * `messages-actions.ts` (reply + mark-read).
  */
 
 /** One teacher the caller may message about a given child (server-filtered). */
@@ -65,9 +66,9 @@ export async function loadEligibleTeachersAction(
  *
  * Idempotency lives server-side (the @@unique tuple): a re-submit returns the
  * existing thread without appending a duplicate message, so a double-click is
- * safe even before the client `pending` guard. The optional `alertId` is
- * accepted + validated by the backend in S1 but the alert-context exposure is
- * deferred to S2 (we never surface it here).
+ * safe even before the client `pending` guard. The optional `alertId`/`subjectId`
+ * seed an alert-originated thread — the backend re-checks the alert↔student wall
+ * (never widens access) and the thread's `alertContext` is then exposed in S2.
  */
 export async function sendFirstMessageAction(input: {
   studentId: string;
