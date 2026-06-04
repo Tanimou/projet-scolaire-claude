@@ -7,8 +7,12 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
+  AlertContextDto,
   ConversationDto,
+  ConversationInboxResponse,
   ConversationMessageDto,
+  ConversationMessagePage,
+  ConversationStatus,
   EligibleTeacherDto,
 } from '@pilotage/contracts';
 
@@ -241,7 +245,7 @@ export class MessagingService {
       if (alert.studentId !== args.studentId) {
         throw new BadRequestException('Alert does not concern this student');
       }
-      // S1 stores alertId; full alertContext exposure is deferred to S2.
+      // The stored alertId drives the read-time alertContext (resolveAlertContext).
       if (!subjectId) subjectId = alert.subjectId ?? null;
     }
 
@@ -408,7 +412,12 @@ export class MessagingService {
     }
     const senderRole = conv.participants[0]!.role as ParticipantRole;
 
-    // ABAC re-check keyed on the sender's role.
+    // Dual-wall ABAC re-checked on EVERY send (plan.md risk table). The two walls
+    // are independent: guardianship gates the parent sender, while the teaching
+    // wall is a property of the THREAD and is re-checked for BOTH directions —
+    // otherwise a parent (whose guardianship still holds) could keep reaching, and
+    // re-notifying, a teacher who has stopped teaching their child, with the thread
+    // only freezing the next time that teacher happened to send.
     if (senderRole === 'parent') {
       const guards = await this.studentAccess.canAccessStudent(
         args.me,
@@ -417,22 +426,23 @@ export class MessagingService {
         args.schoolId,
       );
       if (!guards) throw new ForbiddenException('Not a guardian of this student');
-    } else {
-      const teaches = await this.isTeacherOfStudent({
-        tenantId: args.me.tenantId,
-        teacherUserProfileId: conv.teacherId,
-        studentId: conv.studentId,
-      });
-      if (!teaches) {
-        // Teaching wall lapsed: freeze the thread (history preserved) and 403.
-        if (conv.status === 'active') {
-          await this.prisma.conversation.update({
-            where: { id: conv.id },
-            data: { status: 'read_only' },
-          });
-        }
-        throw new ForbiddenException('This teacher no longer teaches this student');
+    }
+
+    const teaches = await this.isTeacherOfStudent({
+      tenantId: args.me.tenantId,
+      teacherUserProfileId: conv.teacherId,
+      studentId: conv.studentId,
+    });
+    if (!teaches) {
+      // Teaching wall lapsed: freeze the thread (history preserved) and 403,
+      // symmetrically for parent and teacher senders.
+      if (conv.status === 'active') {
+        await this.prisma.conversation.update({
+          where: { id: conv.id },
+          data: { status: 'read_only' },
+        });
       }
+      throw new ForbiddenException('This teacher no longer teaches this student');
     }
 
     // Refuse send on a non-active thread.
@@ -537,10 +547,268 @@ export class MessagingService {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // GET /conversations — role-aware inbox aggregate (S2).
+  //
+  // Scoping is on the DENORMALISED participant columns, NEVER via
+  // StudentAccessService.getAccessScope (PM-2: that scope is unrestricted for
+  // teacher/admin and would leak foreign threads). A parent caller sees
+  // parentId=me; a teacher caller sees teacherId=me; any other role sees nothing.
+  //
+  // No N+1 (PM-7): the page is fetched in one findMany, then unread counts for
+  // ALL rows come from ONE grouped query, and previews/timestamps come from the
+  // denormalised columns (no per-thread message join).
+  // -------------------------------------------------------------------------
+  async listConversations(args: {
+    me: Caller;
+    role: ParticipantRole | null;
+    status?: ConversationStatus;
+    limit: number;
+    offset: number;
+  }): Promise<ConversationInboxResponse> {
+    if (args.role == null) return { data: [], total: 0 };
+
+    const scopeWhere =
+      args.role === 'parent'
+        ? { parentId: args.me.id }
+        : { teacherId: args.me.id };
+
+    // Default to the visible set (active + read_only); explicit status narrows.
+    const statusWhere: Prisma.ConversationWhereInput = args.status
+      ? { status: args.status }
+      : { status: { in: ['active', 'read_only'] } };
+
+    const where: Prisma.ConversationWhereInput = {
+      tenantId: args.me.tenantId,
+      ...scopeWhere,
+      ...statusWhere,
+    };
+
+    // Query 1: total for paging.
+    // Query 2: the page (denormalised columns only — no message join).
+    const [total, rows] = await Promise.all([
+      this.prisma.conversation.count({ where }),
+      this.prisma.conversation.findMany({
+        where,
+        orderBy: [{ lastMessageAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+        take: args.limit,
+        skip: args.offset,
+        select: {
+          id: true,
+          studentId: true,
+          parentId: true,
+          teacherId: true,
+          subjectId: true,
+          alertId: true,
+          status: true,
+          topic: true,
+          lastMessageAt: true,
+          createdAt: true,
+          student: { select: { firstName: true, lastName: true } },
+          parent: { select: { firstName: true, lastName: true } },
+          teacher: { select: { firstName: true, lastName: true } },
+          subject: { select: { name: true } },
+          alert: { select: { id: true, code: true, title: true, studentId: true, subject: { select: { name: true } } } },
+          participants: {
+            where: { userProfileId: args.me.id },
+            select: { lastReadAt: true },
+          },
+        },
+      }),
+    ]);
+
+    if (rows.length === 0) return { data: [], total };
+
+    const ids = rows.map((r) => r.id);
+
+    // Query 3: unread messages across ALL rows in ONE pass. We fetch the small
+    // (conversationId, createdAt) tuples of messages NOT authored by the caller,
+    // then fold each against that thread's own lastReadAt in memory — groupBy
+    // cannot express a per-thread `createdAt >` filter, so this is the bounded
+    // shape (one query, capped by page size).
+    const unreadRows = await this.prisma.conversationMessage.findMany({
+      where: {
+        tenantId: args.me.tenantId,
+        conversationId: { in: ids },
+        senderId: { not: args.me.id },
+      },
+      select: { conversationId: true, createdAt: true },
+    });
+    const lastReadByConv = new Map(
+      rows.map((r) => [r.id, r.participants[0]?.lastReadAt ?? null]),
+    );
+    const unreadByConv = new Map<string, number>();
+    for (const m of unreadRows) {
+      const lastReadAt = lastReadByConv.get(m.conversationId) ?? null;
+      if (lastReadAt && m.createdAt <= lastReadAt) continue;
+      unreadByConv.set(m.conversationId, (unreadByConv.get(m.conversationId) ?? 0) + 1);
+    }
+
+    const data: ConversationDto[] = rows.map((r) => ({
+      id: r.id,
+      studentId: r.studentId,
+      studentName: `${r.student.firstName} ${r.student.lastName}`.trim(),
+      parentId: r.parentId,
+      parentName: `${r.parent.firstName} ${r.parent.lastName}`.trim(),
+      teacherId: r.teacherId,
+      teacherName: `${r.teacher.firstName} ${r.teacher.lastName}`.trim(),
+      subjectId: r.subjectId,
+      subjectName: r.subject?.name ?? null,
+      alertContext: this.resolveAlertContext(r.alert, r.studentId),
+      status: r.status,
+      topic: r.topic,
+      lastMessageAt: r.lastMessageAt?.toISOString() ?? null,
+      // Preview comes from `topic` (denormalised at create) — no per-thread join.
+      lastMessagePreview: r.topic,
+      unreadCount: unreadByConv.get(r.id) ?? 0,
+      createdAt: r.createdAt.toISOString(),
+    }));
+
+    return { data, total };
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /conversations/:id — participant-only thread header DTO (S2).
+  // A missing thread OR a non-participant caller (even a co-guardian of the same
+  // child) → 404 (PM-1: no existence leak). Cross-tenant → 404.
+  // -------------------------------------------------------------------------
+  async getConversation(args: { me: Caller; conversationId: string }): Promise<ConversationDto> {
+    const participant = await this.prisma.conversationParticipant.findFirst({
+      where: {
+        conversationId: args.conversationId,
+        userProfileId: args.me.id,
+        conversation: { tenantId: args.me.tenantId },
+      },
+      select: { id: true },
+    });
+    if (!participant) throw new NotFoundException('Conversation not found');
+    return this.toConversationDto(args.conversationId, args.me.id);
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /conversations/:id/messages — participant-only paged messages (S2).
+  // Returned oldest→newest within a page; `before` is an exclusive ISO cursor on
+  // createdAt for "load previous". Index-covered by ([tenantId, conversationId,
+  // createdAt]). limit hard-capped by the contract (1..200).
+  // -------------------------------------------------------------------------
+  async listMessages(args: {
+    me: Caller;
+    conversationId: string;
+    limit: number;
+    before?: string;
+  }): Promise<ConversationMessagePage> {
+    // Participant gate BEFORE any message read (PM-1/PM-8).
+    const conv = await this.prisma.conversation.findFirst({
+      where: { id: args.conversationId, tenantId: args.me.tenantId },
+      select: {
+        id: true,
+        parentId: true,
+        teacherId: true,
+        participants: { select: { userProfileId: true, lastReadAt: true } },
+      },
+    });
+    const mine = conv?.participants.find((p) => p.userProfileId === args.me.id);
+    if (!conv || !mine) throw new NotFoundException('Conversation not found');
+
+    const beforeDate = args.before ? new Date(args.before) : null;
+    const messageWhere: Prisma.ConversationMessageWhereInput = {
+      tenantId: args.me.tenantId,
+      conversationId: conv.id,
+      ...(beforeDate && !Number.isNaN(beforeDate.getTime())
+        ? { createdAt: { lt: beforeDate } }
+        : {}),
+    };
+
+    // Fetch the newest `limit+1` below the cursor (so we know `hasMore`), then
+    // reverse to oldest→newest for rendering.
+    const rows = await this.prisma.conversationMessage.findMany({
+      where: messageWhere,
+      orderBy: { createdAt: 'desc' },
+      take: args.limit + 1,
+      select: {
+        id: true,
+        conversationId: true,
+        senderId: true,
+        senderRole: true,
+        body: true,
+        createdAt: true,
+        sender: { select: { firstName: true, lastName: true } },
+      },
+    });
+
+    const hasMore = rows.length > args.limit;
+    const page = (hasMore ? rows.slice(0, args.limit) : rows).reverse();
+
+    // The counterpart's read anchor, for "Vu/Envoyé" receipts (no extra call).
+    const counterpartId = args.me.id === conv.parentId ? conv.teacherId : conv.parentId;
+    const counterpart = conv.participants.find((p) => p.userProfileId === counterpartId);
+
+    return {
+      data: page.map((m) => ({
+        id: m.id,
+        conversationId: m.conversationId,
+        senderId: m.senderId,
+        senderRole: m.senderRole,
+        senderName: `${m.sender.firstName} ${m.sender.lastName}`.trim(),
+        body: m.body,
+        createdAt: m.createdAt.toISOString(),
+      })),
+      hasMore,
+      counterpartLastReadAt: counterpart?.lastReadAt?.toISOString() ?? null,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // PATCH /conversations/:id/read — bump the caller's lastReadAt to server now()
+  // (S2). Participant-only (PM-6): updates ONLY the caller's own participant row;
+  // ignores any client timestamp; idempotent; never mutates thread status or any
+  // message. Non-participant / cross-tenant → 404. No audit row (read state).
+  // -------------------------------------------------------------------------
+  async markRead(args: { me: Caller; conversationId: string }): Promise<{ ok: true }> {
+    const result = await this.prisma.conversationParticipant.updateMany({
+      where: {
+        conversationId: args.conversationId,
+        userProfileId: args.me.id,
+        conversation: { tenantId: args.me.tenantId },
+      },
+      data: { lastReadAt: new Date() },
+    });
+    if (result.count === 0) throw new NotFoundException('Conversation not found');
+    return { ok: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
   /**
-   * Build the ConversationDto for the create/reuse response. S1 keeps it thin:
-   * `alertContext` is always null (deferred to S2) and `unreadCount` is computed
-   * for the caller. Tenant scope is already guaranteed by the caller.
+   * The strict read-only alertContext subset for a seeded thread. Re-asserts the
+   * wall at READ time (PM-3): the joined alert must still concern the thread's
+   * student; otherwise degrade to null (never widen). Exposes ONLY
+   * {alertId, code, title, subjectName} — never body/recommendation/threshold.
+   * `alert` may be null when alertId is absent or the alert was deleted (SetNull).
+   */
+  private resolveAlertContext(
+    alert:
+      | { id: string; code: string; title: string; studentId: string; subject: { name: string } | null }
+      | null,
+    conversationStudentId: string,
+  ): AlertContextDto | null {
+    if (!alert) return null;
+    if (alert.studentId !== conversationStudentId) return null;
+    return {
+      alertId: alert.id,
+      code: alert.code,
+      title: alert.title,
+      subjectName: alert.subject?.name ?? null,
+    };
+  }
+
+  /**
+   * Build the ConversationDto for a single thread (create/reuse response +
+   * getConversation). `alertContext` is resolved from the joined alert (S2 —
+   * promotes the S1 stub) and `unreadCount` is computed for the caller. Tenant
+   * scope is already guaranteed by the caller.
    */
   private async toConversationDto(
     conversationId: string,
@@ -562,6 +830,9 @@ export class MessagingService {
         parent: { select: { firstName: true, lastName: true } },
         teacher: { select: { firstName: true, lastName: true } },
         subject: { select: { name: true } },
+        alert: {
+          select: { id: true, code: true, title: true, studentId: true, subject: { select: { name: true } } },
+        },
         participants: { where: { userProfileId: callerId }, select: { lastReadAt: true } },
         messages: {
           orderBy: { createdAt: 'desc' },
@@ -590,7 +861,7 @@ export class MessagingService {
       teacherName: `${conv.teacher.firstName} ${conv.teacher.lastName}`.trim(),
       subjectId: conv.subjectId,
       subjectName: conv.subject?.name ?? null,
-      alertContext: null, // deferred to S2
+      alertContext: this.resolveAlertContext(conv.alert, conv.studentId),
       status: conv.status,
       topic: conv.topic,
       lastMessageAt: conv.lastMessageAt?.toISOString() ?? null,

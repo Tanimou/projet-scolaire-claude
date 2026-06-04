@@ -35,7 +35,7 @@ load-bearing deliverable.
 - **AC:** spec §5 AC1, AC2, AC3 (alert seed not yet wired — `alertId` accepted + validated though),
   AC7, AC8, AC9.
 
-## [ ] S2 — Parent messages surface + alert-seeded threads · `[auth]` · ~M
+## [x] S2 — Parent messages surface + alert-seeded threads · `[auth]` · ~M  ✅ shipped (needs human review)
 
 **Capability:** a parent has a real `/parent/messages` inbox (list + thread view + compose) AND
 the E1 alert CTA opens an **alert-seeded** thread (the visionary hook).

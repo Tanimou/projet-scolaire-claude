@@ -17,8 +17,8 @@ import { UuidSchema } from './common';
  * the DTOs live in `@pilotage/contracts`. Mirrors the structure/comment style of
  * `dto/meeting-request.ts`.
  *
- * NOTE (S1 scope): the create response stores `alertId` but does NOT expose the
- * full `alertContext` — that exposure + the alert-seeded CTA rewire are S2.
+ * S2 adds the read/state surface (inbox aggregate, paged messages, mark-read)
+ * and wires the `alertContext` exposure + the alert-seeded CTA end-to-end.
  */
 
 export const CONVERSATION_STATUS = ['active', 'read_only', 'archived', 'blocked'] as const;
@@ -45,8 +45,10 @@ export type EligibleTeacherDto = z.infer<typeof EligibleTeacherDtoSchema>;
 
 /**
  * The originating alert's context for an alert-seeded thread. Nullable.
- * Reserved/DEFERRED to S2 — S1 stores `alertId` but never exposes this on the
- * create response (the contract is declared here so S2 needs no DTO churn).
+ * Exposed end-to-end in S2: a strict read-only subset (`alertId`, `code`,
+ * `title`, `subjectName`) of the alert card the parent already sees. It never
+ * widens access — the read mapper re-asserts `alert.studentId === conv.studentId`
+ * and degrades to `null` on any mismatch / deleted alert.
  */
 export const AlertContextDtoSchema = z.object({
   alertId: UuidSchema,
@@ -66,7 +68,7 @@ export const ConversationDtoSchema = z.object({
   teacherName: z.string(),
   subjectId: UuidSchema.nullable(),
   subjectName: z.string().nullable(),
-  /** Nullable. DEFERRED to S2 — always null on the S1 create/reuse response. */
+  /** Nullable. Populated for alert-seeded threads (read-only subset); null otherwise. */
   alertContext: AlertContextDtoSchema.nullable(),
   status: z.enum(CONVERSATION_STATUS),
   topic: z.string().nullable(),
@@ -87,6 +89,55 @@ export const ConversationMessageDtoSchema = z.object({
   createdAt: z.string(),
 });
 export type ConversationMessageDto = z.infer<typeof ConversationMessageDtoSchema>;
+
+// ---------------------------------------------------------------------------
+// S2 — read/state surface (additive). Inbox + paged messages + mark-read.
+// These schemas describe the NEW aggregate read endpoints; the existing DTOs
+// above are reused unchanged (no field retyped/removed).
+// ---------------------------------------------------------------------------
+
+/**
+ * Inbox query — role-aware (parent: parentId=me; teacher: teacherId=me; resolved
+ * server-side from the JWT, NOT passed here). `status` defaults to the visible
+ * set (active + read_only); `archived`/`blocked` are excluded unless requested.
+ * `limit` is capped 1..200 (default 50); `offset` for paging.
+ */
+export const ConversationInboxQuerySchema = z.object({
+  status: z.enum(CONVERSATION_STATUS).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type ConversationInboxQuery = z.infer<typeof ConversationInboxQuerySchema>;
+
+/** Inbox aggregate response: the caller's threads + a total for paging. */
+export const ConversationInboxResponseSchema = z.object({
+  data: z.array(ConversationDtoSchema),
+  total: z.number(),
+});
+export type ConversationInboxResponse = z.infer<typeof ConversationInboxResponseSchema>;
+
+/**
+ * Paged thread messages. `before` is an ISO cursor (exclusive upper bound on
+ * `createdAt`) for "load older"; a page is returned oldest→newest. `limit`
+ * capped 1..200 (default 50).
+ */
+export const ConversationMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  before: z.string().datetime().optional(),
+});
+export type ConversationMessagesQuery = z.infer<typeof ConversationMessagesQuerySchema>;
+
+/** A page of messages + a `hasMore` flag so the UI can offer "load previous". */
+export const ConversationMessagePageSchema = z.object({
+  data: z.array(ConversationMessageDtoSchema),
+  hasMore: z.boolean(),
+  /**
+   * The counterpart's read anchor (ISO) — lets the UI render "Vu/Envoyé" receipts
+   * without an extra call. Null when the counterpart has never read the thread.
+   */
+  counterpartLastReadAt: z.string().nullable(),
+});
+export type ConversationMessagePage = z.infer<typeof ConversationMessagePageSchema>;
 
 /**
  * Open-or-reuse a thread. `body` is the first message (ignored on idempotent

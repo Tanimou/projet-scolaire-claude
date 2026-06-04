@@ -1,12 +1,12 @@
 'use client';
 
 import {
-  CheckCircle2,
+  AlertTriangle,
   Loader2,
-  MessageSquarePlus,
   Send,
   UserRoundX,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useEffect, useId, useState, useTransition } from 'react';
 
 import { Button, EmptyState, Label, SelectFilter } from '@pilotage/ui';
@@ -14,7 +14,6 @@ import { Button, EmptyState, Label, SelectFilter } from '@pilotage/ui';
 import {
   loadEligibleTeachersAction,
   sendFirstMessageAction,
-  type CreatedConversation,
   type EligibleTeacher,
 } from './compose-actions';
 
@@ -31,13 +30,31 @@ interface ComposeFormProps {
   students: ComposeChild[];
   /** Pre-selected child id when the page is reached per-child (?studentId=). */
   initialStudentId?: string | null;
+  /** Alert-seed (E1 CTA): when set, the create is forwarded `alertId` so the
+   *  resulting thread is alert-seeded, and the body is pre-filled. */
+  alertId?: string | null;
+  /** Alert subject — forwarded as thread context alongside `alertId`. */
+  subjectId?: string | null;
+  /** Alert title — used to pre-fill a kind, editable opening message. */
+  alertTitle?: string | null;
 }
 
 const MAX_BODY = 2000;
 
+/** Kind, editable opening line for an alert-seeded compose (never auto-sent). */
+function alertSeedBody(title: string | null): string {
+  if (!title) return '';
+  return `Bonjour, je vous écris au sujet de l’alerte « ${title} ». `;
+}
+
 /**
- * ComposeForm — the E2-S1 thin parent compose surface (the ONLY new UI this
- * slice ships; the full inbox/thread view + alert-seeded CTA are S2).
+ * ComposeForm — the parent compose surface, now living at `/parent/messages/new`
+ * (the inbox at `/parent/messages` is the thread list). It doubles as the
+ * alert-seeded compose landing: when reached with `alertId`/`subjectId`/
+ * `alertTitle` (the E1 `AlertNextSteps` CTA), it pre-fills a kind, editable body,
+ * shows the read-only alert-context note, and forwards `alertId`/`subjectId` to
+ * the create action so the resulting thread is alert-seeded. On success it
+ * navigates the parent into the freshly created/reused thread.
  *
  * Flow: pick a child (skipped + shown as a static chip when the parent guards
  * exactly one) → the eligible-teacher list is lazily fetched from the
@@ -52,7 +69,14 @@ const MAX_BODY = 2000;
  * French message, never a raw status. WCAG 2.2 AA: labelled controls, 44px
  * targets, focus-visible rings, reduced-motion-safe hover.
  */
-export function ComposeForm({ students, initialStudentId = null }: ComposeFormProps) {
+export function ComposeForm({
+  students,
+  initialStudentId = null,
+  alertId = null,
+  subjectId = null,
+  alertTitle = null,
+}: ComposeFormProps) {
+  const router = useRouter();
   const singleChild = students.length === 1 ? students[0] : null;
 
   const [studentId, setStudentId] = useState<string>(
@@ -66,11 +90,10 @@ export function ComposeForm({ students, initialStudentId = null }: ComposeFormPr
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [teacherId, setTeacherId] = useState('');
-  const [body, setBody] = useState('');
+  const [body, setBody] = useState(alertSeedBody(alertTitle));
 
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<CreatedConversation | null>(null);
   const [announce, setAnnounce] = useState('');
 
   const teacherSelectId = useId();
@@ -94,6 +117,10 @@ export function ComposeForm({ students, initialStudentId = null }: ComposeFormPr
       setLoadingTeachers(false);
       if (res.ok) {
         setTeachers(res.data);
+        // Deterministic alert-seed preselect (PM-5): when exactly one teacher is
+        // eligible, preselect it so an alert-seeded compose lands on the right
+        // person; an ambiguous list leaves the picker for the parent to choose.
+        if (res.data.length === 1 && res.data[0]) setTeacherId(res.data[0].userProfileId);
       } else {
         setTeachers([]);
         setLoadError(res.error);
@@ -116,11 +143,19 @@ export function ComposeForm({ students, initialStudentId = null }: ComposeFormPr
     if (!canSubmit) return;
     setError(null);
     startTransition(async () => {
-      const res = await sendFirstMessageAction({ studentId, teacherId, body });
+      const res = await sendFirstMessageAction({
+        studentId,
+        teacherId,
+        body,
+        ...(subjectId ? { subjectId } : {}),
+        ...(alertId ? { alertId } : {}),
+      });
       if (res.ok) {
-        setSuccess(res.data);
-        setAnnounce(`Message envoyé à ${res.data.teacherName}.`);
-        setBody('');
+        setAnnounce(`Message envoyé à ${res.data.teacherName}. Ouverture de la conversation…`);
+        // Land the parent inside the (alert-seeded) thread they just opened —
+        // the inbox + thread are now real surfaces (S2), so we navigate instead
+        // of holding a static success card.
+        router.push(`/parent/messages/${res.data.id}`);
       } else {
         setError(res.error);
         // Self-heal the picker: a lapsed teaching wall means the teacher list
@@ -134,47 +169,35 @@ export function ComposeForm({ students, initialStudentId = null }: ComposeFormPr
     });
   };
 
-  // Success state — drop the form, render the confirmation (mirrors the
-  // AlertNextSteps emerald success block; no link that would 404 pre-S2).
-  if (success) {
-    return (
-      <div
-        className="flex items-start gap-3 rounded-2xl bg-emerald-50 p-4 ring-1 ring-emerald-200"
-        role="status"
-      >
-        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
-          <CheckCircle2 className="h-5 w-5" aria-hidden />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-emerald-900">
-            Message envoyé à {success.teacherName}
-          </p>
-          <p className="mt-1 text-sm text-emerald-700">
-            Vous retrouverez cette conversation dans vos messages.
-          </p>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="mt-3 min-h-11"
-            onClick={() => {
-              setSuccess(null);
-              setTeacherId('');
-            }}
-          >
-            <MessageSquarePlus className="h-3.5 w-3.5" aria-hidden />
-            Écrire un autre message
-          </Button>
-        </div>
-        <p aria-live="polite" className="sr-only">
-          {announce}
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/60 sm:p-6">
+    <div className="space-y-4">
+      {/* Alert-seeded context — the strict, read-only subset of the alert card so
+          the parent sees what the teacher will see (never widens access). */}
+      {alertId && alertTitle && (
+        <section
+          role="note"
+          aria-label="Contexte de l'alerte à l'origine de ce message"
+          className="rounded-xl bg-amber-50/60 p-3 ring-1 ring-amber-200/70 sm:p-4"
+        >
+          <div className="flex items-start gap-3">
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                À propos d’une alerte
+              </p>
+              <p className="mt-0.5 text-sm font-semibold text-slate-800">{alertTitle}</p>
+              <p className="mt-0.5 text-xs leading-snug text-slate-600">
+                Votre message ouvrira une conversation reliée à cette alerte, pour que
+                l’enseignant·e en connaisse le contexte.
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/60 sm:p-6">
       <div className="flex flex-col gap-5">
         {/* (1) Child — static chip when there's exactly one, selector otherwise. */}
         {singleChild ? (
@@ -309,6 +332,7 @@ export function ComposeForm({ students, initialStudentId = null }: ComposeFormPr
             {error ?? loadError}
           </p>
         )}
+      </div>
       </div>
     </div>
   );

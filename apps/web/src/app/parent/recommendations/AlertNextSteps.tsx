@@ -79,6 +79,15 @@ export function AlertNextSteps({
 }: AlertNextStepsProps) {
   const steps = deriveAlertActions({ code, studentId, subjectId, subjectCode, subjectName });
 
+  // Deep-link to the alert-seeded compose (E2): the body pre-fills + alertId is
+  // forwarded so the created thread carries the alert context. The server
+  // re-checks guardianship + alert.studentId === studentId — never widens access.
+  const messagesHref =
+    `/parent/messages/new?alertId=${encodeURIComponent(alertId)}` +
+    `&studentId=${encodeURIComponent(studentId)}` +
+    (subjectId ? `&subjectId=${encodeURIComponent(subjectId)}` : '') +
+    `&alertTitle=${encodeURIComponent(title)}`;
+
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [requestedAt, setRequestedAt] = useState<string | null>(meetingRequestedAt);
@@ -168,34 +177,50 @@ export function AlertNextSteps({
               </span>
             </div>
           ) : (
-            <div className="flex min-h-11 items-center gap-3 rounded-lg bg-violet-50/70 px-3 py-2 ring-1 ring-violet-200/70">
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
-                <MessagesSquare className="h-4 w-4" aria-hidden />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold text-slate-800">
-                  En parler à l’enseignant
+            <div className="rounded-lg bg-violet-50/70 px-3 py-2.5 ring-1 ring-violet-200/70">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+                  <MessagesSquare className="h-4 w-4" aria-hidden />
                 </span>
-                <span className="mt-0.5 block text-xs leading-snug text-slate-600">
-                  Demander un point sur cette alerte avec l’équipe enseignante.
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold text-slate-800">
+                    En parler à l’enseignant·e
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-snug text-slate-600">
+                    Ouvrez une conversation reliée à cette alerte, ou demandez un
+                    rendez-vous avec l’équipe.
+                  </span>
                 </span>
-              </span>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={pending}
-                aria-busy={pending}
-                onClick={requestMeeting}
-                className="min-h-11 shrink-0"
-              >
-                {pending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                ) : (
+              </div>
+              <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-11">
+                {/* Primary (E2): open the alert-seeded thread — the compose pre-fills
+                    the body + forwards alertId/subjectId so the created thread carries
+                    the alert context. The server re-checks the alert↔student wall. */}
+                <Link
+                  href={messagesHref}
+                  className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-1"
+                >
                   <MessagesSquare className="h-3.5 w-3.5" aria-hidden />
-                )}
-                {pending ? 'Envoi en cours…' : 'Demander'}
-              </Button>
+                  Écrire à l’enseignant·e
+                </Link>
+                {/* Secondary (E1, preserved): the idempotent meeting-request intent. */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={pending}
+                  aria-busy={pending}
+                  onClick={requestMeeting}
+                  className="min-h-11 shrink-0 text-violet-700"
+                >
+                  {pending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <CalendarClock className="h-3.5 w-3.5" aria-hidden />
+                  )}
+                  {pending ? 'Envoi en cours…' : 'Demander un rendez-vous'}
+                </Button>
+              </div>
             </div>
           )}
         </li>

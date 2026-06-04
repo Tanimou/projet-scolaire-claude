@@ -6,6 +6,7 @@ import {
   Get,
   HttpCode,
   Param,
+  Patch,
   Post,
   Query,
   Res,
@@ -13,6 +14,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
+  ConversationInboxQuerySchema,
+  ConversationMessagesQuerySchema,
   CreateConversationRequestSchema,
   SendMessageRequestSchema,
 } from '@pilotage/contracts';
@@ -103,6 +106,78 @@ export class MessagingController {
     // 201 on a genuine create, 200 on an idempotent reuse.
     res.status(created ? 201 : 200);
     return conversation;
+  }
+
+  @Get('conversations')
+  @RequiresPermission('messaging.read')
+  @ApiOperation({ summary: 'Role-aware inbox: the caller’s threads (parent: own; teacher: own)' })
+  async listConversations(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Query() rawQuery: unknown,
+  ) {
+    const parsed = ConversationInboxQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message));
+    }
+    const me = await this.users.ensureUser(jwt);
+    // Role-aware (PM-2): scope on the participant column, never via access-scope.
+    // A caller who is neither parent nor teacher (e.g. admin) gets an empty inbox.
+    const roles = jwt.realm_access?.roles ?? [];
+    const role: 'parent' | 'teacher' | null = roles.includes('parent')
+      ? 'parent'
+      : roles.includes('teacher')
+        ? 'teacher'
+        : null;
+    return this.messaging.listConversations({
+      me,
+      role,
+      status: parsed.data.status,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+    });
+  }
+
+  @Get('conversations/:id')
+  @RequiresPermission('messaging.read')
+  @ApiOperation({ summary: 'Thread header (participant-only; non-participant → 404)' })
+  async getConversation(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    return this.messaging.getConversation({ me, conversationId: id });
+  }
+
+  @Get('conversations/:id/messages')
+  @RequiresPermission('messaging.read')
+  @ApiOperation({ summary: 'Paged thread messages (participant-only; oldest→newest; before cursor)' })
+  async listMessages(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Query() rawQuery: unknown,
+  ) {
+    const parsed = ConversationMessagesQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message));
+    }
+    const me = await this.users.ensureUser(jwt);
+    return this.messaging.listMessages({
+      me,
+      conversationId: id,
+      limit: parsed.data.limit,
+      before: parsed.data.before,
+    });
+  }
+
+  @Patch('conversations/:id/read')
+  @RequiresPermission('messaging.write')
+  @ApiOperation({ summary: 'Mark the caller’s read anchor to now() (idempotent, participant-only)' })
+  async markRead(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    return this.messaging.markRead({ me, conversationId: id });
   }
 
   @Post('conversations/:id/messages')
