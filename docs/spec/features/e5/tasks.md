@@ -77,7 +77,7 @@ digest cron, expressing the per-kind cadence promise end-to-end.
 
 ---
 
-## [ ] S3 — Dedicated parent/teacher notification-preferences UI · `[web][a11y]` · P2 · ~M
+## [x] S3 — Dedicated parent/teacher notification-preferences UI · `[web][a11y]` · P2 · ~M — **shipped**
 
 **Goal:** the self-service control that turns the S2 cadence engine into a felt promise — for parents
 and teachers, in their own portal.

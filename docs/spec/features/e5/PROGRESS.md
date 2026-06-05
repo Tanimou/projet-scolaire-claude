@@ -9,7 +9,7 @@
 | **Spec-kit** | **written** (this run) | — | `spec.md` (John) · `data-model.md` + `plan.md` + `contracts/openapi.yaml` (Winston) · `ux.md` (Sally) · `tasks.md` · `quickstart.md` · `PROGRESS.md`. Docs-only; no schema/API/UI/worker code. |
 | **S1 — Verify & harden the email dispatcher** | **shipped** | — | `[worker][test]` P2. New worker `notifications-email.processor.spec.ts` (the consumer had ZERO coverage) + extended API `notifications.service.spec.ts` producer edges (empty-recipient skip, null→`fr-FR` locale, `{attempts:3, backoff exponential 5000}` opts) + **one concrete hardening fix**: tenant-scoped `userProfile.findMany`/`emailEnabledKeys` on the API path (was id-only, asymmetric vs the worker cron sibling — ADR-002). **No new queue/template, NO schema.** |
 | **S2 — Cross-kind daily digest & cadence** | **shipped** | — | `[schema][worker]` P1. Additive `enum NotificationCadence { instant daily_digest off }` + `cadence @default(instant)` + `@@index([tenantId, cadence, emailEnabled])` (`db push`, the **only** schema change). `NOTIFICATION_CADENCE` const+type in contracts. API: `cadence` on `PreferenceDto`/`UpdatePreferenceArgs` + validated `@IsIn(NOTIFICATION_CADENCE)` on the PATCH DTO + FR-2 gate via new `instantEmailKeys` (email seam) + `inAppPlan` (in-app seam: off→skip row, daily_digest+inApp-off+email-on→hidden `readAt=now` source row). NEW `apps/worker/.../notifications-digest/*` cron (mirror of `parent-digest/*`): 18h-UTC daily window, per-tenant→per-user, group day-window rows **by kind**, one composite branded email via `MailerService`, `(user, day)` sent-marker `Notification(kind=system, sourceType='daily_digest', readAt=now)`. **No new queue/table/template/kind/permission/endpoint/ADR.** Tests: extended `notifications.service.spec.ts` (truth table on both seams) + new worker `notifications-digest-cron.spec.ts` (11) + `daily-digest-email.template.spec.ts` (7) — 18 worker tests green locally. |
-| **S3 — Parent/teacher prefs UI** | not started | — | `[web][a11y]` P2. Cadence selector + channels + mute on `/parent/settings` + `/teacher/settings`; **extend** the shared `PreferencesPanel`. **No schema/endpoint/permission.** |
+| **S3 — Parent/teacher prefs UI** | **shipped** | — | `[web][a11y]` P2. Cadence-aware extension of the **shared** `PreferencesPanel` (no fork): a keyboard `CadenceSelect` radiogroup (Instant `Zap` / Résumé quotidien `CalendarClock` / Off `BellOff`) per per-event kind reusing the E3-S3 severity segmented-control pattern (roving tabindex, arrow keys, Enter/Space, ≥44px, icon+text, `motion-reduce`), In-app/Email switches + Push-"Bientôt", and a header **"Tout mettre en sourdine"** mute (`setCadenceForKindsAction`, weekly-digest excluded, channels untouched/reversible). Cadence **disabled-with-hint** when email off (*"Activez l'email…"*, `aria-describedby`); `cadence=off`/`emailEnabled=false` read as one calm Off while server state is preserved; sky-blue *"Résumé quotidien · un email par jour"* badge. Persists via the existing self-scoped `PATCH /notifications/preferences/:kind` (cadence-accepting since S2), optimistic with per-control revert. Surfaced on **both** `/parent/settings` + `/teacher/settings` (shared-panel mount in the Notifications tab); admin panel + parent reassurance banner unchanged. **No schema/endpoint/permission, no panel fork.** Story: `stories/S3-prefs-ui.md`. |
 
 ## Spec-run decisions (autonomous — no AskUserQuestion)
 
@@ -123,10 +123,27 @@
    build). The API spec references `NotificationCadence` via `@prisma/client`, so it runs green only after
    generate (Murat's gate). The worker specs need only `NotificationKind` (already generated) → green now (18/18).
 
+## S3 run decisions (autonomous — no AskUserQuestion)
+
+1. **Extended the shared panel in the existing Notifications tab** (not new `/settings/notifications`
+   sub-pages) — `ux.md` §2.1's preferred lower-churn mount. One panel, both portals, admin unchanged,
+   parent reassurance banner kept (and a calm cadence line added).
+2. **Cadence appears on every per-event kind, including the admin view** — the panel is shared and
+   `cadence` already arrives in the snapshot (S2). Additive + self-scoped (`profile.*.self`), so the
+   admin panel gains the same control without regressing — consistent with "admin keeps working".
+3. **`CadenceSelect` reuses the E3-S3 severity radiogroup pattern** verbatim (roving tabindex, arrow/
+   Enter/Space, `tabIndex` only-selected, ≥44px, icon+text) — no new `packages/ui` primitive (app-level
+   composition; promote later only with DS-Guardian sign-off).
+4. **Email-off ⇒ cadence disabled-with-hint** (`aria-disabled` + `aria-describedby`), never silent;
+   the user-facing **Off** maps to `cadence='off'` and the Email switch is left untouched so the soft
+   mute is reversible (server state preserved per FR-2 / data-model §1.2).
+5. **Header mute = bulk cadence `off`** via the new `setCadenceForKindsAction` (same partial-failure
+   reconcile as the bulk-channel action), weekly digest excluded, with an inverse "Tout réactiver".
+6. **Off badge wording is window-agnostic** (*"un email par jour"*) since `DIGEST_DAILY_SEND_HOUR` is
+   env-configurable — the hint stays truthful for any window.
+
 ## Next action
 
-S2 shipped. Run **E5-S3** (`epic-slice`, `[web][a11y]`): the dedicated parent/teacher
-notification-preferences UI — per-kind **cadence selector** (Instant / Résumé quotidien / Off) + channel
-switches + mute on `/parent/settings` + `/teacher/settings`, **extending** the shared `PreferencesPanel`
-(cadence-aware), reusing the existing self-scoped `GET/PATCH /notifications/preferences` (now returning +
-accepting `cadence`). No schema/endpoint/permission.
+**E5 complete — all slices (S1–S3) shipped.** On land: tick S3 in `bmad/roadmap.md`, set the E5
+`status: shipped`, and advance to the next epic (`E6 — Analytics Snapshots & pre-computation`, `proposed`
+→ promote to its epic-spec run). No follow-up E5 work is queued.

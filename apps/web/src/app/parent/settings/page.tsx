@@ -169,6 +169,11 @@ export default async function ParentSettingsPage() {
                         <span className="text-violet-600">•</span> Recevez chaque lundi un résumé
                         clair de la semaine — sans ouvrir l&apos;application
                       </li>
+                      <li className="flex gap-1.5">
+                        <span className="text-violet-600">•</span> Choisissez la fréquence par
+                        catégorie : instantané, un résumé quotidien, ou en pause — vous gardez le
+                        contrôle
+                      </li>
                     </ul>
                   </div>
                 </div>
