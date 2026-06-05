@@ -157,3 +157,60 @@ export const SendMessageRequestSchema = z.object({
   body: z.string().min(1).max(5000),
 });
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// S4 — moderation / safety (additive). Report a thread + admin oversight list.
+// A participant raises a report; an admin triages it in a read-only oversight
+// surface. Reports are idempotent-while-open and append-only (never deleted).
+// ---------------------------------------------------------------------------
+
+export const CONVERSATION_REPORT_STATUS = ['open', 'reviewed', 'dismissed'] as const;
+export type ConversationReportStatus = (typeof CONVERSATION_REPORT_STATUS)[number];
+
+/**
+ * Raise a safety report against a thread. Participant-only (404 otherwise);
+ * idempotent while an `open` report by the same reporter exists (re-clicking
+ * "Signaler" reuses it). `reason` is optional free text — kept short and never
+ * stigmatising in the UI copy.
+ */
+export const ReportConversationRequestSchema = z.object({
+  reason: z.string().max(2000).optional(),
+});
+export type ReportConversationRequest = z.infer<typeof ReportConversationRequestSchema>;
+
+/** The report row returned to the reporter on create (+ admin oversight rows). */
+export const ConversationReportDtoSchema = z.object({
+  id: UuidSchema,
+  conversationId: UuidSchema,
+  reportedBy: UuidSchema,
+  reporterName: z.string(),
+  reason: z.string().nullable(),
+  status: z.enum(CONVERSATION_REPORT_STATUS),
+  reviewedAt: z.string().nullable(),
+  createdAt: z.string(),
+  /** Thread context for the admin oversight list (null on the create response). */
+  studentName: z.string().nullable(),
+  parentName: z.string().nullable(),
+  teacherName: z.string().nullable(),
+  conversationStatus: z.enum(CONVERSATION_STATUS).nullable(),
+});
+export type ConversationReportDto = z.infer<typeof ConversationReportDtoSchema>;
+
+/**
+ * Admin moderation oversight query. `status` defaults to `open` (the triage
+ * queue); admins can request `reviewed`/`dismissed`. Tenant/school scoped
+ * server-side. `limit` capped 1..200 (default 50); `offset` for paging.
+ */
+export const ConversationReportsQuerySchema = z.object({
+  status: z.enum(CONVERSATION_REPORT_STATUS).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type ConversationReportsQuery = z.infer<typeof ConversationReportsQuerySchema>;
+
+/** Admin oversight response: reported threads + a total for paging. */
+export const ConversationReportsResponseSchema = z.object({
+  data: z.array(ConversationReportDtoSchema),
+  total: z.number(),
+});
+export type ConversationReportsResponse = z.infer<typeof ConversationReportsResponseSchema>;

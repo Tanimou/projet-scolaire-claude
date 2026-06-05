@@ -11,6 +11,8 @@ export type NotificationKindCode =
   | 'enrollment_status'
   | 'lesson_published'
   | 'system'
+  // E2-S4 — opt-in email on a new parent↔teacher message (OFF by default, RGPD).
+  | 'message'
   | 'weekly_digest';
 
 export interface UpdatePreferencePatch {

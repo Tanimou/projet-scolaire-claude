@@ -65,7 +65,7 @@ read-receipts show on both sides.
   read-only thread is reply-disabled.
 - **AC:** spec §5 AC5.
 
-## [ ] S4 — Moderation / safety + optional email channel · `[auth]` · ~M
+## [x] S4 — Moderation / safety + optional email channel · `[schema][auth]` · ~M  ✅ shipped (needs human review)
 
 **Capability:** either party can report a thread; an admin has read-only oversight of reported
 threads; sends are rate-limited; copy is non-stigmatising; an opt-in email channel notifies on

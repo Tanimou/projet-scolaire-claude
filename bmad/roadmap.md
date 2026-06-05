@@ -21,7 +21,7 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1, E2-S2 and E2-S3 are now shipped; next slice → E2-S4** (moderation / safety + optional email channel).
+**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1 through E2-S4 are now shipped → `E2` is `shipped` (all 4 slices landed; S4 = moderation/safety: report + admin oversight + send rate-limit + opt-in email reusing the existing notification-email pipeline). Next epic → `E3 — Complete the Alert Engine` (the highest-priority `proposed` epic; its spec-kit is not yet written → the next run is an `epic-spec` run for E3).**
 
 ---
 
@@ -57,7 +57,7 @@ alerts but are **read-only** — they cannot act. This makes the dashboard actua
   `apps/worker/src/modules/parent-digest/*` cron (structural parity with `AlertsCronService`).
   *(worker + api + prefs UI; [schema][auth] tag)*
 
-### E2 — Parent ↔ Teacher Messaging (Conversations) · `in-progress` (specced) · ~M-L
+### E2 — Parent ↔ Teacher Messaging (Conversations) · `shipped` · ~M-L
 **Why:** unblocks parent→teacher contact (today only teacher→family announcements exist). The
 natural target of E1's "message the teacher" action. Prepares the future Messagerie module.
 **Audit:** messaging ~25%; no `Conversation` model yet.
@@ -87,8 +87,16 @@ real-time deferred (ADR-019 tripwire). **S1 + S2 shipped; next slice → S3.**
   in-app notification deep-links retargeted `/teacher/messages` → `/teacher/conversations`; a distinct
   "Conversations parents" sidebar item. No schema, no new endpoint, no controller/permission change —
   the teacher-side wall is the existing S2 participant + `teacherId = me` scoping (unchanged). *(api + web)*
-- [ ] **S4** — Moderation/safety: report, admin oversight, rate-limit, non-stigmatising guardrails;
-  optional email channel. *(api + worker)*
+- [x] **S4** — Moderation/safety: report, admin oversight, rate-limit, non-stigmatising guardrails;
+  optional email channel. Shipped (needs human review): `ConversationReport` model + enum (`db push`);
+  participant-scoped idempotent `POST /conversations/:id/report` (append-only `conversation.report`
+  audit) + **admin-only** `GET /conversations/reports` (new `messaging.moderate` perm, school/super
+  admin ONLY, append-only `conversation.moderation_read` audit); per-sender send rate-limit (≤20/60 s,
+  counted on existing message rows → 429, no new table/queue); shared non-stigmatising
+  `ReportThreadDialog` on both portals + admin `/admin/conversations` oversight page; **opt-in email
+  on new message reusing the existing `notifications-email` processor** via `createMany.dispatchEmails`
+  + `NotificationPreference(message, emailEnabled)` (default OFF, RGPD) — **zero worker code added**,
+  no new BullMQ queue, no websocket. *(schema [schema][auth] tag)*
 
 ---
 

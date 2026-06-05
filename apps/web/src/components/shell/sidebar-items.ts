@@ -126,6 +126,14 @@ export const adminSidebarGroups: SidebarGroupConfig[] = [
     items: [
       { key: 'communications', icon: Megaphone, label: 'Annonces', href: '/admin/communications' },
       { key: 'notifications', icon: Bell, label: 'Notifications', href: '/admin/notifications' },
+      {
+        key: 'conversation-moderation',
+        icon: ShieldCheck,
+        label: 'Modération messagerie',
+        href: '/admin/conversations',
+        // E2-S4 read-only moderation oversight of reported parent↔teacher threads.
+        matches: /^\/admin\/conversations(\/|$)/,
+      },
     ],
   },
   {

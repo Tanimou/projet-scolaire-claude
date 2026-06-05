@@ -161,8 +161,8 @@ model ConversationMessage {
 
 ## 5. `ConversationReport` (S4 — moderation/safety)
 
-Sliced separately (S4). Listed here so the full data model is visible up front; **do not create
-it before S4**.
+Sliced separately (S4 — **shipped**). Listed here so the full data model is visible up front.
+The model + enum + the `UserProfile`/`Conversation` back-relations landed in S4 via `db push`.
 
 ```prisma
 enum ConversationReportStatus {

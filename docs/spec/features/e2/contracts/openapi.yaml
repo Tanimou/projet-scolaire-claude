@@ -246,17 +246,21 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [reason]
               properties:
-                reason: { type: string, minLength: 1, maxLength: 2000 }
+                reason: { type: string, maxLength: 2000, description: Optional free-text precision (non-stigmatising UX — reporting never forces a reason). }
       responses:
         '201':
-          description: Report recorded (or existing open report returned, idempotent).
+          description: Report recorded (genuine create).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationReport' }
+        '200':
+          description: Existing open report returned (idempotent reuse).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ConversationReport' }

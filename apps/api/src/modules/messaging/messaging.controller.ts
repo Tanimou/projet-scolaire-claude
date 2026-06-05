@@ -16,7 +16,9 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   ConversationInboxQuerySchema,
   ConversationMessagesQuerySchema,
+  ConversationReportsQuerySchema,
   CreateConversationRequestSchema,
+  ReportConversationRequestSchema,
   SendMessageRequestSchema,
 } from '@pilotage/contracts';
 import type { Response } from 'express';
@@ -33,7 +35,7 @@ import { SchoolContextService } from '../school-structure/school-context.service
 import { MessagingService } from './messaging.service';
 
 /**
- * Parent ↔ teacher messaging (E2-S1). Gated by the dedicated
+ * Parent ↔ teacher messaging (E2-S1 + S4). Gated by the dedicated
  * `messaging.read`/`messaging.write` permissions (granted to parent, teacher,
  * school_admin; super_admin inherits via the all-permissions map). Every query
  * is tenant-scoped in the service; cross-tenant ids resolve to 404.
@@ -42,6 +44,12 @@ import { MessagingService } from './messaging.service';
  * guardianship wall (StudentAccessService returns true for admins), admins are
  * non-participants and must NOT spawn parent↔teacher threads — the controller
  * rejects any non-parent caller on the create path with 403.
+ *
+ * E2-S4 moderation/safety: `POST /conversations/:id/report` (participant-only via
+ * the service gate, reuses `messaging.write`) lets either party flag a thread;
+ * `GET /conversations/reports` is the **admin-only** oversight list, gated by the
+ * dedicated `messaging.moderate` permission (granted to school_admin/super_admin
+ * ONLY — never to parent or teacher), so a participant cannot read the queue.
  */
 @ApiTags('messaging')
 @ApiBearerAuth()
@@ -137,6 +145,33 @@ export class MessagingController {
     });
   }
 
+  @Get('conversations/reports')
+  @RequiresPermission('messaging.moderate')
+  @ApiOperation({ summary: 'Admin moderation oversight: reported threads (admin-only, read-only)' })
+  async listReports(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Query() rawQuery: unknown,
+  ) {
+    const parsed = ConversationReportsQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message));
+    }
+    const me = await this.users.ensureUser(jwt);
+    // School-scope the oversight list (AC3/AC9): resolve the admin's active school
+    // so a school_admin never reads another school's reports in the same tenant.
+    const { schoolId } = await this.ctx.forUser(me);
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    return this.messaging.listReports({
+      me,
+      schoolId,
+      actorRole,
+      portal,
+      status: parsed.data.status,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+    });
+  }
+
   @Get('conversations/:id')
   @RequiresPermission('messaging.read')
   @ApiOperation({ summary: 'Thread header (participant-only; non-participant → 404)' })
@@ -202,5 +237,32 @@ export class MessagingController {
       conversationId: id,
       body: parsed.data.body,
     });
+  }
+
+  @Post('conversations/:id/report')
+  @RequiresPermission('messaging.write')
+  @ApiOperation({ summary: 'Report a thread for safety review (participant-only, idempotent open)' })
+  async reportConversation(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Body() rawBody: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const parsed = ReportConversationRequestSchema.safeParse(rawBody ?? {});
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message));
+    }
+    const me = await this.users.ensureUser(jwt);
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    const { report, created } = await this.messaging.reportConversation({
+      me,
+      actorRole,
+      portal,
+      conversationId: id,
+      reason: parsed.data.reason ?? null,
+    });
+    // 201 on a genuine create, 200 on an idempotent reuse of an open report.
+    res.status(created ? 201 : 200);
+    return report;
   }
 }
