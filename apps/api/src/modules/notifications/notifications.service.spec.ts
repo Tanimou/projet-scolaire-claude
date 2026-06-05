@@ -3,7 +3,11 @@ import { NotificationPreferencesService } from './preferences.service';
 
 type CreatedRow = { userProfileId: string; kind: string };
 
-type EnqueuedJob = { name: string; data: { to: string; kind: string } };
+type EnqueuedJob = {
+  name: string;
+  data: { to: string; kind: string; locale: string };
+  opts?: { attempts: number; backoff: { type: string; delay: number } };
+};
 
 function makeService() {
   const created: CreatedRow[] = [];
@@ -20,13 +24,15 @@ function makeService() {
     userProfile: {
       // Echo a deterministic email per requested id so dispatch can resolve them.
       findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
-        where.id.in.map((id) => ({
-          id,
-          email: `${id}@example.test`,
-          firstName: 'Test',
-          lastName: id.toUpperCase(),
-          locale: 'fr-FR',
-        })),
+        where.id.in.map(
+          (id): { id: string; email: string; firstName: string; lastName: string; locale: string | null } => ({
+            id,
+            email: `${id}@example.test`,
+            firstName: 'Test',
+            lastName: id.toUpperCase(),
+            locale: 'fr-FR',
+          }),
+        ),
       ),
     },
   };
@@ -167,6 +173,71 @@ describe('NotificationsService.createMany — email channel (R8.2)', () => {
 
     expect(res.created).toBe(1);
     expect(created).toHaveLength(1);
+  });
+});
+
+describe('NotificationsService.dispatchEmails — E5-S1 producer edges', () => {
+  it('skips a recipient with no email on file but still emails a co-batched valid recipient', async () => {
+    const { service, prisma, prefs, enqueued } = makeService();
+    prefs.emailEnabledKeys.mockResolvedValue(
+      new Set(['u1|grade_published', 'u2|grade_published']),
+    );
+    // u1 has no usable email (empty string), u2 does. The producer must drop u1
+    // without throwing while u2 still gets a job.
+    prisma.userProfile.findMany.mockResolvedValueOnce([
+      { id: 'u1', email: '', firstName: 'A', lastName: 'One', locale: 'fr-FR' },
+      { id: 'u2', email: 'u2@example.test', firstName: 'B', lastName: 'Two', locale: 'fr-FR' },
+    ]);
+
+    const res = await service.createMany([
+      item({ userProfileId: 'u1' }),
+      item({ userProfileId: 'u2' }),
+    ]);
+
+    // Both still get the in-app row — the empty email only suppresses the email channel.
+    expect(res.created).toBe(2);
+    expect(enqueued.map((j) => j.data.to)).toEqual(['u2@example.test']);
+  });
+
+  it('defaults a null locale to fr-FR on the enqueued job', async () => {
+    const { service, prisma, prefs, emailQueue } = makeService();
+    prefs.emailEnabledKeys.mockResolvedValue(new Set(['u1|grade_published']));
+    prisma.userProfile.findMany.mockResolvedValueOnce([
+      { id: 'u1', email: 'u1@example.test', firstName: 'A', lastName: 'One', locale: null },
+    ]);
+
+    await service.createMany([item({ userProfileId: 'u1' })]);
+
+    // The enqueued job carries the FR fallback (template localisation itself is
+    // an S2 non-goal — only the field is plumbed here).
+    const job = emailQueue.addBulk.mock.calls[0]![0][0] as { data: { locale: string } };
+    expect(job.data.locale).toBe('fr-FR');
+  });
+
+  it('enqueues with exactly the retry/backoff opts {attempts:3, exponential 5000}', async () => {
+    const { service, prefs, emailQueue } = makeService();
+    prefs.emailEnabledKeys.mockResolvedValue(new Set(['u1|grade_published']));
+
+    await service.createMany([item({ userProfileId: 'u1' })]);
+
+    const jobs = emailQueue.addBulk.mock.calls[0]![0];
+    expect(jobs[0]!.opts).toMatchObject({
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+    });
+  });
+
+  it('scopes the profile + preference lookups by tenantId (parity with the worker cron path)', async () => {
+    const { service, prisma, prefs } = makeService();
+    prefs.emailEnabledKeys.mockResolvedValue(new Set(['u1|grade_published']));
+
+    await service.createMany([item({ userProfileId: 'u1', tenantId: 't1' })]);
+
+    // emailEnabledKeys receives the batch tenant as its 2nd arg…
+    expect(prefs.emailEnabledKeys.mock.calls[0]![1]).toBe('t1');
+    // …and the profile lookup is tenant-scoped, not id-only.
+    const profileWhere = prisma.userProfile.findMany.mock.calls[0]![0].where;
+    expect(profileWhere).toMatchObject({ tenantId: 't1' });
   });
 });
 

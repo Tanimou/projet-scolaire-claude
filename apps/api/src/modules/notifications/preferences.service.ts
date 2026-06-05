@@ -165,15 +165,21 @@ export class NotificationPreferencesService {
    * email channel is *explicitly enabled*. The email default is **off**, so a
    * missing override row means "no email" and is absent from the result — the
    * dispatcher emails only recipients who opted in. One query per batch.
+   *
+   * `tenantId` is optional but the dispatcher always passes it, so the lookup is
+   * tenant-scoped — defence-in-depth matching the worker cron sibling
+   * (`dispatchAlertEmails`) and ADR-002 ("every query scoped by tenant_id").
    */
   async emailEnabledKeys(
     pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
+    tenantId?: string,
   ): Promise<Set<string>> {
     if (pairs.length === 0) return new Set();
     const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
     for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
     const rows = await this.prisma.notificationPreference.findMany({
       where: {
+        ...(tenantId ? { tenantId } : {}),
         OR: [...uniq.values()].map((p) => ({
           userProfileId: p.userProfileId,
           kind: p.kind,
