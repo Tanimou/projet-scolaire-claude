@@ -31,7 +31,7 @@ the `TEACHER_COMMENT_FLAG` rule raises one explainable alert to the guardian. **
   audit row, evaluator reads only flagged+published grades, tenant isolation, dedup window. P1.
 - **AC:** spec §5 AC1 (partial — one of two), AC2, AC6, AC7, AC8, AC9.
 
-## [ ] S2 — 7th rule = `IMPROVEMENT` (non-stigmatising positive signal) + dual evaluator · `[rules]` · ~S-M
+## [x] S2 — 7th rule = `IMPROVEMENT` (non-stigmatising positive signal) + dual evaluator · `[rules]` · ~S-M · **shipped** (needs human review)
 
 **Capability:** when a child *recovers* ≥ +1.5 pts over 3 consecutive published grades in a subject,
 a **green, celebratory** alert appears in the parent's bell. **The engine goes 7/7** and the bell
@@ -51,7 +51,7 @@ becomes a warning **and** an encouragement channel (the cahier's "which subjects
   nothing; clamp on bad params; severity low; dedup. Same fixture through api + worker. P2.
 - **AC:** spec §5 AC1 (complete — 7/7), AC3, AC6, AC8, AC9.
 
-## [ ] S3 — Admin rule-config UI (threshold / severity / period / notify) · `[web]` · ~M
+## [x] S3 — Admin rule-config UI (threshold / severity / period / notify) · `[web]` · ~M · **shipped** (needs human review)
 
 **Capability:** an admin edits a rule's **thresholds, severity, period, and enabled** state per
 school through a real editor — over the **existing** `PATCH /alerts/rules/:code` (no new endpoint).
@@ -68,7 +68,7 @@ school through a real editor — over the **existing** `PATCH /alerts/rules/:cod
   side; admin-only (parent/teacher token → 403 on the write). P2.
 - **AC:** spec §5 AC4, AC8, AC9.
 
-## [ ] S4 — Email on the cron path (parity with the API path) · `[worker]` · ~S-M
+## [x] S4 — Email on the cron path (parity with the API path) · `[worker]` · ~S-M · **shipped** (needs human review)
 
 **Capability:** a cron-detected alert **emails** each guardian who opted in
 (`NotificationPreference(alert, emailEnabled)`), removing today's "in-app only" asymmetry — same
