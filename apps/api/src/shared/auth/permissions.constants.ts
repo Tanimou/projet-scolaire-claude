@@ -102,6 +102,7 @@ export const PERMISSIONS = [
   ['imports.execute', 'Exécuter bulk imports', 'import', 'execute'],
   ['exports.execute', 'Générer exports', 'export', 'execute'],
   ['exports.execute.parent', 'Générer ses propres exports (bulletin)', 'export', 'execute.parent'],
+  ['exports.execute.teacher', 'Générer la grille de notes de ses classes', 'export', 'execute.teacher'],
   ['integrations.write', 'Gérer intégrations', 'integration', 'write'],
 
   // Profile (everyone)
@@ -224,6 +225,7 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'meeting_requests.write',
     'messaging.read',
     'messaging.write',
+    'exports.execute.teacher',
     'profile.read.self',
     'profile.write.self',
   ],

@@ -92,6 +92,28 @@ export interface ParentExportJobDto {
   finishedAt: string | null;
 }
 
+/**
+ * Teacher-scoped export-job view (E4-S3). A deliberately NARROW projection of the
+ * generic `ExportJobDto` for the teacher class grade-grid surface: the teacher
+ * only ever sees their OWN `grades_xlsx` jobs (re-scoped to `requestedBy = me`),
+ * the raw `errorMessage`/`fileUrl`/requester identity are omitted, and
+ * `classSectionId`/`termId` are HOISTED to top-level from the job `parameters` so
+ * the gradebook UI can map each job to its (class × term) row + poll status
+ * without reaching into the JSONB blob — matching `@pilotage/contracts`
+ * `TeacherExportJobSchema`.
+ */
+export interface TeacherExportJobDto {
+  id: string;
+  kind: 'grades_xlsx';
+  status: ExportStatusCode;
+  fileName: string;
+  fileSizeBytes: number | null;
+  classSectionId: string | null;
+  termId: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
 /** BullMQ job payload — the API enqueues, the worker consumes. */
 export interface ExportJobPayload {
   exportJobId: string;

@@ -21,6 +21,7 @@ import { ParentExportsModule } from './modules/parent-exports/parent-exports.mod
 import { SchoolsModule } from './modules/schools/schools.module';
 import { SchoolStructureModule } from './modules/school-structure/school-structure.module';
 import { StudentsModule } from './modules/students/students.module';
+import { TeacherExportsModule } from './modules/teacher-exports/teacher-exports.module';
 import { TeachingModule } from './modules/teaching/teaching.module';
 import { KeycloakModule } from './shared/keycloak/keycloak.module';
 import { PrismaModule } from './shared/prisma/prisma.module';
@@ -48,6 +49,7 @@ import { PrismaModule } from './shared/prisma/prisma.module';
     NotificationsModule,
     ExportsModule,
     ParentExportsModule,
+    TeacherExportsModule,
     AlertsModule,
     MessagingModule,
   ],

@@ -48,3 +48,50 @@ export const ParentExportJobSchema = z.object({
   finishedAt: z.string().nullable(),
 });
 export type ParentExportJob = z.infer<typeof ParentExportJobSchema>;
+
+/**
+ * Teacher self-service class grade-grid exports — E4-S3.
+ *
+ * A teacher one-clicks "Exporter la grille" from their gradebook. The
+ * teacher-scoped surface (POST /api/v1/teacher/exports/grade-grid,
+ * GET /api/v1/teacher/exports, GET /api/v1/teacher/exports/:id[/download-url])
+ * enqueues the EXISTING `grades_xlsx` worker generator scoped to a single,
+ * teaching-assignment-checked `{ classSectionId, termId? }` — never the
+ * admin-only `exports.execute` nor the parent `exports.execute.parent` surface.
+ *
+ * The input is intentionally minimal: the server derives `classSectionId` from
+ * the teaching assignment the caller is verified to OWN (never trusted from the
+ * client) to prevent IDOR / foreign-class export. See the E4-S3 architect ruling.
+ *
+ * These shapes mirror the API's narrow `ExportsService.toTeacherDto` output and
+ * the existing status model already shipped for the admin/parent surfaces — no
+ * schema change.
+ */
+export const CreateTeacherGradeGridInputSchema = z.object({
+  teachingAssignmentId: UuidSchema,
+  termId: UuidSchema.optional(),
+});
+export type CreateTeacherGradeGridInput = z.infer<
+  typeof CreateTeacherGradeGridInputSchema
+>;
+
+/**
+ * A teacher-visible export-job view (the caller's own `grades_xlsx` jobs).
+ * Mirrors the parent narrow shape but for an XLSX class grid: `classSectionId`
+ * and `termId` are hoisted top-level (echoed from the job parameters), and the
+ * raw `errorMessage`/`fileUrl`/requester identity are omitted from the surface.
+ */
+export const TeacherExportJobSchema = z.object({
+  id: UuidSchema,
+  kind: z.literal('grades_xlsx'),
+  status: z.enum(PARENT_EXPORT_STATUS),
+  fileName: z.string(),
+  fileSizeBytes: z.number().int().nullable(),
+  /** The class section this grid was generated for (echoed from the job parameters). */
+  classSectionId: UuidSchema.nullable(),
+  /** The term scope when one was selected, else null = whole-year grid. */
+  termId: UuidSchema.nullable(),
+  createdAt: z.string(),
+  finishedAt: z.string().nullable(),
+});
+export type TeacherExportJob = z.infer<typeof TeacherExportJobSchema>;
