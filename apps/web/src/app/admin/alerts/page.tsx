@@ -71,6 +71,9 @@ const RULE_IMPLEMENTED: Partial<Record<AlertRuleCode, true>> = {
   LOW_SUBJECT_AVG: true,
   HIGH_ABSENCE: true,
   REPEATED_FAILURE: true,
+  NEGATIVE_TREND: true,
+  MISSING_ASSESSMENT: true,
+  TEACHER_COMMENT_FLAG: true,
 };
 
 interface AlertsSearchParams {

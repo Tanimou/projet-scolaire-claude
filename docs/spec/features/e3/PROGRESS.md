@@ -3,7 +3,8 @@
 > One row per slice. The routine updates this on Land (tick `tasks.md`, this file, and the roadmap
 > E3 entry). Status legend: `not-started` ▸ `in-progress` ▸ `shipped` ▸ `blocked`.
 
-**Epic status:** `proposed` → spec-kit landed (this run). Next run → **epic-slice S1**.
+**Epic status:** `in-progress` (spec-kit landed; **S1 shipped**). Next run → **epic-slice S2** (7th
+rule = `IMPROVEMENT`, a non-stigmatising positive signal — mirror of `NEGATIVE_TREND`, inverted).
 
 **Audit baseline (2026-06-05):** alert engine **58%** — 5/7 rules live
 (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`, `NEGATIVE_TREND`, `MISSING_ASSESSMENT`) in
@@ -15,7 +16,7 @@ data model for either.
 | Slice | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | Spec | E3 epic-spec kit | **shipped** | _(this run)_ | spec/plan/data-model/contracts/tasks/quickstart/PROGRESS authored; docs only, no code. |
-| S1 | `TEACHER_COMMENT_FLAG` flag + dual evaluator | not-started | — | additive `Grade` flag field (`db push`) + teacher flag/unflag endpoint + byte-parity evaluator. `[schema][auth]`. |
+| S1 | `TEACHER_COMMENT_FLAG` flag + dual evaluator | **shipped** | _(this run — needs human review)_ | additive `Grade` flag fields `isFlagged`/`flaggedAt`/`flaggedBy`/`flagNote` (`db push`) + `@@index([tenantId, isFlagged])`; `PATCH /grades/:id/flag` (ownership ABAC, 404-before-403, idempotent, append-only `grade.flag`/`grade.unflag`); byte-parity `evaluateTeacherCommentFlag` in api + worker `RULE_FN`; teacher gradebook flag toggle; "non implémenté" badge removed on `/admin/alerts`. **Engine 6/7.** `[schema][auth]` P1. |
 | S2 | 7th rule = `IMPROVEMENT` (positive signal) + evaluator | not-started | — | mirror of `NEGATIVE_TREND`, inverted; `severity: low`; no new data (RGPD minimal). `BEHAVIOR_ALERT` left reserved-but-unwired (spec §6). |
 | S3 | Admin rule-config UI (threshold/severity/period/notify) | not-started | — | over the existing `PATCH /alerts/rules/:code`; no new endpoint. `[web]`. |
 | S4 | Email on the cron path (parity with API path) | not-started | — | reuse `notifications-email` (no new queue/template); honor `NotificationPreference(alert, emailEnabled)`. `[worker]`. |

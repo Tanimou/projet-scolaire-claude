@@ -4,13 +4,16 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Logger,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Prisma } from '@prisma/client';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -60,11 +63,20 @@ class ReviseGradeDto {
   @IsString() @MinLength(3) @MaxLength(500) reason!: string;
 }
 
+class FlagGradeDto {
+  @IsBoolean() flagged!: boolean;
+  // Short, bounded teacher reason — NOT a messaging surface (spec §6). Capped at
+  // 280 chars so it stays a factual addendum to the templated alert body.
+  @IsOptional() @IsString() @MaxLength(280) note?: string;
+}
+
 @ApiTags('grades')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('grades')
 export class GradesController {
+  private readonly logger = new Logger(GradesController.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly users: UserSyncService,
@@ -237,6 +249,99 @@ export class GradesController {
         include: { revisions: { orderBy: { revisedAt: 'desc' } } },
       });
     });
+  }
+
+  /**
+   * Flag / unflag a published grade as « à signaler » (E3-S1). Feeds the
+   * `TEACHER_COMMENT_FLAG` rule, which raises one explainable guardian alert per
+   * flagged published grade on the next evaluation pass.
+   *
+   * Ownership ABAC reuses `assertCanWrite(assessment.teacherProfileId, …)` — the
+   * grade's owner is the assignment teacher, NOT `Grade.enteredBy` (an admin may
+   * have batch-entered it). Cross-tenant id → 404 (checked before ownership so a
+   * 403 never confirms the id exists). Draft grades cannot be flagged (the
+   * evaluator only reads published grades → a draft flag would be a silent
+   * dead-end). Idempotent: a redundant flag/unflag is a 200 no-op that re-stamps
+   * nothing and writes NO audit row; every real transition writes exactly one
+   * append-only `grade.flag`/`grade.unflag` `AuditLog` row (best-effort,
+   * non-rolling-back), tenant-scoped.
+   */
+  @Patch(':id/flag')
+  @RequiresPermission('grades.write')
+  async flag(
+    @Param('id') id: string,
+    @Body() body: FlagGradeDto,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const grade = await this.prisma.grade.findUnique({
+      where: { id },
+      include: { assessment: true },
+    });
+    if (!grade || grade.tenantId !== me.tenantId) throw new NotFoundException();
+    await this.assertCanWrite(grade.assessment.teacherProfileId, me, jwt);
+    if (grade.status !== 'published' && grade.status !== 'revised') {
+      throw new BadRequestException(
+        'Seules les notes publiées peuvent être signalées.',
+      );
+    }
+
+    // Idempotency: no-op when the flag already matches the requested state.
+    const didTransition = grade.isFlagged !== body.flagged;
+    if (!didTransition) {
+      return {
+        id: grade.id,
+        isFlagged: grade.isFlagged,
+        flaggedAt: grade.flaggedAt?.toISOString() ?? null,
+        flagNote: grade.flagNote ?? null,
+      };
+    }
+
+    const now = new Date();
+    const note = body.flagged ? body.note?.trim() || null : null;
+    const updated = await this.prisma.grade.update({
+      where: { id: grade.id },
+      data: {
+        isFlagged: body.flagged,
+        flaggedAt: body.flagged ? now : null,
+        flaggedBy: body.flagged ? me.id : null,
+        flagNote: note,
+      },
+    });
+
+    // Append-only audit, one row per real transition. Best-effort: a write
+    // failure is logged and swallowed (never rolls back the flag).
+    const roles = jwt.realm_access?.roles ?? [];
+    const actorRole =
+      ['super_admin', 'school_admin', 'teacher', 'parent'].find((r) => roles.includes(r)) ??
+      roles[0] ??
+      null;
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: me.tenantId,
+          actorId: me.id,
+          actorRole,
+          portal: actorRole === 'teacher' ? 'teacher' : actorRole ? 'admin' : null,
+          action: body.flagged ? 'grade.flag' : 'grade.unflag',
+          resourceType: 'grade',
+          resourceId: grade.id,
+          before: { isFlagged: grade.isFlagged } as Prisma.InputJsonValue,
+          after: { isFlagged: body.flagged } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write ${body.flagged ? 'grade.flag' : 'grade.unflag'} audit row for grade ${grade.id} (flag unaffected): ${(err as Error).message}`,
+      );
+    }
+
+    return {
+      id: updated.id,
+      isFlagged: updated.isFlagged,
+      flaggedAt: updated.flaggedAt?.toISOString() ?? null,
+      flagNote: updated.flagNote ?? null,
+    };
   }
 
   /** Per-student statistics — averages, per subject + overall. */

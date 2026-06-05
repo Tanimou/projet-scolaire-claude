@@ -1,10 +1,10 @@
 'use client';
 
-import { CheckCircle2, Loader2, Plus, Save, Send } from 'lucide-react';
+import { CheckCircle2, Flag, Loader2, Plus, Save, Send } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-import { createAssessment, publishAssessment, refresh, saveGrades } from './actions';
+import { createAssessment, flagGrade, publishAssessment, refresh, saveGrades } from './actions';
 import type { GradebookData } from './page';
 
 export function Gradebook({
@@ -25,6 +25,45 @@ export function Gradebook({
   const [edits, setEdits] = useState<
     Record<string, Record<string, { value?: number | ''; isAbsent?: boolean }>>
   >({});
+
+  // ── flag state overlay, keyed by gradeId, seeded from the server payload.
+  //    `data` is frozen at mount, so we track flag transitions here so the
+  //    icon reflects the latest action without a full re-render of the table.
+  const [flagged, setFlagged] = useState<Record<string, boolean>>(() => {
+    const seed: Record<string, boolean> = {};
+    for (const row of initial.rows) {
+      for (const g of row.grades) {
+        if (g) seed[g.id] = !!g.isFlagged;
+      }
+    }
+    return seed;
+  });
+  // per-cell in-flight gradeId, so flagging one cell never blocks editing others
+  const [flaggingId, setFlaggingId] = useState<string | null>(null);
+
+  const isFlagged = (gradeId: string) => flagged[gradeId] ?? false;
+
+  const toggleFlag = async (gradeId: string) => {
+    const next = !isFlagged(gradeId);
+    setFlaggingId(gradeId);
+    setError(null);
+    // optimistic flip
+    setFlagged((f) => ({ ...f, [gradeId]: next }));
+    const res = await flagGrade(gradeId, next);
+    setFlaggingId(null);
+    if (!res.ok) {
+      // rollback on failure
+      setFlagged((f) => ({ ...f, [gradeId]: !next }));
+      setError(res.error);
+      return;
+    }
+    setFeedback(
+      next
+        ? 'Note signalée — la famille sera alertée au prochain passage.'
+        : 'Signalement retiré.',
+    );
+    router.refresh();
+  };
 
   const setCell = (assessmentId: string, studentId: string, patch: { value?: number | ''; isAbsent?: boolean }) => {
     setEdits((e) => ({
@@ -79,9 +118,19 @@ export function Gradebook({
 
   return (
     <div className="space-y-4">
-      {error && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>}
+      {error && (
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+        >
+          {error}
+        </div>
+      )}
       {feedback && (
-        <div className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+        <div
+          aria-live="polite"
+          className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
+        >
           <CheckCircle2 className="h-4 w-4" /> {feedback}
         </div>
       )}
@@ -154,9 +203,17 @@ export function Gradebook({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {data.rows.map((row) => (
+              {data.rows.map((row) => {
+                const rowHasFlag = row.grades.some((g) => g && isFlagged(g.id));
+                return (
                 <tr key={row.studentId} className="hover:bg-slate-50/40">
                   <td className="px-4 py-2 font-bold text-slate-900 sticky left-0 bg-white">
+                    {rowHasFlag && (
+                      <Flag
+                        className="mr-1 inline-block h-3 w-3 -translate-y-px fill-rose-500 text-rose-500"
+                        aria-label="Cet élève a une note signalée"
+                      />
+                    )}
                     {row.student.lastName.toUpperCase()} {row.student.firstName}
                     {row.student.externalRef && (
                       <span className="ml-1 font-mono text-[10px] font-normal text-slate-400">
@@ -210,6 +267,16 @@ export function Gradebook({
                             />
                             abs.
                           </label>
+                          {/* flag toggle — only on a real, published/revised grade */}
+                          {a.isPublished &&
+                            g &&
+                            (g.status === 'published' || g.status === 'revised') && (
+                              <FlagToggle
+                                flagged={isFlagged(g.id)}
+                                busy={flaggingId === g.id}
+                                onToggle={() => toggleFlag(g.id)}
+                              />
+                            )}
                         </div>
                       </td>
                     );
@@ -218,7 +285,8 @@ export function Gradebook({
                     {row.average ?? '—'}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -262,6 +330,44 @@ export function Gradebook({
         </div>
       )}
     </div>
+  );
+}
+
+function FlagToggle({
+  flagged,
+  busy,
+  onToggle,
+}: {
+  flagged: boolean;
+  busy: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={busy}
+      aria-pressed={flagged}
+      aria-label={flagged ? 'Retirer le signalement' : 'Signaler cette note comme préoccupante'}
+      title={
+        flagged ? 'Signalée — cliquer pour retirer' : 'Signaler — alertera la famille'
+      }
+      className={`mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 disabled:cursor-wait ${
+        flagged
+          ? 'bg-rose-50 ring-1 ring-rose-200'
+          : 'text-slate-400 hover:bg-rose-50 hover:text-rose-500'
+      }`}
+    >
+      {busy ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-400" />
+      ) : (
+        <Flag
+          className={`h-3.5 w-3.5 motion-safe:active:scale-95 ${
+            flagged ? 'fill-rose-500 text-rose-500' : ''
+          }`}
+        />
+      )}
+    </button>
   );
 }
 
