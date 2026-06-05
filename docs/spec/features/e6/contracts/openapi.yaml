@@ -1,0 +1,333 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — E6 Analytics Snapshots & pre-computation (contract delta)
+  version: 0.2.0
+  description: >
+    E6 is a pre-computation / NFR epic: hold the parent-dashboard <2 s NFR at scale by
+    materialising the per-student averages the dashboards compute LIVE today, recomputed by
+    a tenant-scoped worker cron/event handler on GradePublished / GradeRevised / coefficient
+    change (mirroring the alerts-cron / notifications-digest worker pattern).
+
+    CONTRACT POSTURE — minimal, additive, convention-preserving:
+      * The dashboards keep calling the SAME /api/v1/analytics/* aggregate endpoints —
+        paths, permissions and request shapes UNCHANGED. After E6 they serve from
+        materialised snapshots with a TRANSPARENT fallback to the live computation on a
+        miss (a miss is never an error — see data-model.md §4). The ONLY response change is
+        an additive, optional `freshness` object (the visionary "à jour il y a Xs / recalcul
+        en cours" chip).
+      * Snapshot tables (student_subject_snapshot / student_global_snapshot /
+        class_subject_distribution) are INTERNAL read models — NOT exposed as their own REST
+        resources.
+      * E6 adds NO new permission. Parent reads stay students.read + guardianship ABAC;
+        admin reads stay schools.read; teacher reads stay teaching_assignments.read.
+      * The ONLY net-new endpoints are an ADMIN operational surface over the cache: a manual
+        rebuild trigger + a recompute-status read — reusing the existing admin analytics
+        capability (schools.read), NOT a new scope.
+
+    All routes are under /api/v1 and require a Keycloak bearer JWT. Tenant scoping + RLS are
+    implicit on every operation (ADR-002); tenantId/schoolId/userId are server-derived from
+    the JWT (SchoolContextService.forUser), never client-supplied.
+
+    Slice mapping (see tasks.md): S1 = snapshot schema + recompute spine (NO contract change
+    — schema + worker + enqueue only). Later slices wire the cache-first reads + `freshness`
+    onto the existing aggregates (parent dashboard first), then the admin status/rebuild
+    surface + freshness chip.
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: analytics
+    description: >
+      Pre-aggregated dashboard reads. After E6 these serve from materialised snapshots (with
+      a transparent fallback to live computation on a miss); response SHAPES are byte-identical
+      to pre-E6 except for the additive `freshness` field. Aggregate-endpoint convention
+      preserved (no client N+1).
+  - name: analytics-snapshots
+    description: >
+      E6 admin operational surface over the snapshot cache: manual rebuild + recompute status.
+      Admin-only. The recompute itself runs in the worker (analytics-snapshots cron); these
+      endpoints only enqueue / observe.
+
+paths:
+  # ===========================================================================
+  # EXTENDED (no new path) — parent dashboard becomes cache-first; response gains
+  # the optional `freshness`. Permission + ABAC UNCHANGED: students.read +
+  # StudentAccessService.canAccessStudent BEFORE any read. Holds the <2 s NFR on
+  # the cache-hit path. Controller: analytics.controller.ts @Get('parent-dashboard/:studentId').
+  # ===========================================================================
+  /analytics/parent-dashboard/{studentId}:
+    get:
+      tags: [analytics]
+      summary: Parent dashboard for one child (snapshot-backed after E6) — perm unchanged
+      description: >
+        UNCHANGED contract EXCEPT an additive top-level `freshness` object. After E6 the
+        per-subject + global numbers are assembled from student_subject_snapshot +
+        student_global_snapshot + class_subject_distribution, falling back to live computation
+        on a miss (never an error). Guarded by students.read + guardianship ABAC
+        (canAccessStudent) — the access check runs BEFORE any snapshot read; the cache never
+        widens access.
+      operationId: getParentDashboard
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: studentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Existing ParentDashboardResponse + additive `freshness`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParentDashboardResponse'
+        '403': { description: Caller is not a guardian of this student (ABAC). }
+        '404': { description: Student not found in tenant. }
+
+  # ===========================================================================
+  # EXTENDED (no new path) — admin dashboard / drill-down / teacher reports gain
+  # the SAME optional `freshness`; reads become cache-first. Permissions UNCHANGED.
+  # ===========================================================================
+  /analytics/dashboard:
+    get:
+      tags: [analytics]
+      summary: Admin dashboard (snapshot-backed after E6) — perm unchanged (schools.read)
+      description: >
+        UNCHANGED contract; cache-first internally with live fallback. Additive `freshness` only.
+      operationId: getAdminDashboard
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Existing AdminDashboardResponse + additive `freshness`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    description: Existing AdminDashboardResponse shape (unchanged).
+                  - $ref: '#/components/schemas/HasFreshness'
+
+  /analytics/school-performance-drilldown:
+    get:
+      tags: [analytics]
+      summary: School-performance drill-down (distribution from cache after E6) — perm unchanged (schools.read)
+      description: >
+        UNCHANGED contract + query params (termId/cycleId/classSectionId/subjectId). The L3/L4
+        per-subject distribution is served from class_subject_distribution when fresh, else live.
+        Additive `freshness` only.
+      operationId: getSchoolPerformanceDrilldown
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: termId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: cycleId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: classSectionId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: subjectId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Existing drill-down payload + additive `freshness`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    description: Existing drill-down shape (unchanged).
+                  - $ref: '#/components/schemas/HasFreshness'
+
+  /analytics/teacher-reports:
+    get:
+      tags: [analytics]
+      summary: Teacher reports (per-class rows + distribution from cache after E6) — perm unchanged (teaching_assignments.read)
+      description: >
+        UNCHANGED contract; the per-class averages + low/mid/high distribution are served from
+        student_subject_snapshot + class_subject_distribution when fresh, else live. Additive
+        `freshness` only.
+      operationId: getTeacherReports
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Existing TeacherReportsResponse + additive `freshness`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    description: Existing TeacherReportsResponse shape (unchanged).
+                  - $ref: '#/components/schemas/HasFreshness'
+
+  # ===========================================================================
+  # NEW — admin operational surface over the snapshot cache. NO new permission:
+  # status read reuses schools.read; rebuild is admin-only over the same capability.
+  # The recompute runs in the worker — these endpoints only enqueue / observe.
+  # ===========================================================================
+  /analytics/snapshots/recompute-status:
+    get:
+      tags: [analytics-snapshots]
+      summary: "[NEW] Snapshot recompute backlog health (admin) — perm: schools.read"
+      description: >
+        Tenant-scoped counts of pending/processing/failed SnapshotRecomputeTrigger rows + the
+        oldest-pending staleness signal + a recent feed. Read-only observability (no side
+        effect). Tenant-scoped server-side; never crosses tenants.
+      operationId: getSnapshotRecomputeStatus
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Recompute backlog health.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SnapshotRecomputeStatusResponse' }
+        '403': { description: Missing schools.read. }
+
+  /analytics/snapshots/rebuild:
+    post:
+      tags: [analytics-snapshots]
+      summary: "[NEW] Admin manual rebuild — enqueue a recompute trigger (admin-only)"
+      description: >
+        Enqueues a `manual_rebuild` SnapshotRecomputeTrigger for the given (optional, narrowing)
+        scope, idempotently (a still-pending identical trigger is coalesced, not duplicated). The
+        worker drains it on the next tick. Writes ONE append-only `analytics.snapshot_rebuild`
+        audit row (an explicit admin action — unlike the derived cron writes, which are not
+        audited). Admin-only via the existing admin guard; reuses the analytics admin capability,
+        NO new permission. Scope ids validated against the caller's tenant before enqueue.
+      operationId: rebuildSnapshots
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RebuildSnapshotsRequest' }
+      responses:
+        '202':
+          description: Rebuild enqueued (or coalesced onto an existing pending trigger).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RebuildSnapshotsResponse' }
+        '400': { description: Invalid scope ids. }
+        '403': { description: Not an admin / missing capability. }
+        '404': { description: A scope id was not found in the caller's tenant. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    # The freshness signal — the visionary spine. Additive + optional on every
+    # snapshot-backed response. A client that ignores it sees today's payload.
+    Freshness:
+      type: object
+      description: >
+        Provenance of the served numbers, for the "à jour il y a Xs / recalcul en cours" chip.
+        `source=snapshot` = the fast cache path served it; `source=live` = a cache miss fell
+        through to the live computation (then computedAt=now, recomputing=true).
+      required: [source, recomputing]
+      properties:
+        source:
+          type: string
+          enum: [snapshot, live]
+          description: snapshot = cache fast path; live = fall-through computation (miss/stale).
+        computedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When the served numbers were computed (snapshot.computedAt, or now on a live miss).
+        recomputing:
+          type: boolean
+          description: >
+            True when an open SnapshotRecomputeTrigger exists for this scope (a recompute is
+            pending/processing), or the response was served live — the chip shows "recalcul en cours".
+        gradeCount:
+          type: [integer, 'null']
+          description: Sample size behind the served average (for "à jour … (N notes)").
+        sourceEventId:
+          type: [string, 'null']
+          format: uuid
+          description: The recompute trigger id that last refreshed the snapshot (explainability).
+        revision:
+          type: [integer, 'null']
+          description: Snapshot generation counter (null on a live miss).
+
+    HasFreshness:
+      type: object
+      properties:
+        freshness:
+          $ref: '#/components/schemas/Freshness'
+
+    ParentDashboardResponse:
+      type: object
+      description: >
+        EXISTING ParentDashboardResponse (see apps/api/.../analytics.service.ts) — student,
+        globalPerformance, subjectPerf[], termEvolution[], subjectEvolution[], subjectTeachers[],
+        previousYearComparison, annualProgression, recentGrades[], upcomingAssessments[]. E6 adds
+        ONLY the additive `freshness` object; every existing field keeps its exact shape/meaning.
+      properties:
+        freshness:
+          $ref: '#/components/schemas/Freshness'
+      additionalProperties: true
+
+    # ---- Admin operational surface DTOs (rebuild + status) ----
+    SnapshotTriggerReason:
+      type: string
+      enum: [grade_published, grade_revised, coefficient_changed, manual_rebuild, backfill]
+
+    SnapshotTriggerStatus:
+      type: string
+      enum: [pending, processing, done, failed]
+
+    RebuildSnapshotsRequest:
+      type: object
+      description: >
+        Admin manual rebuild. Scope is OPTIONAL + narrowing — omitting all fields rebuilds the
+        whole tenant (bounded by the worker batch loop). Scope ids validated against the caller's
+        tenant before enqueue.
+      properties:
+        classSectionId: { type: [string, 'null'], format: uuid }
+        subjectId: { type: [string, 'null'], format: uuid }
+        termId: { type: [string, 'null'], format: uuid }
+        studentId: { type: [string, 'null'], format: uuid }
+        academicYearId:
+          type: [string, 'null']
+          format: uuid
+          description: Defaults to the active academic year when omitted.
+
+    RebuildSnapshotsResponse:
+      type: object
+      required: [triggerId, status, coalesced]
+      properties:
+        triggerId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/SnapshotTriggerStatus' }
+        coalesced:
+          type: boolean
+          description: True when an identical pending trigger already existed (idempotent enqueue collapsed it).
+
+    SnapshotRecomputeStatusResponse:
+      type: object
+      description: Recompute backlog health for the caller's tenant — admin observability for the cache.
+      required: [generatedAt, pending, processing, failed]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        pending: { type: integer }
+        processing: { type: integer }
+        failed: { type: integer, description: Triggers parked after exceeding the retry cap. }
+        oldestPendingAt:
+          type: [string, 'null']
+          format: date-time
+          description: Enqueue time of the oldest pending trigger (staleness signal).
+        recent:
+          type: array
+          description: Up to 20 most-recent triggers (newest first) for the admin panel.
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              reason: { $ref: '#/components/schemas/SnapshotTriggerReason' }
+              status: { $ref: '#/components/schemas/SnapshotTriggerStatus' }
+              enqueuedAt: { type: string, format: date-time }
+              processedAt: { type: [string, 'null'], format: date-time }
+              attempts: { type: integer }
