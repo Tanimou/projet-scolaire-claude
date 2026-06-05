@@ -5,16 +5,29 @@ import { AlertsEvaluatorService } from './alerts-evaluator.service';
  * (`notifyGuardiansOfAlert`). The method is private; we exercise it directly
  * with a hand-rolled Prisma mock so no DB / Nest context is needed.
  *
- * NOTE: the worker fan-out is IN-APP ONLY by design — it does NOT consult
- * NotificationPreference (that gate is API-owned). So these tests assert the
- * severity map, source-dedup, the early return, and best-effort error
- * swallowing — NOT preference gating.
+ * The in-app fan-out does NOT consult NotificationPreference for the in-app
+ * channel (parity with the API's unconditional alert in-app insert). The
+ * EMAIL channel (E3-S4) DOES: it is opt-in / OFF by default, gated by
+ * `NotificationPreference(alert, emailEnabled=true)` and enqueued onto the
+ * shared `notifications-email` queue. These tests assert the severity map,
+ * source-dedup, early returns, best-effort error swallowing, AND the email
+ * opt-in gate + job shape.
  */
 type Mock = ReturnType<typeof jest.fn>;
 
 function makePrisma(opts: {
   guardians: Array<{ userProfileId: string | null }>;
   alreadyNotified?: string[];
+  /** userProfileIds with NotificationPreference(alert, emailEnabled=true). */
+  emailOptIn?: string[];
+  /** id → profile row returned by userProfile.findMany. */
+  profiles?: Array<{
+    id: string;
+    email: string;
+    firstName?: string;
+    lastName?: string;
+    locale?: string | null;
+  }>;
 }) {
   const guardianshipFindMany: Mock = jest
     .fn()
@@ -25,19 +38,38 @@ function makePrisma(opts: {
   const notificationCreateMany: Mock = jest
     .fn()
     .mockImplementation((arg: { data: unknown[] }) => Promise.resolve({ count: arg.data.length }));
+  const notificationPreferenceFindMany: Mock = jest
+    .fn()
+    .mockResolvedValue((opts.emailOptIn ?? []).map((userProfileId) => ({ userProfileId })));
+  const userProfileFindMany: Mock = jest
+    .fn()
+    .mockResolvedValue(opts.profiles ?? []);
   return {
     prisma: {
       guardianship: { findMany: guardianshipFindMany },
       notification: { findMany: notificationFindMany, createMany: notificationCreateMany },
+      notificationPreference: { findMany: notificationPreferenceFindMany },
+      userProfile: { findMany: userProfileFindMany },
     },
     guardianshipFindMany,
     notificationFindMany,
     notificationCreateMany,
+    notificationPreferenceFindMany,
+    userProfileFindMany,
   };
 }
 
-function callNotify(prisma: unknown, severity: 'low' | 'medium' | 'high') {
-  const service = new AlertsEvaluatorService(prisma as never);
+function makeQueue() {
+  const addBulk: Mock = jest.fn().mockResolvedValue(undefined);
+  return { queue: { addBulk }, addBulk };
+}
+
+function callNotifyWith(
+  prisma: unknown,
+  queue: unknown,
+  severity: 'low' | 'medium' | 'high',
+) {
+  const service = new AlertsEvaluatorService(prisma as never, queue as never);
   // private method — exercised directly
   return (service as unknown as {
     notifyGuardiansOfAlert(a: {
@@ -56,6 +88,11 @@ function callNotify(prisma: unknown, severity: 'low' | 'medium' | 'high') {
     title: 'Moyenne faible',
     body: 'Moyenne sous le seuil',
   });
+}
+
+/** Back-compat helper: most in-app tests don't care about the email queue. */
+function callNotify(prisma: unknown, severity: 'low' | 'medium' | 'high') {
+  return callNotifyWith(prisma, makeQueue().queue, severity);
 }
 
 describe('AlertsEvaluatorService.notifyGuardiansOfAlert', () => {
@@ -126,5 +163,101 @@ describe('AlertsEvaluatorService.notifyGuardiansOfAlert', () => {
       notification: { findMany: jest.fn(), createMany: jest.fn() },
     };
     await expect(callNotify(prisma, 'high')).resolves.toBe(0);
+  });
+});
+
+describe('AlertsEvaluatorService — E3-S4 email parity on the cron path', () => {
+  it('enqueues one notifications-email job per opted-in guardian (default OFF → none)', async () => {
+    // u1 opted in, u2 did not.
+    const m = makePrisma({
+      guardians: [{ userProfileId: 'u1' }, { userProfileId: 'u2' }],
+      emailOptIn: ['u1'],
+      profiles: [{ id: 'u1', email: 'p1@ex.fr', firstName: 'Anne', lastName: 'Dupond', locale: 'fr-FR' }],
+    });
+    const q = makeQueue();
+    const count = await callNotifyWith(m.prisma, q.queue, 'high');
+
+    expect(count).toBe(2); // in-app to both, unchanged
+    expect(q.addBulk).toHaveBeenCalledTimes(1);
+    const jobs = q.addBulk.mock.calls[0]![0];
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      name: 'alert',
+      data: {
+        tenantId: 'tenant-1',
+        to: 'p1@ex.fr',
+        recipientName: 'Anne Dupond',
+        kind: 'alert',
+        severity: 'danger',
+        title: 'Moyenne faible',
+        body: 'Moyenne sous le seuil',
+        link: '/parent/recommendations?studentId=student-1',
+        sourceType: 'alert_instance',
+        sourceId: 'alert-1',
+      },
+    });
+    expect(jobs[0].opts).toMatchObject({ attempts: 3 });
+  });
+
+  it('default OFF: no opt-in row → no email enqueued, in-app still fans out', async () => {
+    const m = makePrisma({ guardians: [{ userProfileId: 'u1' }], emailOptIn: [] });
+    const q = makeQueue();
+    const count = await callNotifyWith(m.prisma, q.queue, 'medium');
+
+    expect(count).toBe(1);
+    expect(m.notificationPreferenceFindMany).toHaveBeenCalledTimes(1);
+    expect(q.addBulk).not.toHaveBeenCalled();
+    expect(m.userProfileFindMany).not.toHaveBeenCalled();
+  });
+
+  it('queries the email opt-in scoped to tenant + alert kind + freshly-notified recipients only', async () => {
+    const m = makePrisma({
+      guardians: [{ userProfileId: 'u1' }, { userProfileId: 'u2' }],
+      alreadyNotified: ['u2'], // only u1 is fresh
+      emailOptIn: ['u1'],
+      profiles: [{ id: 'u1', email: 'p1@ex.fr' }],
+    });
+    const q = makeQueue();
+    await callNotifyWith(m.prisma, q.queue, 'low');
+
+    const where = m.notificationPreferenceFindMany.mock.calls[0]![0].where;
+    expect(where).toMatchObject({ tenantId: 'tenant-1', kind: 'alert', emailEnabled: true });
+    // only the fresh recipient (u1) — never the already-notified u2 → no double-send
+    expect(where.userProfileId.in).toEqual(['u1']);
+    const profWhere = m.userProfileFindMany.mock.calls[0]![0].where;
+    expect(profWhere).toMatchObject({ tenantId: 'tenant-1' });
+  });
+
+  it('skips opted-in recipients with no email on file', async () => {
+    const m = makePrisma({
+      guardians: [{ userProfileId: 'u1' }],
+      emailOptIn: ['u1'],
+      profiles: [{ id: 'u1', email: '' }], // no usable email
+    });
+    const q = makeQueue();
+    await callNotifyWith(m.prisma, q.queue, 'high');
+    expect(q.addBulk).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the email as recipient name when no first/last name', async () => {
+    const m = makePrisma({
+      guardians: [{ userProfileId: 'u1' }],
+      emailOptIn: ['u1'],
+      profiles: [{ id: 'u1', email: 'solo@ex.fr' }],
+    });
+    const q = makeQueue();
+    await callNotifyWith(m.prisma, q.queue, 'high');
+    expect(q.addBulk.mock.calls[0]![0][0].data.recipientName).toBe('solo@ex.fr');
+  });
+
+  it('email enqueue failure is swallowed; in-app fan-out count is unaffected', async () => {
+    const m = makePrisma({
+      guardians: [{ userProfileId: 'u1' }],
+      emailOptIn: ['u1'],
+      profiles: [{ id: 'u1', email: 'p1@ex.fr' }],
+    });
+    const q = { queue: { addBulk: jest.fn().mockRejectedValue(new Error('redis down')) }, addBulk: jest.fn() };
+    const count = await callNotifyWith(m.prisma, q.queue, 'high');
+    expect(count).toBe(1); // in-app unaffected
   });
 });

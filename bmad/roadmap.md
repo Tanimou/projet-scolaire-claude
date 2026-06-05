@@ -21,7 +21,7 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1 through E2-S4 are now shipped → `E2` is `shipped` (all 4 slices landed; S4 = moderation/safety: report + admin oversight + send rate-limit + opt-in email reusing the existing notification-email pipeline). Next epic → `E3 — Complete the Alert Engine` is now **in-progress** (spec-kit landed at `docs/spec/features/e3/`; **S1 + S2 shipped** — S1 `TEACHER_COMMENT_FLAG` grade-flag + dual byte-parity evaluator; **S2 `IMPROVEMENT`** = the 7th rule, a non-stigmatising positive signal mirroring `NEGATIVE_TREND` inverted, with a code-aware emerald celebration lane on the parent recommendations surface — **engine now 7/7 rules wired** (`BEHAVIOR_ALERT` stays reserved-but-unwired by design); **S3 shipped** = admin rule-config UI (per-rule "Configurer" `FormDrawer` over the existing `PATCH /alerts/rules/:code` — enabled/severity/numeric-params, complete-object wholesale PATCH, no new endpoint/schema; also hardened the shared `Drawer` primitive with a WCAG focus-trap + focus-restore-to-trigger); next slice → **E3-S4** = email on the cron path (reuse the `notifications-email` pipeline, honor `NotificationPreference(alert)`)).**
+**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1 through E2-S4 are now shipped → `E2` is `shipped` (all 4 slices landed; S4 = moderation/safety: report + admin oversight + send rate-limit + opt-in email reusing the existing notification-email pipeline). Next epic → `E3 — Complete the Alert Engine` is now **in-progress** (spec-kit landed at `docs/spec/features/e3/`; **S1 + S2 shipped** — S1 `TEACHER_COMMENT_FLAG` grade-flag + dual byte-parity evaluator; **S2 `IMPROVEMENT`** = the 7th rule, a non-stigmatising positive signal mirroring `NEGATIVE_TREND` inverted, with a code-aware emerald celebration lane on the parent recommendations surface — **engine now 7/7 rules wired** (`BEHAVIOR_ALERT` stays reserved-but-unwired by design); **S3 shipped** = admin rule-config UI (per-rule "Configurer" `FormDrawer` over the existing `PATCH /alerts/rules/:code` — enabled/severity/numeric-params, complete-object wholesale PATCH, no new endpoint/schema; also hardened the shared `Drawer` primitive with a WCAG focus-trap + focus-restore-to-trigger); **S4 shipped** = email on the cron path — the worker evaluator enqueues the SAME `notifications-email` job the API producer enqueues (path A, no ADR, no new queue/template), gated by `NotificationPreference(alert, emailEnabled)` (default OFF/RGPD), tenant-scoped, freshly-deduped recipients, best-effort, removing the "in-app only" asymmetry. **`E3` is now `shipped` (all 4 slices landed). Next epic → `E4 — Async Exports & Bulletins`** (`proposed`, high ROI — exports backend 100% done, only the FE is unwired; the next run should ship **E4-S1** = admin `/admin/exports` real generate buttons + `ExportJob` status polling + signed downloads)).**
 
 ---
 
@@ -102,11 +102,12 @@ real-time deferred (ADR-019 tripwire). **S1 + S2 shipped; next slice → S3.**
 
 ## Tier 2 — Complete the MVP pillars (R6/R7/R8)
 
-### E3 — Complete the Alert Engine (7 rules + admin config + email) · `in-progress` · ~M
-**Audit:** 58% baseline (5/7 rules). **S1 + S2 shipped → all 7 rule slots now wired** in both api +
-worker (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`, `NEGATIVE_TREND`, `MISSING_ASSESSMENT`,
-`TEACHER_COMMENT_FLAG`, `IMPROVEMENT`; `BEHAVIOR_ALERT` reserved-but-unwired by design); cron every
-15 min with in-app fan-out. **Remaining: S3 admin rule-config UI, S4 email on the cron path.**
+### E3 — Complete the Alert Engine (7 rules + admin config + email) · `shipped` · ~M
+**Audit:** 58% baseline (5/7 rules) → **100%**. **S1–S4 all shipped → all 7 rule slots wired** in both
+api + worker (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`, `NEGATIVE_TREND`,
+`MISSING_ASSESSMENT`, `TEACHER_COMMENT_FLAG`, `IMPROVEMENT`; `BEHAVIOR_ALERT` reserved-but-unwired by
+design); cron every 15 min with in-app fan-out **AND** opt-in email (S4); admin rule-config UI live
+(S3). **Epic complete → next epic: E4 — Async Exports & Bulletins.**
 - [x] **S1** — `TEACHER_COMMENT_FLAG` rule: teacher can flag a grade/comment as concerning
   (additive `Grade` flag fields `isFlagged`/`flaggedAt`/`flaggedBy`/`flagNote` via `db push` +
   `@@index([tenantId, isFlagged])`) → `PATCH /grades/:id/flag` (ownership ABAC, 404-before-403,
@@ -132,8 +133,14 @@ worker (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`, `NEGATIVE_TREND`,
   restore-to-trigger on close, keyed on `[open]` only (onClose held in a ref) so controlled inputs
   stay typeable across all Drawer/FormDrawer consumers. Shipped (needs human review — P1
   `[ui][a11y][shared-primitive]`; RED typecheck gate fixed in-flight). *(web + packages/ui)*
-- [ ] **S4** — **Email on the cron path**: cron-raised alerts email guardians honoring prefs
-  (today only in-app bell) — share the dispatcher with the API path. *(worker)*
+- [x] **S4** — **Email on the cron path**: cron-raised alerts email guardians honoring prefs
+  (was in-app only) — shares the dispatcher with the API path. Shipped (needs human review): the
+  worker evaluator now **enqueues the same `notifications-email` BullMQ job** the API producer enqueues
+  (path A — no ADR; no new queue/template). `dispatchAlertEmails` gates on
+  `NotificationPreference(alert, emailEnabled=true)` (default OFF / RGPD), tenant-scoped, runs only on
+  the freshly source-deduped recipients (no double-send), with the API's exact retry/backoff opts;
+  strictly additive + best-effort (a Redis/SMTP failure never touches the in-app fan-out). The
+  "in-app only" asymmetry comment is removed. *(worker)* `[worker]` P1.
 
 ### E4 — Async Exports & Bulletins — wire the UI · `proposed` · ~S-M (high ROI)
 **Audit:** exports backend is **100% done** (`ExportJob` + worker + 5 XLSX/PDF generators + S3 +
