@@ -46,6 +46,28 @@ export async function toggleRuleAction(code: AlertRuleCode, enabled: boolean) {
   return res;
 }
 
+export interface RuleConfigPayload {
+  enabled?: boolean;
+  severity?: 'low' | 'medium' | 'high';
+  /**
+   * COMPLETE parameters object for the code. PATCH replaces the JSONB wholesale
+   * (no server-side deep-merge) — sending a partial would silently drop the
+   * sibling keys, so the editor always submits every canonical key for the rule.
+   */
+  parameters?: Record<string, number>;
+}
+
+/**
+ * E3-S3: persist a rule's enabled/severity/parameters in one PATCH to the
+ * existing `/api/v1/alerts/rules/:code` (no new endpoint, no schema). On success
+ * revalidate so the rule card reflects the saved values immediately.
+ */
+export async function updateRuleConfigAction(code: AlertRuleCode, config: RuleConfigPayload) {
+  const res = await callApi(`/api/v1/alerts/rules/${code}`, 'PATCH', config);
+  if (res.ok) revalidatePath('/admin/alerts');
+  return res;
+}
+
 export async function acknowledgeAlertAction(id: string) {
   const res = await callApi(`/api/v1/alerts/instances/${id}/acknowledge`, 'POST');
   if (res.ok) revalidatePath('/admin/alerts');
