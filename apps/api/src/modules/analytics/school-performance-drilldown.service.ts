@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { SnapshotFreshness } from '@pilotage/contracts';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
@@ -96,6 +97,17 @@ export interface DrilldownResponse {
   groups: DrilldownGroup[];
   /** Liste élèves (présente uniquement pour L4 ; vide sinon). */
   students: DrilldownStudent[];
+  /**
+   * E6-S3 — bloc freshness additif optionnel (même forme qu'en S2/S3 ailleurs). Le
+   * drill-down reste calculé en LIVE : la seule table snapshot candidate
+   * (`ClassSubjectDistribution`) agrège la population de NOTES (passRate, moyenne de
+   * notes) alors que le drill-down compte des ÉLÈVES selon leur moyenne
+   * (successRate, moyenne des moyennes) — grain incompatible (PM-4), donc une
+   * lecture snapshot servirait un mauvais chiffre. `freshness` indique
+   * honnêtement `source:'live'` et si un recalcul est en cours pour le périmètre
+   * (le S4 affiche « recalcul en cours »). Champ ignoré par les clients actuels.
+   */
+  freshness?: SnapshotFreshness;
 }
 
 /** Forme minimale d'une note chargée pour l'agrégation. */
@@ -146,7 +158,20 @@ export class SchoolPerformanceDrilldownService {
       subjectId: subjectId ?? null,
     };
 
-    const empty: DrilldownResponse = { level: 'cycle', scope, terms, groups: [], students: [] };
+    // E6-S3 (FR4) — freshness envelope. The drill-down figures stay live (grain
+    // mismatch with the only candidate snapshot, see DrilldownResponse.freshness);
+    // `recomputing` is true iff an open trigger targets the requested scope (the
+    // class, or — for L1/L2 — the year-wide coefficient-change trigger).
+    const freshness = await this.resolveFreshness({ tenantId, academicYearId, classSectionId });
+
+    const empty: DrilldownResponse = {
+      level: 'cycle',
+      scope,
+      terms,
+      groups: [],
+      students: [],
+      freshness,
+    };
     if (!academicYearId) return empty;
 
     // L4 — élèves d'une classe pour une matière donnée.
@@ -188,6 +213,42 @@ export class SchoolPerformanceDrilldownService {
       level: 'cycle',
       groups: await this.cyclesForSchool({ tenantId, schoolId, academicYearId, termId }),
     };
+  }
+
+  /**
+   * E6-S3 (FR4) — freshness for the drill-down. Always `source:'live'` (the figures
+   * are computed live; grain mismatch precludes a snapshot read — see
+   * `DrilldownResponse.freshness`). `recomputing` = an open (`pending`/`processing`)
+   * recompute trigger targets the requested scope: the specific class section when
+   * drilling into one (L3/L4), else any class-keyed trigger OR the class-less
+   * coefficient-change trigger for the year (L1/L2 span the whole school). Every
+   * query is tenant-scoped (ADR-002); a probe throw degrades to recomputing:false.
+   */
+  private async resolveFreshness(args: {
+    tenantId: string;
+    academicYearId: string | null;
+    classSectionId?: string;
+  }): Promise<SnapshotFreshness> {
+    const { tenantId, academicYearId, classSectionId } = args;
+    let recomputing = false;
+    try {
+      const open = await this.prisma.snapshotRecomputeTrigger.findFirst({
+        where: {
+          tenantId,
+          status: { in: ['pending', 'processing'] },
+          ...(classSectionId
+            ? { OR: [{ classSectionId }, ...(academicYearId ? [{ classSectionId: null, academicYearId }] : [])] }
+            : academicYearId
+              ? { OR: [{ academicYearId }, { classSectionId: null, academicYearId }] }
+              : {}),
+        },
+        select: { id: true },
+      });
+      recomputing = open != null;
+    } catch {
+      recomputing = false;
+    }
+    return { source: 'live', computedAt: new Date().toISOString(), recomputing };
   }
 
   // ---------------------------------------------------------------------------

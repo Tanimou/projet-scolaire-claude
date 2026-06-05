@@ -9,6 +9,7 @@ import {
   trendDelta,
   weightedGlobal,
 } from './snapshot-formula';
+import { SnapshotDrainCronService } from './snapshot-drain-cron.service';
 import { SnapshotRecomputeService } from './snapshot-recompute.service';
 
 type Mock = ReturnType<typeof jest.fn>;
@@ -333,5 +334,124 @@ describe('SnapshotRecomputeService.recomputeScope', () => {
     const r = await h.service.recomputeScope({ ...TRIGGER, classSectionId: null });
     expect(r.subjectRows).toBe(0);
     expect(h.gradeFindMany).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 4 — E6-S3 (FR7): the drain fans a class-LESS coefficient_changed trigger
+// out to one class-scoped recompute per ClassSection teaching the subject in the
+// year (tenant-scoped), marks the trigger done after the whole fan-out, and is a
+// no-op for a class-less trigger that cannot be resolved.
+// ---------------------------------------------------------------------------
+
+function makeDrainHarness(opts: {
+  trigger: {
+    id: string;
+    reason: string;
+    classSectionId: string | null;
+    subjectId: string | null;
+    academicYearId: string | null;
+    attempts?: number;
+  };
+  assignmentClassIds?: string[];
+}) {
+  const TENANT = 't1';
+  const recompute = { recomputeScope: jest.fn().mockResolvedValue({}) };
+  const teachingAssignmentFindMany: Mock = jest
+    .fn()
+    .mockResolvedValue((opts.assignmentClassIds ?? []).map((classSectionId) => ({ classSectionId })));
+  const updateMany: Mock = jest.fn().mockResolvedValue({ count: 1 });
+  const trigger = { attempts: 0, ...opts.trigger };
+
+  const prisma = {
+    snapshotRecomputeTrigger: {
+      // reclaimStaleProcessing
+      updateMany,
+      // tenantsWithPending / backfill probes
+      findMany: jest.fn().mockImplementation((args: { where?: { status?: unknown }; select?: unknown }) => {
+        // FIFO candidate list in drainTenant: status pending, select id.
+        if ((args.where as { status?: string })?.status === 'pending') {
+          return Promise.resolve([{ id: trigger.id }]);
+        }
+        return Promise.resolve([{ tenantId: TENANT }]);
+      }),
+      findFirst: jest.fn().mockResolvedValue({ tenantId: TENANT, ...trigger }),
+    },
+    teachingAssignment: { findMany: teachingAssignmentFindMany },
+    grade: { findMany: jest.fn().mockResolvedValue([]) },
+    studentSubjectSnapshot: { findFirst: jest.fn().mockResolvedValue({ id: 'x' }) },
+  };
+
+  const service = new SnapshotDrainCronService(prisma as never, recompute as never);
+  return { service, prisma, recompute, teachingAssignmentFindMany, updateMany, TENANT };
+}
+
+describe('SnapshotDrainCronService — coefficient_changed fan-out (E6-S3 FR7)', () => {
+  it('fans a class-less coefficient_changed trigger out to one recompute per affected class', async () => {
+    const h = makeDrainHarness({
+      trigger: {
+        id: 'cf1',
+        reason: 'coefficient_changed',
+        classSectionId: null,
+        subjectId: 'maths',
+        academicYearId: 'y1',
+      },
+      assignmentClassIds: ['cA', 'cB', 'cA'], // duplicate → deduped to 2 classes
+    });
+
+    // drainTenant is private; exercise it via the public drain entry.
+    await (h.service as unknown as { drainTenant(t: string): Promise<unknown> }).drainTenant(h.TENANT);
+
+    // Resolved classes via teachingAssignment (tenant + subject + year scoped).
+    expect(h.teachingAssignmentFindMany).toHaveBeenCalledTimes(1);
+    const taWhere = h.teachingAssignmentFindMany.mock.calls[0]![0].where;
+    expect(taWhere.tenantId).toBe('t1');
+    expect(taWhere.subjectId).toBe('maths');
+    expect(taWhere.academicYearId).toBe('y1');
+
+    // One recompute per DISTINCT class (cA, cB), each a real class-scoped recompute.
+    expect(h.recompute.recomputeScope).toHaveBeenCalledTimes(2);
+    const recomputedClasses = h.recompute.recomputeScope.mock.calls.map(
+      (c: unknown[]) => (c[0] as { classSectionId: string }).classSectionId,
+    );
+    expect(new Set(recomputedClasses)).toEqual(new Set(['cA', 'cB']));
+
+    // The trigger is marked done AFTER the fan-out (status:'done').
+    const doneCall = h.updateMany.mock.calls.find(
+      (c: unknown[]) => (c[0] as { data?: { status?: string } }).data?.status === 'done',
+    );
+    expect(doneCall).toBeDefined();
+  });
+
+  it('a normal class-scoped trigger still routes to recomputeScope unchanged', async () => {
+    const h = makeDrainHarness({
+      trigger: {
+        id: 'gp1',
+        reason: 'grade_published',
+        classSectionId: 'cA',
+        subjectId: 'maths',
+        academicYearId: 'y1',
+      },
+    });
+    await (h.service as unknown as { drainTenant(t: string): Promise<unknown> }).drainTenant(h.TENANT);
+    expect(h.recompute.recomputeScope).toHaveBeenCalledTimes(1);
+    expect(h.recompute.recomputeScope.mock.calls[0]![0].classSectionId).toBe('cA');
+    // No fan-out query for a class-scoped trigger.
+    expect(h.teachingAssignmentFindMany).not.toHaveBeenCalled();
+  });
+
+  it('a class-less coefficient_changed trigger with no resolvable subject/year is a no-op fan-out', async () => {
+    const h = makeDrainHarness({
+      trigger: {
+        id: 'cf2',
+        reason: 'coefficient_changed',
+        classSectionId: null,
+        subjectId: null,
+        academicYearId: null,
+      },
+    });
+    await (h.service as unknown as { drainTenant(t: string): Promise<unknown> }).drainTenant(h.TENANT);
+    expect(h.recompute.recomputeScope).not.toHaveBeenCalled();
+    expect(h.teachingAssignmentFindMany).not.toHaveBeenCalled();
   });
 });

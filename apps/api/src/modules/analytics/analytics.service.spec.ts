@@ -635,3 +635,113 @@ describe('AnalyticsService.parentDashboard — E6-S2 snapshot reads', () => {
     expect(classScan).toHaveBeenCalledTimes(1);
   });
 });
+
+// =============================================================================
+// E6-S3 — teacher-reports freshness envelope (FR1/FR4)
+// =============================================================================
+//
+// teacher-reports figures stay LIVE: the only candidate snapshot
+// (ClassSubjectDistribution) is a CLASS-WIDE, all-teachers, round2 grade-population
+// aggregate, while teacher-reports aggregates the teacher's OWN per-assignment
+// grades at round1 — a structural grain + rounding mismatch (PM-1/2/3). So the
+// additive `freshness` is always source:'live'; `recomputing` truthfully reflects
+// an open recompute trigger over ANY of the teacher's class scopes (PM-5), and the
+// probe is tenant-scoped + degrades to false on a throw (never errors).
+
+const TR_TENANT = 'tr-t1';
+const TR_TEACHER = 'tp-1';
+const TR_YEAR = 'tr-ay-1';
+
+function makeTeacherReportsService(opts: { openTrigger?: boolean; triggerThrows?: boolean } = {}) {
+  const triggerFindFirst = jest.fn().mockImplementation(() => {
+    if (opts.triggerThrows) return Promise.reject(new Error('no table'));
+    return Promise.resolve(opts.openTrigger ? { id: 'trig-1' } : null);
+  });
+  const prisma = {
+    academicYear: { findUnique: jest.fn().mockResolvedValue({ id: TR_YEAR, name: '2025-2026' }) },
+    term: { findMany: jest.fn().mockResolvedValue([]) },
+    teachingAssignment: {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          id: 'asg-1',
+          subject: { id: 'sub-math', code: 'MATH', name: 'Maths', color: '#1' },
+          classSection: {
+            id: 'cs-A',
+            name: '6eA',
+            gradeLevel: { name: '6e' },
+            _count: { enrollments: 20 },
+          },
+        },
+        {
+          id: 'asg-2',
+          subject: { id: 'sub-fr', code: 'FR', name: 'Français', color: '#2' },
+          classSection: {
+            id: 'cs-B',
+            name: '6eB',
+            gradeLevel: { name: '6e' },
+            _count: { enrollments: 18 },
+          },
+        },
+      ]),
+    },
+    assessment: { findMany: jest.fn().mockResolvedValue([]) },
+    snapshotRecomputeTrigger: { findFirst: triggerFindFirst },
+  };
+  const grades = { statsForStudent: jest.fn() };
+  const service = new AnalyticsService(prisma as never, grades as never);
+  return { service, prisma, triggerFindFirst };
+}
+
+describe('AnalyticsService.teacherReports — E6-S3 freshness', () => {
+  it('AC-S3 — figures served live; freshness.source is always "live"', async () => {
+    const { service } = makeTeacherReportsService();
+    const res = await service.teacherReports({
+      tenantId: TR_TENANT,
+      teacherProfileId: TR_TEACHER,
+      academicYearId: TR_YEAR,
+    });
+    expect(res.freshness).toBeDefined();
+    expect(res.freshness!.source).toBe('live');
+    expect(res.freshness!.recomputing).toBe(false);
+  });
+
+  it('PM-5 — an open trigger on ANY of the teacher\'s classes → recomputing:true', async () => {
+    const { service } = makeTeacherReportsService({ openTrigger: true });
+    const res = await service.teacherReports({
+      tenantId: TR_TENANT,
+      teacherProfileId: TR_TEACHER,
+      academicYearId: TR_YEAR,
+    });
+    expect(res.freshness!.recomputing).toBe(true);
+  });
+
+  it('the open-trigger probe covers every class scope + is tenant-scoped', async () => {
+    const { service, triggerFindFirst } = makeTeacherReportsService();
+    await service.teacherReports({
+      tenantId: TR_TENANT,
+      teacherProfileId: TR_TEACHER,
+      academicYearId: TR_YEAR,
+    });
+    const where = triggerFindFirst.mock.calls[0]![0].where;
+    expect(where.tenantId).toBe(TR_TENANT);
+    // OR covers BOTH the teacher's class sections AND the class-less coefficient row.
+    const orClasses = where.OR.find((o: { classSectionId?: { in?: string[] } }) => o.classSectionId?.in);
+    expect(new Set(orClasses.classSectionId.in)).toEqual(new Set(['cs-A', 'cs-B']));
+    const orCoef = where.OR.find(
+      (o: { classSectionId?: null; academicYearId?: string }) =>
+        o.classSectionId === null && o.academicYearId,
+    );
+    expect(orCoef.academicYearId).toBe(TR_YEAR);
+  });
+
+  it('INV — a trigger-probe throw degrades to recomputing:false (never errors)', async () => {
+    const { service } = makeTeacherReportsService({ triggerThrows: true });
+    const res = await service.teacherReports({
+      tenantId: TR_TENANT,
+      teacherProfileId: TR_TEACHER,
+      academicYearId: TR_YEAR,
+    });
+    expect(res.freshness!.source).toBe('live');
+    expect(res.freshness!.recomputing).toBe(false);
+  });
+});

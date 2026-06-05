@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Prisma } from '@prisma/client';
+import { snapshotCoalesceKey } from '@pilotage/contracts';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -147,7 +148,8 @@ export class GradesController {
     }
 
     const now = new Date();
-    return this.prisma.$transaction(async (tx) => {
+    let anyRevised = false;
+    const result = await this.prisma.$transaction(async (tx) => {
       const results = [];
       for (const g of body.grades) {
         const existing = await tx.grade.findUnique({
@@ -158,6 +160,7 @@ export class GradesController {
           const wasPublished = existing.status === 'published' || existing.status === 'revised';
           const valueChanged = Number(existing.value) !== Number(g.value);
           if (wasPublished && valueChanged) {
+            anyRevised = true;
             await tx.gradeRevision.create({
               data: {
                 gradeId: existing.id,
@@ -197,6 +200,15 @@ export class GradesController {
       }
       return { ok: true, count: results.length };
     });
+
+    // E6-S3 (FR5) — if the batch save flipped ≥1 published grade to `revised`,
+    // enqueue ONE coalesced grade_revised recompute for the assessment's scope.
+    // Best-effort, AFTER commit, never blocks the batch (mirrors the publish seam).
+    if (anyRevised) {
+      await this.enqueueGradeRevisedRecompute(me.tenantId, assessment.id);
+    }
+
+    return result;
   }
 
   /** Revise a single published grade with an audit-tracked reason. */
@@ -228,7 +240,7 @@ export class GradesController {
       );
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.gradeRevision.create({
         data: {
           gradeId: grade.id,
@@ -249,6 +261,12 @@ export class GradesController {
         include: { revisions: { orderBy: { revisedAt: 'desc' } } },
       });
     });
+
+    // E6-S3 (FR5) — enqueue a grade_revised recompute AFTER the revise commits.
+    // Best-effort sibling of the $transaction (never nested in / never rolls it back).
+    await this.enqueueGradeRevisedRecompute(me.tenantId, grade.assessmentId);
+
+    return result;
   }
 
   /**
@@ -451,5 +469,65 @@ export class GradesController {
       return;
     }
     throw new ForbiddenException();
+  }
+
+  /**
+   * E6-S3 (FR5) — best-effort, NON-BLOCKING `grade_revised` snapshot-recompute
+   * enqueue. Called AFTER a grade flips to `status='revised'` on BOTH revise seams
+   * (single `POST :id/revise` and the batch `wasPublished && valueChanged` path),
+   * always OUTSIDE the revise `$transaction` so an enqueue failure can never roll
+   * back the revise. Idempotent upsert on (tenantId, coalesceKey, status='pending'):
+   * a burst of revisions for the same (class, subject, term) collapses into ONE
+   * pending row. Class-wide scope (no studentId) so the cascaded class averages /
+   * ranks / global rows refresh for every pupil — mirrors the publish enqueue in
+   * assessments.controller.ts. A missed enqueue degrades only cache freshness (the
+   * safety-net sweep + live fallback cover it), NEVER the revise.
+   */
+  private async enqueueGradeRevisedRecompute(
+    tenantId: string,
+    assessmentId: string,
+  ): Promise<void> {
+    try {
+      const assessment = await this.prisma.assessment.findFirst({
+        where: { id: assessmentId, tenantId },
+        select: {
+          termId: true,
+          teachingAssignment: {
+            select: { classSectionId: true, subjectId: true, academicYearId: true },
+          },
+        },
+      });
+      const ta = assessment?.teachingAssignment;
+      if (!ta?.classSectionId || !ta.subjectId) return;
+      const scope = {
+        classSectionId: ta.classSectionId,
+        subjectId: ta.subjectId,
+        termId: assessment?.termId ?? null,
+        academicYearId: ta.academicYearId ?? null,
+      };
+      const coalesceKey = snapshotCoalesceKey(tenantId, 'grade_revised', scope);
+      await this.prisma.snapshotRecomputeTrigger.upsert({
+        where: {
+          tenantId_coalesceKey_status: { tenantId, coalesceKey, status: 'pending' },
+        },
+        create: {
+          tenantId,
+          reason: 'grade_revised',
+          status: 'pending',
+          classSectionId: scope.classSectionId,
+          subjectId: scope.subjectId,
+          termId: scope.termId,
+          academicYearId: scope.academicYearId,
+          coalesceKey,
+        },
+        // Re-revise while a recompute is still pending: refresh enqueuedAt so the
+        // FIFO drain re-orders, but stay ONE coalesced row.
+        update: { enqueuedAt: new Date() },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[grades] grade_revised snapshot recompute enqueue failed for assessment ${assessmentId}: ${(err as Error).message}`,
+      );
+    }
   }
 }

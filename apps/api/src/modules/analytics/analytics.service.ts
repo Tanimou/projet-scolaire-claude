@@ -333,6 +333,15 @@ export interface TeacherReportsResponse {
     absentCount: number;
     maxScore: number;
   }>;
+  /**
+   * E6-S3 — additive, optional freshness metadata (same shape S2 added to
+   * `ParentDashboardResponse`). Tells the (S4) chip whether the per-class
+   * `average`/`passRate`/`distribution`/`perTerm` figures were served from the
+   * materialised snapshot cache or computed live, and whether a recompute is in
+   * flight. Strictly additive — a client that ignores it sees today's payload; the
+   * byte-parity contract test excludes it. Reuses the S1 `SnapshotFreshness` type.
+   */
+  freshness?: SnapshotFreshness;
 }
 
 
@@ -3681,6 +3690,22 @@ export class AnalyticsService {
         };
       });
 
+    // E6-S3 (FR1/FR4) — resolve the additive freshness envelope. The per-class
+    // figures above stay LIVE: the only snapshot grain that could back them is
+    // `ClassSubjectDistribution`, but teacher-reports aggregates over the TEACHER's
+    // OWN per-assignment grades (round1, 1-decimal) while the distribution is a
+    // CLASS-WIDE, all-teachers, round2 grade-population aggregate — a structural
+    // grain + rounding mismatch (PM-1/PM-2/PM-3), so a snapshot read would serve a
+    // wrong number. Per FR1's own escape clause ("if not, the gate must fall through
+    // to live for that surface") this surface is served live, with `freshness`
+    // truthfully reporting source:'live' + whether a recompute is in flight for any
+    // of the teacher's class scopes (so the S4 chip shows "recalcul en cours").
+    const freshness = await this.resolveTeacherReportsFreshness({
+      tenantId,
+      classSectionIds: [...new Set(assignments.map((a) => a.classSection.id))],
+      academicYearId,
+    });
+
     return {
       academicYear,
       terms,
@@ -3697,7 +3722,43 @@ export class AnalyticsService {
           a.subjectName.localeCompare(b.subjectName),
       ),
       recentAssessments,
+      freshness,
     };
+  }
+
+  /**
+   * E6-S3 (FR4) — freshness envelope for `teacherReports`. The figures are served
+   * live (see the call site for the byte-parity rationale), so this always returns
+   * `source:'live'`; `recomputing` is true iff an open (`pending`/`processing`)
+   * recompute trigger targets ANY of the teacher's class scopes — a class-keyed
+   * publish/revise trigger OR the broad class-less coefficient-change trigger for the
+   * year (PM-5: the gate must cover EVERY class in the multi-class report, not one).
+   * Tenant-scoped; degrades to recomputing:false on any probe throw (never errors).
+   */
+  private async resolveTeacherReportsFreshness(args: {
+    tenantId: string;
+    classSectionIds: string[];
+    academicYearId?: string;
+  }): Promise<SnapshotFreshness> {
+    const { tenantId, classSectionIds, academicYearId } = args;
+    let recomputing = false;
+    try {
+      const openTrigger = await this.prisma.snapshotRecomputeTrigger.findFirst({
+        where: {
+          tenantId,
+          status: { in: ['pending', 'processing'] },
+          OR: [
+            ...(classSectionIds.length ? [{ classSectionId: { in: classSectionIds } }] : []),
+            ...(academicYearId ? [{ classSectionId: null, academicYearId }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      recomputing = openTrigger != null;
+    } catch {
+      recomputing = false;
+    }
+    return { source: 'live', computedAt: new Date().toISOString(), recomputing };
   }
 
 }

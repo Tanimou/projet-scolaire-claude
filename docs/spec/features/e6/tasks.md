@@ -89,7 +89,16 @@ yet** (S4) — the UI is unchanged; the win is the snapshot-served path + the ad
 
 ---
 
-## [ ] S3 — Admin & teacher aggregates read snapshots + revise/coefficient triggers · `[api]` · P1-P2 · ~M
+## [x] S3 — Admin & teacher aggregates read snapshots + revise/coefficient triggers · `[api][worker]` · P1-P2 · ~M
+
+> **Shipped.** Delivered the two recompute-trigger seams + the worker fan-out + the additive
+> `freshness` envelope on teacher-reports & drill-down. **Honest read-switch call:** the teacher-reports
+> and drill-down figures are served **live** (not snapshot) because the only candidate snapshot grain
+> (`ClassSubjectDistribution`, a class-wide round2 grade-population aggregate) cannot byte-reproduce the
+> teacher's per-assignment round1 figures nor the drill-down's student-population counts (PM-1/2/3/4,
+> architect C-2) — FR1/FR2 explicitly authorise falling through to live where parity can't hold.
+> `schoolPerformance` stays live (FR3, no cycle-grain snapshot). The visible S3 win is the
+> trigger-driven freshness + the GradeRevised/coefficient recomputes keeping all snapshots fresh.
 
 **Goal:** complete the read-rewiring — teacher reports + admin dashboard/drill-down read the
 `class_subject_distribution` (+ `student_subject_snapshot`) snapshots (snapshot-first + live fallback),
