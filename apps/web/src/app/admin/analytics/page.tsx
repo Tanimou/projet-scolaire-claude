@@ -1,6 +1,7 @@
 import { BarChart3, Target, TrendingUp, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { FreshnessChip } from '@/components/freshness/FreshnessChip';
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
 import { KpiCard, PageHeader } from '@pilotage/ui';
@@ -89,6 +90,7 @@ export default async function AdminAnalyticsPage({
         ]}
         title="Analytique des performances"
         subtitle="Explorez la réussite par cycle, classe, matière puis élève — filtrable par trimestre."
+        actions={<FreshnessChip freshness={data?.freshness} />}
       />
 
       {/* KPI strip — synthèse de l'année active (niveau cycle) */}

@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
 import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
+import { FreshnessChip } from '@/components/freshness/FreshnessChip';
 import { api, isNextNavigationSignal } from '@/lib/api-client';
 import { fetchMe } from '@/lib/me';
 import {
@@ -110,6 +111,14 @@ interface ParentDashboardResponse {
   }>;
   recentGrades: GradeRow[];
   upcomingAssessments: UpcomingItem[];
+  // E6-S4: additive/optional freshness envelope (S2 returns it on a snapshot read).
+  // Optional so an older payload / un-rewired surface still type-checks → no chip.
+  freshness?: {
+    source: 'snapshot' | 'live';
+    computedAt: string;
+    recomputing: boolean;
+    gradeCount?: number;
+  };
 }
 
 interface ParentAlertItem {
@@ -429,7 +438,10 @@ export default async function ParentDashboardPage({
 
         {/* Global performance — span 3 cols */}
         <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60 lg:col-span-3">
-          <h3 className="text-sm font-bold text-slate-900">Performance globale</h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-bold text-slate-900">Performance globale</h3>
+            <FreshnessChip freshness={dashboard?.freshness} />
+          </div>
           {perf?.studentAverage == null ? (
             <p className="mt-3 text-xs text-slate-500">Pas encore de notes publiées.</p>
           ) : (
