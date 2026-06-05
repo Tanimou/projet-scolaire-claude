@@ -44,6 +44,13 @@ export interface DrilldownResponse {
   terms: Array<{ id: string; name: string; orderIndex: number }>;
   groups: DrilldownGroup[];
   students: DrilldownStudent[];
+  // E6-S4: additive/optional freshness envelope (S3 returns it, served live).
+  freshness?: {
+    source: 'snapshot' | 'live';
+    computedAt: string;
+    recomputing: boolean;
+    gradeCount?: number;
+  };
 }
 
 export interface Selection {

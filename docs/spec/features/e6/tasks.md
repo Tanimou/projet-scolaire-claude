@@ -123,7 +123,17 @@ and add the remaining recompute triggers so those views stay fresh under correct
 
 ---
 
-## [ ] S4 — Freshness chip (the visionary trust signal) · `[web][a11y]` · P2 · ~S
+## [x] S4 — Freshness chip (the visionary trust signal) · `[web][a11y]` · P2 · ~S
+
+> **Shipped.** A new app-level `'use client'` `FreshnessChip`
+> (`apps/web/src/components/freshness/FreshnessChip.tsx`) composed over the existing `@pilotage/ui`
+> `Badge` + `formatRelativeTime` (no `packages/ui` change), rendering the three states (Recomputing /
+> Fresh / neutral-live) purely from the additive `freshness` field — degrade-to-no-chip when absent.
+> Mounted on `/parent/dashboard` (S2), `/teacher/reports` + `/admin/analytics` (S3). The only client
+> interactivity is the ~30 s relative-time tick; the static `aria-label` keeps the polite region from
+> re-announcing the tick. apps/web only — no schema/endpoint/permission/contract change. Known
+> limitations folded into PROGRESS (Fresh-state hydration width reservation + the reload-only live
+> announcement) → S5/polish.
 
 **Goal:** turn pre-computation into a **visible** trust signal — a calm `@pilotage/ui` `FreshnessChip` on
 the parent + admin (+ teacher) dashboards, rendered from the additive `freshness` field (ux.md §1–§5).

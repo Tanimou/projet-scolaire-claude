@@ -2,7 +2,7 @@
 
 > Epic: **E6 — Analytics Snapshots & pre-computation** · Tier 3 (Scale & new surfaces) · Size ~M
 > Spec-kit run: **2026-06-05** (docs-only; no code, no schema, no build). Roadmap status: `proposed`
-> → promoted to **in-progress** (spec authored). Next action: ship **S1** (`epic-slice`).
+> → promoted to **in-progress** (spec authored). **S1–S4 shipped → next slice: S5** (`epic-slice`).
 
 ## Slice status
 
@@ -11,7 +11,7 @@
 | S1 | Snapshot schema + recompute spine + publish trigger | `[schema][worker]` | P1 | ✅ shipped | — |
 | S2 | Parent dashboard reads snapshots (headline perf win) | `[api]` | P1 | ✅ shipped | — |
 | S3 | Admin & teacher reads + revise/coefficient triggers | `[api][worker]` | P1-P2 | ✅ shipped | — |
-| S4 | Freshness chip (the visionary trust signal) | `[web][a11y]` | P2 | ⬜ not started | — |
+| S4 | Freshness chip (the visionary trust signal) | `[web][a11y]` | P2 | ✅ shipped | — |
 | S5 | Operability: idempotent full rebuild + sweep hardening | `[worker]` | P2 | ⬜ not started | — |
 
 ## What landed this run (spec run)
@@ -136,6 +136,42 @@
   an unresolvable class-less trigger is a no-op fan-out).
 - **No schema/endpoint/permission/queue/contract change** (reuses S1 `SnapshotFreshness` +
   `snapshotCoalesceKey` + `SNAPSHOT_TRIGGER_REASON`). The parent read (S2) keeps working unchanged.
+
+## What landed (S4 — freshness chip)
+
+- **New app-level client component** `apps/web/src/components/freshness/FreshnessChip.tsx`
+  (`'use client'`) — a thin composition over the existing `@pilotage/ui` `Badge` +
+  `formatRelativeTime` (reuse-first; no `packages/ui` change, no DS Guardian promotion). Three
+  states derived **purely** from the additive `freshness` field, never a fetch / loading gate:
+  **Recomputing** (`recomputing === true`, checked first) → neutral Badge + spinning `RefreshCw` +
+  "Recalcul en cours…"; **Fresh** (`source === 'snapshot' && !recomputing`) → success Badge +
+  `CheckCircle2` + "À jour" with an aria-hidden "il y a {Xs}" suffix (+ optional " · N notes",
+  plural toggle at N>1, omitted at 0); **Neutral/live** (`source === 'live'`) → quiet neutral Badge +
+  "À jour" with no suffix. `!freshness` or empty `computedAt` → renders `null` (degrade-to-no-chip on
+  older payloads / un-rewired surfaces).
+- **Mounted on all three E6 read surfaces**, reading the field S2/S3 already put on the wire:
+  `/parent/dashboard` (S2 snapshot read) in a new `flex … justify-between` header next to
+  "Performance globale"; `/teacher/reports` and `/admin/analytics` (S3 live-served reads) in the
+  existing `PageHeader actions` slot. Each page added the additive optional `freshness?` shape to its
+  local response interface so an un-rewired payload still type-checks.
+- **A11y (folds AC-5 / ux S4):** icon+text (not colour-alone), `role="status"` + `aria-live="polite"`
+  with the **state word as the static `aria-label`** so the polite region announces the
+  recomputing↔fresh transition but the 30 s relative-time tick (aria-hidden suffix) never
+  re-announces; `motion-reduce:animate-none` on the spinner; kind/factual FR copy (no
+  "obsolète/erreur/cache"); never names or compares another child.
+- **Only client interactivity = a ~30 s `setInterval`** bumping `now` so "il y a 12 s" → "il y a 1 min"
+  rolls forward without a refetch (cleared on unmount); the dashboards stay server components. A
+  ≤5-line `relativeLabel` shim keeps "il y a {sec} s" sub-minute and defers to the shared
+  `formatRelativeTime` from 60 s up; clock-skew (future `computedAt`) clamps to "à l'instant", a NaN
+  date returns ''.
+- **apps/web ONLY** — no schema, no endpoint, no permission, no contract, no `packages/ui` change.
+- **Known limitation (folds the verify gate):** the chip reserves no min-width for the Fresh
+  relative-time suffix, so on a snapshot-fresh hydration the pill widens once when the post-mount
+  "il y a {Xs}" swaps in (minor CLS the spec's "no layout shift" AC-S4-4 flags). The three surfaces
+  are server components that don't refetch, so the documented recomputing↔fresh live-region
+  announcement only materialises across a full navigation/reload (informational, not interactive).
+  Both recorded for an S5/polish follow-up; functionally the chip conveys state visually + via the
+  accessible name on every paint.
 
 ## Key decisions (locked in the spec)
 

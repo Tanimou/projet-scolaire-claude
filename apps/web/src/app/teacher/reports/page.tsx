@@ -17,6 +17,7 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { FreshnessChip } from '@/components/freshness/FreshnessChip';
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
 import {
@@ -69,6 +70,13 @@ interface TeacherReportsResponse {
     absentCount: number;
     maxScore: number;
   }>;
+  // E6-S4: additive/optional freshness envelope (S3 returns it, served live).
+  freshness?: {
+    source: 'snapshot' | 'live';
+    computedAt: string;
+    recomputing: boolean;
+    gradeCount?: number;
+  };
 }
 
 async function safe<T>(p: Promise<T>): Promise<T | null> {
@@ -410,6 +418,7 @@ export default async function TeacherReportsPage({
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <FreshnessChip freshness={reports.freshness} />
             <ExportReportButton
               classes={allClasses}
               recentAssessments={recentAssessments}
