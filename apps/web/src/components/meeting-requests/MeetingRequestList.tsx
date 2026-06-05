@@ -5,6 +5,7 @@ import {
   MessageSquarePlus,
   ShieldAlert,
   TrendingDown,
+  TrendingUp,
   UserRound,
   UserX,
 } from 'lucide-react';
@@ -52,6 +53,7 @@ const ALERT_ICON: Record<AlertCode, typeof AlertTriangle> = {
   MISSING_ASSESSMENT: AlertTriangle,
   HIGH_ABSENCE: UserX,
   TEACHER_COMMENT_FLAG: ShieldAlert,
+  IMPROVEMENT: TrendingUp,
   BEHAVIOR_ALERT: ShieldAlert,
 };
 

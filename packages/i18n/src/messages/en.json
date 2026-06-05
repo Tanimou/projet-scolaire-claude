@@ -65,5 +65,6 @@
   "alert.NEGATIVE_TREND": "A recent decrease has been observed in {subject}.",
   "alert.REPEATED_FAILURE": "Repeated difficulties in {subject}.",
   "alert.MISSING_ASSESSMENT": "An assessment has not been completed.",
-  "alert.TEACHER_COMMENT_FLAG": "A teacher's comment requires your attention."
+  "alert.TEACHER_COMMENT_FLAG": "A teacher's comment requires your attention.",
+  "alert.IMPROVEMENT": "Encouraging progress in {subject} 🎉"
 }

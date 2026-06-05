@@ -38,6 +38,7 @@ export const RULE_LABEL: Record<AlertRuleCode, string> = {
   MISSING_ASSESSMENT: 'Évaluation manquante',
   HIGH_ABSENCE: 'Absence élevée',
   TEACHER_COMMENT_FLAG: 'Commentaire signalé',
+  IMPROVEMENT: 'Progrès / amélioration',
   BEHAVIOR_ALERT: 'Comportement',
 };
 

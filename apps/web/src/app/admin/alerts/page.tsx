@@ -5,6 +5,7 @@ import {
   ShieldAlert,
   Sparkles,
   TrendingDown,
+  TrendingUp,
   UserX,
 } from 'lucide-react';
 import type { Metadata } from 'next';
@@ -64,6 +65,7 @@ const RULE_ICON: Record<AlertRuleCode, typeof AlertTriangle> = {
   MISSING_ASSESSMENT: AlertTriangle,
   HIGH_ABSENCE: UserX,
   TEACHER_COMMENT_FLAG: ShieldAlert,
+  IMPROVEMENT: TrendingUp,
   BEHAVIOR_ALERT: ShieldAlert,
 };
 
@@ -74,7 +76,15 @@ const RULE_IMPLEMENTED: Partial<Record<AlertRuleCode, true>> = {
   NEGATIVE_TREND: true,
   MISSING_ASSESSMENT: true,
   TEACHER_COMMENT_FLAG: true,
+  IMPROVEMENT: true,
 };
+
+/**
+ * E3-S2: IMPROVEMENT is a *positive* signal, not a problem detector. Tint its
+ * icon chip emerald so admins can scan it as the encouraging rule; the rest of
+ * the card stays neutral slate for scan consistency.
+ */
+const POSITIVE_RULE_CODE: AlertRuleCode = 'IMPROVEMENT';
 
 interface AlertsSearchParams {
   tab?: string;
@@ -319,14 +329,24 @@ export default async function AlertsPage({
                 {rules.map((rule) => {
                   const Icon = RULE_ICON[rule.code];
                   const implemented = !!RULE_IMPLEMENTED[rule.code];
+                  const positive = rule.code === POSITIVE_RULE_CODE;
                   return (
                     <li
                       key={rule.code}
                       className="rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-slate-300"
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white ring-1 ring-slate-200">
-                          <Icon className="h-4 w-4 text-slate-600" />
+                        <span
+                          className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ${
+                            positive
+                              ? 'bg-emerald-50 ring-emerald-200'
+                              : 'bg-white ring-slate-200'
+                          }`}
+                        >
+                          <Icon
+                            className={`h-4 w-4 ${positive ? 'text-emerald-700' : 'text-slate-600'}`}
+                            aria-hidden
+                          />
                         </span>
                         <AlertRuleToggle code={rule.code} initial={rule.enabled} />
                       </div>

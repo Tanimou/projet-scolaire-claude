@@ -21,7 +21,7 @@
 > **Status legend:** `in-progress` ▸ `next` ▸ `proposed` ▸ `shipped` ▸ `parked`.
 > Keep entries short; the detailed spec lives in each epic's `docs/spec/features/<id>/`.
 
-**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1 through E2-S4 are now shipped → `E2` is `shipped` (all 4 slices landed; S4 = moderation/safety: report + admin oversight + send rate-limit + opt-in email reusing the existing notification-email pipeline). Next epic → `E3 — Complete the Alert Engine` is now **in-progress** (spec-kit landed at `docs/spec/features/e3/`; **S1 shipped** — `TEACHER_COMMENT_FLAG` grade-flag + dual byte-parity evaluator, engine now 6/7; next slice → **E3-S2** = the 7th rule `IMPROVEMENT`, a non-stigmatising positive signal mirroring `NEGATIVE_TREND` inverted).**
+**Current focus →** `E1 — Parent Alert Action Loop` is **shipped** (S1–S4 all landed; S1 in [PR #103](https://github.com/Tanimou/projet-scolaire-claude/pull/103) — parent ack/resolve/dismiss via guardianship ABAC; **S2** = the "What should I do?" panel with deterministic deep-link next-steps + an append-only, idempotent `alert.meeting_intent` CTA; **S3** = the `MeetingRequest` model promoting that intent into a queryable, role-scoped teacher/admin action center + in-app assignee notification; **S4** = the opt-in weekly parent digest worker cron + email-only `NotificationPreference`). **Next epic → `E2 — Parent ↔ Teacher Messaging`** is now **specced** (epic-spec kit landed at `docs/spec/features/e2/` — spec/plan/data-model/contracts/tasks/quickstart/PROGRESS); the next run should ship **E2-S1** (`epic-slice`: `Conversation` + `ConversationParticipant` + `ConversationMessage` models, dual-wall ABAC = guardianship ∩ teaching-assignment, create/send spine). The codebase was already past the roadmap's "epic-spec first" assumption for E1 (admin lifecycle endpoints + parent read shipped), so the E1 runs were **epic-slices**, not a spec run; the `docs/spec/features/e1/` spec-kit was backfilled one story per slice. **E2-S1 through E2-S4 are now shipped → `E2` is `shipped` (all 4 slices landed; S4 = moderation/safety: report + admin oversight + send rate-limit + opt-in email reusing the existing notification-email pipeline). Next epic → `E3 — Complete the Alert Engine` is now **in-progress** (spec-kit landed at `docs/spec/features/e3/`; **S1 + S2 shipped** — S1 `TEACHER_COMMENT_FLAG` grade-flag + dual byte-parity evaluator; **S2 `IMPROVEMENT`** = the 7th rule, a non-stigmatising positive signal mirroring `NEGATIVE_TREND` inverted, with a code-aware emerald celebration lane on the parent recommendations surface — **engine now 7/7 rules wired** (`BEHAVIOR_ALERT` stays reserved-but-unwired by design); next slice → **E3-S3** = admin rule-config UI over the existing `PATCH /alerts/rules/:code`).**
 
 ---
 
@@ -103,15 +103,26 @@ real-time deferred (ADR-019 tripwire). **S1 + S2 shipped; next slice → S3.**
 ## Tier 2 — Complete the MVP pillars (R6/R7/R8)
 
 ### E3 — Complete the Alert Engine (7 rules + admin config + email) · `in-progress` · ~M
-**Audit:** 58% — 5/7 rules live (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`,
-`NEGATIVE_TREND`, `MISSING_ASSESSMENT`); cron every 15 min with in-app fan-out.
+**Audit:** 58% baseline (5/7 rules). **S1 + S2 shipped → all 7 rule slots now wired** in both api +
+worker (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`, `NEGATIVE_TREND`, `MISSING_ASSESSMENT`,
+`TEACHER_COMMENT_FLAG`, `IMPROVEMENT`; `BEHAVIOR_ALERT` reserved-but-unwired by design); cron every
+15 min with in-app fan-out. **Remaining: S3 admin rule-config UI, S4 email on the cron path.**
 - [x] **S1** — `TEACHER_COMMENT_FLAG` rule: teacher can flag a grade/comment as concerning
   (additive `Grade` flag fields `isFlagged`/`flaggedAt`/`flaggedBy`/`flagNote` via `db push` +
   `@@index([tenantId, isFlagged])`) → `PATCH /grades/:id/flag` (ownership ABAC, 404-before-403,
   idempotent, append-only `grade.flag`/`grade.unflag`) → byte-parity `evaluateTeacherCommentFlag`
   evaluator in **both** api + worker. Teacher gradebook flag toggle; "non implémenté" badge removed
   on `/admin/alerts`. **Engine now 6/7.** Shipped (needs human review — P1 `[schema][auth]`). *(schema+rules)*
-- [ ] **S2** — 7th rule (e.g. `BEHAVIOR_ALERT` or `IMPROVEMENT` positive signal) + evaluator.
+- [x] **S2** — 7th rule = `IMPROVEMENT` (positive signal) + evaluator: additive `IMPROVEMENT`
+  `AlertRuleCode` enum value threaded through `schema.prisma` + contracts (`ALERT_RULE_CODE`) +
+  api/worker `RULE_FN`/`RULE_DEFAULTS` + all FE `Record<AlertCode,…>` maps + i18n EN/FR; byte-parity
+  `evaluateImprovement` in **both** api + worker (inverted `NEGATIVE_TREND`: fires only when
+  `lastHalfAvg − firstHalfAvg ≥ delta` over the trailing window, defaults 1.5 pts / 3 evals,
+  defensive param clamp); `severity: low`, reads only published grades (RGPD minimal-data), auto-seeds
+  `enabled: false` per tenant. Code-aware **emerald celebration lane** on `/parent/recommendations`
+  (override keys on `code === 'IMPROVEMENT'`, not the `low` bucket) + emerald rule chip on
+  `/admin/alerts`. **Engine 7/7 wired** (`BEHAVIOR_ALERT` reserved-but-unwired by design). Shipped
+  (needs human review — P1 `[schema][alert-engine]`). *(schema+rules)*
 - [ ] **S3** — Admin **rule-config UI**: thresholds, severity, period, notify on/off, per-school
   (API exists, UI partial). *(web)*
 - [ ] **S4** — **Email on the cron path**: cron-raised alerts email guardians honoring prefs

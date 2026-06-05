@@ -11,6 +11,7 @@ export type AlertRuleCode =
   | 'MISSING_ASSESSMENT'
   | 'HIGH_ABSENCE'
   | 'TEACHER_COMMENT_FLAG'
+  | 'IMPROVEMENT'
   | 'BEHAVIOR_ALERT';
 
 export interface ActionResult {

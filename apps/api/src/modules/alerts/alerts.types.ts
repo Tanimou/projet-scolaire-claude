@@ -10,6 +10,7 @@ export const RULE_CODES: ReadonlyArray<AlertRuleCode> = [
   'HIGH_ABSENCE',
   'TEACHER_COMMENT_FLAG',
   'BEHAVIOR_ALERT',
+  'IMPROVEMENT',
 ];
 
 /** Default labels + thresholds, mirrored on the front for the rule list UI. */
@@ -63,6 +64,12 @@ export const RULE_DEFAULTS: Record<
     description: '>= 3 remarques disciplinaires sur 14 jours',
     severity: 'high',
     parameters: { count: 3, windowDays: 14 },
+  },
+  IMPROVEMENT: {
+    label: 'Progrès / amélioration',
+    description: 'Progression de >= 1.5 pts sur 3 évaluations consécutives',
+    severity: 'low',
+    parameters: { delta: 1.5, windowAssessments: 3 },
   },
 };
 
