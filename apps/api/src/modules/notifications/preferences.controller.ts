@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import type { NotificationKind } from '@prisma/client';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { NOTIFICATION_CADENCE } from '@pilotage/contracts';
+import type { NotificationCadence, NotificationKind } from '@prisma/client';
+import { IsBoolean, IsIn, IsOptional } from 'class-validator';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -16,6 +17,9 @@ class UpdatePreferenceDto {
   @IsOptional() @IsBoolean() inAppEnabled?: boolean;
   @IsOptional() @IsBoolean() emailEnabled?: boolean;
   @IsOptional() @IsBoolean() pushEnabled?: boolean;
+  // E5-S2 — per-kind email cadence. Validated against the shared contract enum so
+  // an unknown value is rejected before it reaches the service / gate.
+  @IsOptional() @IsIn(NOTIFICATION_CADENCE) cadence?: NotificationCadence;
 }
 
 @ApiTags('notifications')

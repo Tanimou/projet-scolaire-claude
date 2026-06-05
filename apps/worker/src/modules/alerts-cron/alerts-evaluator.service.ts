@@ -298,11 +298,17 @@ export class AlertsEvaluatorService {
 
       // Per-user email opt-in for the `alert` kind. Default OFF: a missing
       // override row means "no email", so only explicitly-enabled rows pass.
+      // E5-S2: also gate on `cadence: 'instant'` so this cron path mirrors the
+      // API `instantEmailKeys` gate — a parent who set `alert` to `daily_digest`
+      // (or `off`) gets NO instant alert email here; the alert is bundled into the
+      // daily digest instead (no double-delivery). A missing override row resolves
+      // to email OFF anyway, so the explicit-row filter is unaffected.
       const prefs = await this.prisma.notificationPreference.findMany({
         where: {
           tenantId: args.tenantId,
           kind: 'alert',
           emailEnabled: true,
+          cadence: 'instant',
           userProfileId: { in: args.recipients },
         },
         select: { userProfileId: true },
