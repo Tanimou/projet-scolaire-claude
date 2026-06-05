@@ -11,7 +11,7 @@
 
 ---
 
-## [ ] S1 — `TEACHER_COMMENT_FLAG`: teacher grade-flag + dual evaluator · `[schema][auth]` · ~M
+## [x] S1 — `TEACHER_COMMENT_FLAG`: teacher grade-flag + dual evaluator · `[schema][auth]` · ~M · **shipped** (needs human review)
 
 **Capability:** a teacher flags a published grade as *« à signaler »*; on the next evaluation pass
 the `TEACHER_COMMENT_FLAG` rule raises one explainable alert to the guardian. **The engine goes 6/7.**

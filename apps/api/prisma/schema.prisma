@@ -865,6 +865,14 @@ model Grade {
   enteredBy    String      @map("entered_by") @db.Uuid
   enteredAt    DateTime    @default(now()) @map("entered_at") @db.Timestamptz(6)
   publishedAt  DateTime?   @map("published_at") @db.Timestamptz(6)
+  // E3-S1 — teacher grade-flag (TEACHER_COMMENT_FLAG rule). Additive, defaulted/
+  // nullable, no backfill. `flaggedBy` is lightweight provenance (a UserProfile
+  // id, plain @db.Uuid like `enteredBy` — NOT an FK relation). `flagNote` is a
+  // short, bounded teacher reason (capped at the DTO), never a messaging surface.
+  isFlagged    Boolean     @default(false) @map("is_flagged")
+  flaggedAt    DateTime?   @map("flagged_at") @db.Timestamptz(6)
+  flaggedBy    String?     @map("flagged_by") @db.Uuid
+  flagNote     String?     @map("flag_note")
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -875,6 +883,7 @@ model Grade {
   @@unique([assessmentId, studentId])
   @@index([tenantId])
   @@index([studentId, status])
+  @@index([tenantId, isFlagged])
   @@map("grade")
 }
 

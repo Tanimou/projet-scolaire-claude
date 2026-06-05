@@ -235,6 +235,8 @@ export class GradesService {
               isAbsent: g.isAbsent,
               status: g.status,
               comment: g.comment,
+              isFlagged: g.isFlagged,
+              flagNote: g.flagNote,
             }
           : null;
       });

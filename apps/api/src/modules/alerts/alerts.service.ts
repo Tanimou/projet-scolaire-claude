@@ -27,6 +27,7 @@ import { evaluateLowSubjectAvg } from './rules/low-subject-avg.rule';
 import { evaluateMissingAssessment } from './rules/missing-assessment.rule';
 import { evaluateNegativeTrend } from './rules/negative-trend.rule';
 import { evaluateRepeatedFailure } from './rules/repeated-failure.rule';
+import { evaluateTeacherCommentFlag } from './rules/teacher-comment-flag.rule';
 import type { DetectedAlert, RuleContext } from './rules/rule-context';
 
 const DEDUP_WINDOW_DAYS = 7;
@@ -45,8 +46,8 @@ const RULE_FN: Partial<Record<AlertRuleCode, RuleFn>> = {
   REPEATED_FAILURE: evaluateRepeatedFailure,
   NEGATIVE_TREND: evaluateNegativeTrend,
   MISSING_ASSESSMENT: evaluateMissingAssessment,
-  // TEACHER_COMMENT_FLAG, BEHAVIOR_ALERT
-  // remain stubs — they will be wired in subsequent iterations.
+  TEACHER_COMMENT_FLAG: evaluateTeacherCommentFlag,
+  // BEHAVIOR_ALERT remains a stub — it will be wired in a subsequent iteration.
 };
 
 @Injectable()

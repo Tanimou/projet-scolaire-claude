@@ -34,6 +34,21 @@ export async function saveGrades(payload: Record<string, unknown>): Promise<Resu
   }
 }
 
+export async function flagGrade(
+  gradeId: string,
+  flagged: boolean,
+  note?: string,
+): Promise<Result> {
+  try {
+    const body: { flagged: boolean; note?: string } = { flagged };
+    if (note !== undefined) body.note = note;
+    const data = await api(`/api/v1/grades/${gradeId}/flag`, { method: 'PATCH', body });
+    return { ok: true, data };
+  } catch (err) {
+    return toError(err);
+  }
+}
+
 export async function publishAssessment(id: string): Promise<Result> {
   try {
     const data = await api(`/api/v1/assessments/${id}/publish`, { method: 'POST' });

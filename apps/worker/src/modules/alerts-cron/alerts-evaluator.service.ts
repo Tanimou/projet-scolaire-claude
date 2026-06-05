@@ -8,6 +8,7 @@ import { evaluateLowSubjectAvg } from '../alerts-rules/low-subject-avg.rule';
 import { evaluateMissingAssessment } from '../alerts-rules/missing-assessment.rule';
 import { evaluateNegativeTrend } from '../alerts-rules/negative-trend.rule';
 import { evaluateRepeatedFailure } from '../alerts-rules/repeated-failure.rule';
+import { evaluateTeacherCommentFlag } from '../alerts-rules/teacher-comment-flag.rule';
 import type { DetectedAlert, RuleContext } from '../alerts-rules/rule-context';
 
 /**
@@ -27,6 +28,7 @@ const RULE_FN: Partial<Record<AlertRuleCode, RuleFn>> = {
   REPEATED_FAILURE: evaluateRepeatedFailure,
   NEGATIVE_TREND: evaluateNegativeTrend,
   MISSING_ASSESSMENT: evaluateMissingAssessment,
+  TEACHER_COMMENT_FLAG: evaluateTeacherCommentFlag,
 };
 
 @Injectable()

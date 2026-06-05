@@ -43,6 +43,8 @@ export interface GradebookData {
       isAbsent: boolean;
       status: string;
       comment: string | null;
+      isFlagged: boolean;
+      flagNote: string | null;
     }>;
     average: number | null;
     count: number;
