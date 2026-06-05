@@ -796,8 +796,8 @@ describe('MessagingService.sendMessage (E2-S4 per-sender rate-limit)', () => {
 
 describe('MessagingService.listReports (admin oversight: tenant + school scope)', () => {
   function makeReportsService() {
-    const count = jest.fn(async () => 0);
-    const findMany = jest.fn(async () => [] as unknown[]);
+    const count = jest.fn(async (_args: unknown) => 0);
+    const findMany = jest.fn(async (_args: unknown) => [] as unknown[]);
     const prisma = {
       conversationReport: { count, findMany },
       auditLog: { create: jest.fn(async () => ({})) },
@@ -831,7 +831,8 @@ describe('MessagingService.listReports (admin oversight: tenant + school scope)'
   it('falls back to tenant-only scope when no active school resolves (schoolId null)', async () => {
     const { service, findMany } = makeReportsService();
     await service.listReports({ ...baseArgs, schoolId: null });
-    const where = (findMany.mock.calls[0]![0] as { where: Record<string, unknown> }).where;
+    const firstCall = findMany.mock.calls[0];
+    const where = (firstCall![0] as { where: Record<string, unknown> }).where;
     expect(where.tenantId).toBe(TENANT);
     expect('schoolId' in where).toBe(false);
   });
