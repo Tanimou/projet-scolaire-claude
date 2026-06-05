@@ -15,10 +15,20 @@ export type NotificationKindCode =
   | 'message'
   | 'weekly_digest';
 
+/**
+ * Per-kind email cadence (E5-S2/S3). Mirrors the shared contract enum
+ * `NOTIFICATION_CADENCE` 1:1 — governs *email frequency* only, orthogonal to the
+ * channel booleans. `instant` = today's per-event email (default); `daily_digest`
+ * = bundle into one daily summary; `off` = mute this kind's email (reversible
+ * soft snooze that preserves the channel choice server-side).
+ */
+export type NotificationCadenceCode = 'instant' | 'daily_digest' | 'off';
+
 export interface UpdatePreferencePatch {
   inAppEnabled?: boolean;
   emailEnabled?: boolean;
   pushEnabled?: boolean;
+  cadence?: NotificationCadenceCode;
 }
 
 function revalidateSettings() {
@@ -73,6 +83,47 @@ export async function setChannelForKindsAction(
       api(`/api/v1/notifications/preferences/${kind}`, {
         method: 'PATCH',
         body: { [channel]: enabled } as UpdatePreferencePatch,
+      }),
+    ),
+  );
+
+  const succeededKinds = kinds.filter((_, i) => results[i]?.status === 'fulfilled');
+  revalidateSettings();
+
+  if (succeededKinds.length === kinds.length) {
+    return { ok: true, succeededKinds };
+  }
+
+  const firstRejected = results.find(
+    (r): r is PromiseRejectedResult => r.status === 'rejected',
+  );
+  const reason = firstRejected?.reason;
+  const error =
+    reason instanceof ApiError ? `HTTP ${reason.status}` : ((reason as Error)?.message ?? 'Erreur');
+  return { ok: false, error, succeededKinds };
+}
+
+/**
+ * Bulk-set the email *cadence* across many notification kinds in one round-trip.
+ * Backs the header "Tout mettre en sourdine" mute (→ `off` for every per-event
+ * kind) and its inverse "Tout réactiver" (→ `instant`). Same partial-failure
+ * reconciliation contract as {@link setChannelForKindsAction}: the client keeps
+ * the kinds that actually landed and reverts only the rejected ones.
+ *
+ * Cadence governs the *email* channel only, so the channel booleans are left
+ * untouched server-side — muting is a reversible soft snooze (FR-2 / data-model
+ * §1.2). The caller excludes the email-only weekly digest from this set (it is
+ * its own summary row, never a per-event cadence kind).
+ */
+export async function setCadenceForKindsAction(
+  kinds: NotificationKindCode[],
+  cadence: NotificationCadenceCode,
+): Promise<BulkChannelResult> {
+  const results = await Promise.allSettled(
+    kinds.map((kind) =>
+      api(`/api/v1/notifications/preferences/${kind}`, {
+        method: 'PATCH',
+        body: { cadence } as UpdatePreferencePatch,
       }),
     ),
   );
