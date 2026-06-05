@@ -101,6 +101,7 @@ export const PERMISSIONS = [
   ['audit.read', 'Consulter audit', 'audit', 'read'],
   ['imports.execute', 'Exécuter bulk imports', 'import', 'execute'],
   ['exports.execute', 'Générer exports', 'export', 'execute'],
+  ['exports.execute.parent', 'Générer ses propres exports (bulletin)', 'export', 'execute.parent'],
   ['integrations.write', 'Gérer intégrations', 'integration', 'write'],
 
   // Profile (everyone)
@@ -241,6 +242,7 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'branding.read',
     'messaging.read',
     'messaging.write',
+    'exports.execute.parent',
     'profile.read.self',
     'profile.write.self',
   ],
