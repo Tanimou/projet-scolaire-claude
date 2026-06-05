@@ -9,8 +9,8 @@
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
 | S1 | Snapshot schema + recompute spine + publish trigger | `[schema][worker]` | P1 | ✅ shipped | — |
-| S2 | Parent dashboard reads snapshots (headline perf win) | `[api]` | P1 | ⬜ not started | — |
-| S3 | Admin & teacher reads + revise/coefficient triggers | `[api]` | P1-P2 | ⬜ not started | — |
+| S2 | Parent dashboard reads snapshots (headline perf win) | `[api]` | P1 | ✅ shipped | — |
+| S3 | Admin & teacher reads + revise/coefficient triggers | `[api]` | P1-P2 | ⬜ **next** | — |
 | S4 | Freshness chip (the visionary trust signal) | `[web][a11y]` | P2 | ⬜ not started | — |
 | S5 | Operability: idempotent full rebuild + sweep hardening | `[worker]` | P2 | ⬜ not started | — |
 
@@ -49,6 +49,40 @@
 - **Zero read-path wiring** — snapshots are written but never read in S1 (provably zero behaviour change).
 - **Build/migration left to the orchestrator** (agents don't build): `prisma generate` + `db push` must run
   once so the new snapshot/trigger Prisma clients exist for the typecheck gate + runtime.
+
+## What landed (S2 — parent dashboard reads snapshots)
+
+- **Read switch** (`apps/api/src/modules/analytics/analytics.service.ts`): the `parentDashboard`
+  class-context block (per-subject `classAverage` / `studentRank` / `classSize` + the global
+  `studentRank` / `classRankTotal`) now resolves **snapshot-first**. The original ~90-line live
+  class-wide `grade.findMany` + in-memory ranking is extracted **verbatim** into
+  `computeParentClassContextLive` (behaviour-preserving cut-paste) and gated behind a new
+  `resolveParentClassContext`, which serves the materialised
+  `StudentGlobalSnapshot` / `StudentSubjectSnapshot` / `ClassSubjectDistribution` point-reads when a
+  fresh snapshot exists, collapsing the O(class × grades) scan (the <2 s NFR win).
+- **Fall-through-to-live, never an error.** Any snapshot miss/throw, or an open
+  (`pending`/`processing`) `SnapshotRecomputeTrigger` on the child's class scope, short-circuits to
+  the byte-identical live scan — no mixed-generation reads. All-or-nothing gate: a global YEAR row +
+  a subject YEAR row for **every** graded subject. Each snapshot/trigger query carries explicit
+  `where: { tenantId }` (ADR-002 defence-in-depth).
+- **Additive `freshness` envelope.** `ParentDashboardResponse.freshness?: SnapshotFreshness`
+  (reuses the S1 contract type) — `source: 'snapshot' | 'live'`, `computedAt`, `recomputing`.
+  Optional/ignored by today's clients (S4 wires the chip); excluded from the byte-parity contract
+  test.
+- **ABAC + tenant unchanged.** Controller `GET parent-dashboard/:studentId` still gates on
+  `studentAccess.canAccessStudent(...)` before the service; `classSectionId`/`academicYearId` stay
+  server-derived from the child's own active enrollment. No schema change, no new endpoint, no
+  controller change, no `packages/ui` drift.
+- **Tests** (`analytics.service.spec.ts`, +10 E6-S2 cases): byte-parity (≤0.01 tolerance for the
+  Decimal-backed `ClassSubjectDistribution.average`), no-class-scan-on-hit, fall-through,
+  tenant-scoping of every snapshot/trigger query, all-or-nothing gate (missing subject row **and**
+  missing distribution row), degrade-to-live-on-throw, and freshness-provenance propagation.
+- **Two review findings folded in before land** (orchestrator pass over the verify gate): (1) the
+  snapshot-hit `freshness` now carries the **served snapshot's real** `computedAt` /
+  `sourceEventId` / `revision` / `gradeCount` (was `new Date()` / partial), so the S4 chip can
+  render "à jour il y a Xs" instead of always "0 s"; (2) `ClassSubjectDistribution` presence is now
+  part of the all-or-nothing gate, so a partial recompute can never emit a `null` `classAverage`
+  while still claiming `source:'snapshot'` (AC-S2-3 "never a wrong number").
 
 ## Key decisions (locked in the spec)
 

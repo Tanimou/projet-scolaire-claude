@@ -314,3 +314,324 @@ describe('AnalyticsService.adminDashboard — U1 reorg', () => {
     expect(res.studentTeacherRatio.ratio).toBe(0);
   });
 });
+
+// =============================================================================
+// E6-S2 — Parent dashboard reads snapshots (snapshot-first + live fallback)
+// =============================================================================
+//
+// A single seeded fixture (one child, 2 subjects, 1 classmate, 2 terms) drives
+// BOTH read paths so the byte-parity contract can be proven against the live
+// computation. maxScore = 20 everywhere so onTwenty = value (keeps the expected
+// numbers human-checkable). Snapshot rows are pre-rounded (Decimal(5,2)); the
+// parity comparison uses a 2-dp tolerance (PM-1), exactly as the slice mandates.
+
+const PD_TENANT = 'pt1';
+const PD_STUDENT = 'stu-1';
+const PD_CLASSMATE = 'stu-2';
+const PD_SECTION = 'cs-1';
+const PD_GRADELEVEL = 'gl-1';
+const PD_YEAR = 'ay-1';
+const PD_SCHOOL = 'sch-1';
+const SUB_MATH = 'sub-math';
+const SUB_FR = 'sub-fr';
+const T1 = { id: 't1', name: 'T1', orderIndex: 1, startDate: new Date('2025-09-01') };
+const T2 = { id: 't2', name: 'T2', orderIndex: 2, startDate: new Date('2026-01-01') };
+
+const SUBJECT_MATH = { id: SUB_MATH, code: 'MATH', name: 'Mathématiques', color: '#1', defaultCoefficient: 4 };
+const SUBJECT_FR = { id: SUB_FR, code: 'FR', name: 'Français', color: '#2', defaultCoefficient: 2 };
+
+// One graded row, shaped exactly like the per-student `grade.findMany` include.
+function pdGrade(
+  id: string,
+  studentId: string,
+  subject: typeof SUBJECT_MATH,
+  term: typeof T1,
+  value: number,
+) {
+  return {
+    id,
+    value,
+    studentId,
+    comment: null,
+    updatedAt: new Date('2026-02-01'),
+    assessment: {
+      maxScore: 20,
+      coefficientOverride: null,
+      title: `${subject.code} ${term.name}`,
+      kind: 'devoir',
+      scheduledAt: term.startDate,
+      conductedAt: null,
+      createdAt: term.startDate,
+      term: { id: term.id, name: term.name, orderIndex: term.orderIndex, startDate: term.startDate },
+      teachingAssignment: { subject },
+    },
+  };
+}
+
+// The child's own grades (Math: 12,14 | 16  → year 14; French: 10 | 8,12 → year 10).
+const PD_STUDENT_GRADES = [
+  pdGrade('g1', PD_STUDENT, SUBJECT_MATH, T1, 12),
+  pdGrade('g2', PD_STUDENT, SUBJECT_MATH, T1, 14),
+  pdGrade('g3', PD_STUDENT, SUBJECT_MATH, T2, 16),
+  pdGrade('g4', PD_STUDENT, SUBJECT_FR, T1, 10),
+  pdGrade('g5', PD_STUDENT, SUBJECT_FR, T2, 8),
+  pdGrade('g6', PD_STUDENT, SUBJECT_FR, T2, 12),
+];
+// The classmate's grades (Math: 8 | 10 → 9; French: 14 → 14).
+const PD_CLASSMATE_GRADES = [
+  pdGrade('g7', PD_CLASSMATE, SUBJECT_MATH, T1, 8),
+  pdGrade('g8', PD_CLASSMATE, SUBJECT_MATH, T2, 10),
+  pdGrade('g9', PD_CLASSMATE, SUBJECT_FR, T1, 14),
+];
+const PD_CLASS_GRADES = [...PD_STUDENT_GRADES, ...PD_CLASSMATE_GRADES];
+
+const PD_STUDENT_ROW = {
+  id: PD_STUDENT,
+  firstName: 'Léa',
+  lastName: 'Martin',
+  photoUrl: null,
+  externalRef: 'EXT-1',
+  birthDate: new Date('2014-05-01'),
+  school: { name: 'École Test' },
+  enrollments: [
+    {
+      academicYearId: PD_YEAR,
+      classSectionId: PD_SECTION,
+      classSection: {
+        name: '6eA',
+        gradeLevelId: PD_GRADELEVEL,
+        gradeLevel: { id: PD_GRADELEVEL, name: '6e' },
+      },
+      academicYear: {
+        id: PD_YEAR,
+        name: '2025-2026',
+        status: 'active',
+        startDate: new Date('2025-09-01'),
+        endDate: new Date('2026-07-01'),
+      },
+    },
+  ],
+};
+
+// Pre-rounded snapshot rows (what S1's recompute would have written). The global
+// roll-up carries the freshness provenance (computedAt/sourceEventId/revision) the
+// S4 chip renders; the subject rows carry the per-subject gradeCount summed into it.
+const PD_SNAPSHOT_COMPUTED_AT = new Date('2026-02-02T10:00:00.000Z');
+const PD_SNAPSHOT_EVENT_ID = '11111111-1111-1111-1111-111111111111';
+const PD_GLOBAL_SNAPSHOT = {
+  classRank: 1,
+  classSize: 2,
+  computedAt: PD_SNAPSHOT_COMPUTED_AT,
+  sourceEventId: PD_SNAPSHOT_EVENT_ID,
+  revision: 3,
+};
+const PD_SUBJECT_SNAPSHOTS = [
+  { subjectId: SUB_MATH, classRank: 1, classSize: 2, gradeCount: 3 },
+  { subjectId: SUB_FR, classRank: 2, classSize: 2, gradeCount: 3 },
+];
+const PD_DISTRIBUTIONS = [
+  { subjectId: SUB_MATH, average: 12 },
+  { subjectId: SUB_FR, average: 11 },
+];
+
+interface PdOpts {
+  /** Provide the snapshot rows (snapshot path) or leave empty (live path). */
+  withSnapshots?: boolean;
+  /** An open recompute trigger exists for the scope (forces fall-through to live). */
+  openTrigger?: boolean;
+}
+
+function makeParentDashboardService(opts: PdOpts = {}) {
+  const classScan = jest.fn();
+  const prisma = {
+    student: {
+      findFirst: jest.fn().mockResolvedValue(PD_STUDENT_ROW),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    grade: {
+      findMany: jest.fn().mockImplementation((args: Record<string, unknown>) => {
+        const where = (args.where ?? {}) as Record<string, unknown>;
+        // recentGrades: per-student, take 30, ordered by updatedAt.
+        if (args.take === 30) return Promise.resolve(PD_STUDENT_GRADES);
+        // Per-student grade scan (has studentId in where).
+        if (where.studentId) return Promise.resolve(PD_STUDENT_GRADES);
+        // Class-wide scan (no studentId; keyed by assessment.teachingAssignment).
+        classScan();
+        return Promise.resolve(PD_CLASS_GRADES);
+      }),
+    },
+    subjectCoefficient: {
+      findMany: jest.fn().mockResolvedValue([
+        { subjectId: SUB_MATH, coefficient: 4 },
+        { subjectId: SUB_FR, coefficient: 2 },
+      ]),
+    },
+    assessment: { findMany: jest.fn().mockResolvedValue([]) },
+    attendanceRecord: { findMany: jest.fn().mockResolvedValue([]) },
+    teachingAssignment: { findMany: jest.fn().mockResolvedValue([]) },
+    academicYear: { findFirst: jest.fn().mockResolvedValue(null) },
+    // Snapshot point-reads (tenant-scoped). Empty unless `withSnapshots`.
+    studentGlobalSnapshot: {
+      findFirst: jest.fn().mockResolvedValue(opts.withSnapshots ? PD_GLOBAL_SNAPSHOT : null),
+    },
+    studentSubjectSnapshot: {
+      findMany: jest.fn().mockResolvedValue(opts.withSnapshots ? PD_SUBJECT_SNAPSHOTS : []),
+    },
+    classSubjectDistribution: {
+      findMany: jest.fn().mockResolvedValue(opts.withSnapshots ? PD_DISTRIBUTIONS : []),
+    },
+    snapshotRecomputeTrigger: {
+      findFirst: jest.fn().mockResolvedValue(opts.openTrigger ? { id: 'trig-1' } : null),
+    },
+  };
+
+  const grades = { statsForStudent: jest.fn().mockResolvedValue({ overallAverage: null }) };
+  const service = new AnalyticsService(prisma as never, grades as never);
+  return { service, prisma, classScan };
+}
+
+/** Deep-compare two payloads (minus `freshness`) within a 2-dp tolerance. */
+function expectByteParity(a: unknown, b: unknown, path = ''): void {
+  if (typeof a === 'number' && typeof b === 'number') {
+    expect(Math.abs(a - b)).toBeLessThanOrEqual(0.01);
+    return;
+  }
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    expect(a).toEqual(b);
+    return;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    expect(Array.isArray(a) && Array.isArray(b)).toBe(true);
+    const arrA = a as unknown[];
+    const arrB = b as unknown[];
+    expect(arrA.length).toBe(arrB.length);
+    arrA.forEach((v, i) => expectByteParity(v, arrB[i], `${path}[${i}]`));
+    return;
+  }
+  const objA = a as Record<string, unknown>;
+  const objB = b as Record<string, unknown>;
+  const keys = new Set([...Object.keys(objA), ...Object.keys(objB)]);
+  keys.delete('freshness');
+  for (const k of keys) expectByteParity(objA[k], objB[k], `${path}.${k}`);
+}
+
+describe('AnalyticsService.parentDashboard — E6-S2 snapshot reads', () => {
+  it('AC-S2-1 — snapshot payload is byte-identical to live (minus freshness, 2-dp)', async () => {
+    const live = await makeParentDashboardService({ withSnapshots: false }).service.parentDashboard({
+      tenantId: PD_TENANT,
+      studentId: PD_STUDENT,
+    });
+    const snap = await makeParentDashboardService({ withSnapshots: true }).service.parentDashboard({
+      tenantId: PD_TENANT,
+      studentId: PD_STUDENT,
+    });
+
+    // Sanity: the seeded live numbers are what we expect.
+    expect(live.globalPerformance.studentAverage).toBeCloseTo(76 / 6, 2); // weighted 12.667
+    expect(live.globalPerformance.classAverage).toBeCloseTo(70 / 6, 2); // weighted 11.667
+    expect(live.student.rank).toBe(1);
+    expect(live.student.classSize).toBe(2);
+    const liveMath = live.subjectPerf.find((s) => s.subjectId === SUB_MATH)!;
+    expect(liveMath.classAverage).toBeCloseTo(12, 2);
+    expect(liveMath.studentRank).toBe(1);
+
+    // The whole payload matches between the two paths (freshness excluded).
+    expectByteParity(snap, live);
+  });
+
+  it('AC-S2-2 — snapshot hit issues NO class-wide grade findMany', async () => {
+    const { service, classScan } = makeParentDashboardService({ withSnapshots: true });
+    await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(classScan).not.toHaveBeenCalled();
+  });
+
+  it('AC-S2-2 — live fall-through DOES run the class-wide scan', async () => {
+    const { service, classScan } = makeParentDashboardService({ withSnapshots: false });
+    await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(classScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('AC-S2-4/6 — fresh snapshot hit → freshness carries the SERVED snapshot provenance', async () => {
+    const { service } = makeParentDashboardService({ withSnapshots: true });
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(res.freshness).toBeDefined();
+    expect(res.freshness!.source).toBe('snapshot');
+    expect(res.freshness!.recomputing).toBe(false);
+    // The freshness block must reflect the snapshot's REAL provenance (not now()), so
+    // the S4 chip can render "à jour il y a Xs" instead of always "0s ago".
+    expect(res.freshness!.computedAt).toBe(PD_SNAPSHOT_COMPUTED_AT.toISOString());
+    expect(res.freshness!.sourceEventId).toBe(PD_SNAPSHOT_EVENT_ID);
+    expect(res.freshness!.revision).toBe(3);
+    expect(res.freshness!.gradeCount).toBe(6); // 3 (Math) + 3 (FR)
+  });
+
+  it('AC-S2-3/6 — missing snapshot → served live, recomputing=true', async () => {
+    const { service, classScan } = makeParentDashboardService({ withSnapshots: false });
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(res.freshness!.source).toBe('live');
+    expect(res.freshness!.recomputing).toBe(true);
+    expect(classScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('AC-S2-3/6 — open trigger → fall-through to live even with fresh rows present', async () => {
+    const { service, classScan, prisma } = makeParentDashboardService({
+      withSnapshots: true,
+      openTrigger: true,
+    });
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(res.freshness!.source).toBe('live');
+    expect(res.freshness!.recomputing).toBe(true);
+    // The class scan ran (live), and snapshot rows were NOT read (trigger short-circuit).
+    expect(classScan).toHaveBeenCalledTimes(1);
+    expect(prisma.studentGlobalSnapshot.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('AC-S2-5 — every snapshot/trigger query is tenant-scoped', async () => {
+    const { service, prisma } = makeParentDashboardService({ withSnapshots: true });
+    await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    const tenantWhere = (m: { mock: { calls: unknown[][] } }) =>
+      m.mock.calls.forEach((c) => {
+        const where = (c[0] as { where?: { tenantId?: string } }).where ?? {};
+        expect(where.tenantId).toBe(PD_TENANT);
+      });
+    tenantWhere(prisma.snapshotRecomputeTrigger.findFirst as never);
+    tenantWhere(prisma.studentGlobalSnapshot.findFirst as never);
+    tenantWhere(prisma.studentSubjectSnapshot.findMany as never);
+    tenantWhere(prisma.classSubjectDistribution.findMany as never);
+  });
+
+  it('PM-5 — one missing subject snapshot row → whole payload served live (all-or-nothing)', async () => {
+    const { service, classScan, prisma } = makeParentDashboardService({ withSnapshots: true });
+    // Drop the French subject snapshot row → not every graded subject has a row.
+    (prisma.studentSubjectSnapshot.findMany as jest.Mock).mockResolvedValue([
+      { subjectId: SUB_MATH, classRank: 1, classSize: 2 },
+    ]);
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(res.freshness!.source).toBe('live');
+    expect(classScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('PM-5 — one missing class-distribution row → whole payload served live (no wrong classAverage)', async () => {
+    const { service, classScan, prisma } = makeParentDashboardService({ withSnapshots: true });
+    // Subject snapshots are complete but the French distribution row is absent. Without
+    // folding dist presence into the all-or-nothing gate, the snapshot path would emit
+    // card.classAverage=null for French while still claiming source:'snapshot' — a wrong
+    // number (AC-S2-3). The gate must instead fall through to a byte-identical live read.
+    (prisma.classSubjectDistribution.findMany as jest.Mock).mockResolvedValue([
+      { subjectId: SUB_MATH, average: 12 },
+    ]);
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(res.freshness!.source).toBe('live');
+    expect(classScan).toHaveBeenCalledTimes(1);
+    const fr = res.subjectPerf.find((s) => s.subjectId === SUB_FR)!;
+    expect(fr.classAverage).not.toBeNull(); // live class mean, not a snapshot-miss null
+  });
+
+  it('INV-4 — a snapshot-read throw degrades to live, never throws', async () => {
+    const { service, classScan, prisma } = makeParentDashboardService({ withSnapshots: true });
+    (prisma.studentGlobalSnapshot.findFirst as jest.Mock).mockRejectedValue(new Error('no table'));
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(res.freshness!.source).toBe('live');
+    expect(classScan).toHaveBeenCalledTimes(1);
+  });
+});

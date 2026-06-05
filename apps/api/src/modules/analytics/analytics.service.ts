@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import type { SnapshotFreshness } from '@pilotage/contracts';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { GradesService } from '../grades/grades.service';
@@ -428,6 +429,14 @@ export interface ParentDashboardResponse {
     subjectColor: string | null;
     subjectCode: string;
   }>;
+  /**
+   * E6-S2 — additive, optional freshness metadata. Tells the (S4) chip whether the
+   * served numbers came from the materialised snapshot cache or a fall-through-to-live
+   * computation, and whether a recompute is in flight. A client that ignores this
+   * field sees today's payload unchanged (strictly additive; never compared by the
+   * byte-parity contract test). Reuses the S1 `SnapshotFreshness` contract type.
+   */
+  freshness?: SnapshotFreshness;
 }
 
 /** Variation annuelle d'une matière entre le premier et le dernier trimestre noté. */
@@ -451,6 +460,8 @@ export interface AnnualSubjectDelta {
  */
 @Injectable()
 export class AnalyticsService {
+  private readonly logger = new Logger(AnalyticsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly grades: GradesService,
@@ -778,96 +789,26 @@ export class AnalyticsService {
     });
 
     // Rang général de l'élève dans sa classe + nombre d'élèves classés.
-    let studentRank: number | null = null;
-    let classRankTotal = 0;
-
-    // Compute class averages for each subject (light query: fetch all grades for the class section in this year)
-    if (classSectionId && academicYearId) {
-      const classGrades = await this.prisma.grade.findMany({
-        where: {
-          tenantId,
-          status: { in: ['published', 'revised'] },
-          isAbsent: false,
-          assessment: { teachingAssignment: { classSectionId, academicYearId } },
-        },
-        include: {
-          assessment: {
-            include: {
-              teachingAssignment: { include: { subject: { select: { id: true } } } },
-            },
-          },
-        },
-      });
-      const classSubjectAgg = new Map<string, { sum: number; n: number; studentIds: Set<string> }>();
-      // Cumul par (élève × matière) pour calculer rang par matière + rang général.
-      const perStudentSubject = new Map<string, Map<string, { sum: number; n: number }>>();
-      for (const g of classGrades) {
-        if (!g.value) continue;
-        const sId = g.assessment.teachingAssignment.subject.id;
-        const onTwenty = (Number(g.value) / Number(g.assessment.maxScore)) * 20;
-        const agg = classSubjectAgg.get(sId) ?? { sum: 0, n: 0, studentIds: new Set() };
-        agg.sum += onTwenty;
-        agg.n += 1;
-        agg.studentIds.add(g.studentId);
-        classSubjectAgg.set(sId, agg);
-
-        if (!perStudentSubject.has(g.studentId)) perStudentSubject.set(g.studentId, new Map());
-        const subjMap = perStudentSubject.get(g.studentId)!;
-        const cur = subjMap.get(sId) ?? { sum: 0, n: 0 };
-        cur.sum += onTwenty;
-        cur.n += 1;
-        subjMap.set(sId, cur);
-      }
-      const classSize = new Set(classGrades.map((g) => g.studentId)).size;
-
-      // Moyenne simple par (élève × matière), puis moyenne générale par élève
-      // (moyenne des moyennes par matière — cohérent avec `card.studentAverage`).
-      const subjectAvgByStudent = new Map<string, Map<string, number>>();
-      const overallByStudent = new Map<string, number>();
-      for (const [sid, subjMap] of perStudentSubject.entries()) {
-        const avgMap = new Map<string, number>();
-        const subjAvgs: number[] = [];
-        for (const [subjId, { sum, n }] of subjMap.entries()) {
-          if (n === 0) continue;
-          const avg = sum / n;
-          avgMap.set(subjId, avg);
-          subjAvgs.push(avg);
-        }
-        subjectAvgByStudent.set(sid, avgMap);
-        if (subjAvgs.length > 0) {
-          overallByStudent.set(sid, subjAvgs.reduce((a, b) => a + b, 0) / subjAvgs.length);
-        }
-      }
-
-      // Rang par matière de l'élève courant (compétition : ex æquo = même rang).
-      // `classSize` reste le nombre d'élèves de la classe (dénominateur affiché).
-      for (const card of subjectPerf) {
-        const agg = classSubjectAgg.get(card.subjectId);
-        card.classAverage = agg ? agg.sum / agg.n : null;
-        card.classSize = classSize;
-
-        const myAvg = subjectAvgByStudent.get(studentId)?.get(card.subjectId);
-        if (myAvg != null) {
-          let higher = 0;
-          for (const avgMap of subjectAvgByStudent.values()) {
-            const v = avgMap.get(card.subjectId);
-            if (v != null && v > myAvg) higher += 1;
-          }
-          card.studentRank = higher + 1;
-        }
-      }
-
-      // Rang général de l'élève courant.
-      classRankTotal = overallByStudent.size;
-      const myOverall = overallByStudent.get(studentId);
-      if (myOverall != null) {
-        let higher = 0;
-        for (const v of overallByStudent.values()) {
-          if (v > myOverall) higher += 1;
-        }
-        studentRank = higher + 1;
-      }
-    }
+    //
+    // E6-S2 — snapshot-first class context. The per-subject `classAverage` /
+    // `studentRank` / `classSize` and the global `studentRank` / `classSize` are
+    // served from the materialised `class_subject_distribution` +
+    // `student_subject_snapshot` + `student_global_snapshot` point-reads when a fresh
+    // snapshot exists for this child's class — collapsing the O(class × grades)
+    // class-wide `grade.findMany` (the <2 s NFR win). On any miss/stale snapshot we
+    // transparently fall through to the live class scan (byte-identical, never an
+    // error). `card.classAverage` / `card.studentRank` / `card.classSize` are
+    // mutated in place by the resolver, exactly as the live path did.
+    const classContext = await this.resolveParentClassContext({
+      tenantId,
+      studentId,
+      classSectionId,
+      academicYearId,
+      subjectPerf,
+      subjectIds: Array.from(bySubject.keys()),
+    });
+    const studentRank: number | null = classContext.studentRank;
+    const classRankTotal = classContext.classRankTotal;
 
     // Global performance
     const weightedSum = subjectPerf.reduce((acc, s) => acc + (s.studentAverage ?? 0) * s.coefficient, 0);
@@ -1059,7 +1000,256 @@ export class AnalyticsService {
       annualProgression,
       recentGrades,
       upcomingAssessments,
+      freshness: classContext.freshness,
     };
+  }
+
+  /**
+   * E6-S2 — resolve the per-subject + global class context (averages / ranks /
+   * sizes) snapshot-first, falling through to the live class-wide grade scan on any
+   * miss or stale snapshot. Mutates `card.classAverage` / `card.studentRank` /
+   * `card.classSize` on the passed `subjectPerf` cards in place (exactly the live
+   * effect) and returns the global `studentRank` / `classRankTotal` plus the
+   * {@link SnapshotFreshness} block.
+   *
+   * Snapshot hit conditions (all-or-nothing per dashboard, PM-5):
+   *   1. a fresh `StudentGlobalSnapshot` YEAR roll-up row exists for the child, AND
+   *   2. a `StudentSubjectSnapshot` YEAR row exists for **every** subject the child
+   *      has graded this year, AND
+   *   3. no open (`pending`/`processing`) `SnapshotRecomputeTrigger` targets the
+   *      child's class scope (class-keyed OR the broad coefficient-change trigger).
+   * If any condition fails we serve the entire class context live so the displayed
+   * cards never come from mixed recompute generations. Every snapshot/trigger query
+   * carries an explicit `where: { tenantId }` (RLS defence-in-depth, ADR-002).
+   */
+  private async resolveParentClassContext(args: {
+    tenantId: string;
+    studentId: string;
+    classSectionId: string | undefined;
+    academicYearId: string | undefined;
+    subjectPerf: StudentSubjectPerf[];
+    subjectIds: string[];
+  }): Promise<{
+    studentRank: number | null;
+    classRankTotal: number;
+    freshness: SnapshotFreshness;
+  }> {
+    const { tenantId, studentId, classSectionId, academicYearId, subjectPerf, subjectIds } = args;
+
+    const liveFreshness = (): SnapshotFreshness => ({
+      source: 'live',
+      computedAt: new Date().toISOString(),
+      recomputing: true,
+    });
+
+    // No active enrollment → nothing to rank against; keep the live (empty) shape.
+    if (!classSectionId || !academicYearId) {
+      return { studentRank: null, classRankTotal: 0, freshness: liveFreshness() };
+    }
+
+    // Is a recompute in flight for this child's scope? (class-keyed publish/revise
+    // triggers OR the broad, class-less coefficient-change trigger for the year).
+    const openTrigger = await this.prisma.snapshotRecomputeTrigger
+      .findFirst({
+        where: {
+          tenantId,
+          status: { in: ['pending', 'processing'] },
+          OR: [{ classSectionId }, { classSectionId: null, academicYearId }],
+        },
+        select: { id: true },
+      })
+      .catch(() => null);
+    const recomputing = openTrigger != null;
+
+    // Snapshot-first: read the child's YEAR roll-up rows + the class distribution via
+    // indexed point-reads (NO class-wide grade findMany). Any throw (missing client /
+    // table) degrades to live (defensive, mirrors S1's best-effort posture).
+    if (!recomputing) {
+      try {
+        const [globalRow, subjectRows, distRows] = await Promise.all([
+          this.prisma.studentGlobalSnapshot.findFirst({
+            where: { tenantId, studentId, termId: null, academicYearId },
+            select: {
+              classRank: true,
+              classSize: true,
+              computedAt: true,
+              sourceEventId: true,
+              revision: true,
+            },
+          }),
+          this.prisma.studentSubjectSnapshot.findMany({
+            where: { tenantId, studentId, termId: null, academicYearId },
+            select: { subjectId: true, classRank: true, classSize: true, gradeCount: true },
+          }),
+          this.prisma.classSubjectDistribution.findMany({
+            where: { tenantId, classSectionId, termId: null, academicYearId },
+            select: { subjectId: true, average: true },
+          }),
+        ]);
+
+        const subjectRowBySubject = new Map(subjectRows.map((r) => [r.subjectId, r]));
+        const distBySubject = new Map(distRows.map((r) => [r.subjectId, r]));
+
+        // All-or-nothing freshness gate: a global YEAR row + a subject YEAR row AND a
+        // class-distribution row for EVERY graded subject must be present, else fall
+        // through to live. The distribution row backs `card.classAverage`, so a dist
+        // miss on the snapshot path would silently emit a wrong number (null) while
+        // still claiming `source:'snapshot'` — fold it into the gate so a partial
+        // recompute never diverges from live (AC-S2-3 "never a wrong number").
+        const hasAllRows =
+          subjectIds.length === 0 ||
+          subjectIds.every((s) => subjectRowBySubject.has(s) && distBySubject.has(s));
+
+        if (globalRow && hasAllRows) {
+          // The displayed class denominator mirrors the live `card.classSize`
+          // (constant across cards) — use the global roll-up's classSize.
+          const classSize = globalRow.classSize;
+          for (const card of subjectPerf) {
+            const sub = subjectRowBySubject.get(card.subjectId);
+            const dist = distBySubject.get(card.subjectId);
+            card.classAverage = dist?.average != null ? Number(dist.average) : null;
+            card.studentRank = sub?.classRank ?? null;
+            card.classSize = classSize;
+          }
+          // Freshness carries the SERVED snapshot's real provenance (not now()) so the
+          // S4 chip can render "à jour il y a Xs" — computedAt/sourceEventId/revision
+          // from the global roll-up row, gradeCount summed from the subject rows.
+          const gradeCount = subjectRows.reduce((acc, r) => acc + r.gradeCount, 0);
+          return {
+            studentRank: globalRow.classRank,
+            classRankTotal: globalRow.classSize,
+            freshness: {
+              source: 'snapshot',
+              computedAt: globalRow.computedAt.toISOString(),
+              recomputing: false,
+              gradeCount,
+              sourceEventId: globalRow.sourceEventId,
+              revision: globalRow.revision,
+            },
+          };
+        }
+      } catch (err) {
+        this.logger.debug(
+          `parent-dashboard snapshot read failed (tenant=${tenantId}, student=${studentId}); serving live: ${String(err)}`,
+        );
+      }
+    }
+
+    // ── Fall-through to the live class-wide scan (byte-identical to pre-S2). ──────
+    const live = await this.computeParentClassContextLive({
+      tenantId,
+      studentId,
+      classSectionId,
+      academicYearId,
+      subjectPerf,
+    });
+    return { ...live, freshness: liveFreshness() };
+  }
+
+  /**
+   * The original live class-context computation (pre-E6-S2): a single class-wide
+   * `grade.findMany` over the section + in-memory per-(student × subject) means,
+   * then per-subject + global competition ranks. Preserved verbatim as the
+   * fall-through path; mutates `card.classAverage` / `card.studentRank` /
+   * `card.classSize` in place exactly as before.
+   */
+  private async computeParentClassContextLive(args: {
+    tenantId: string;
+    studentId: string;
+    classSectionId: string;
+    academicYearId: string;
+    subjectPerf: StudentSubjectPerf[];
+  }): Promise<{ studentRank: number | null; classRankTotal: number }> {
+    const { tenantId, studentId, classSectionId, academicYearId, subjectPerf } = args;
+    let studentRank: number | null = null;
+    let classRankTotal = 0;
+
+    const classGrades = await this.prisma.grade.findMany({
+      where: {
+        tenantId,
+        status: { in: ['published', 'revised'] },
+        isAbsent: false,
+        assessment: { teachingAssignment: { classSectionId, academicYearId } },
+      },
+      include: {
+        assessment: {
+          include: {
+            teachingAssignment: { include: { subject: { select: { id: true } } } },
+          },
+        },
+      },
+    });
+    const classSubjectAgg = new Map<string, { sum: number; n: number; studentIds: Set<string> }>();
+    // Cumul par (élève × matière) pour calculer rang par matière + rang général.
+    const perStudentSubject = new Map<string, Map<string, { sum: number; n: number }>>();
+    for (const g of classGrades) {
+      if (!g.value) continue;
+      const sId = g.assessment.teachingAssignment.subject.id;
+      const onTwenty = (Number(g.value) / Number(g.assessment.maxScore)) * 20;
+      const agg = classSubjectAgg.get(sId) ?? { sum: 0, n: 0, studentIds: new Set() };
+      agg.sum += onTwenty;
+      agg.n += 1;
+      agg.studentIds.add(g.studentId);
+      classSubjectAgg.set(sId, agg);
+
+      if (!perStudentSubject.has(g.studentId)) perStudentSubject.set(g.studentId, new Map());
+      const subjMap = perStudentSubject.get(g.studentId)!;
+      const cur = subjMap.get(sId) ?? { sum: 0, n: 0 };
+      cur.sum += onTwenty;
+      cur.n += 1;
+      subjMap.set(sId, cur);
+    }
+    const classSize = new Set(classGrades.map((g) => g.studentId)).size;
+
+    // Moyenne simple par (élève × matière), puis moyenne générale par élève
+    // (moyenne des moyennes par matière — cohérent avec `card.studentAverage`).
+    const subjectAvgByStudent = new Map<string, Map<string, number>>();
+    const overallByStudent = new Map<string, number>();
+    for (const [sid, subjMap] of perStudentSubject.entries()) {
+      const avgMap = new Map<string, number>();
+      const subjAvgs: number[] = [];
+      for (const [subjId, { sum, n }] of subjMap.entries()) {
+        if (n === 0) continue;
+        const avg = sum / n;
+        avgMap.set(subjId, avg);
+        subjAvgs.push(avg);
+      }
+      subjectAvgByStudent.set(sid, avgMap);
+      if (subjAvgs.length > 0) {
+        overallByStudent.set(sid, subjAvgs.reduce((a, b) => a + b, 0) / subjAvgs.length);
+      }
+    }
+
+    // Rang par matière de l'élève courant (compétition : ex æquo = même rang).
+    // `classSize` reste le nombre d'élèves de la classe (dénominateur affiché).
+    for (const card of subjectPerf) {
+      const agg = classSubjectAgg.get(card.subjectId);
+      card.classAverage = agg ? agg.sum / agg.n : null;
+      card.classSize = classSize;
+
+      const myAvg = subjectAvgByStudent.get(studentId)?.get(card.subjectId);
+      if (myAvg != null) {
+        let higher = 0;
+        for (const avgMap of subjectAvgByStudent.values()) {
+          const v = avgMap.get(card.subjectId);
+          if (v != null && v > myAvg) higher += 1;
+        }
+        card.studentRank = higher + 1;
+      }
+    }
+
+    // Rang général de l'élève courant.
+    classRankTotal = overallByStudent.size;
+    const myOverall = overallByStudent.get(studentId);
+    if (myOverall != null) {
+      let higher = 0;
+      for (const v of overallByStudent.values()) {
+        if (v > myOverall) higher += 1;
+      }
+      studentRank = higher + 1;
+    }
+
+    return { studentRank, classRankTotal };
   }
 
   /**
