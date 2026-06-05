@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { PortalShell } from '@/components/PortalShell';
+import { ReportThreadDialog } from '@/components/messaging/ReportThreadDialog';
 import { api, ApiError } from '@/lib/api-client';
 import type {
   ConversationDto,
@@ -12,6 +13,7 @@ import type {
 } from '@pilotage/contracts';
 import { formatDateLong, PageHeader } from '@pilotage/ui';
 
+import { reportThreadAction } from '../conversation-actions';
 import { TeacherThreadReply } from '../TeacherThreadReply';
 
 export const metadata: Metadata = { title: 'Conversation' };
@@ -272,6 +274,14 @@ export default async function TeacherThreadPage({
         </section>
 
         <TeacherThreadReply conversationId={header.id} status={header.status} />
+
+        {/* Safety control (E2-S4) — discreet, non-stigmatising. Hidden once the
+            thread is admin-blocked (the report lever is moot at that point). */}
+        {header.status !== 'blocked' && (
+          <div className="flex justify-end pt-1">
+            <ReportThreadDialog conversationId={header.id} onReport={reportThreadAction} />
+          </div>
+        )}
       </div>
     </PortalShell>
   );

@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
-import type { ConversationMessageDto } from '@pilotage/contracts';
+import type { ConversationMessageDto, ConversationReportDto } from '@pilotage/contracts';
 
 /**
  * Parent messaging thread-view server actions (E2-S2 — inbox + thread surface).
@@ -60,6 +60,28 @@ export async function markThreadReadAction(
     // The inbox unread badges derive from the aggregate; refresh on next load.
     revalidatePath('/parent/messages');
     return { ok: true, data: { ok: true } };
+  } catch (err) {
+    return apiResultFromError(err);
+  }
+}
+
+/**
+ * Report a thread for safety review (E2-S4). Participant-only server-side and
+ * idempotent while an open report exists (re-reporting reuses the open row). The
+ * thread is never blocked here — an admin triages it in the moderation oversight
+ * surface. Failures surface as a kind, fail-closed French message.
+ */
+export async function reportThreadAction(
+  conversationId: string,
+  reason: string,
+): Promise<ApiResult<ConversationReportDto>> {
+  try {
+    const data = await api<ConversationReportDto>(
+      `/api/v1/conversations/${conversationId}/report`,
+      { method: 'POST', body: { reason: reason.trim() || undefined } },
+    );
+    revalidatePath(`/parent/messages/${conversationId}`);
+    return { ok: true, data };
   } catch (err) {
     return apiResultFromError(err);
   }

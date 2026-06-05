@@ -643,3 +643,196 @@ describe('MessagingService.isTeacherOfStudent (teaching wall, tenant isolation)'
     ).resolves.toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// E2-S4 — moderation / safety: report idempotency + participant gate, and the
+// per-sender send rate-limit boundary (AC6 + the audit invariants of AC7).
+// ---------------------------------------------------------------------------
+
+/**
+ * A focused Prisma double for `reportConversation`. `participant` toggles the
+ * thread participant gate; `existingOpen` simulates an already-open report by the
+ * same reporter (the idempotency path). The `auditLog.create` spy lets us assert
+ * the append-only audit row fires on a genuine create.
+ */
+function makeReportService(opts: { participant?: boolean; existingOpen?: boolean } = {}) {
+  const { participant = true, existingOpen = false } = opts;
+  const reportCreate = jest.fn(async () => ({ id: 'report-new' }));
+  const auditCreate = jest.fn(async () => ({}));
+
+  const reportRow = {
+    id: existingOpen ? 'report-existing' : 'report-new',
+    conversationId: 'conv-1',
+    reportedBy: PARENT,
+    reason: 'Propos déplacés',
+    status: 'open',
+    reviewedAt: null,
+    createdAt: new Date('2026-06-04T13:00:00Z'),
+    reporter: { firstName: 'Marie', lastName: 'Martin' },
+  };
+
+  const prisma = {
+    conversation: {
+      findFirst: jest.fn(async () =>
+        participant
+          ? { id: 'conv-1', schoolId: SCHOOL, participants: [{ id: 'cp-1' }] }
+          : { id: 'conv-1', schoolId: SCHOOL, participants: [] },
+      ),
+    },
+    conversationReport: {
+      findFirst: jest.fn(async () => (existingOpen ? { id: 'report-existing' } : null)),
+      create: reportCreate,
+      findUniqueOrThrow: jest.fn(async () => reportRow),
+    },
+    auditLog: { create: auditCreate },
+  };
+
+  const studentAccess = { canAccessStudent: jest.fn() } as unknown as StudentAccessService;
+  const notifications = { createMany: jest.fn() } as unknown as NotificationsService;
+  const service = new MessagingService(prisma as never, studentAccess, notifications);
+  return { service, prisma, reportCreate, auditCreate };
+}
+
+const reportArgs = {
+  me,
+  actorRole: 'parent',
+  portal: 'parent',
+  conversationId: 'conv-1',
+  reason: 'Propos déplacés',
+};
+
+describe('MessagingService.reportConversation (participant gate + idempotent open)', () => {
+  it('creates an open report (201) + an append-only audit row when the caller is a participant', async () => {
+    const { service, reportCreate, auditCreate } = makeReportService();
+    const res = await service.reportConversation(reportArgs);
+    expect(res.created).toBe(true);
+    expect(reportCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'conversation.report' }),
+      }),
+    );
+  });
+
+  it('404 when the caller is NOT a participant (no existence leak), and writes nothing', async () => {
+    const { service, reportCreate } = makeReportService({ participant: false });
+    await expect(service.reportConversation(reportArgs)).rejects.toBeInstanceOf(NotFoundException);
+    expect(reportCreate).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent: an existing OPEN report is reused (200), no new row created', async () => {
+    const { service, reportCreate } = makeReportService({ existingOpen: true });
+    const res = await service.reportConversation(reportArgs);
+    expect(res.created).toBe(false);
+    expect(reportCreate).not.toHaveBeenCalled();
+  });
+
+  it('falls back to reuse (200) on a P2002 unique-violation race', async () => {
+    const { service, prisma } = makeReportService();
+    (prisma.conversationReport.findFirst as jest.Mock)
+      .mockResolvedValueOnce(null) // pre-create idempotency check: none
+      .mockResolvedValueOnce({ id: 'report-winner' }); // post-race winner
+    (prisma.conversationReport.create as jest.Mock).mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: '5' }),
+    );
+    const res = await service.reportConversation(reportArgs);
+    expect(res.created).toBe(false);
+  });
+});
+
+describe('MessagingService.sendMessage (E2-S4 per-sender rate-limit)', () => {
+  function makeRateService(recentCount: number) {
+    const { service, prisma } = makeService({ teaches: true });
+    (prisma.conversation.findFirst as jest.Mock).mockResolvedValue({
+      id: 'conv-1',
+      status: 'active',
+      studentId: STUDENT,
+      parentId: PARENT,
+      teacherId: TEACHER,
+      participants: [{ role: 'teacher' }],
+    });
+    // The rate-limit window count (the only conversationMessage.count call in send).
+    (prisma.conversationMessage.count as jest.Mock).mockResolvedValue(recentCount);
+    (prisma.$transaction as jest.Mock).mockImplementation(async (cb: never) =>
+      (cb as (t: unknown) => unknown)({
+        conversationMessage: {
+          create: jest.fn(async () => ({
+            id: 'msg-1',
+            conversationId: 'conv-1',
+            senderId: TEACHER,
+            senderRole: 'teacher',
+            body: 'ok',
+            createdAt: new Date('2026-06-04T11:00:00Z'),
+            sender: { firstName: 'Paul', lastName: 'Diallo' },
+          })),
+        },
+        conversation: { update: jest.fn(async () => ({})) },
+      }),
+    );
+    return { service };
+  }
+
+  const sendArgs = {
+    me: { id: TEACHER, tenantId: TENANT },
+    jwt: { realm_access: { roles: ['teacher'] } } as never,
+    schoolId: SCHOOL,
+    conversationId: 'conv-1',
+    body: 'Bonjour',
+  };
+
+  it('sends when the recent-message count is below the window cap (default 10)', async () => {
+    const { service } = makeRateService(9);
+    const dto = await service.sendMessage(sendArgs);
+    expect(dto.id).toBe('msg-1');
+  });
+
+  it('429 (HttpException) when the recent-message count is at/over the window cap (default 10)', async () => {
+    const { service } = makeRateService(10);
+    await expect(service.sendMessage(sendArgs)).rejects.toMatchObject({
+      status: 429,
+    });
+  });
+});
+
+describe('MessagingService.listReports (admin oversight: tenant + school scope)', () => {
+  function makeReportsService() {
+    const count = jest.fn(async () => 0);
+    const findMany = jest.fn(async () => [] as unknown[]);
+    const prisma = {
+      conversationReport: { count, findMany },
+      auditLog: { create: jest.fn(async () => ({})) },
+    };
+    const studentAccess = { canAccessStudent: jest.fn() } as unknown as StudentAccessService;
+    const notifications = { createMany: jest.fn() } as unknown as NotificationsService;
+    const service = new MessagingService(prisma as never, studentAccess, notifications);
+    return { service, count, findMany };
+  }
+
+  const baseArgs = {
+    me,
+    actorRole: 'school_admin',
+    portal: 'admin',
+    limit: 50,
+    offset: 0,
+  };
+
+  it('scopes the query to the resolved schoolId (no cross-school leak in a multi-school tenant)', async () => {
+    const { service, count, findMany } = makeReportsService();
+    await service.listReports({ ...baseArgs, schoolId: SCHOOL, status: 'open' });
+    const expectedWhere = expect.objectContaining({
+      tenantId: TENANT,
+      schoolId: SCHOOL,
+      status: 'open',
+    });
+    expect(count).toHaveBeenCalledWith(expect.objectContaining({ where: expectedWhere }));
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expectedWhere }));
+  });
+
+  it('falls back to tenant-only scope when no active school resolves (schoolId null)', async () => {
+    const { service, findMany } = makeReportsService();
+    await service.listReports({ ...baseArgs, schoolId: null });
+    const where = (findMany.mock.calls[0]![0] as { where: Record<string, unknown> }).where;
+    expect(where.tenantId).toBe(TENANT);
+    expect('schoolId' in where).toBe(false);
+  });
+});

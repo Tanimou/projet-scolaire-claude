@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -12,6 +14,9 @@ import type {
   ConversationInboxResponse,
   ConversationMessageDto,
   ConversationMessagePage,
+  ConversationReportDto,
+  ConversationReportsResponse,
+  ConversationReportStatus,
   ConversationStatus,
   EligibleTeacherDto,
 } from '@pilotage/contracts';
@@ -42,6 +47,29 @@ type ParticipantRole = 'parent' | 'teacher';
 @Injectable()
 export class MessagingService {
   private readonly logger = new Logger(MessagingService.name);
+
+  /**
+   * E2-S4 — per-sender send rate-limit. A sender may post at most
+   * `RATE_LIMIT_MAX` messages within any rolling `RATE_LIMIT_WINDOW_MS` window
+   * ACROSS all their threads (anti-spam guardrail, AC6). Counted on the
+   * append-only `ConversationMessage` rows (no extra table, no new infra), so it
+   * is naturally tenant-scoped and survives a restart. Tripping it returns 429
+   * with a kind, non-stigmatising message — never blocks reading. Both knobs are
+   * operator-tunable via env (`MESSAGING_RATE_LIMIT_MAX` / `MESSAGING_RATE_LIMIT_WINDOW_MS`),
+   * defaulting to 10 messages / 60s (spec FR4); a malformed/absent value falls back
+   * to the default rather than disabling the guard.
+   */
+  private readonly RATE_LIMIT_MAX = this.readPositiveIntEnv('MESSAGING_RATE_LIMIT_MAX', 10);
+  private readonly RATE_LIMIT_WINDOW_MS = this.readPositiveIntEnv(
+    'MESSAGING_RATE_LIMIT_WINDOW_MS',
+    60_000,
+  );
+
+  /** Read a strictly-positive integer env knob, falling back to `fallback`. */
+  private readPositiveIntEnv(name: string, fallback: number): number {
+    const parsed = Number.parseInt(process.env[name] ?? '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -450,6 +478,24 @@ export class MessagingService {
     // Refuse send on a non-active thread.
     if (conv.status !== 'active') {
       throw new ForbiddenException('This conversation is read-only');
+    }
+
+    // E2-S4 — per-sender rate-limit (anti-spam, AC6). Count the caller's own
+    // messages in the rolling window across ALL their threads; trip → 429 with
+    // a kind message. Tenant-scoped; senderId-indexed by ([senderId, createdAt]).
+    const windowStart = new Date(Date.now() - this.RATE_LIMIT_WINDOW_MS);
+    const recentCount = await this.prisma.conversationMessage.count({
+      where: {
+        tenantId: args.me.tenantId,
+        senderId: args.me.id,
+        createdAt: { gte: windowStart },
+      },
+    });
+    if (recentCount >= this.RATE_LIMIT_MAX) {
+      throw new HttpException(
+        'Vous avez envoyé beaucoup de messages en peu de temps. Patientez une minute avant de réessayer.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
     const recipientId = senderRole === 'parent' ? conv.teacherId : conv.parentId;
@@ -873,6 +919,244 @@ export class MessagingService {
       lastMessagePreview: conv.messages[0]?.body.slice(0, 140) ?? null,
       unreadCount,
       createdAt: conv.createdAt.toISOString(),
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // POST /conversations/:id/report — E2-S4. A PARTICIPANT raises a safety
+  // report against a thread. Participant-only (non-participant / cross-tenant →
+  // 404, no existence leak). Idempotent while an `open` report by the same
+  // reporter exists (re-clicking "Signaler" returns the existing open row, not a
+  // duplicate). Append-only AuditLog row on a genuine create. Reporting never
+  // mutates the thread or its messages — an admin decides what happens next.
+  // -------------------------------------------------------------------------
+  async reportConversation(args: {
+    me: Caller;
+    actorRole: string | null;
+    portal: string | null;
+    conversationId: string;
+    reason?: string | null;
+  }): Promise<{ report: ConversationReportDto; created: boolean }> {
+    // Participant gate: re-read the thread under {id, tenantId} with the caller's
+    // participant row. A missing thread OR a non-participant both → 404.
+    const conv = await this.prisma.conversation.findFirst({
+      where: { id: args.conversationId, tenantId: args.me.tenantId },
+      select: {
+        id: true,
+        schoolId: true,
+        participants: { where: { userProfileId: args.me.id }, select: { id: true } },
+      },
+    });
+    if (!conv || conv.participants.length === 0) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    const reason = (args.reason ?? '').trim();
+
+    // Idempotent reuse: an existing OPEN report by this reporter is returned
+    // unchanged (200), so a double-click never spawns duplicates.
+    const existing = await this.prisma.conversationReport.findFirst({
+      where: {
+        conversationId: conv.id,
+        reportedBy: args.me.id,
+        status: 'open',
+        tenantId: args.me.tenantId,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      return { report: await this.toReportDto(existing.id), created: false };
+    }
+
+    let reportId: string;
+    try {
+      const row = await this.prisma.conversationReport.create({
+        data: {
+          tenantId: args.me.tenantId,
+          schoolId: conv.schoolId,
+          conversationId: conv.id,
+          reportedBy: args.me.id,
+          reason,
+          status: 'open',
+        },
+        select: { id: true },
+      });
+      reportId = row.id;
+    } catch (err) {
+      // Concurrency: a parallel report won the @@unique race. Return the winner.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const winner = await this.prisma.conversationReport.findFirst({
+          where: {
+            conversationId: conv.id,
+            reportedBy: args.me.id,
+            status: 'open',
+            tenantId: args.me.tenantId,
+          },
+          select: { id: true },
+        });
+        if (winner) return { report: await this.toReportDto(winner.id), created: false };
+      }
+      throw err;
+    }
+
+    // Append-only audit row (best-effort, never rolls back the report).
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: args.me.tenantId,
+          actorId: args.me.id,
+          actorRole: args.actorRole,
+          portal: args.portal,
+          action: 'conversation.report',
+          resourceType: 'conversation_report',
+          resourceId: reportId,
+          after: {
+            conversationId: conv.id,
+            reason: reason || null,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write conversation.report audit row for ${reportId} (report unaffected): ${(err as Error).message}`,
+      );
+    }
+
+    return { report: await this.toReportDto(reportId), created: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /conversations/reports — E2-S4 admin moderation oversight (read-only).
+  // Admin-only at the controller (`messaging.moderate`, granted to admins only).
+  // Tenant- AND school-scoped here (AC3/AC9): a school_admin pinned to School A
+  // must never see reported-thread metadata from School B in the same tenant
+  // (multi-school is live; RGPD data-minimisation). The caller's active school is
+  // resolved at the controller via SchoolContextService.forUser and passed in;
+  // mirrors meeting-requests.service.list. Never impersonates a participant. Reads
+  // the joined thread context (student/parent/teacher names + thread status) in
+  // ONE findMany — no client N+1. The admin READ writes an append-only AuditLog
+  // row (AC7) the first time a non-empty page is surfaced, so oversight access is
+  // itself traceable.
+  // -------------------------------------------------------------------------
+  async listReports(args: {
+    me: Caller;
+    schoolId: string | null;
+    actorRole: string | null;
+    portal: string | null;
+    status?: ConversationReportStatus;
+    limit: number;
+    offset: number;
+  }): Promise<ConversationReportsResponse> {
+    const where: Prisma.ConversationReportWhereInput = {
+      tenantId: args.me.tenantId,
+      ...(args.schoolId ? { schoolId: args.schoolId } : {}),
+      ...(args.status ? { status: args.status } : {}),
+    };
+
+    const [total, rows] = await Promise.all([
+      this.prisma.conversationReport.count({ where }),
+      this.prisma.conversationReport.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: args.limit,
+        skip: args.offset,
+        select: {
+          id: true,
+          conversationId: true,
+          reportedBy: true,
+          reason: true,
+          status: true,
+          reviewedAt: true,
+          createdAt: true,
+          reporter: { select: { firstName: true, lastName: true } },
+          conversation: {
+            select: {
+              status: true,
+              student: { select: { firstName: true, lastName: true } },
+              parent: { select: { firstName: true, lastName: true } },
+              teacher: { select: { firstName: true, lastName: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    // Append-only audit on a moderation read (AC7). Best-effort; an audit
+    // failure never blocks the admin from reading the oversight list.
+    if (rows.length > 0) {
+      try {
+        await this.prisma.auditLog.create({
+          data: {
+            tenantId: args.me.tenantId,
+            actorId: args.me.id,
+            actorRole: args.actorRole,
+            portal: args.portal,
+            action: 'conversation.moderation_read',
+            resourceType: 'conversation_report',
+            resourceId: null,
+            after: {
+              status: args.status ?? 'all',
+              count: rows.length,
+            } as Prisma.InputJsonValue,
+          },
+        });
+      } catch (err) {
+        this.logger.error(
+          `Failed to write conversation.moderation_read audit row (read unaffected): ${(err as Error).message}`,
+        );
+      }
+    }
+
+    const data: ConversationReportDto[] = rows.map((r) => ({
+      id: r.id,
+      conversationId: r.conversationId,
+      reportedBy: r.reportedBy,
+      reporterName: `${r.reporter.firstName} ${r.reporter.lastName}`.trim(),
+      reason: r.reason ? r.reason : null,
+      status: r.status,
+      reviewedAt: r.reviewedAt?.toISOString() ?? null,
+      createdAt: r.createdAt.toISOString(),
+      studentName: `${r.conversation.student.firstName} ${r.conversation.student.lastName}`.trim(),
+      parentName: `${r.conversation.parent.firstName} ${r.conversation.parent.lastName}`.trim(),
+      teacherName: `${r.conversation.teacher.firstName} ${r.conversation.teacher.lastName}`.trim(),
+      conversationStatus: r.conversation.status,
+    }));
+
+    return { data, total };
+  }
+
+  /**
+   * Build the ConversationReportDto for a single report (the report-create
+   * response). Thread-context fields are null here — they are only populated for
+   * the admin oversight list (`listReports`), which the reporter never sees.
+   */
+  private async toReportDto(reportId: string): Promise<ConversationReportDto> {
+    const r = await this.prisma.conversationReport.findUniqueOrThrow({
+      where: { id: reportId },
+      select: {
+        id: true,
+        conversationId: true,
+        reportedBy: true,
+        reason: true,
+        status: true,
+        reviewedAt: true,
+        createdAt: true,
+        reporter: { select: { firstName: true, lastName: true } },
+      },
+    });
+    return {
+      id: r.id,
+      conversationId: r.conversationId,
+      reportedBy: r.reportedBy,
+      reporterName: `${r.reporter.firstName} ${r.reporter.lastName}`.trim(),
+      reason: r.reason ? r.reason : null,
+      status: r.status,
+      reviewedAt: r.reviewedAt?.toISOString() ?? null,
+      createdAt: r.createdAt.toISOString(),
+      studentName: null,
+      parentName: null,
+      teacherName: null,
+      conversationStatus: null,
     };
   }
 }

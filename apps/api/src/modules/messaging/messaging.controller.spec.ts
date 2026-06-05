@@ -48,6 +48,10 @@ function makeController() {
     getConversation: jest.fn().mockResolvedValue({ id: 'conv-1' }),
     listMessages: jest.fn().mockResolvedValue({ data: [], hasMore: false, counterpartLastReadAt: null }),
     markRead: jest.fn().mockResolvedValue({ ok: true }),
+    reportConversation: jest
+      .fn()
+      .mockResolvedValue({ report: { id: 'report-1' }, created: true }),
+    listReports: jest.fn().mockResolvedValue({ data: [], total: 0 }),
   };
   // ensureUser is the ONLY source of tenantId/userProfileId — derived from the
   // verified JWT, never from a request param.
@@ -263,5 +267,70 @@ describe('MessagingController.sendMessage', () => {
       }),
     );
     expect(out).toEqual({ id: 'msg-1' });
+  });
+});
+
+describe('MessagingController S4 moderation/safety routes', () => {
+  it('reportConversation delegates with the JWT tenant + path id + provenance (201 on create)', async () => {
+    const { controller, messaging } = makeController();
+    const res = makeRes();
+    const out = await controller.reportConversation(
+      jwtWithRoles(['parent']),
+      'conv-1',
+      { reason: 'Propos déplacés' },
+      res,
+    );
+    expect(messaging.reportConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        me: { id: USER, tenantId: TENANT },
+        conversationId: 'conv-1',
+        reason: 'Propos déplacés',
+        actorRole: 'parent',
+        portal: 'parent',
+      }),
+    );
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(out).toEqual({ id: 'report-1' });
+  });
+
+  it('reportConversation sets 200 on an idempotent reuse of an open report', async () => {
+    const { controller, messaging } = makeController();
+    (messaging.reportConversation as jest.Mock).mockResolvedValue({
+      report: { id: 'report-existing' },
+      created: false,
+    });
+    const res = makeRes();
+    await controller.reportConversation(jwtWithRoles(['parent']), 'conv-1', {}, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('reportConversation accepts an empty body (reason optional)', async () => {
+    const { controller, messaging } = makeController();
+    const res = makeRes();
+    await controller.reportConversation(jwtWithRoles(['teacher']), 'conv-1', undefined, res);
+    expect(messaging.reportConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it('listReports delegates with the JWT tenant + parsed status + provenance', async () => {
+    const { controller, messaging } = makeController();
+    await controller.listReports(jwtWithRoles(['school_admin']), { status: 'open' });
+    expect(messaging.listReports).toHaveBeenCalledWith(
+      expect.objectContaining({
+        me: { id: USER, tenantId: TENANT },
+        status: 'open',
+        limit: 50,
+        offset: 0,
+        actorRole: 'school_admin',
+        portal: 'admin',
+      }),
+    );
+  });
+
+  it('listReports rejects an invalid status (400) before the service', async () => {
+    const { controller, messaging } = makeController();
+    await expect(
+      controller.listReports(jwtWithRoles(['school_admin']), { status: 'bogus' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(messaging.listReports).not.toHaveBeenCalled();
   });
 });

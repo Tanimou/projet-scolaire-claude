@@ -1,6 +1,6 @@
 # E2 — Parent ↔ Teacher Messaging (Conversations) · PROGRESS
 
-> **Epic status: `in-progress` — S1 shipped (this run, needs human review).** The epic-spec kit is
+> **Epic status: `shipped` — S1–S4 all shipped (each needs human review).** The epic-spec kit is
 > in place (`spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `tasks.md`, `quickstart.md`)
 > and the **Conversations spine** (S1) is now implemented: 3 new Prisma models + 2 enums, dual-wall
 > ABAC (guardianship ∩ teaching-assignment, re-checked at create AND every send), parent-only create,
@@ -22,8 +22,23 @@
 > `/teacher/conversations`; no schema, no new endpoint, no controller/permission change. Three new
 > service specs lock the notification deep-link payloads. The teacher reply path goes live for the
 > first time (the `sendMessage` teacher branch was code-complete + ABAC-walled since S1).
-> **Next run → implement S4** (moderation / safety: report, admin oversight, rate-limit,
-> non-stigmatising guardrails + optional email channel).
+> **S4 shipped (this run, needs human review).** Moderation / safety + the opt-in email channel
+> are live. New: a `ConversationReport` model + `ConversationReportStatus` enum (`db push`); a
+> participant-scoped, idempotent-while-open `POST /conversations/:id/report` (reuses `messaging.write`,
+> append-only `conversation.report` audit) and an **admin-only** `GET /conversations/reports`
+> oversight list (new `messaging.moderate` perm — granted to school_admin/super_admin ONLY, never
+> parent/teacher — with an append-only `conversation.moderation_read` audit on each non-empty read);
+> a **per-sender send rate-limit** (≤20 messages / rolling 60 s across all the sender's threads,
+> counted on the append-only `ConversationMessage` rows → no new table/queue → 429 with a kind
+> message); a shared, non-stigmatising `ReportThreadDialog` control on BOTH the parent and teacher
+> thread views; an admin `/admin/conversations` read-only moderation oversight page (+ a "Modération
+> messagerie" sidebar item); and the **opt-in email on a new message** — which needed **no worker
+> code**: messaging already fans out via `NotificationsService.createMany`, whose `dispatchEmails`
+> reuses the existing `notifications-email` processor + template (the `message` kind was already
+> rendered), honoring `NotificationPreference(message, emailEnabled)` (default OFF, RGPD). The shared
+> `PreferencesPanel` already surfaced the `message` row (API exposes it since S1); S4 only added
+> `message` to the web `NotificationKindCode` union for type-completeness. No new BullMQ queue, no
+> websocket (ADR-019 tripwire un-triggered). **Epic E2 — all slices (S1–S4) shipped.**
 > Predecessor **E1 — Parent Alert Action Loop** is `shipped` (S1–S4).
 
 | Slice | Title | Status | PR |
@@ -32,7 +47,7 @@
 | S1 | Conversation models + ABAC core + create/send | **shipped** (needs human review) | — |
 | S2 | Parent messages surface + alert-seeded threads | **shipped** (needs human review) | — |
 | S3 | Teacher inbox (separated from announcements) + reply | **shipped** (needs human review) | — |
-| S4 | Moderation / safety + optional email channel | `proposed` | — |
+| S4 | Moderation / safety + optional email channel | **shipped** (needs human review) | — |
 
 > A self-contained `story` spec is authored under `stories/S<n>-*.md` on each slice run
 > (mirrors E1's `stories/` backfill convention).
@@ -76,9 +91,15 @@
 
 ## Pre-merge operator steps (every schema-touching slice — S1, S4)
 - `prisma generate` + `prisma db push` (the diff carries the schema edit; the regenerated client
-  is NOT in the diff → `pnpm typecheck` is red until regen — identical to E1-S3/S4).
+  is NOT in the diff → `pnpm typecheck` is red until regen — identical to E1-S3/S4). S4 adds the
+  `ConversationReport` model + `ConversationReportStatus` enum.
 - Re-run the permission seed so `messaging.read|write` (S1) / `messaging.moderate` (S4) land in
-  the DB (identical to E1-S3's `meeting_requests.*`).
+  the DB (identical to E1-S3's `meeting_requests.*`). The new `messaging.moderate` perm is granted
+  to `school_admin` (and `super_admin` via the all-map) ONLY — never parent/teacher.
+- **Rebuild `packages/contracts`** — S4 adds new exported runtime schemas
+  (`ReportConversationRequestSchema`, `ConversationReportsQuerySchema`) consumed by the NestJS
+  controller via the CJS `dist/`; until the rebuild the contracts `dist/` is stale (same regen
+  pattern as S2). The orchestrator's single `pnpm build` covers both this and `prisma generate`.
 
 ## Pre-merge operator step (S2 — contracts-only, NO schema)
 - **Rebuild `packages/contracts`** (`pnpm --filter @pilotage/contracts build`, or the orchestrator's

@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
-import type { ConversationMessageDto } from '@pilotage/contracts';
+import type { ConversationMessageDto, ConversationReportDto } from '@pilotage/contracts';
 
 /**
  * Teacher conversation thread-view server actions (E2-S3 — teacher inbox + reply).
@@ -60,6 +60,28 @@ export async function markThreadReadAction(
     // The inbox unread cues derive from the aggregate; refresh on next load.
     revalidatePath('/teacher/conversations');
     return { ok: true, data: { ok: true } };
+  } catch (err) {
+    return apiResultFromError(err);
+  }
+}
+
+/**
+ * Report a thread for safety review (E2-S4) — the teacher-portal mirror of the
+ * parent `reportThreadAction`. Participant-only + idempotent-while-open
+ * server-side; revalidates the TEACHER thread route only (PM-9). The thread is
+ * never blocked here — an admin triages it in the moderation oversight surface.
+ */
+export async function reportThreadAction(
+  conversationId: string,
+  reason: string,
+): Promise<ApiResult<ConversationReportDto>> {
+  try {
+    const data = await api<ConversationReportDto>(
+      `/api/v1/conversations/${conversationId}/report`,
+      { method: 'POST', body: { reason: reason.trim() || undefined } },
+    );
+    revalidatePath(`/teacher/conversations/${conversationId}`);
+    return { ok: true, data };
   } catch (err) {
     return apiResultFromError(err);
   }

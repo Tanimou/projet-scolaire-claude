@@ -677,11 +677,13 @@ model UserProfile {
   meetingRequestsAssigned MeetingRequest[]         @relation("MeetingRequestAssignee")
   // E2-S1 — parent ↔ teacher messaging. A UserProfile participates as the parent
   // OR the teacher of a thread; the participant rows carry per-side read state;
-  // sent messages are attributed back here. (ConversationReport relation is S4.)
+  // sent messages are attributed back here. (E2-S4 adds the report-reporter
+  // back-relation for safety moderation.)
   conversationsAsParent     Conversation[]            @relation("ConversationParent")
   conversationsAsTeacher    Conversation[]            @relation("ConversationTeacher")
   conversationParticipants  ConversationParticipant[]
   conversationMessages      ConversationMessage[]     @relation("ConversationMessageSender")
+  conversationReports       ConversationReport[]      @relation("ConversationReportReporter")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1342,7 +1344,7 @@ model MeetingRequest {
 // exists only for a (parent, teacher, child) where the parent guards the child
 // AND the teacher currently teaches that child. Re-checked at create AND every
 // send; a lapsed teaching wall flips the thread to read_only (history preserved).
-// (ConversationReport + ConversationReportStatus land in S4 — not added here.)
+// E2-S4 adds ConversationReport + ConversationReportStatus (moderation/safety).
 // ---------------------------------------------------------------------------
 
 /// Role of a participant within a conversation thread. MVP: exactly one parent +
@@ -1402,6 +1404,7 @@ model Conversation {
   alert        AlertInstance?            @relation(fields: [alertId], references: [id], onDelete: SetNull)
   participants ConversationParticipant[]
   messages     ConversationMessage[]
+  reports      ConversationReport[]
 
   /// Idempotency: one thread per (tenant, parent, teacher, child). Reuse on re-open.
   @@unique([tenantId, parentId, teacherId, studentId])
@@ -1459,4 +1462,42 @@ model ConversationMessage {
   @@index([tenantId, conversationId, createdAt])
   @@index([senderId, createdAt])
   @@map("conversation_message")
+}
+
+/// E2-S4 — lifecycle of a safety report. `open` = awaiting admin triage;
+/// `reviewed` = an admin looked at it (and optionally froze the thread);
+/// `dismissed` = an admin judged it benign. Append-only resolution — never deleted.
+enum ConversationReportStatus {
+  open
+  reviewed
+  dismissed
+}
+
+/// A safety report raised by a thread participant (E2-S4). Triaged by a
+/// school/super admin in the moderation oversight surface. The resolution is
+/// stamped (reviewedBy/reviewedAt/status), never deleted — mirroring the
+/// platform's append-only ethos. Idempotent: re-reporting an already-`open`
+/// thread by the same reporter reuses the open row (the @@unique enforces this),
+/// so a parent who clicks "Signaler" twice does not spawn duplicates.
+model ConversationReport {
+  id             String                   @id @default(uuid()) @db.Uuid
+  tenantId       String                   @map("tenant_id") @db.Uuid
+  schoolId       String?                  @map("school_id") @db.Uuid
+  conversationId String                   @map("conversation_id") @db.Uuid
+  reportedBy     String                   @map("reported_by") @db.Uuid
+  reason         String                   @db.Text
+  status         ConversationReportStatus @default(open)
+  reviewedBy     String?                  @map("reviewed_by") @db.Uuid
+  reviewedAt     DateTime?                @map("reviewed_at") @db.Timestamptz(6)
+  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  reporter     UserProfile  @relation("ConversationReportReporter", fields: [reportedBy], references: [id], onDelete: Cascade)
+
+  /// One open report per (thread, reporter) — re-report is idempotent while open.
+  @@unique([conversationId, reportedBy, status])
+  /// Oversight list: open reports per tenant/school, newest first.
+  @@index([tenantId, schoolId, status, createdAt])
+  @@map("conversation_report")
 }
