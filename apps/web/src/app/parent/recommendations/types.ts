@@ -5,6 +5,7 @@ export type AlertCode =
   | 'MISSING_ASSESSMENT'
   | 'HIGH_ABSENCE'
   | 'TEACHER_COMMENT_FLAG'
+  | 'IMPROVEMENT'
   | 'BEHAVIOR_ALERT';
 
 export type AlertSeverity = 'low' | 'medium' | 'high';

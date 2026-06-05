@@ -3,8 +3,10 @@ import {
   CheckCircle2,
   Eye,
   Lightbulb,
+  PartyPopper,
   ShieldAlert,
   TrendingDown,
+  TrendingUp,
   UserX,
 } from 'lucide-react';
 import type { Metadata } from 'next';
@@ -62,6 +64,7 @@ const VALID_CODES: ReadonlyArray<AlertCode> = [
   'MISSING_ASSESSMENT',
   'HIGH_ABSENCE',
   'TEACHER_COMMENT_FLAG',
+  'IMPROVEMENT',
   'BEHAVIOR_ALERT',
 ];
 const VALID_ACK: ReadonlyArray<AcknowledgedFilter> = ['open', 'acknowledged'];
@@ -73,6 +76,7 @@ const CODE_LABEL: Record<AlertCode, string> = {
   MISSING_ASSESSMENT: 'Évaluation manquante',
   HIGH_ABSENCE: 'Absences élevées',
   TEACHER_COMMENT_FLAG: 'Signalement enseignant',
+  IMPROVEMENT: 'Progrès',
   BEHAVIOR_ALERT: 'Comportement',
 };
 
@@ -83,8 +87,21 @@ const CODE_ICON: Record<AlertCode, typeof AlertTriangle> = {
   MISSING_ASSESSMENT: AlertTriangle,
   HIGH_ABSENCE: UserX,
   TEACHER_COMMENT_FLAG: ShieldAlert,
+  IMPROVEMENT: TrendingUp,
   BEHAVIOR_ALERT: ShieldAlert,
 };
+
+/**
+ * E3-S2 — positive lane. `IMPROVEMENT` is a celebration, not a warning. It is
+ * `severity: 'low'` (so it groups under "Sévérité faible"), but its colour must
+ * key on `code === 'IMPROVEMENT'`, NOT on the `low` severity bucket — a generic
+ * low-severity *warning* must stay sky/cold. These emerald classes are layered
+ * over the severity tone as a code-aware override (CONCERN-1).
+ */
+const POSITIVE_CARD_CLS = 'bg-emerald-50 ring-emerald-200';
+const POSITIVE_ICON_CLS = 'bg-emerald-100 text-emerald-700';
+const POSITIVE_PILL_CLS = 'bg-emerald-100 text-emerald-700';
+const isPositiveCode = (code: AlertCode) => code === 'IMPROVEMENT';
 
 const SEVERITY_CARD_CLS: Record<AlertSeverity, string> = {
   low: 'bg-sky-50 ring-sky-200',
@@ -168,6 +185,9 @@ export default async function ParentRecommendationsPage({
   const highAll = all.filter((a) => a.severity === 'high').length;
   const mediumAll = all.filter((a) => a.severity === 'medium').length;
   const withRecoAll = all.filter((a) => a.recommendation).length;
+  // E3-S2: celebratory positive signals (the 7th rule) — surfaced as an
+  // encouraging strip, never counted/threatened as a problem.
+  const improvementAll = all.filter((a) => isPositiveCode(a.code)).length;
 
   // Derive subject options from the data so the dropdown matches what's visible.
   const subjectMap = new Map<string, SubjectOption>();
@@ -284,6 +304,26 @@ export default async function ParentRecommendationsPage({
         </div>
       )}
 
+      {/* E3-S2: celebratory strip — lighter than the rose critical strip
+          (celebration ≠ urgency). Carries the up-trend meaning via the
+          PartyPopper icon + text, not colour alone (WCAG 1.4.1). */}
+      {improvementAll > 0 && (
+        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+            <PartyPopper className="h-5 w-5" aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1 text-sm text-emerald-900">
+            <p className="font-bold">
+              {improvementAll} progrès détecté{improvementAll > 1 ? 's' : ''} 🎉
+            </p>
+            <p className="mt-0.5 text-xs text-emerald-800/80">
+              Félicitez votre enfant pour ses efforts dans {improvementAll > 1 ? 'ces matières' : 'cette matière'}.
+              Encourager les progrès est aussi important que corriger les difficultés.
+            </p>
+          </div>
+        </div>
+      )}
+
       {totalAll > 0 && (
         <div className="mt-6">
           <RecommendationsFilters
@@ -334,21 +374,34 @@ export default async function ParentRecommendationsPage({
                 {g.items.map((a) => {
                   const Icon = CODE_ICON[a.code];
                   const isAcknowledged = a.status === 'acknowledged';
+                  // E3-S2: code-aware positive override (CONCERN-1) — emerald
+                  // for IMPROVEMENT only; generic `low` warnings stay sky.
+                  const positive = isPositiveCode(a.code);
                   return (
                     <li
                       key={a.id}
-                      className={`rounded-2xl p-5 ring-1 transition-shadow hover:shadow-sm ${SEVERITY_CARD_CLS[a.severity]}`}
+                      className={`rounded-2xl p-5 ring-1 transition-shadow hover:shadow-sm ${
+                        positive ? POSITIVE_CARD_CLS : SEVERITY_CARD_CLS[a.severity]
+                      }`}
                     >
                       <div className="flex items-start gap-4">
                         <span
-                          className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${SEVERITY_ICON_CLS[a.severity]}`}
+                          className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                            positive ? POSITIVE_ICON_CLS : SEVERITY_ICON_CLS[a.severity]
+                          }`}
                         >
-                          <Icon className="h-5 w-5" />
+                          <Icon className="h-5 w-5" aria-hidden />
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="text-sm font-bold text-slate-900">{a.title}</h3>
-                            <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                positive
+                                  ? POSITIVE_PILL_CLS
+                                  : 'bg-white/70 text-slate-600'
+                              }`}
+                            >
                               {CODE_LABEL[a.code]}
                             </span>
                             {a.subjectCode && a.subjectName && (
@@ -361,7 +414,7 @@ export default async function ParentRecommendationsPage({
                             {isAcknowledged && (
                               <StatusBadge
                                 label="Lue"
-                                tone="sky"
+                                tone={positive ? 'success' : 'sky'}
                                 size="sm"
                                 withDot
                               />
@@ -373,7 +426,11 @@ export default async function ParentRecommendationsPage({
                           {a.recommendation && (
                             <div className="mt-3 rounded-lg bg-white/80 p-3 ring-1 ring-white">
                               <div className="flex items-start gap-2">
-                                <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                                {positive ? (
+                                  <PartyPopper className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
+                                ) : (
+                                  <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                                )}
                                 <p className="text-sm font-medium text-slate-800">
                                   {a.recommendation}
                                 </p>

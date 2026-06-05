@@ -25,6 +25,7 @@ const CODE_OPTIONS: SelectOption[] = [
   { value: 'MISSING_ASSESSMENT', label: 'Évaluation manquante' },
   { value: 'HIGH_ABSENCE', label: 'Absences élevées' },
   { value: 'TEACHER_COMMENT_FLAG', label: 'Signalement enseignant' },
+  { value: 'IMPROVEMENT', label: 'Progrès' },
   { value: 'BEHAVIOR_ALERT', label: 'Comportement' },
 ];
 

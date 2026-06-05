@@ -13,6 +13,7 @@ export type AlertCode =
   | 'MISSING_ASSESSMENT'
   | 'HIGH_ABSENCE'
   | 'TEACHER_COMMENT_FLAG'
+  | 'IMPROVEMENT'
   | 'BEHAVIOR_ALERT';
 
 export type AlertSeverity = 'low' | 'medium' | 'high';
@@ -48,6 +49,7 @@ export const ALERT_CODE_LABEL: Record<AlertCode, string> = {
   MISSING_ASSESSMENT: 'Évaluation manquante',
   HIGH_ABSENCE: 'Absences élevées',
   TEACHER_COMMENT_FLAG: 'Signalement enseignant',
+  IMPROVEMENT: 'Progrès',
   BEHAVIOR_ALERT: 'Comportement',
 };
 

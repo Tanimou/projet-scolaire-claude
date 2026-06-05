@@ -47,6 +47,7 @@ export const ALERT_RULE_CODE = [
   'HIGH_ABSENCE',
   'TEACHER_COMMENT_FLAG',
   'BEHAVIOR_ALERT',
+  'IMPROVEMENT',
 ] as const;
 
 export const ATTENDANCE_STATUS = ['present', 'absent', 'late', 'excused', 'exempt'] as const;

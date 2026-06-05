@@ -1140,6 +1140,7 @@ enum AlertRuleCode {
   HIGH_ABSENCE
   TEACHER_COMMENT_FLAG
   BEHAVIOR_ALERT
+  IMPROVEMENT
 }
 
 enum AlertSeverity {

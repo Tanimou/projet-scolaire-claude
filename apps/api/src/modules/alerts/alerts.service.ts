@@ -25,6 +25,7 @@ import {
 import { evaluateHighAbsence } from './rules/high-absence.rule';
 import { evaluateLowSubjectAvg } from './rules/low-subject-avg.rule';
 import { evaluateMissingAssessment } from './rules/missing-assessment.rule';
+import { evaluateImprovement } from './rules/improvement.rule';
 import { evaluateNegativeTrend } from './rules/negative-trend.rule';
 import { evaluateRepeatedFailure } from './rules/repeated-failure.rule';
 import { evaluateTeacherCommentFlag } from './rules/teacher-comment-flag.rule';
@@ -47,6 +48,7 @@ const RULE_FN: Partial<Record<AlertRuleCode, RuleFn>> = {
   NEGATIVE_TREND: evaluateNegativeTrend,
   MISSING_ASSESSMENT: evaluateMissingAssessment,
   TEACHER_COMMENT_FLAG: evaluateTeacherCommentFlag,
+  IMPROVEMENT: evaluateImprovement,
   // BEHAVIOR_ALERT remains a stub — it will be wired in a subsequent iteration.
 };
 
