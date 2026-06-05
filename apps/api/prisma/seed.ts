@@ -63,6 +63,7 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['imports.execute', 'Exécuter bulk imports', 'import', 'execute'],
   ['exports.execute', 'Générer exports', 'export', 'execute'],
   ['exports.execute.parent', 'Générer ses propres exports (bulletin)', 'export', 'execute.parent'],
+  ['exports.execute.teacher', 'Générer la grille de notes de ses classes', 'export', 'execute.teacher'],
   ['integrations.write', 'Gérer intégrations', 'integration', 'write'],
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
@@ -102,7 +103,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'lessons.read', 'lessons.write',
     'discipline.read', 'discipline.write',
     'announcements.read', 'announcements.write',
-    'branding.read',
+    'branding.read', 'exports.execute.teacher',
     'profile.read.self', 'profile.write.self',
   ],
   parent: [

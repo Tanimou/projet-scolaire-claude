@@ -8,6 +8,7 @@ import { PageHeader } from '@pilotage/ui';
 
 import { Gradebook } from './Gradebook';
 import { GradebookInsights } from './GradebookInsights';
+import { GradeGridExportButton } from './GradeGridExportButton';
 
 export const metadata: Metadata = { title: 'Notes' };
 export const dynamic = 'force-dynamic';
@@ -134,12 +135,18 @@ export default async function GradebookPage({ params }: { params: Promise<{ id: 
           </>
         }
         actions={
-          <Link
-            href={`/teacher/classes/${id}`}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" /> Retour à la classe
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <GradeGridExportButton
+              teachingAssignmentId={id}
+              classSectionId={data.assignment.classSection.id}
+            />
+            <Link
+              href={`/teacher/classes/${id}`}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Retour à la classe
+            </Link>
+          </div>
         }
       />
 

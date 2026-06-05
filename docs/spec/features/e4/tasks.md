@@ -22,7 +22,22 @@
   existing `report_card_pdf` enrollment query so the PDF contains only the child
   (RGPD minimal-data) — no new generator/worker module. `[auth]` P1.
 
-- [ ] **S3 — Teacher class grade-grid export** *(web + small api)* — teacher
+- [x] **S3 — Teacher class grade-grid export** *(web + small api)* — **shipped**.
+  Story: `stories/S3-teacher-grade-grid-export.md` (written this run). Teacher
   gradebook "Exporter la grille" → `grades_xlsx` for a teaching-assigned class
-  section, polled signed download. Teaching-assignment ABAC; reuse the same
-  enqueue/poll/download pattern. (Spec to be written on the S3 run.)
+  section, polled signed download. NEW teacher-permitted surface
+  (`exports.execute.teacher` permission, NOT admin `exports.execute` nor parent
+  `exports.execute.parent`): `POST /api/v1/teacher/exports/grade-grid` (input is
+  the **`teachingAssignmentId`** — gradebook route key — + optional `termId`;
+  teaching-assignment ABAC re-checked at enqueue: assignment `teacherProfileId`
+  must equal the caller's own `TeacherProfile.id` (STRICT — **no admin bypass**;
+  the surface is teacher-only by permission, and admins have `/admin/exports`),
+  else 403; 404-before-403), server-derives `classSectionId`/`academicYearId` from the
+  assignment (never client-supplied), `GET /api/v1/teacher/exports` (own jobs,
+  `grades_xlsx`-only), `GET :id` + `GET :id/download-url` (own-job re-check).
+  Append-only `export.grade_grid.request` audit on enqueue. UI on the gradebook
+  page reusing the S2 polling/download client trio. **No worker change** (reuses
+  the `grades_xlsx` generator's existing `{classSectionId, academicYearId, termId}`
+  filters), no new queue, no schema. Risk: **P1 `[auth][public-api][ui]`**. Targeted
+  test: `teacher-exports.controller.spec.ts` (owned→enqueue once w/o client
+  classSectionId; non-owned→403 + no enqueue; read/download `requestedBy = me`).

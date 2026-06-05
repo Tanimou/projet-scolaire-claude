@@ -15,6 +15,7 @@ import {
   ExportKindCode,
   ExportStatusCode,
   ParentExportJobDto,
+  TeacherExportJobDto,
 } from './exports.types';
 
 type ExportJobWithRequester = ExportJob & {
@@ -212,6 +213,178 @@ export class ExportsService {
         `Failed to write export.bulletin.request audit for job ${args.exportJobId} (enqueue unaffected): ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Teacher self-service class grade-grid enqueue (E4-S3). Teaching-assignment
+   * ABAC is enforced by the controller BEFORE this is called (the controller has
+   * already verified the caller currently teaches `classSectionId` and SERVER-
+   * derived it from the teaching assignment — never a client-supplied id). Here:
+   *   1. resolve the term in-tenant when supplied (404), so a stale termId can't
+   *      silently widen the grid to the whole year,
+   *   2. enqueue the EXISTING `grades_xlsx` generator scoped to
+   *      `{ classSectionId, termId? }` (the generator already accepts exactly
+   *      this scope — zero worker change),
+   *   3. write a best-effort append-only `export.grade_grid.request` audit row.
+   *
+   * The job is created with `requestedBy = teacherProfileId`'s user-profile id so
+   * all teacher read/download paths can re-scope by ownership.
+   */
+  async enqueueTeacherGradeGrid(args: {
+    tenantId: string;
+    teacherUserProfileId: string;
+    teachingAssignmentId: string;
+    classSectionId: string;
+    termId: string | null;
+    schoolIdFallback: string | null;
+    actorRole: string | null;
+    portal: string | null;
+  }): Promise<TeacherExportJobDto> {
+    let termId: string | null = null;
+    if (args.termId) {
+      const term = await this.prisma.term.findFirst({
+        where: { id: args.termId, tenantId: args.tenantId },
+        select: { id: true },
+      });
+      if (!term) throw new NotFoundException('Trimestre introuvable');
+      termId = term.id;
+    }
+
+    const dto: CreateExportDto = {
+      kind: 'grades_xlsx',
+      parameters: {
+        classSectionId: args.classSectionId,
+        ...(termId ? { termId } : {}),
+      },
+    };
+
+    const result = await this.enqueue({
+      dto,
+      tenantId: args.tenantId,
+      userProfileId: args.teacherUserProfileId,
+      schoolIdFallback: args.schoolIdFallback,
+    });
+
+    await this.writeGradeGridAudit({
+      tenantId: args.tenantId,
+      actorId: args.teacherUserProfileId,
+      actorRole: args.actorRole,
+      portal: args.portal,
+      exportJobId: result.id,
+      teachingAssignmentId: args.teachingAssignmentId,
+      classSectionId: args.classSectionId,
+      termId,
+    });
+
+    return {
+      id: result.id,
+      kind: 'grades_xlsx',
+      status: result.status,
+      fileName: result.fileName,
+      fileSizeBytes: result.fileSizeBytes,
+      classSectionId: args.classSectionId,
+      termId,
+      createdAt: result.createdAt,
+      finishedAt: result.finishedAt,
+    };
+  }
+
+  /**
+   * Append-only audit row for a teacher grade-grid enqueue. Best-effort and
+   * post-create: a write failure is logged and swallowed, never rolling back the
+   * enqueue (mirrors `writeBulletinAudit`). Tenant-scoped.
+   */
+  private async writeGradeGridAudit(args: {
+    tenantId: string;
+    actorId: string;
+    actorRole: string | null;
+    portal: string | null;
+    exportJobId: string;
+    teachingAssignmentId: string;
+    classSectionId: string;
+    termId: string | null;
+  }): Promise<void> {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: args.tenantId,
+          actorId: args.actorId,
+          actorRole: args.actorRole,
+          portal: args.portal,
+          action: 'export.grade_grid.request',
+          resourceType: 'export_job',
+          resourceId: args.exportJobId,
+          after: {
+            teachingAssignmentId: args.teachingAssignmentId,
+            classSectionId: args.classSectionId,
+            termId: args.termId,
+            kind: 'grades_xlsx',
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write export.grade_grid.request audit for job ${args.exportJobId} (enqueue unaffected): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Teacher self-service list (E4-S3). Tenant- AND requester-scoped (the caller's
+   * OWN `grades_xlsx` jobs only), projected through the narrow `toTeacherDto`
+   * (top-level `classSectionId`/`termId`) so the response matches the
+   * `TeacherExportJobSchema` the gradebook UI consumes. Never widens admin reads.
+   */
+  async listForTeacher(args: {
+    tenantId: string;
+    requestedBy: string;
+    classSectionId?: string;
+    limit: number;
+    offset: number;
+  }): Promise<{ data: TeacherExportJobDto[]; total: number }> {
+    const where: Prisma.ExportJobWhereInput = {
+      tenantId: args.tenantId,
+      requestedBy: args.requestedBy,
+      kind: 'grades_xlsx' as ExportKind,
+      // `classSectionId` lives inside the job parameters JSONB. Push the optional
+      // class narrowing into the DB WHERE (Postgres JSONB path filter) so it runs
+      // BEFORE pagination — filtering in-memory after `take` would let a newer job
+      // for a DIFFERENT class consume the single returned row and strand the
+      // caller's poller for THIS class on 'pending' forever.
+      ...(args.classSectionId
+        ? { parameters: { path: ['classSectionId'], equals: args.classSectionId } }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.exportJob.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: args.offset,
+        take: args.limit,
+      }),
+      this.prisma.exportJob.count({ where }),
+    ]);
+    return { data: rows.map((row) => this.toTeacherDto(row)), total };
+  }
+
+  /**
+   * Teacher-scoped single-job read — tenant- AND requester-scoped (404-on-other-
+   * teacher, no IDOR), projected through the narrow `toTeacherDto`.
+   */
+  async findOneForTeacher(args: {
+    id: string;
+    tenantId: string;
+    requestedBy: string;
+  }): Promise<TeacherExportJobDto> {
+    const job = await this.prisma.exportJob.findFirst({
+      where: {
+        id: args.id,
+        tenantId: args.tenantId,
+        requestedBy: args.requestedBy,
+      },
+    });
+    if (!job) throw new NotFoundException('Export job not found');
+    return this.toTeacherDto(job);
   }
 
   async findOne(args: {
@@ -424,6 +597,31 @@ export class ExportsService {
       fileSizeBytes: row.fileSizeBytes,
       termId,
       studentId,
+      createdAt: row.createdAt.toISOString(),
+      finishedAt: row.finishedAt?.toISOString() ?? null,
+    };
+  }
+
+  /**
+   * Narrow teacher-scoped projection of an export row (E4-S3). HOISTS
+   * `classSectionId`/`termId` out of the job `parameters` JSONB to top-level so
+   * the response matches `@pilotage/contracts` `TeacherExportJobSchema` (the
+   * gradebook maps a job to its class × term row + polls status by reading them
+   * top-level). Omits the raw `errorMessage`, `fileUrl`, and requester identity.
+   */
+  private toTeacherDto(row: ExportJob): TeacherExportJobDto {
+    const params = (row.parameters as Record<string, unknown> | null) ?? {};
+    const classSectionId =
+      typeof params.classSectionId === 'string' ? params.classSectionId : null;
+    const termId = typeof params.termId === 'string' ? params.termId : null;
+    return {
+      id: row.id,
+      kind: 'grades_xlsx',
+      status: row.status as ExportStatusCode,
+      fileName: row.fileName,
+      fileSizeBytes: row.fileSizeBytes,
+      classSectionId,
+      termId,
       createdAt: row.createdAt.toISOString(),
       finishedAt: row.finishedAt?.toISOString() ?? null,
     };
