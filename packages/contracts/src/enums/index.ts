@@ -55,6 +55,14 @@ export const ATTENDANCE_STATUS = ['present', 'absent', 'late', 'excused', 'exemp
 export const NOTIFICATION_CHANNEL = ['email', 'push', 'sms', 'in_app'] as const;
 export const NOTIFICATION_FREQUENCY = ['instant', 'daily', 'weekly', 'never'] as const;
 
+// E5-S2 — per-(user, kind) email cadence on NotificationPreference. Composes with
+// the channel booleans: `instant` = today's per-event email (default), `daily_digest`
+// = suppress the per-event email & bundle into one grouped email/day (the
+// notifications-digest cron), `off` = mute this kind's email entirely. Mirrors the
+// Prisma `NotificationCadence` enum 1:1 so client + server share one source of truth.
+export const NOTIFICATION_CADENCE = ['instant', 'daily_digest', 'off'] as const;
+export type NotificationCadence = (typeof NOTIFICATION_CADENCE)[number];
+
 export const IMPORT_TYPE = ['students', 'teachers', 'classes', 'grades', 'attendance', 'parents'] as const;
 export const IMPORT_STATUS = [
   'uploaded',

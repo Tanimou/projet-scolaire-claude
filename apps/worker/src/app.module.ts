@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { AlertsCronModule } from './modules/alerts-cron/alerts-cron.module';
 import { ExportsModule } from './modules/exports/exports.module';
+import { NotificationsDigestModule } from './modules/notifications-digest/notifications-digest.module';
 import { NotificationsEmailModule } from './modules/notifications-email/notifications-email.module';
 import { ParentDigestModule } from './modules/parent-digest/parent-digest.module';
 import { PrismaModule } from './shared/prisma/prisma.module';
@@ -29,6 +30,7 @@ import { StorageModule } from './shared/storage/storage.module';
     AlertsCronModule,
     NotificationsEmailModule,
     ParentDigestModule,
+    NotificationsDigestModule,
   ],
 })
 export class AppModule {}

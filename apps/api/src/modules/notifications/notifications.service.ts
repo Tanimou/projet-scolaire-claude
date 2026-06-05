@@ -125,20 +125,32 @@ export class NotificationsService {
     });
     if (deduped.length === 0) return { created: 0 };
 
-    // Honour per-user notification preferences: drop items whose recipient has
-    // explicitly turned the in-app channel off for that kind. Missing override
-    // rows default to in-app on, so they pass through untouched.
-    const disabled = await this.preferences.disabledInAppKeys(
+    // Honour per-user notification preferences (E5-S2 FR-2 in-app gate). Each
+    // (user, kind) resolves to one of three in-app actions per the §1.2 truth
+    // table: `skip` (cadence `off` wins, or in-app channel off while instant),
+    // `hiddenSource` (in-app channel off but cadence `daily_digest` → write a
+    // hidden readAt=now row so the daily cron has a durable source), or a normal
+    // visible row (the default for any kind with no override / in-app on). Every
+    // item in a fan-out batch shares one tenant (producers loop per tenant).
+    const inAppTenantId = deduped[0]!.tenantId;
+    const { skip, hiddenSource } = await this.preferences.inAppPlan(
       deduped.map((i) => ({ userProfileId: i.userProfileId, kind: i.kind })),
+      inAppTenantId,
     );
-    const toInsert = disabled.size
-      ? deduped.filter((i) => !disabled.has(`${i.userProfileId}|${i.kind}`))
-      : deduped;
+    const now = new Date();
+    const toInsert = deduped
+      .filter((i) => !skip.has(`${i.userProfileId}|${i.kind}`))
+      .map((i) => ({
+        item: i,
+        // Hidden digest-source row (data-model §3.3): pre-read so it never rings
+        // the bell, but exists for the daily-digest cron to group.
+        hidden: hiddenSource.has(`${i.userProfileId}|${i.kind}`),
+      }));
 
     let created = 0;
     if (toInsert.length > 0) {
       const res = await this.prisma.notification.createMany({
-        data: toInsert.map((i) => ({
+        data: toInsert.map(({ item: i, hidden }) => ({
           tenantId: i.tenantId,
           userProfileId: i.userProfileId,
           kind: i.kind,
@@ -148,6 +160,7 @@ export class NotificationsService {
           link: i.link ?? null,
           sourceType: i.sourceType ?? null,
           sourceId: i.sourceId ?? null,
+          readAt: hidden ? now : null,
         })),
       });
       created = res.count;
@@ -180,7 +193,11 @@ export class NotificationsService {
       // tenant); pin it so both downstream queries are tenant-scoped, matching
       // the worker cron sibling (`dispatchAlertEmails`) and ADR-002.
       const tenantId = items[0]!.tenantId;
-      const enabled = await this.preferences.emailEnabledKeys(
+      // E5-S2 FR-2 email gate: enqueue a per-event email only for keys that are
+      // emailEnabled AND cadence=instant. `daily_digest` keys are suppressed here
+      // (the notifications-digest cron bundles them into one grouped email/day);
+      // `off` keys are muted. `emailEnabled=false` is excluded as before.
+      const enabled = await this.preferences.instantEmailKeys(
         items.map((i) => ({ userProfileId: i.userProfileId, kind: i.kind })),
         tenantId,
       );

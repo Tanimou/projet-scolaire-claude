@@ -8,7 +8,7 @@
 |---|---|---|---|
 | **Spec-kit** | **written** (this run) | — | `spec.md` (John) · `data-model.md` + `plan.md` + `contracts/openapi.yaml` (Winston) · `ux.md` (Sally) · `tasks.md` · `quickstart.md` · `PROGRESS.md`. Docs-only; no schema/API/UI/worker code. |
 | **S1 — Verify & harden the email dispatcher** | **shipped** | — | `[worker][test]` P2. New worker `notifications-email.processor.spec.ts` (the consumer had ZERO coverage) + extended API `notifications.service.spec.ts` producer edges (empty-recipient skip, null→`fr-FR` locale, `{attempts:3, backoff exponential 5000}` opts) + **one concrete hardening fix**: tenant-scoped `userProfile.findMany`/`emailEnabledKeys` on the API path (was id-only, asymmetric vs the worker cron sibling — ADR-002). **No new queue/template, NO schema.** |
-| **S2 — Cross-kind daily digest & cadence** | not started | — | `[schema][worker]` P1. The **only** schema change: additive `NotificationCadence` enum + `cadence` field (`db push`). New `notifications-digest` cron (mirrors `parent-digest/*`). **No new queue/table.** |
+| **S2 — Cross-kind daily digest & cadence** | **shipped** | — | `[schema][worker]` P1. Additive `enum NotificationCadence { instant daily_digest off }` + `cadence @default(instant)` + `@@index([tenantId, cadence, emailEnabled])` (`db push`, the **only** schema change). `NOTIFICATION_CADENCE` const+type in contracts. API: `cadence` on `PreferenceDto`/`UpdatePreferenceArgs` + validated `@IsIn(NOTIFICATION_CADENCE)` on the PATCH DTO + FR-2 gate via new `instantEmailKeys` (email seam) + `inAppPlan` (in-app seam: off→skip row, daily_digest+inApp-off+email-on→hidden `readAt=now` source row). NEW `apps/worker/.../notifications-digest/*` cron (mirror of `parent-digest/*`): 18h-UTC daily window, per-tenant→per-user, group day-window rows **by kind**, one composite branded email via `MailerService`, `(user, day)` sent-marker `Notification(kind=system, sourceType='daily_digest', readAt=now)`. **No new queue/table/template/kind/permission/endpoint/ADR.** Tests: extended `notifications.service.spec.ts` (truth table on both seams) + new worker `notifications-digest-cron.spec.ts` (11) + `daily-digest-email.template.spec.ts` (7) — 18 worker tests green locally. |
 | **S3 — Parent/teacher prefs UI** | not started | — | `[web][a11y]` P2. Cadence selector + channels + mute on `/parent/settings` + `/teacher/settings`; **extend** the shared `PreferencesPanel`. **No schema/endpoint/permission.** |
 
 ## Spec-run decisions (autonomous — no AskUserQuestion)
@@ -84,8 +84,49 @@
   job; `renderNotificationEmail` is FR-only by design — S1 asserts the field fallback only, it does NOT
   add locale-branching rendering.
 
+## S2 run decisions (autonomous — no AskUserQuestion)
+
+1. **Cleaner gate shape than the story's suggested `cadenceFor` Map.** Rather than fetch a cadence Map
+   and post-filter on top of the legacy `disabledInAppKeys`/`emailEnabledKeys`, the dispatcher now
+   drives two cadence-aware batch resolvers that fold the FR-2 truth table into a single query each:
+   `instantEmailKeys(pairs, tenantId)` (email seam — `emailEnabled && cadence==='instant'`) and
+   `inAppPlan(pairs, tenantId)` (in-app seam — returns `{skip, hiddenSource}`). Same byte-for-byte
+   outcomes as the truth table; fewer passes; the legacy `disabledInAppKeys`/`emailEnabledKeys` stay on
+   the service (untouched, still used elsewhere). Pure implementation-shape choice — no AC/§6 deviation.
+
+2. **Hidden-source row gated on `emailEnabled` (matches data-model §3.3 exactly).** `inAppPlan` only
+   emits a hidden `readAt=now` row when `cadence='daily_digest' && inAppEnabled=false && emailEnabled=true`.
+   A `daily_digest`-without-email pair is **not** digest-eligible, so it falls through to a normal skip
+   (no orphan hidden row). The cron's recipient resolver filters `emailEnabled=true` anyway, so the
+   hidden row is always reachable.
+
+3. **`off` = strongest (no in-app + no email + no digest)** — implemented in `inAppPlan` (off → `skip`)
+   and `instantEmailKeys` (off excluded). Matches the contract/data-model reconciliation note.
+
+4. **Marker reuses `kind=system`, no new kind.** `(user, day)` idempotency rides
+   `Notification(kind=system, sourceType='daily_digest', sourceId=dailyDigestMarkerId(...), readAt=now)`,
+   written only after a successful send (a crash leaves no marker → next tick retries). `daily-key.ts`
+   generalises `iso-week.ts`'s `deterministicUuid` to a UTC-**day** key (self-contained copy, mirroring
+   the parent-digest precedent of independent helper modules).
+
+5. **Worker reads `Notification` rows directly — no contract/job-type change.** `NotificationEmailJob`
+   is untouched; the cron groups existing in-app rows worker-side, so only `NOTIFICATION_CADENCE` (+type)
+   is added to `packages/contracts` (the PATCH DTO + the future S3 UI consume it). Confirmed §8 of the story.
+
+6. **Grouping/template.** `groupByKind` folds day-window rows into per-kind groups (count + up to 3 sample
+   titles + freshest deep link / kind-level fallback), sorted by count desc then kind. `renderDailyDigestEmail`
+   is a structural sibling of `renderDigestEmail` (branded, table-based, inline-styled, plain-text fallback,
+   per-kind pill = emoji+text+colour so it is never colour-alone — WCAG 1.4.1). Sky-blue accent distinguishes
+   the daily digest from the weekly digest's violet.
+
+7. **Schema applied in-tree; `prisma generate` + `db push` are orchestrator pre-merge steps** (agents never
+   build). The API spec references `NotificationCadence` via `@prisma/client`, so it runs green only after
+   generate (Murat's gate). The worker specs need only `NotificationKind` (already generated) → green now (18/18).
+
 ## Next action
 
-S1 shipped. Run **E5-S2** (`epic-slice`): cross-kind daily digest & cadence (additive
-`NotificationCadence` enum + `cadence` field via `db push` + `notifications-digest` cron mirroring
-`parent-digest/*`). The only schema change of the epic.
+S2 shipped. Run **E5-S3** (`epic-slice`, `[web][a11y]`): the dedicated parent/teacher
+notification-preferences UI — per-kind **cadence selector** (Instant / Résumé quotidien / Off) + channel
+switches + mute on `/parent/settings` + `/teacher/settings`, **extending** the shared `PreferencesPanel`
+(cadence-aware), reusing the existing self-scoped `GET/PATCH /notifications/preferences` (now returning +
+accepting `cadence`). No schema/endpoint/permission.

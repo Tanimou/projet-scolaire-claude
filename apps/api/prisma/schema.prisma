@@ -1206,6 +1206,25 @@ enum NotificationSeverity {
   danger
 }
 
+/// E5-S2 — per-(user, kind) notification CADENCE. The PRIMARY delivery control;
+/// it composes with the channel booleans (spec FR-2 / data-model §1.2 truth table):
+///  - instant       → today's behaviour: deliver per-event (in-app iff inAppEnabled,
+///                    email iff emailEnabled). The default — every existing row
+///                    resolves here, so the field is a zero-behaviour-change addition.
+///  - daily_digest  → suppress the per-event EMAIL; the in-app row is still written
+///                    iff inAppEnabled (bell stays a live feed), and the event is
+///                    bundled into one grouped email/day by the notifications-digest
+///                    cron iff emailEnabled. (Edge: in-app off + email on writes a
+///                    hidden readAt=now source row so the cron has a durable source.)
+///  - off           → the STRONGEST value — "off wins": no in-app row, no per-event
+///                    email, never in the digest, for that kind. The channel booleans
+///                    are preserved so the user can un-mute by switching cadence back.
+enum NotificationCadence {
+  instant
+  daily_digest
+  off
+}
+
 /// Per-user opt-in/out per notification kind, per channel. Default (missing
 /// row) is "in-app on, email off, push off". Rows are written only when the
 /// user diverges from defaults.
@@ -1217,12 +1236,17 @@ model NotificationPreference {
   inAppEnabled  Boolean          @default(true) @map("in_app_enabled")
   emailEnabled  Boolean          @default(false) @map("email_enabled")
   pushEnabled   Boolean          @default(false) @map("push_enabled")
+  // --- E5-S2: per-kind email cadence (additive, defaulted ⇒ zero behaviour change) ---
+  cadence       NotificationCadence @default(instant) @map("cadence")
   updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   userProfile UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
   @@unique([userProfileId, kind])
   @@index([tenantId])
+  // E5-S2: lets the daily-digest cron resolve "who wants a grouped email of kind K"
+  // cheaply, tenant-first, without scanning every preference row.
+  @@index([tenantId, cadence, emailEnabled])
   @@map("notification_preference")
 }
 

@@ -1,5 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { NotificationKind, NotificationPreference } from '@prisma/client';
+import type {
+  NotificationCadence,
+  NotificationKind,
+  NotificationPreference,
+} from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
@@ -50,13 +54,20 @@ export interface PreferenceDto {
   inAppEnabled: boolean;
   emailEnabled: boolean;
   pushEnabled: boolean;
+  // E5-S2 — per-kind email cadence (instant | daily_digest | off). Default
+  // `instant` for any kind with no override row (today's behaviour).
+  cadence: NotificationCadence;
 }
 
 export interface UpdatePreferenceArgs {
   inAppEnabled?: boolean;
   emailEnabled?: boolean;
   pushEnabled?: boolean;
+  cadence?: NotificationCadence;
 }
+
+/** Default cadence for a kind with no override row (= today's behaviour). */
+export const DEFAULT_CADENCE: NotificationCadence = 'instant';
 
 /**
  * Per-user notification preferences. Missing row → defaults (in-app on, email
@@ -88,6 +99,7 @@ export class NotificationPreferencesService {
         inAppEnabled: r?.inAppEnabled ?? true,
         emailEnabled: r?.emailEnabled ?? false,
         pushEnabled: r?.pushEnabled ?? false,
+        cadence: r?.cadence ?? DEFAULT_CADENCE,
       };
     });
   }
@@ -109,6 +121,7 @@ export class NotificationPreferencesService {
       inAppEnabled: args.patch.inAppEnabled ?? existing?.inAppEnabled ?? true,
       emailEnabled: args.patch.emailEnabled ?? existing?.emailEnabled ?? false,
       pushEnabled: args.patch.pushEnabled ?? existing?.pushEnabled ?? false,
+      cadence: args.patch.cadence ?? existing?.cadence ?? DEFAULT_CADENCE,
     };
     const row = await this.prisma.notificationPreference.upsert({
       where: { userProfileId_kind: { userProfileId: args.userProfileId, kind: args.kind } },
@@ -127,6 +140,7 @@ export class NotificationPreferencesService {
       inAppEnabled: row.inAppEnabled,
       emailEnabled: row.emailEnabled,
       pushEnabled: row.pushEnabled,
+      cadence: row.cadence,
     };
   }
 
@@ -169,6 +183,10 @@ export class NotificationPreferencesService {
    * `tenantId` is optional but the dispatcher always passes it, so the lookup is
    * tenant-scoped — defence-in-depth matching the worker cron sibling
    * (`dispatchAlertEmails`) and ADR-002 ("every query scoped by tenant_id").
+   *
+   * NOTE (E5-S2): this returns *email-enabled* keys regardless of cadence. The
+   * per-event dispatcher (`dispatchEmails`) layers the FR-2 cadence gate on top
+   * via `instantEmailKeys` so `daily_digest`/`off` suppress the per-event email.
    */
   async emailEnabledKeys(
     pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
@@ -190,6 +208,102 @@ export class NotificationPreferencesService {
     return new Set(
       rows.filter((r) => r.emailEnabled).map((r) => `${r.userProfileId}|${r.kind}`),
     );
+  }
+
+  /**
+   * E5-S2 — the FR-2 *per-event email* gate. Returns the set of
+   * `${userProfileId}|${kind}` keys that should receive an email **now**:
+   * `emailEnabled = true` **and** `cadence = instant`. Keys on `daily_digest`
+   * (bundled by the daily cron) or `off` (muted) are excluded; a missing row
+   * defaults to `emailEnabled=false` so it is excluded too. One query per batch,
+   * tenant-scoped (ADR-002), mirroring `emailEnabledKeys`.
+   *
+   * This is the cadence-aware replacement the dispatcher uses for "email now".
+   */
+  async instantEmailKeys(
+    pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
+    tenantId?: string,
+  ): Promise<Set<string>> {
+    if (pairs.length === 0) return new Set();
+    const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
+    for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
+    const rows = await this.prisma.notificationPreference.findMany({
+      where: {
+        ...(tenantId ? { tenantId } : {}),
+        OR: [...uniq.values()].map((p) => ({
+          userProfileId: p.userProfileId,
+          kind: p.kind,
+        })),
+      },
+      select: { userProfileId: true, kind: true, emailEnabled: true, cadence: true },
+    });
+    return new Set(
+      rows
+        .filter((r) => r.emailEnabled && r.cadence === 'instant')
+        .map((r) => `${r.userProfileId}|${r.kind}`),
+    );
+  }
+
+  /**
+   * E5-S2 — the FR-2 *in-app* gate that supersedes `disabledInAppKeys` when
+   * cadence is live. For the (userProfileId, kind) pairs in a batch, classifies
+   * each into the in-app action the §1.2 truth table dictates:
+   *  - `skip`        → no in-app row (cadence `off` wins, OR in-app channel off
+   *                    while cadence is `instant`/absent — today's behaviour).
+   *  - `hiddenSource`→ write a hidden (`readAt=now`) in-app row even though the
+   *                    in-app channel is off, because cadence is `daily_digest`
+   *                    AND email is opted in — the daily cron needs a durable
+   *                    source (data-model §3.3). (If email is off the event is not
+   *                    digest-eligible, so no hidden row is needed → normal skip.)
+   * Pairs absent from BOTH sets get a normal visible in-app row (the default).
+   *
+   * Returned as two Sets of `${userProfileId}|${kind}` keys. One query per batch,
+   * tenant-scoped.
+   */
+  async inAppPlan(
+    pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
+    tenantId?: string,
+  ): Promise<{ skip: Set<string>; hiddenSource: Set<string> }> {
+    const skip = new Set<string>();
+    const hiddenSource = new Set<string>();
+    if (pairs.length === 0) return { skip, hiddenSource };
+    const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
+    for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
+    const rows = await this.prisma.notificationPreference.findMany({
+      where: {
+        ...(tenantId ? { tenantId } : {}),
+        OR: [...uniq.values()].map((p) => ({
+          userProfileId: p.userProfileId,
+          kind: p.kind,
+        })),
+      },
+      select: {
+        userProfileId: true,
+        kind: true,
+        inAppEnabled: true,
+        emailEnabled: true,
+        cadence: true,
+      },
+    });
+    for (const r of rows) {
+      const key = `${r.userProfileId}|${r.kind}`;
+      if (r.cadence === 'off') {
+        // off wins: never write an in-app row for this kind.
+        skip.add(key);
+      } else if (!r.inAppEnabled) {
+        if (r.cadence === 'daily_digest' && r.emailEnabled) {
+          // in-app off + daily_digest + email on → hidden source row so the cron
+          // has a durable source (data-model §3.3).
+          hiddenSource.add(key);
+        } else {
+          // in-app off + (instant | daily_digest-without-email) → no row (today's
+          // behaviour; nothing is digest-eligible without email).
+          skip.add(key);
+        }
+      }
+      // inAppEnabled && cadence != off → normal visible row (not in either set).
+    }
+    return { skip, hiddenSource };
   }
 
   /**

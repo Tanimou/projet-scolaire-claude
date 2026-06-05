@@ -61,9 +61,9 @@ the unit runner; gated by `pnpm typecheck` (Murat).
    rows still appear in the bell.
 4. **Force the daily window:** set `DIGEST_DAILY_SEND_HOUR` to the current UTC hour (and let the
    hourly check tick), per the env override (mirrors the weekly digest's `DIGEST_SEND_*`). Then:
-   - **One grouped email** arrives: *"Votre résumé Pilotage — {date}"*, grouped by kind
-     (*"📚 2 nouvelles notes · 📣 1 annonce"*), per child where relevant, each line a deep link. Wins
-     (`IMPROVEMENT`) appear in the emerald celebration lane.
+   - **One grouped email** arrives: *"🔔 Votre résumé du jour — 2 nouvelles notes · 1 annonce"*,
+     grouped by kind (one section per kind, count + up to 3 sample titles + one deep link per group),
+     sky-blue branded to distinguish it from the violet weekly digest.
 5. **Idempotency + empty checks:**
    - Re-run the same window the same day → **no second digest** (the `(user, day)` sent-marker).
    - A user with **no** `daily_digest` events that day → **no email** (empty digest sends nothing).

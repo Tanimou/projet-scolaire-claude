@@ -38,7 +38,7 @@
 
 ---
 
-## [ ] S2 — Cross-kind daily digest & cadence · `[schema][worker]` · P1 · ~M
+## [x] S2 — Cross-kind daily digest & cadence · `[schema][worker]` · P1 · ~M — **shipped**
 
 **Goal:** the net-new anti-fatigue engine — the **only** schema change of the epic plus the daily
 digest cron, expressing the per-kind cadence promise end-to-end.

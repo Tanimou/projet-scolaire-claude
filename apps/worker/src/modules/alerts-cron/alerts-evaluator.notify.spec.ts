@@ -221,7 +221,14 @@ describe('AlertsEvaluatorService — E3-S4 email parity on the cron path', () =>
     await callNotifyWith(m.prisma, q.queue, 'low');
 
     const where = m.notificationPreferenceFindMany.mock.calls[0]![0].where;
-    expect(where).toMatchObject({ tenantId: 'tenant-1', kind: 'alert', emailEnabled: true });
+    // E5-S2: the cron alert-email gate now also pins cadence='instant' so a parent
+    // on daily_digest/off gets no instant email here (the digest bundles it).
+    expect(where).toMatchObject({
+      tenantId: 'tenant-1',
+      kind: 'alert',
+      emailEnabled: true,
+      cadence: 'instant',
+    });
     // only the fresh recipient (u1) — never the already-notified u2 → no double-send
     expect(where.userProfileId.in).toEqual(['u1']);
     const profWhere = m.userProfileFindMany.mock.calls[0]![0].where;
