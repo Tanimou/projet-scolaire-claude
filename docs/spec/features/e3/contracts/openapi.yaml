@@ -1,0 +1,230 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — E3 Alert Engine contracts (delta)
+  version: 0.1.0
+  description: >
+    DELTA spec for E3 "Complete the Alert Engine". E3 adds exactly ONE new endpoint
+    (the S1 teacher grade-flag toggle); everything else REUSES existing endpoints
+    (alert rule config PATCH, parent alert reads, the email path). Endpoints already
+    shipped are listed under "Reused (no change)" for context only. All routes are under
+    /api/v1 and require a Keycloak bearer JWT. Tenant scoping + RLS are implicit on every
+    operation (ADR-002).
+servers:
+  - url: /api/v1
+
+tags:
+  - name: grades
+    description: Teacher grade entry — E3-S1 adds the concern-flag toggle.
+  - name: alerts
+    description: Alert rules + instances (reused by S3 config UI; no new endpoint).
+
+paths:
+  # ===========================================================================
+  # NEW in E3 — S1: teacher flags / unflags a grade as concerning
+  # (feeds the TEACHER_COMMENT_FLAG evaluator). Path is illustrative; the
+  # implementer mounts it on the existing grades controller.
+  # ===========================================================================
+  /grades/{id}/flag:
+    patch:
+      tags: [grades]
+      operationId: setGradeFlag
+      summary: Teacher flags or unflags a published grade as concerning (E3-S1)
+      description: >
+        Toggle the `isFlagged` signal on a grade the caller OWNS (entered it / teaches its
+        assignment). Sets `flaggedAt`/`flaggedBy` on flag, clears them on unflag. Writes an
+        append-only AuditLog row (`grade.flag` / `grade.unflag`). ABAC: a non-owner teacher
+        → 403; a grade id not in the caller's tenant → 404. Idempotent (flagging an
+        already-flagged grade is a no-op that does not re-stamp provenance nor duplicate the
+        audit row). Requires permission `grades.write` (the same the batch/revise paths use).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetGradeFlagDto'
+      responses:
+        '200':
+          description: Updated flag state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GradeFlagResult'
+        '403': { description: Not the owning teacher of this grade }
+        '404': { description: Grade not found in caller's tenant }
+
+  # ===========================================================================
+  # REUSED (no change) — S3 drives the existing rule-config endpoints.
+  # Documented here so the config UI contract is explicit.
+  # ===========================================================================
+  /alerts/rules:
+    get:
+      tags: [alerts]
+      operationId: listAlertRules
+      summary: "[REUSED] List rule configurations for the current tenant/school"
+      description: >
+        Existing aggregate endpoint (permission `alerts.read`). Returns one row per
+        AlertRuleCode with label/description/enabled/severity/parameters/openInstances.
+        After E3 all 7 (or 8 incl. IMPROVEMENT) codes are present; the two previously-stubbed
+        rules no longer carry an "unimplemented" hint. No change to the response shape.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Rule list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AlertRuleDto' }
+
+  /alerts/rules/{code}:
+    patch:
+      tags: [alerts]
+      operationId: updateAlertRule
+      summary: "[REUSED] Enable/disable, set severity, edit threshold/period parameters (S3)"
+      description: >
+        Existing endpoint (permission `alerts.write`). S3's config UI calls this with the
+        edited `severity` and typed `parameters` (thresholds/periods) — no new endpoint is
+        added. Evaluators read `parameters` defensively (clamped), so out-of-range values are
+        safe; S3 adds typed inputs + ranges as a UX guard, optionally backed by a shared
+        validation schema in `packages/contracts`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/AlertRuleCode' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAlertRuleDto'
+      responses:
+        '200':
+          description: Updated rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlertRuleDto' }
+        '404': { description: Rule not found }
+
+  /alerts/evaluate:
+    post:
+      tags: [alerts]
+      operationId: evaluateAlertsNow
+      summary: "[REUSED] Run the evaluator immediately (now covers all 7 rules)"
+      description: >
+        Existing endpoint (permission `alerts.write`). After E3 it runs the two new
+        evaluators too; the API path already emails opted-in guardians, so a manual run
+        delivers email for the new rules immediately (S4 brings the cron path to parity).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                schoolId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Evaluation summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rulesRun: { type: integer }
+                  detected: { type: integer }
+                  createdInstances: { type: integer }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    AlertRuleCode:
+      type: string
+      description: >
+        7 reserved codes today; E3-S2 may add IMPROVEMENT as an 8th (preferred) — see
+        data-model §2. BEHAVIOR_ALERT stays reserved-but-unwired (spec §6 non-goal).
+      enum:
+        - LOW_SUBJECT_AVG
+        - NEGATIVE_TREND
+        - REPEATED_FAILURE
+        - MISSING_ASSESSMENT
+        - HIGH_ABSENCE
+        - TEACHER_COMMENT_FLAG
+        - BEHAVIOR_ALERT
+        - IMPROVEMENT
+
+    AlertSeverity:
+      type: string
+      enum: [low, medium, high]
+
+    SetGradeFlagDto:
+      type: object
+      required: [flagged]
+      properties:
+        flagged:
+          type: boolean
+          description: true to flag as concerning, false to clear.
+        note:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: >
+            OPTIONAL short reason. May be omitted; an implementation may reuse the grade's
+            existing `comment` instead. NOT a messaging surface (spec §6 non-goal).
+
+    GradeFlagResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        isFlagged: { type: boolean }
+        flaggedAt: { type: string, format: date-time, nullable: true }
+        flaggedBy: { type: string, format: uuid, nullable: true }
+
+    UpdateAlertRuleDto:
+      type: object
+      description: All fields optional; only present fields are updated (existing DTO).
+      properties:
+        enabled: { type: boolean }
+        severity: { $ref: '#/components/schemas/AlertSeverity' }
+        parameters:
+          type: object
+          additionalProperties: true
+          description: >
+            Rule-specific thresholds/periods, e.g. { threshold: 10 } for LOW_SUBJECT_AVG,
+            { delta: 1.5, windowAssessments: 3 } for NEGATIVE_TREND / IMPROVEMENT,
+            { count: 5, windowDays: 30 } for HIGH_ABSENCE.
+
+    AlertRuleDto:
+      type: object
+      properties:
+        id: { type: string, format: uuid, nullable: true }
+        code: { $ref: '#/components/schemas/AlertRuleCode' }
+        label: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        severity: { $ref: '#/components/schemas/AlertSeverity' }
+        parameters:
+          type: object
+          additionalProperties: true
+        openInstances:
+          type: integer
+          description: Currently-open instances for this rule (UX hint).
