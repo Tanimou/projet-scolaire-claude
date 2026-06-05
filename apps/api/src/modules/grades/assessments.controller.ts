@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { snapshotCoalesceKey } from '@pilotage/contracts';
 import { AssessmentKind } from '@prisma/client';
 import {
   IsDateString,
@@ -300,7 +301,14 @@ export class AssessmentsController {
         where: { id },
         include: {
           _count: { select: { grades: true } },
-          teachingAssignment: { include: { subject: { select: { name: true } } } },
+          teachingAssignment: {
+            select: {
+              classSectionId: true,
+              subjectId: true,
+              academicYearId: true,
+              subject: { select: { name: true } },
+            },
+          },
         },
       });
     });
@@ -344,6 +352,55 @@ export class AssessmentsController {
       // Notification fan-out is best-effort — never fails the publish.
       // eslint-disable-next-line no-console
       console.warn('[assessments.publish] notification fan-out failed', err);
+    }
+
+    // E6-S1 — best-effort, NON-BLOCKING snapshot-recompute enqueue. A SEPARATE
+    // try/catch (sibling of, never nested in, the notification fan-out, and
+    // OUTSIDE the publish $transaction) so an enqueue failure can never roll back
+    // the publish nor be swallowed by the notification catch. Idempotent upsert on
+    // (tenantId, coalesceKey, status='pending'): a burst of publishes for the same
+    // (class, subject, term) collapses into ONE pending row. The worker drains it
+    // into byte-parity snapshot rows. Class-wide scope (no studentId) so the
+    // cascaded class averages / ranks / global rows refresh for every pupil.
+    // Snapshots are written but NOT YET READ in S1 → provably zero behaviour change.
+    try {
+      const ta = result?.teachingAssignment;
+      if (ta?.classSectionId && ta.subjectId) {
+        const scope = {
+          classSectionId: ta.classSectionId,
+          subjectId: ta.subjectId,
+          termId: a.termId ?? null,
+          academicYearId: ta.academicYearId ?? null,
+        };
+        const coalesceKey = snapshotCoalesceKey(me.tenantId, 'grade_published', scope);
+        await this.prisma.snapshotRecomputeTrigger.upsert({
+          where: {
+            tenantId_coalesceKey_status: {
+              tenantId: me.tenantId,
+              coalesceKey,
+              status: 'pending',
+            },
+          },
+          create: {
+            tenantId: me.tenantId,
+            reason: 'grade_published',
+            status: 'pending',
+            classSectionId: scope.classSectionId,
+            subjectId: scope.subjectId,
+            termId: scope.termId,
+            academicYearId: scope.academicYearId,
+            coalesceKey,
+          },
+          // Re-publish while a recompute is still pending: refresh enqueuedAt so
+          // the FIFO drain re-orders, but stay ONE coalesced row.
+          update: { enqueuedAt: now },
+        });
+      }
+    } catch (err) {
+      // Recompute enqueue is best-effort — a missed enqueue degrades only cache
+      // freshness (the safety-net sweep + live fallback cover it), NEVER the publish.
+      // eslint-disable-next-line no-console
+      console.warn('[assessments.publish] snapshot recompute enqueue failed', err);
     }
 
     return result;

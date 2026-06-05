@@ -16,7 +16,7 @@
 
 ---
 
-## [ ] S1 — Snapshot schema + recompute spine + publish trigger · `[schema][worker]` · P1 · ~M
+## [x] S1 — Snapshot schema + recompute spine + publish trigger · `[schema][worker]` · P1 · ~M
 
 **Goal:** the foundation — the three snapshot tables + the dirty-queue exist, and a published grade
 **enqueues a recompute** the worker drains into byte-parity snapshot rows. **No read wiring yet**
