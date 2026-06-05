@@ -7,7 +7,7 @@
 | Slice | State | PR | Notes |
 |---|---|---|---|
 | **Spec-kit** | **written** (this run) | — | `spec.md` (John) · `data-model.md` + `plan.md` + `contracts/openapi.yaml` (Winston) · `ux.md` (Sally) · `tasks.md` · `quickstart.md` · `PROGRESS.md`. Docs-only; no schema/API/UI/worker code. |
-| **S1 — Verify & harden the email dispatcher** | not started | — | `[worker]` P2. Verify the **already-built** end-to-end email path + targeted test + harden edges. **No new queue/template, NO schema.** |
+| **S1 — Verify & harden the email dispatcher** | **shipped** | — | `[worker][test]` P2. New worker `notifications-email.processor.spec.ts` (the consumer had ZERO coverage) + extended API `notifications.service.spec.ts` producer edges (empty-recipient skip, null→`fr-FR` locale, `{attempts:3, backoff exponential 5000}` opts) + **one concrete hardening fix**: tenant-scoped `userProfile.findMany`/`emailEnabledKeys` on the API path (was id-only, asymmetric vs the worker cron sibling — ADR-002). **No new queue/template, NO schema.** |
 | **S2 — Cross-kind daily digest & cadence** | not started | — | `[schema][worker]` P1. The **only** schema change: additive `NotificationCadence` enum + `cadence` field (`db push`). New `notifications-digest` cron (mirrors `parent-digest/*`). **No new queue/table.** |
 | **S3 — Parent/teacher prefs UI** | not started | — | `[web][a11y]` P2. Cadence selector + channels + mute on `/parent/settings` + `/teacher/settings`; **extend** the shared `PreferencesPanel`. **No schema/endpoint/permission.** |
 
@@ -63,7 +63,29 @@
   worker's hand-mirrored `NotificationEmailJob` needs it (the digest reads rows directly, so likely
   not — confirm in the S2 story).
 
+## S1 run decisions (autonomous — no AskUserQuestion)
+
+- **Net-new test value, not re-assertion.** The opt-in/off/dedup/enqueue-failure trio was already
+  pinned in `notifications.service.spec.ts`; S1 adds only the un-pinned edges (empty-recipient skip
+  with a co-batched valid recipient still served, null→`fr-FR` job locale, exact retry/backoff opts)
+  plus a brand-new worker-consumer spec (`notifications-email.processor.spec.ts` — zero coverage
+  before this run).
+- **Consumer rethrow vs producer swallow (recorded in both specs).** The processor RE-THROWS on a
+  `mailer.send` failure so BullMQ `attempts:3` exponential-5s backoff re-delivers; the API producer
+  SWALLOWS enqueue failures so the in-app insert the caller depends on is never broken. The asymmetry
+  is deliberate and documented.
+- **FR-S1-4 fired (smallest additive fix).** The audit surfaced one concrete gap: the API
+  `dispatchEmails` `userProfile.findMany` and `emailEnabledKeys` were **id-only**, not tenant-scoped,
+  diverging from the worker cron sibling (`dispatchAlertEmails`) and ADR-002. Fixed minimally: derive
+  the batch tenant (every fan-out batch is single-tenant) and pass it to both queries; pinned by a new
+  assertion. Defence-in-depth (IDs already originate tenant-scoped from the producer) — not an
+  exploited cross-tenant leak.
+- **Template localisation stays an S2/out-of-scope non-goal.** The `locale` field is plumbed onto the
+  job; `renderNotificationEmail` is FR-only by design — S1 asserts the field fallback only, it does NOT
+  add locale-branching rendering.
+
 ## Next action
 
-Run **E5-S1** (`epic-slice`): verify the existing email dispatcher end-to-end, add the single most
-valuable targeted test, harden any concrete gap found. No schema, no UI, no new queue/template.
+S1 shipped. Run **E5-S2** (`epic-slice`): cross-kind daily digest & cadence (additive
+`NotificationCadence` enum + `cadence` field via `db push` + `notifications-digest` cron mirroring
+`parent-digest/*`). The only schema change of the epic.

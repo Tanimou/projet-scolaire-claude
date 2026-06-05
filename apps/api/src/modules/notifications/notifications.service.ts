@@ -176,8 +176,13 @@ export class NotificationsService {
   private async dispatchEmails(items: CreateNotificationArgs[]): Promise<void> {
     try {
       if (items.length === 0) return;
+      // Every item in a fan-out batch shares one tenant (producers loop per
+      // tenant); pin it so both downstream queries are tenant-scoped, matching
+      // the worker cron sibling (`dispatchAlertEmails`) and ADR-002.
+      const tenantId = items[0]!.tenantId;
       const enabled = await this.preferences.emailEnabledKeys(
         items.map((i) => ({ userProfileId: i.userProfileId, kind: i.kind })),
+        tenantId,
       );
       if (enabled.size === 0) return;
 
@@ -186,7 +191,7 @@ export class NotificationsService {
 
       const recipientIds = [...new Set(toEmail.map((i) => i.userProfileId))];
       const profiles = await this.prisma.userProfile.findMany({
-        where: { id: { in: recipientIds } },
+        where: { tenantId, id: { in: recipientIds } },
         select: { id: true, email: true, firstName: true, lastName: true, locale: true },
       });
       const byId = new Map(profiles.map((p) => [p.id, p]));
