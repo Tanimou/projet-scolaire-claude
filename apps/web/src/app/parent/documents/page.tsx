@@ -25,6 +25,12 @@ import {
 } from '@pilotage/ui';
 
 import { ChildSelector } from '../_components/ChildSelector';
+import {
+  BulletinLauncher,
+  type BulletinJobView,
+  type BulletinTerm,
+} from './BulletinLauncher';
+import type { ParentExportJob } from './actions';
 
 export const metadata: Metadata = { title: 'Documents' };
 export const dynamic = 'force-dynamic';
@@ -33,6 +39,12 @@ interface StudentSummary {
   id: string;
   firstName: string;
   lastName: string;
+}
+
+/** Minimal grade-row shape used only to derive the child's terms with published grades. */
+interface GradeTermRow {
+  status: 'draft' | 'published' | 'revised';
+  assessment: { term: { id: string; name: string } | null };
 }
 
 interface AnnouncementApiRow {
@@ -225,23 +237,74 @@ export default async function ParentDocumentsPage({
       ? sp.studentId
       : children[0]!.id;
 
+  const activeChild = children.find((c) => c.id === activeStudentId)!;
+
   // Step 2 — fetch announcements (parent-scoped) + lessons (active child)
-  const [announcementsResp, lessonsResp] = await Promise.all([
-    safe(
-      api<{ data: AnnouncementApiRow[] }>('/api/v1/announcements', {
-        cache: 'no-store',
-      }),
-    ),
-    safe(
-      api<{ data: LessonApiRow[] }>(
-        `/api/v1/lessons?studentId=${activeStudentId}&limit=200`,
-        { cache: 'no-store' },
+  // + the child's published-grade terms (bulletin term picker source) + the
+  // parent's OWN bulletin export jobs (status polling source).
+  const [announcementsResp, lessonsResp, gradesResp, parentExportsResp] =
+    await Promise.all([
+      safe(
+        api<{ data: AnnouncementApiRow[] }>('/api/v1/announcements', {
+          cache: 'no-store',
+        }),
       ),
-    ),
-  ]);
+      safe(
+        api<{ data: LessonApiRow[] }>(
+          `/api/v1/lessons?studentId=${activeStudentId}&limit=200`,
+          { cache: 'no-store' },
+        ),
+      ),
+      safe(
+        api<{ data: GradeTermRow[] }>(
+          `/api/v1/grades/students/${activeStudentId}/grades`,
+          { cache: 'no-store' },
+        ),
+      ),
+      safe(
+        api<{ data: ParentExportJob[] }>('/api/v1/parent/exports', {
+          cache: 'no-store',
+        }),
+      ),
+    ]);
 
   const announcements = announcementsResp?.data ?? [];
   const lessons = lessonsResp?.data ?? [];
+
+  // Bulletin terms = the active child's terms that already have published grades
+  // (RGPD minimal-data + the UX "no published grades → no bulletin row" rule).
+  const bulletinTermMap = new Map<string, BulletinTerm>();
+  for (const g of gradesResp?.data ?? []) {
+    if (g.status !== 'published') continue;
+    const t = g.assessment.term;
+    if (t && !bulletinTermMap.has(t.id)) bulletinTermMap.set(t.id, { id: t.id, name: t.name });
+  }
+  const bulletinTerms = Array.from(bulletinTermMap.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, 'fr'),
+  );
+
+  // Keep only the MOST RECENT job per term for this child, so each row shows its
+  // current state (a "Régénérer" creating a newer job supersedes the older one).
+  const parentJobs = (parentExportsResp?.data ?? []).filter(
+    (j) => j.studentId === activeStudentId,
+  );
+  const jobsByTerm: Record<string, BulletinJobView | null> = {};
+  for (const j of parentJobs) {
+    if (!j.termId || !bulletinTermMap.has(j.termId)) continue;
+    const existing = jobsByTerm[j.termId];
+    if (!existing || new Date(j.createdAt) > new Date(existing.createdAt)) {
+      jobsByTerm[j.termId] = {
+        id: j.id,
+        status: j.status,
+        fileSizeBytes: j.fileSizeBytes,
+        createdAt: j.createdAt,
+        finishedAt: j.finishedAt,
+      };
+    }
+  }
+  const bulletinInflight = Object.values(jobsByTerm).some(
+    (j) => j != null && (j.status === 'pending' || j.status === 'running'),
+  );
 
   // Step 3 — aggregate attachments into a flat document list
   const documents: DocumentRow[] = [
@@ -312,14 +375,22 @@ export default async function ParentDocumentsPage({
           { label: 'Documents' },
         ]}
         title="Documents"
-        subtitle="Toutes les pièces jointes partagées par l'établissement et les enseignants au même endroit"
+        subtitle="Bulletins PDF par trimestre et toutes les pièces jointes partagées par l'établissement et les enseignants"
       />
 
       <div className="mt-4">
         <ChildSelector items={children} activeStudentId={activeStudentId} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <BulletinLauncher
+        studentId={activeStudentId}
+        firstName={activeChild.firstName}
+        terms={bulletinTerms}
+        jobsByTerm={jobsByTerm}
+        hasInflight={bulletinInflight}
+      />
+
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard icon={FolderOpen} tone="blue" label="DOCUMENTS" value={totalDocs}>
           Toutes sources confondues
         </KpiCard>
@@ -397,14 +468,12 @@ export default async function ParentDocumentsPage({
         {hasActiveFilter ? (
           <>
             {filtered.length} document{filtered.length > 1 ? 's' : ''} sur {totalDocs}{' '}
-            après application des filtres. Les bulletins PDF et certificats de
-            scolarité arriveront via le worker R7.
+            après application des filtres.
           </>
         ) : (
           <>
-            Les bulletins PDF et certificats de scolarité arriveront via le
-            worker R7 (génération asynchrone). En attendant, retrouvez ici toutes
-            les pièces jointes publiées dans les annonces et le cahier de texte.
+            Vos bulletins PDF se génèrent à la demande ci-dessus. Retrouvez ici
+            toutes les pièces jointes des annonces et du cahier de texte.
           </>
         )}
       </p>

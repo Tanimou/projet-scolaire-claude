@@ -72,6 +72,26 @@ export interface ExportJobDto {
   finishedAt: string | null;
 }
 
+/**
+ * Parent-scoped export-job view (E4-S2). A deliberately NARROW projection of the
+ * generic `ExportJobDto`: the parent never sees another requester's jobs, the raw
+ * `errorMessage` is omitted (kind, non-technical copy is rendered client-side),
+ * and — critically — `termId`/`studentId` are HOISTED to top-level from the job
+ * `parameters` so the response matches `@pilotage/contracts` `ParentExportJobSchema`
+ * (the consumer reads them top-level for term-row mapping + status polling).
+ */
+export interface ParentExportJobDto {
+  id: string;
+  kind: 'report_card_pdf';
+  status: ExportStatusCode;
+  fileName: string;
+  fileSizeBytes: number | null;
+  termId: string | null;
+  studentId: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
 /** BullMQ job payload — the API enqueues, the worker consumes. */
 export interface ExportJobPayload {
   exportJobId: string;

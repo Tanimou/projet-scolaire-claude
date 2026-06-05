@@ -62,6 +62,7 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['audit.read', 'Consulter audit', 'audit', 'read'],
   ['imports.execute', 'Exécuter bulk imports', 'import', 'execute'],
   ['exports.execute', 'Générer exports', 'export', 'execute'],
+  ['exports.execute.parent', 'Générer ses propres exports (bulletin)', 'export', 'execute.parent'],
   ['integrations.write', 'Gérer intégrations', 'integration', 'write'],
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
@@ -107,7 +108,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
   parent: [
     'students.read', 'grades.read', 'attendance.read',
     'lessons.read', 'discipline.read', 'announcements.read',
-    'branding.read',
+    'branding.read', 'exports.execute.parent',
     'profile.read.self', 'profile.write.self',
   ],
 };

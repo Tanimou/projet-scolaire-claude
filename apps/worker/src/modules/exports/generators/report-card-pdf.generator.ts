@@ -9,6 +9,11 @@ import type { GenerateArgs, GenerateResult } from './types';
  *   - classSectionId
  *   - termId
  *
+ * Optional (E4-S2, additive — parent self-service bulletin):
+ *   - studentId  → narrows the roster to exactly ONE student so the produced PDF
+ *                  contains only that child (RGPD minimal access). When omitted,
+ *                  the behaviour is byte-for-byte the admin class-wide path.
+ *
  * Layout: header (school + class + term) → table (subject / moyenne /20 /
  * coef / appréciation) → footer with overall weighted average.
  */
@@ -16,6 +21,8 @@ export async function generateReportCardPdf(args: GenerateArgs): Promise<Generat
   const { prisma, tenantId, schoolId, parameters } = args;
   let classSectionId = parameters.classSectionId as string | undefined;
   let termId = parameters.termId as string | undefined;
+  // Optional single-student narrowing (parent bulletin). Absent → class-wide.
+  const studentId = parameters.studentId as string | undefined;
 
   // Sensible defaults so the export still produces something useful when called
   // from a one-click button (v1 has no parameter picker UI).
@@ -55,7 +62,15 @@ export async function generateReportCardPdf(args: GenerateArgs): Promise<Generat
   if (!term) throw new Error('Term not found');
 
   const enrollments = await prisma.enrollment.findMany({
-    where: { classSectionId, academicYearId: classSection.academicYearId, status: 'active' },
+    where: {
+      classSectionId,
+      academicYearId: classSection.academicYearId,
+      status: 'active',
+      // Additive single-student narrowing: when a parent requests their own
+      // child's bulletin the PDF must contain exactly one student. Omitting
+      // `studentId` leaves the admin class-wide path unchanged.
+      ...(studentId ? { studentId } : {}),
+    },
     include: { student: true },
     orderBy: [{ student: { lastName: 'asc' } }, { student: { firstName: 'asc' } }],
   });
