@@ -3,9 +3,10 @@
 > One row per slice. The routine updates this on Land (tick `tasks.md`, this file, and the roadmap
 > E3 entry). Status legend: `not-started` ▸ `in-progress` ▸ `shipped` ▸ `blocked`.
 
-**Epic status:** `in-progress` (spec-kit landed; **S1 + S2 shipped — engine now 7/7 rules wired**).
-Next run → **epic-slice S3** (admin rule-config UI: thresholds/severity/period/notify over the
-existing `PATCH /alerts/rules/:code` — no new endpoint).
+**Epic status:** `in-progress` (spec-kit landed; **S1 + S2 + S3 shipped — engine 7/7 wired + admin
+rule-config UI live**). Next run → **epic-slice S4** (email on the cron path: cron-raised alerts email
+guardians honoring `NotificationPreference(alert, emailEnabled)`, reusing the existing
+`notifications-email` queue/template — no new queue, share the dispatcher with the API path).
 
 **Audit baseline (2026-06-05):** alert engine **58%** — 5/7 rules live
 (`LOW_SUBJECT_AVG`, `HIGH_ABSENCE`, `REPEATED_FAILURE`, `NEGATIVE_TREND`, `MISSING_ASSESSMENT`) in
@@ -19,7 +20,7 @@ data model for either.
 | Spec | E3 epic-spec kit | **shipped** | _(this run)_ | spec/plan/data-model/contracts/tasks/quickstart/PROGRESS authored; docs only, no code. |
 | S1 | `TEACHER_COMMENT_FLAG` flag + dual evaluator | **shipped** | _(this run — needs human review)_ | additive `Grade` flag fields `isFlagged`/`flaggedAt`/`flaggedBy`/`flagNote` (`db push`) + `@@index([tenantId, isFlagged])`; `PATCH /grades/:id/flag` (ownership ABAC, 404-before-403, idempotent, append-only `grade.flag`/`grade.unflag`); byte-parity `evaluateTeacherCommentFlag` in api + worker `RULE_FN`; teacher gradebook flag toggle; "non implémenté" badge removed on `/admin/alerts`. **Engine 6/7.** `[schema][auth]` P1. |
 | S2 | 7th rule = `IMPROVEMENT` (positive signal) + evaluator | **shipped** | _(this run — needs human review)_ | additive `IMPROVEMENT` `AlertRuleCode` enum value (`db push`) threaded through schema + contracts `ALERT_RULE_CODE` + api/worker `RULE_FN`/`RULE_CODES`/`RULE_DEFAULTS` + all FE `Record<AlertCode,…>` maps + i18n EN/FR; byte-parity `evaluateImprovement` (md5 `a897bd58…`) in api + worker — inverted `NEGATIVE_TREND`, fires only on `lastHalfAvg − firstHalfAvg ≥ delta`, defaults 1.5 pts / 3 evals, defensive param clamp (delta>0, window≥2), reads only published grades. `severity: low`, auto-seeds `enabled: false` per tenant. Code-aware **emerald celebration lane** on `/parent/recommendations` (keys on `code === 'IMPROVEMENT'`, not the `low` bucket; PartyPopper/TrendingUp + `StatusBadge tone="success"`) + emerald rule chip on `/admin/alerts`. **Engine 7/7 wired.** `[schema][alert-engine]` P1. |
-| S3 | Admin rule-config UI (threshold/severity/period/notify) | not-started | — | over the existing `PATCH /alerts/rules/:code`; no new endpoint. `[web]`. |
+| S3 | Admin rule-config UI (threshold/severity/period/notify) | **shipped** | _(this run — needs human review)_ | per-rule "Configurer" `FormDrawer` (`RuleConfigEditor.tsx`) over the existing `PATCH /alerts/rules/:code` via new `updateRuleConfigAction` — toggle `enabled`, pick `severity` (role=radiogroup, roving tabindex; **locked to `low` for `IMPROVEMENT`** to preserve the non-stigmatising contract), edit each rule's numeric params with client validation (`validateField`) mirroring the evaluator clamps (UX guard only — server still authoritative). `RULE_PARAM_FIELDS`/`SEVERITY_OPTIONS`/`POSITIVE_RULE_CODES` descriptors in `types.ts` mirror api `RULE_DEFAULTS` key-for-key; editor submits the **COMPLETE** parameters object (server replaces JSONB wholesale, no deep-merge → partial would drop siblings). **No new endpoint, no schema, no migration, no auth surface** (`PATCH` gated server-side by `@RequiresPermission('alerts.write')` + `ParseEnumPipe(RULE_CODES)` + JWT tenant/school scoping). Also hardened the **shared `packages/ui` Drawer** primitive: WCAG 2.1.2 focus-trap (Tab/Shift+Tab cycle) + 2.4.3 focus restore-to-trigger on close, keyed on `[open]` only (`onCloseRef`) so controlled inputs stay typeable across **all** Drawer/FormDrawer consumers (audit/enrollments/calendar). RED typecheck gate (2× TS18048 in `Drawer.tsx` + 2× TS2345 in `RuleConfigEditor.tsx`, all `noUncheckedIndexedAccess` narrowing) fixed in-flight. `[ui][a11y][shared-primitive]` P1. |
 | S4 | Email on the cron path (parity with API path) | not-started | — | reuse `notifications-email` (no new queue/template); honor `NotificationPreference(alert, emailEnabled)`. `[worker]`. |
 
 ## Key decisions (carried into implementation)

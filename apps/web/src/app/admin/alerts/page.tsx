@@ -31,6 +31,7 @@ import { AlertsFilters } from './AlertsFilters';
 import { AlertsTabsRouter } from './AlertsTabsRouter';
 import type { AlertRuleCode } from './actions';
 import { EvaluateNowButton } from './EvaluateNowButton';
+import { RuleConfigEditor } from './RuleConfigEditor';
 import {
   parseTab,
   RULE_LABEL,
@@ -370,12 +371,21 @@ export default async function AlertsPage({
                       <div className="mt-3 rounded-md bg-white px-2 py-1.5 font-mono text-[11px] text-slate-700 ring-1 ring-slate-100">
                         {formatParameters(rule.parameters)}
                       </div>
-                      {rule.enabled && rule.openInstances > 0 && (
-                        <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700">
-                          {rule.openInstances} alerte{rule.openInstances > 1 ? 's' : ''} ouverte
-                          {rule.openInstances > 1 ? 's' : ''}
-                        </div>
-                      )}
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        {rule.enabled && rule.openInstances > 0 ? (
+                          <div className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700">
+                            {rule.openInstances} alerte{rule.openInstances > 1 ? 's' : ''} ouverte
+                            {rule.openInstances > 1 ? 's' : ''}
+                          </div>
+                        ) : (
+                          <span aria-hidden />
+                        )}
+                        {implemented && (
+                          <div className="ml-auto">
+                            <RuleConfigEditor rule={rule} />
+                          </div>
+                        )}
+                      </div>
                     </li>
                   );
                 })}

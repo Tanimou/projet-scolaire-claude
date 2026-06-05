@@ -1,9 +1,25 @@
 'use client';
 
 import { X } from 'lucide-react';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 import { cn } from '../lib/cn';
+
+/** Selector for the tabbable elements a focus trap should cycle between. */
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function getFocusable(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.offsetParent !== null || el === document.activeElement,
+  );
+}
 
 export type DrawerSize = 'sm' | 'md' | 'lg' | 'xl';
 const SIZE_CLS: Record<DrawerSize, string> = {
@@ -41,18 +57,73 @@ export function Drawer({
   hideClose,
   children,
 }: DrawerProps) {
+  const panelRef = useRef<HTMLElement>(null);
+  // Remember the element focused before the drawer opened so focus can be
+  // restored to the trigger when it closes (WCAG 2.4.3 Focus Order).
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  // Hold the latest onClose so the keydown handler can call it without making
+  // onClose an effect dependency. Consumers routinely pass an inline arrow
+  // `onClose` (new identity every render); keying the focus effect on it would
+  // re-run capture/move-in/restore on every keystroke and steal focus out of
+  // controlled inputs inside the drawer.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // One-shot focus capture, move-in, and restore — keyed on `open` ONLY. The
+  // keydown listener (which can change behavior via onCloseRef) is wired in the
+  // same effect, but the effect itself must not re-run on unrelated re-renders,
+  // or the cleanup/restore would yank focus mid-typing (WCAG 2.4.3 + usability).
   useEffect(() => {
     if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
+
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    // Move focus into the panel on open (first focusable, else the panel itself).
+    const panel = panelRef.current;
+    if (panel) {
+      const focusables = getFocusable(panel);
+      (focusables[0] ?? panel).focus();
     }
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        onCloseRef.current();
+        return;
+      }
+      // Focus trap: keep Tab / Shift+Tab cycling inside the panel.
+      if (e.key === 'Tab' && panelRef.current) {
+        const focusables = getFocusable(panelRef.current);
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (!first || !last) {
+          // Nothing tabbable yet — keep focus on the panel container.
+          e.preventDefault();
+          panelRef.current.focus();
+          return;
+        }
+        const active = document.activeElement;
+        if (e.shiftKey) {
+          if (active === first || !panelRef.current.contains(active)) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else if (active === last || !panelRef.current.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
     document.addEventListener('keydown', onKey);
     document.body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = '';
+      // Restore focus to the trigger that opened the drawer.
+      restoreFocusRef.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -67,11 +138,17 @@ export function Drawer({
       />
       {/* Panel */}
       <aside
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-title"
+        tabIndex={-1}
         className={cn(
           'relative ml-auto flex h-full flex-col bg-white shadow-2xl ring-1 ring-black/5',
+          // tabIndex=-1 is a focus fallback for an empty/initial trap target;
+          // suppress its outline so the container focus is invisible (real
+          // controls keep their own focus-visible rings).
+          'focus:outline-none',
           SIZE_CLS[size],
         )}
       >
