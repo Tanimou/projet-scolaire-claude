@@ -240,11 +240,24 @@ a `freshness { source, computedAt, recomputing }` dashboard chip ("à jour il y 
 zero new queue/permission. One ADR tripwire (durable dirty-queue + materialised cache + fall-through) to be
 authored on the S1 run (reconcile the ADR number against the index — data-model proposes `ADR-019`, already
 used for a real-time deferral, so take the next free number; **S1 shipped `ADR-019-analytics-snapshots`**).
-**Slices S1→S5 in `tasks.md`; S1 + S2 shipped → next slice → S3** (`epic-slice`: admin & teacher snapshot
-reads + the `GradeRevised`/coefficient-change enqueue seams). **S2 shipped** = the parent dashboard reads
-snapshot-first (`resolveParentClassContext` over the 3 materialised read models, byte-identical
-fall-through-to-live via the verbatim-extracted `computeParentClassContextLive`, additive optional
-`freshness` envelope; tenant-scoped, ABAC unchanged, no schema/endpoint/controller change).
+**Slices S1→S5 in `tasks.md`; S1 + S2 + S3 shipped → next slice → S4** (`[web][a11y]`: the freshness
+chip). **S2 shipped** = the parent dashboard reads snapshot-first (`resolveParentClassContext` over the
+3 materialised read models, byte-identical fall-through-to-live via the verbatim-extracted
+`computeParentClassContextLive`, additive optional `freshness` envelope; tenant-scoped, ABAC unchanged,
+no schema/endpoint/controller change). **S3 shipped** (`[api][worker]`) = the two remaining
+recompute-trigger enqueue seams + the worker fan-out + the additive `freshness` on teacher-reports &
+drill-down: **GradeRevised** enqueues a tenant-scoped coalesced `grade_revised` trigger on BOTH the
+single `POST :id/revise` and the `batch` revise path (after commit, best-effort, never blocks);
+**coefficient change** (`upsertCoefficients`) enqueues one class-LESS `coefficient_changed` trigger per
+distinct changed subject × active year, which the **worker fans out** to every ClassSection teaching the
+subject in the year (re-derived from `teachingAssignment`, no `gradeLevelId` column needed → no schema
+change), recomputing each class slice to refresh the re-weighted global. **Honest read-switch call:** the
+teacher-reports/drill-down/schoolPerformance figures are served **live** (not snapshot) — the only
+candidate snapshot grain (`ClassSubjectDistribution`, a class-wide round2 grade-population aggregate)
+cannot byte-reproduce the teacher's per-assignment round1 figures nor the drill-down's student-population
+counts (PM-1/2/3/4, architect C-2); FR1/FR2/FR3 explicitly authorise falling through to live where parity
+can't hold. The trigger-driven `freshness` (open-trigger probe over every class scope) is the visible win
+the S4 chip renders. No schema/endpoint/permission/queue/contract change.
 
 ### E7 — Remediation & Tutoring loop · `proposed` · ~L
 **Why:** closes alert → diagnosis → **resource**: turn a recommendation into a real booking.

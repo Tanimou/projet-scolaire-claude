@@ -5,6 +5,7 @@ import {
   Controller,
   Delete,
   Get,
+  Logger,
   NotFoundException,
   Param,
   Patch,
@@ -13,6 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { snapshotCoalesceKey } from '@pilotage/contracts';
 import {
   IsBoolean,
   IsNumber,
@@ -71,6 +73,8 @@ class BulkCoefficientDto {
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('subjects')
 export class SubjectsController {
+  private readonly logger = new Logger(SubjectsController.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly users: UserSyncService,
@@ -228,6 +232,56 @@ export class SubjectsController {
         },
       });
     });
+
+    // E6-S3 (FR6) — best-effort, NON-BLOCKING coefficient-change recompute enqueue.
+    // A coefficient edit re-weights the GLOBAL average of every pupil in every class
+    // teaching the changed subject. The locked S1 trigger schema has no gradeLevelId
+    // column, so we enqueue ONE class-LESS trigger per DISTINCT changed subject,
+    // carrying (subjectId, academicYearId); the worker (FR7) fans it out to every
+    // affected ClassSection of that year. Resolved AFTER the $transaction commits
+    // (a sibling, never nested), so an enqueue failure can never roll back the save.
+    // Idempotent upsert on (tenantId, coalesceKey, status='pending') → a 30-entry
+    // matrix save collapses to one trigger per subject. Writes NO audit row
+    // (recompute is derived bookkeeping — the coefficient.upsert audit is untouched).
+    try {
+      const subjectIds = [...new Set(body.entries.map((e) => e.subjectId))];
+      const activeYears = await this.prisma.academicYear.findMany({
+        where: { tenantId: me.tenantId, status: 'active' },
+        select: { id: true },
+      });
+      const now = new Date();
+      for (const subjectId of subjectIds) {
+        for (const year of activeYears) {
+          const scope = { subjectId, academicYearId: year.id };
+          const coalesceKey = snapshotCoalesceKey(me.tenantId, 'coefficient_changed', scope);
+          await this.prisma.snapshotRecomputeTrigger.upsert({
+            where: {
+              tenantId_coalesceKey_status: {
+                tenantId: me.tenantId,
+                coalesceKey,
+                status: 'pending',
+              },
+            },
+            create: {
+              tenantId: me.tenantId,
+              reason: 'coefficient_changed',
+              status: 'pending',
+              // class-LESS: the worker resolves classes from (subject, year).
+              classSectionId: null,
+              subjectId,
+              academicYearId: year.id,
+              coalesceKey,
+            },
+            update: { enqueuedAt: now },
+          });
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[subjects] coefficient_changed snapshot recompute enqueue failed: ${(err as Error).message}`,
+      );
+    }
+
     return { ok: true, count: body.entries.length };
   }
 }

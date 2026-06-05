@@ -13,6 +13,13 @@ const BATCH_SIZE = Number(process.env.SNAPSHOT_RECOMPUTE_BATCH ?? 25);
 const MAX_ATTEMPTS = Number(process.env.SNAPSHOT_RECOMPUTE_MAX_ATTEMPTS ?? 5);
 /** A `processing` row older than this is reclaimed to `pending` (crash recovery, PM-10). */
 const STALE_PROCESSING_MIN = Number(process.env.SNAPSHOT_RECOMPUTE_STALE_MIN ?? 15);
+/**
+ * E6-S3 — upper bound on the per-trigger class fan-out for a class-less
+ * `coefficient_changed` trigger (FR7). A coefficient change on a subject can touch
+ * every class teaching it in the year; cap the expansion so one huge grade level
+ * can never wedge a tick. Remaining classes converge over later ticks / the sweep.
+ */
+const COEFFICIENT_FANOUT_TAKE = Number(process.env.SNAPSHOT_COEFFICIENT_FANOUT_TAKE ?? 200);
 
 /**
  * E6-S1 — snapshot recompute drain cron. Structural sibling of `AlertsCronService`
@@ -239,6 +246,7 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
         select: {
           id: true,
           tenantId: true,
+          reason: true,
           classSectionId: true,
           subjectId: true,
           academicYearId: true,
@@ -248,7 +256,19 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       if (!trigger) continue;
 
       try {
-        await this.recompute.recomputeScope(trigger);
+        if (trigger.classSectionId === null && trigger.reason === 'coefficient_changed') {
+          // E6-S3 (FR7) — a class-LESS coefficient-change trigger carries only
+          // (subjectId, academicYearId). Re-weighting the subject coefficient
+          // invalidates the weighted global of EVERY pupil in EVERY class teaching
+          // that subject this year. Fan out: resolve those classes (tenant-scoped,
+          // bounded) and recompute each class slice — each class-scoped recompute
+          // already rebuilds the whole class slice incl. the weighted global. The
+          // trigger is marked done only after the whole fan-out succeeds; a class
+          // failure throws → the existing attempts/parking path retries the trigger.
+          await this.fanOutCoefficientChange(trigger);
+        } else {
+          await this.recompute.recomputeScope(trigger);
+        }
         await this.prisma.snapshotRecomputeTrigger.updateMany({
           where: { id, tenantId },
           data: { status: 'done', processedAt: new Date() },
@@ -275,5 +295,49 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       }
     }
     return { recomputed, failed };
+  }
+
+  /**
+   * E6-S3 (FR7) — expand a class-LESS `coefficient_changed` trigger into one
+   * class-scoped recompute per affected ClassSection. Affected = every distinct
+   * class section that has a `TeachingAssignment` for the changed subject in the
+   * trigger's academic year (tenant-scoped). Each resolved class is recomputed via
+   * the unchanged `recomputeScope` (which rebuilds the whole class slice incl. the
+   * re-weighted global). Bounded by `COEFFICIENT_FANOUT_TAKE` so a huge grade level
+   * cannot wedge a tick. A per-class failure propagates so the trigger retries.
+   */
+  private async fanOutCoefficientChange(trigger: {
+    id: string;
+    tenantId: string;
+    subjectId: string | null;
+    academicYearId: string | null;
+  }): Promise<void> {
+    const { id: sourceEventId, tenantId, subjectId, academicYearId } = trigger;
+    if (!subjectId || !academicYearId) return; // nothing resolvable → no-op
+
+    const assignments = await this.prisma.teachingAssignment.findMany({
+      where: { tenantId, subjectId, academicYearId },
+      select: { classSectionId: true },
+      distinct: ['classSectionId'],
+      take: COEFFICIENT_FANOUT_TAKE,
+    });
+    const classSectionIds = [...new Set(assignments.map((a) => a.classSectionId))];
+
+    for (const classSectionId of classSectionIds) {
+      // Re-use the trigger id as the sourceEventId so the refreshed snapshot rows
+      // are attributable to the coefficient change (explainability/freshness).
+      await this.recompute.recomputeScope({
+        id: sourceEventId,
+        tenantId,
+        classSectionId,
+        subjectId,
+        academicYearId,
+      });
+    }
+
+    this.logger.debug(
+      `Coefficient fan-out (tenant=${tenantId}, subject=${subjectId}, year=${academicYearId}): ` +
+        `${classSectionIds.length} class section(s) recomputed`,
+    );
   }
 }

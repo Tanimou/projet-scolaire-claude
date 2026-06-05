@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | S1 | Snapshot schema + recompute spine + publish trigger | `[schema][worker]` | P1 | ✅ shipped | — |
 | S2 | Parent dashboard reads snapshots (headline perf win) | `[api]` | P1 | ✅ shipped | — |
-| S3 | Admin & teacher reads + revise/coefficient triggers | `[api]` | P1-P2 | ⬜ **next** | — |
+| S3 | Admin & teacher reads + revise/coefficient triggers | `[api][worker]` | P1-P2 | ✅ shipped | — |
 | S4 | Freshness chip (the visionary trust signal) | `[web][a11y]` | P2 | ⬜ not started | — |
 | S5 | Operability: idempotent full rebuild + sweep hardening | `[worker]` | P2 | ⬜ not started | — |
 
@@ -83,6 +83,59 @@
   render "à jour il y a Xs" instead of always "0 s"; (2) `ClassSubjectDistribution` presence is now
   part of the all-or-nothing gate, so a partial recompute can never emit a `null` `classAverage`
   while still claiming `source:'snapshot'` (AC-S2-3 "never a wrong number").
+
+## What landed (S3 — admin & teacher reads + revise/coefficient triggers)
+
+- **Two new recompute-trigger enqueue seams (the deliverable value of S3):**
+  - **GradeRevised** (`apps/api/.../grades/grades.controller.ts`): a shared best-effort
+    `enqueueGradeRevisedRecompute(tenantId, assessmentId)` helper is called AFTER commit on BOTH
+    revise seams — the single `POST :id/revise` and the `batch` path when ≥1 published grade flips to
+    `status='revised'` (`wasPublished && valueChanged`). Resolves `(classSectionId, subjectId,
+    academicYearId, termId)` from the assessment→teachingAssignment, idempotently upserts a class-wide
+    `SnapshotRecomputeTrigger` (`reason:'grade_revised'`, coalesced on `(tenantId, coalesceKey,
+    status='pending')`). A burst of revisions for one scope collapses to ONE pending row; an enqueue
+    failure is caught+logged and NEVER fails the revise. Mirrors the S1 publish seam exactly.
+  - **Coefficient change** (`apps/api/.../school-structure/subjects.controller.ts` `upsertCoefficients`):
+    AFTER the matrix `$transaction` commits, for each DISTINCT changed `subjectId` × each active
+    `academicYear`, idempotently upserts a **class-LESS** `SnapshotRecomputeTrigger`
+    (`classSectionId:null`, `reason:'coefficient_changed'`, carrying `subjectId`+`academicYearId`,
+    coalesced). A 30-entry matrix save collapses to one trigger per subject. Best-effort, never fails
+    the coefficient save; writes NO audit row (the existing `coefficient.upsert` audit is untouched).
+- **Worker fan-out for class-less `coefficient_changed`** (`apps/worker/.../snapshot-drain-cron.service.ts`):
+  `drainTenant` now detects a class-less `coefficient_changed` trigger and calls a new
+  `fanOutCoefficientChange` that resolves every distinct `ClassSection` teaching the subject in the
+  year (`teachingAssignment.findMany` where `tenantId+subjectId+academicYearId`, `distinct`,
+  `take=COEFFICIENT_FANOUT_TAKE=200`) and invokes the unchanged `recomputeScope` once per class (each
+  class-scoped recompute rebuilds the whole slice incl. the re-weighted global). The trigger is marked
+  `done` only after the whole fan-out; a class failure follows the existing attempts/parking path. The
+  drain's per-trigger `findFirst` select gained `reason`. **No schema change** (the locked S1 trigger
+  table has no `gradeLevelId` — the worker re-derives classes from subject+year, the architect's C-1
+  worker-fan-out reading).
+- **Additive `freshness` envelope on teacher-reports + drill-down** (`analytics.service.ts`
+  `teacherReports`, `school-performance-drilldown.service.ts` `drilldown`): `TeacherReportsResponse`
+  and `DrilldownResponse` gain the additive optional `freshness?: SnapshotFreshness` (mirrors S2 on
+  `ParentDashboardResponse`). A tenant-scoped open-trigger probe sets `recomputing` (covering EVERY
+  class scope in the multi-class/whole-school payload, PM-5); degrades to `recomputing:false` on a
+  probe throw.
+- **Read switch — honest byte-parity gate (the key S3 judgement).** Per the pre-mortem PM-1/2/3/4 and
+  the architect's C-2, the teacher-reports and drill-down figures are **served LIVE**, not from
+  snapshots, because the only candidate snapshot grain (`ClassSubjectDistribution`) is a CLASS-WIDE,
+  all-teachers, round2 **grade-population** aggregate, whereas teacher-reports aggregates the teacher's
+  OWN per-assignment grades at round1, and the drill-down counts **students** by their average
+  (successRate / mean-of-means). A snapshot read at those surfaces would serve a *wrong number* under
+  ≥2 assignments / partial grading / uneven subject sizes (Simpson's paradox). FR1's own escape clause
+  ("if not, the gate must fall through to live for that surface") and FR2 ("snapshot-first only where
+  ClassSubjectDistribution covers the exact figure; everything else stays live") authorise this. The
+  reads keep their existing guards (`teaching_assignments.read` / `schools.read`); `freshness` is the
+  visible S3 win (the S4 chip will render "recalcul en cours" off the trigger probe). **`schoolPerformance`
+  also stays live (FR3)** — no cycle-grain snapshot exists (the draft `school_kpi_snapshot` was dropped).
+- **Tests:** `analytics.service.spec.ts` (+4 teacher-reports freshness cases: source:'live', open-trigger
+  → recomputing:true covering every class scope, tenant-scoped probe, throw-degrades-to-false);
+  `snapshot-recompute.spec.ts` Part 4 (+3 drain cases: coefficient fan-out resolves the right classes
+  one-recompute-per-class + marks done, a normal class-scoped trigger still routes to recomputeScope,
+  an unresolvable class-less trigger is a no-op fan-out).
+- **No schema/endpoint/permission/queue/contract change** (reuses S1 `SnapshotFreshness` +
+  `snapshotCoalesceKey` + `SNAPSHOT_TRIGGER_REASON`). The parent read (S2) keeps working unchanged.
 
 ## Key decisions (locked in the spec)
 
