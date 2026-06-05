@@ -1,0 +1,69 @@
+# E5 — PROGRESS
+
+> **Epic:** E5 — Advanced Notifications (dispatcher + digest + prefs) · Tier 2 (R8) · ~M.
+> **This run = epic-spec** (docs only — no code, no schema, no build/typecheck). The spec-kit is
+> written; slices ship one PR per run from [`tasks.md`](./tasks.md).
+
+| Slice | State | PR | Notes |
+|---|---|---|---|
+| **Spec-kit** | **written** (this run) | — | `spec.md` (John) · `data-model.md` + `plan.md` + `contracts/openapi.yaml` (Winston) · `ux.md` (Sally) · `tasks.md` · `quickstart.md` · `PROGRESS.md`. Docs-only; no schema/API/UI/worker code. |
+| **S1 — Verify & harden the email dispatcher** | not started | — | `[worker]` P2. Verify the **already-built** end-to-end email path + targeted test + harden edges. **No new queue/template, NO schema.** |
+| **S2 — Cross-kind daily digest & cadence** | not started | — | `[schema][worker]` P1. The **only** schema change: additive `NotificationCadence` enum + `cadence` field (`db push`). New `notifications-digest` cron (mirrors `parent-digest/*`). **No new queue/table.** |
+| **S3 — Parent/teacher prefs UI** | not started | — | `[web][a11y]` P2. Cadence selector + channels + mute on `/parent/settings` + `/teacher/settings`; **extend** the shared `PreferencesPanel`. **No schema/endpoint/permission.** |
+
+## Spec-run decisions (autonomous — no AskUserQuestion)
+
+1. **Scoped around the already-built dispatcher.** The 2026-06-05 audit confirms the email path is
+   wired end-to-end (worker `notifications-email` processor + branded `renderNotificationEmail`
+   template + `MailerService`/Maildev + per-kind `NotificationPreference` channel gating in
+   `createMany`/`dispatchEmails`). The roadmap's "email **queue stub**" line is **stale** → **S1 is a
+   verify/harden baseline, not a re-implementation.** Net-new ambition lives in S2 + S3.
+
+2. **One coherent cadence model (the visionary spine).** S1–S3 unify under a single user-facing
+   promise — a per-kind **notification cadence** (`instant` / `daily_digest` / `off`) — backed by
+   **one additive `NotificationPreference.cadence` field**. The dispatcher, the digest worker, and the
+   prefs UI all read that one field, not three disconnected toggles.
+
+3. **`cadence` is orthogonal to `emailEnabled`, default `instant`.** Strictly additive + defaulted ⇒
+   **zero behaviour change** for any existing row until a user opts into a digest/off. `cadence=off`
+   is a reversible *soft mute* that preserves the channel boolean; the S3 UI collapses `cadence=off`
+   and `emailEnabled=false` into one calm **Off** affordance while preserving the richer server state.
+
+4. **Digest reuses the E1-S4 pattern, no new table/queue.** The daily cross-kind digest is a
+   **structural sibling** of `ParentDigestCronService` (cron + send-window + re-entrancy guard +
+   per-tenant/per-user loop), grouping **existing `Notification` rows** and idempotent per `(user,
+   day)` via a `Notification(kind=system, sourceType='daily_digest', readAt=now)` sent-marker. The
+   E1-S4 **weekly** digest stays its own `weekly_digest` kind, untouched.
+
+5. **In-app-off + daily_digest edge (P1, Critic-flagged).** When a kind is on `daily_digest`,
+   `createMany` still writes a hidden (`readAt=now`) in-app row even if `inAppEnabled=false`, so the
+   daily cron has a durable source (a separate `digest_item` table was **rejected** — new persistence
+   for data the `Notification` row already holds). The S2 implementer records the final choice in the
+   S2 story. (See `data-model.md` §3.3.)
+
+6. **No new ADR anticipated; one tripwire.** Every mechanism reuses a documented pattern. **If** S2 is
+   pushed toward a **second BullMQ queue**, a **new digest table**, a **direct-SMTP-from-API** path, or
+   **real-time/WebSocket** delivery, it must stop and land a `docs/adr/` ADR — and those are explicit
+   **non-goals** (spec §Non-goals, `plan.md` §5).
+
+7. **Push / SMS stay reserved stubs.** `pushEnabled` remains a "Bientôt" placeholder (no delivery);
+   cadence applies to **in-app + email** only. A real push transport is a future epic (would need its
+   own ADR).
+
+## Open items for the slice runs (carry forward)
+
+- **S3 mount point (defer to the S3 story):** `plan.md` proposes new `/parent/settings/notifications`
+  + `/teacher/settings/notifications` sub-pages; `ux.md` proposes extending the existing **Notifications
+  tab** on `/parent/settings` + `/teacher/settings`. **Both keep the shared `PreferencesPanel` + server
+  actions and satisfy the AC.** The S3 implementer picks one (prefer the lower-churn option that reuses
+  the existing tab + reassurance banner) and records it in the S3 story. Not a blocker for S1/S2.
+- **Worker module name:** `plan.md` uses `apps/worker/src/modules/notifications-digest/*`; treat that
+  as the authoritative path for the S2 cron (a sibling of `parent-digest/*`).
+- **Contracts surface:** S2 adds `NotificationCadence` to `packages/contracts`; confirm whether the
+  worker's hand-mirrored `NotificationEmailJob` needs it (the digest reads rows directly, so likely
+  not — confirm in the S2 story).
+
+## Next action
+
+Run **E5-S1** (`epic-slice`): verify the existing email dispatcher end-to-end, add the single most
+valuable targeted test, harden any concrete gap found. No schema, no UI, no new queue/template.

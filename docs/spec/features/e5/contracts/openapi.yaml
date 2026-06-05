@@ -1,0 +1,223 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — E5 Advanced Notifications contracts (delta)
+  version: 0.1.0
+  description: >
+    DELTA spec for E5 "Advanced Notifications (dispatcher + digest + prefs)".
+    E5 adds ZERO new endpoints, ZERO new queues, ZERO new permissions. It scopes
+    around the ALREADY-BUILT email dispatcher (worker notifications-email processor +
+    branded template + MailerService/Maildev + per-kind NotificationPreference channel
+    gating). The net-new value is:
+      - S1: verify/harden the existing email dispatcher (no API surface change).
+      - S2: cross-kind daily-digest grouping (a worker cron + ONE additive
+            NotificationPreference.cadence field — see data-model.md §1).
+      - S3: a dedicated parent/teacher notification-preferences UI (channels +
+            cadence + mute) over the EXISTING preferences endpoints, extended with
+            the additive `cadence` field.
+    Both touched endpoints already exist; they are documented here with their E5
+    delta marked. All routes are under /api/v1 and require a Keycloak bearer JWT.
+    Tenant scoping + RLS are implicit on every operation (ADR-002). Permissions are
+    unchanged: profile.read.self / profile.write.self (a user edits only their OWN
+    preferences — userProfileId is server-derived from the JWT, never client-supplied).
+servers:
+  - url: /api/v1
+
+tags:
+  - name: notifications
+    description: >
+      Per-user notification preferences (channel gates + E5 cadence). Backs the
+      shared PreferencesPanel on /admin/settings, /teacher/settings, /parent/settings.
+
+paths:
+  # ===========================================================================
+  # EXTENDED in E5 — S2 adds `cadence` to the returned PreferenceDto; S3's UI
+  # renders it. No new endpoint, no new permission. (Existing controller:
+  # apps/api/src/modules/notifications/preferences.controller.ts)
+  # ===========================================================================
+  /notifications/preferences:
+    get:
+      tags: [notifications]
+      operationId: listNotificationPreferences
+      summary: "[EXTENDED] List the caller's notification preferences (now incl. cadence)"
+      description: >
+        Returns one row per NotificationKind, defaults merged with the caller's
+        override rows (missing row ⇒ inApp on, email off, push off, cadence=instant).
+        E5-S2 adds `cadence` to each row. Self-scoped: the caller is resolved from the
+        JWT (ensureUser), never from a path/query param. Permission: profile.read.self.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Full preference list for the caller
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/PreferenceDto' }
+
+  /notifications/preferences/{kind}:
+    patch:
+      tags: [notifications]
+      operationId: updateNotificationPreference
+      summary: "[EXTENDED] Update one kind's channels and/or cadence (S2/S3)"
+      description: >
+        Upsert the caller's preference for one NotificationKind. All body fields are
+        OPTIONAL; only present fields are updated (the existing merge-with-defaults
+        upsert). E5-S2 adds the optional `cadence` field. Self-scoped (userProfileId
+        from JWT). Permission: profile.write.self. Unknown/invalid `kind` ⇒ 400/404
+        per existing validation. Cadence semantics (the PRIMARY control; composes with
+        the channel booleans — see data-model.md §1.2 truth table / spec FR-2):
+          - cadence=instant      → today's behaviour: deliver per-event on each enabled
+            channel (in-app iff inAppEnabled; email iff emailEnabled). Default.
+          - cadence=daily_digest → suppress per-event EMAIL; in-app row still written iff
+            inAppEnabled; event digest-eligible iff emailEnabled; the daily-digest worker
+            cron sends one grouped email per day.
+          - cadence=off          → STRONGEST setting: no in-app row, no email, not in the
+            digest ("off wins" for this kind).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/NotificationKind' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePreferenceDto'
+      responses:
+        '200':
+          description: Updated preference row
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PreferenceDto' }
+        '400': { description: Invalid kind or body }
+        '404': { description: Kind not recognised }
+
+  # ===========================================================================
+  # REUSED (no change) — listed for context; the dispatcher writes/reads these.
+  # The TopbarBell + Notifications page consume them. E5 does NOT change them.
+  # ===========================================================================
+  /notifications:
+    get:
+      tags: [notifications]
+      operationId: listNotifications
+      summary: "[REUSED, no change] List the caller's in-app notifications"
+      description: >
+        Existing endpoint (permission profile.read.self). The in-app feed is ALSO the
+        durable source the E5-S2 daily-digest cron groups from (it reads Notification
+        rows directly worker-side, not via this endpoint). No response-shape change.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: unreadOnly
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Notification list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/NotificationDto' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    NotificationKind:
+      type: string
+      description: >
+        Existing enum (schema.prisma). E5 adds NO new value. The weekly parent summary
+        stays its own kind (weekly_digest, E1-S4); E5's daily grouping is a per-kind
+        cadence, not a new kind.
+      enum:
+        - announcement
+        - alert
+        - grade_published
+        - enrollment_status
+        - lesson_published
+        - system
+        - weekly_digest
+        - message
+
+    NotificationCadence:
+      type: string
+      description: >
+        E5-S2 — per-(user, kind) notification cadence; the PRIMARY delivery control,
+        composing with the channel booleans (data-model §1.2 truth table). instant =
+        deliver per-event on each enabled channel (default; preserves today's behaviour);
+        daily_digest = suppress per-event email, group into one daily email (in-app row
+        kept iff inAppEnabled); off = strongest, suppresses all channels for the kind.
+      enum:
+        - instant
+        - daily_digest
+        - off
+      default: instant
+
+    PreferenceDto:
+      type: object
+      description: One row per NotificationKind in the GET response.
+      required: [kind, label, description, inAppEnabled, emailEnabled, pushEnabled, cadence]
+      properties:
+        kind: { $ref: '#/components/schemas/NotificationKind' }
+        label: { type: string, description: French display label. }
+        description: { type: string, description: French helper text for the row. }
+        inAppEnabled: { type: boolean, description: In-app (bell) channel. Default true. }
+        emailEnabled: { type: boolean, description: Email channel. Default false (RGPD opt-in). }
+        pushEnabled:
+          type: boolean
+          description: Push channel. Default false. Reserved / "Bientôt" in the UI (not yet dispatched).
+        cadence:
+          $ref: '#/components/schemas/NotificationCadence'
+          description: >
+            E5-S2 — delivery cadence for this kind (instant | daily_digest | off).
+            Default instant. Composes with the channel booleans per the §1.2 truth table;
+            `off` suppresses all channels for the kind.
+
+    UpdatePreferenceDto:
+      type: object
+      description: >
+        All fields optional; only present fields are updated (existing merge-with-defaults
+        upsert). E5-S2 adds optional `cadence`.
+      properties:
+        inAppEnabled: { type: boolean }
+        emailEnabled: { type: boolean }
+        pushEnabled: { type: boolean }
+        cadence:
+          $ref: '#/components/schemas/NotificationCadence'
+          description: E5-S2 — set the per-kind email cadence (instant | daily_digest | off).
+
+    NotificationDto:
+      type: object
+      description: A single in-app notification row (reused, unchanged in E5).
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/NotificationKind' }
+        severity:
+          type: string
+          enum: [info, success, warning, danger]
+        title: { type: string }
+        body: { type: string, nullable: true }
+        link: { type: string, nullable: true }
+        sourceType: { type: string, nullable: true }
+        sourceId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        readAt: { type: string, format: date-time, nullable: true }
