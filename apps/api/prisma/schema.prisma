@@ -1535,3 +1535,172 @@ model ConversationReport {
   @@index([tenantId, schoolId, status, createdAt])
   @@map("conversation_report")
 }
+
+// ============================================================================
+// E6 — Analytics Snapshots & pre-computation (snapshot read-models + dirty-queue)
+// ----------------------------------------------------------------------------
+// Three tenant-scoped, DERIVED, DISPOSABLE cache tables over published/revised
+// `Grade` rows (the source of truth stays `Grade`/`Assessment`) plus a durable
+// `SnapshotRecomputeTrigger` dirty-queue the worker drains (structural sibling of
+// the alerts-cron / notifications-digest poll-drain pattern — NO second BullMQ
+// queue, NO Postgres MATERIALIZED VIEW). Every row is fully rebuildable; deleting
+// the tables degrades only latency, never correctness. Additive `db push`; no
+// existing model changes shape; scope ids are plain @db.Uuid (cache-row
+// convention — NO @relation, so no back-relation field is added to any existing
+// model). Tenant isolation is enforced by explicit `where: { tenantId }` on every
+// read/recompute query, matching the repo-wide de-facto isolation model (the same
+// app-level scoping every prior per-tenant table relies on; see ADR-019).
+// ============================================================================
+
+/// E6 — what kind of source change invalidated a snapshot. Mirrors the roadmap's
+/// "recomputed on GradePublished / GradeRevised / coefficient change".
+enum SnapshotTriggerReason {
+  grade_published
+  grade_revised
+  coefficient_changed
+  manual_rebuild
+  backfill
+}
+
+/// E6 — lifecycle of a recompute dirty-row in the durable backlog.
+enum SnapshotTriggerStatus {
+  pending
+  processing
+  done
+  failed
+}
+
+/// E6 — materialised per-(student × subject × term) average. A disposable CACHE
+/// over published/revised Grade rows. A null termId row is the year-level roll-up
+/// across all terms. `computedAt` + `sourceEventId` + `revision` power the
+/// dashboard freshness signal. Recomputed by the worker on the snapshot triggers.
+model StudentSubjectSnapshot {
+  id             String  @id @default(uuid()) @db.Uuid
+  tenantId       String  @map("tenant_id") @db.Uuid
+  schoolId       String  @map("school_id") @db.Uuid
+  academicYearId String  @map("academic_year_id") @db.Uuid
+  studentId      String  @map("student_id") @db.Uuid
+  classSectionId String  @map("class_section_id") @db.Uuid
+  subjectId      String  @map("subject_id") @db.Uuid
+  termId         String? @map("term_id") @db.Uuid
+
+  average     Decimal? @db.Decimal(5, 2)
+  coefficient Decimal  @default(1.0) @db.Decimal(4, 2)
+  gradeCount  Int      @default(0) @map("grade_count")
+  classRank   Int?     @map("class_rank")
+  classSize   Int      @default(0) @map("class_size")
+  trendDelta  Decimal? @map("trend_delta") @db.Decimal(5, 2)
+
+  computedAt    DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  sourceEventId String?  @map("source_event_id") @db.Uuid
+  revision      Int      @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([studentId, subjectId, termId])
+  @@index([tenantId, academicYearId, classSectionId, subjectId])
+  @@index([tenantId, studentId, academicYearId])
+  @@map("student_subject_snapshot")
+}
+
+/// E6 — materialised per-(student × term) GLOBAL average (coefficient-weighted
+/// across subjects). Backs the parent-dashboard hero KPIs + global rank. Cascaded
+/// from the per-subject snapshots in the same recompute transaction (never drifts).
+model StudentGlobalSnapshot {
+  id             String  @id @default(uuid()) @db.Uuid
+  tenantId       String  @map("tenant_id") @db.Uuid
+  schoolId       String  @map("school_id") @db.Uuid
+  academicYearId String  @map("academic_year_id") @db.Uuid
+  studentId      String  @map("student_id") @db.Uuid
+  classSectionId String  @map("class_section_id") @db.Uuid
+  termId         String? @map("term_id") @db.Uuid
+
+  globalAverage    Decimal? @map("global_average") @db.Decimal(5, 2)
+  classAverage     Decimal? @map("class_average") @db.Decimal(5, 2)
+  classRank        Int?     @map("class_rank")
+  classSize        Int      @default(0) @map("class_size")
+  progressionDelta Decimal? @map("progression_delta") @db.Decimal(5, 2)
+  attendanceRate   Decimal? @map("attendance_rate") @db.Decimal(5, 2)
+  subjectCount     Int      @default(0) @map("subject_count")
+
+  computedAt    DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  sourceEventId String?  @map("source_event_id") @db.Uuid
+  revision      Int      @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([studentId, termId])
+  @@index([tenantId, academicYearId, classSectionId])
+  @@index([tenantId, studentId, academicYearId])
+  @@map("student_global_snapshot")
+}
+
+/// E6 — materialised per-(classSection × subject × term) distribution + class
+/// average. Backs the admin drill-down + teacher-reports distribution charts and
+/// the parent "moyenne de classe" context. Disposable cache over the class grades.
+model ClassSubjectDistribution {
+  id             String  @id @default(uuid()) @db.Uuid
+  tenantId       String  @map("tenant_id") @db.Uuid
+  schoolId       String  @map("school_id") @db.Uuid
+  academicYearId String  @map("academic_year_id") @db.Uuid
+  classSectionId String  @map("class_section_id") @db.Uuid
+  subjectId      String  @map("subject_id") @db.Uuid
+  termId         String? @map("term_id") @db.Uuid
+
+  average      Decimal? @db.Decimal(5, 2)
+  median       Decimal? @db.Decimal(5, 2)
+  minScore     Decimal? @map("min_score") @db.Decimal(5, 2)
+  maxScore     Decimal? @map("max_score") @db.Decimal(5, 2)
+  countLow     Int      @default(0) @map("count_low")
+  countMid     Int      @default(0) @map("count_mid")
+  countHigh    Int      @default(0) @map("count_high")
+  passRate     Decimal? @map("pass_rate") @db.Decimal(5, 2)
+  gradeCount   Int      @default(0) @map("grade_count")
+  studentCount Int      @default(0) @map("student_count")
+
+  computedAt    DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  sourceEventId String?  @map("source_event_id") @db.Uuid
+  revision      Int      @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([classSectionId, subjectId, termId])
+  @@index([tenantId, academicYearId, classSectionId])
+  @@index([tenantId, schoolId, academicYearId])
+  @@map("class_subject_distribution")
+}
+
+/// E6 — append-enqueue "dirty" marker. The worker cron drains pending rows per
+/// tenant (FIFO, bounded batch), recomputes the affected snapshot scope, and marks
+/// the row done/failed — mirroring the alerts-cron / notifications-digest poll-drain
+/// pattern WITHOUT depending on the (unbuilt) outbox→BullMQ listener. Idempotent: a
+/// coalescing unique key collapses a burst of dirties for the same still-pending
+/// scope into ONE pending row. All scope ids are plain @db.Uuid (transient work
+/// item, not a domain aggregate — no FK relation, routinely aged out).
+model SnapshotRecomputeTrigger {
+  id       String                @id @default(uuid()) @db.Uuid
+  tenantId String                @map("tenant_id") @db.Uuid
+  schoolId String?               @map("school_id") @db.Uuid
+  reason   SnapshotTriggerReason
+  status   SnapshotTriggerStatus @default(pending)
+
+  studentId      String? @map("student_id") @db.Uuid
+  classSectionId String? @map("class_section_id") @db.Uuid
+  subjectId      String? @map("subject_id") @db.Uuid
+  termId         String? @map("term_id") @db.Uuid
+  academicYearId String? @map("academic_year_id") @db.Uuid
+
+  coalesceKey String @map("coalesce_key")
+
+  attempts    Int       @default(0)
+  lastError   String?   @map("last_error")
+  enqueuedAt  DateTime  @default(now()) @map("enqueued_at") @db.Timestamptz(6)
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, coalesceKey, status])
+  @@index([tenantId, status, enqueuedAt])
+  @@map("snapshot_recompute_trigger")
+}

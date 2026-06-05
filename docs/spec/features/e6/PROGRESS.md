@@ -8,7 +8,7 @@
 
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
-| S1 | Snapshot schema + recompute spine + publish trigger | `[schema][worker]` | P1 | ⬜ not started | — |
+| S1 | Snapshot schema + recompute spine + publish trigger | `[schema][worker]` | P1 | ✅ shipped | — |
 | S2 | Parent dashboard reads snapshots (headline perf win) | `[api]` | P1 | ⬜ not started | — |
 | S3 | Admin & teacher reads + revise/coefficient triggers | `[api]` | P1-P2 | ⬜ not started | — |
 | S4 | Freshness chip (the visionary trust signal) | `[web][a11y]` | P2 | ⬜ not started | — |
@@ -19,6 +19,36 @@
 - `docs/spec/features/e6/` spec-kit authored: `spec.md`, `plan.md`, `data-model.md`, `ux.md`,
   `contracts/openapi.yaml`, `tasks.md`, `quickstart.md`, this `PROGRESS.md`. **Docs only** — no code, no
   schema, no migration, no build.
+
+## What landed (S1 — snapshot schema + recompute spine + publish trigger)
+
+- **Schema** (`apps/api/prisma/schema.prisma`, additive `db push`): 2 enums (`SnapshotTriggerReason`,
+  `SnapshotTriggerStatus`) + 4 tenant-scoped models (`StudentSubjectSnapshot`, `StudentGlobalSnapshot`,
+  `ClassSubjectDistribution`, `SnapshotRecomputeTrigger`) with freshness columns
+  (`computedAt`/`sourceEventId`/`revision`), natural-key `@@unique`, tenant-first indexes, `@@map`. Scope
+  ids are plain `@db.Uuid` (no `@relation` → no existing model touched).
+- **Contracts** (`packages/contracts`): `SNAPSHOT_TRIGGER_REASON`/`SNAPSHOT_TRIGGER_STATUS`/`SNAPSHOT_SOURCE`
+  consts+types (`enums/index.ts`); new `dto/snapshot.ts` (`SnapshotFreshness`, `SnapshotRecomputeScope`,
+  shared deterministic `snapshotCoalesceKey`) wired through the barrels. Reuses the already-declared
+  `analytics.SnapshotRecomputed` event (no new event).
+- **API enqueue** (`assessments.controller.ts` publish path): a SEPARATE best-effort try/catch AFTER commit
+  + the notification fan-out idempotently upserts a class-wide `SnapshotRecomputeTrigger`
+  (`grade_published`, coalesced on `(tenantId, coalesceKey, status='pending')`); an enqueue failure is
+  caught+logged and NEVER fails the publish. Publish fetch extended to select
+  `classSectionId/subjectId/academicYearId`.
+- **Worker** (`apps/worker/.../analytics-snapshots/*`, registered in `app.module.ts`): `snapshot-formula.ts`
+  (one pure byte-parity helper), `snapshot-keys.ts` (re-exports the shared coalesce key),
+  `SnapshotRecomputeService.recomputeScope` (per-scope class-wide recompute in ONE transaction — per-term +
+  delete-then-insert null-term roll-up + weighted global cascade + distribution; one class-grade findMany),
+  `SnapshotDrainCronService` (alerts-cron mirror: ~60s setInterval, atomic pending→processing claim, per-tenant
+  FIFO bounded batch, stale-processing reclaim, lagging-tenant backfill, references
+  `DOMAIN_EVENTS.SNAPSHOT_RECOMPUTED` — no queue), `snapshot-recompute.spec.ts` (byte-parity + idempotency +
+  coalesce-key).
+- **ADR** `docs/adr/ADR-019-analytics-snapshots.md` (next free filesystem number; reconciles the dangling
+  narrative "ADR-019 real-time deferral" reference).
+- **Zero read-path wiring** — snapshots are written but never read in S1 (provably zero behaviour change).
+- **Build/migration left to the orchestrator** (agents don't build): `prisma generate` + `db push` must run
+  once so the new snapshot/trigger Prisma clients exist for the typecheck gate + runtime.
 
 ## Key decisions (locked in the spec)
 

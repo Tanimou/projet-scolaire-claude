@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { join } from 'node:path';
 
 import { AlertsCronModule } from './modules/alerts-cron/alerts-cron.module';
+import { AnalyticsSnapshotsModule } from './modules/analytics-snapshots/analytics-snapshots.module';
 import { ExportsModule } from './modules/exports/exports.module';
 import { NotificationsDigestModule } from './modules/notifications-digest/notifications-digest.module';
 import { NotificationsEmailModule } from './modules/notifications-email/notifications-email.module';
@@ -28,6 +29,7 @@ import { StorageModule } from './shared/storage/storage.module';
     QueueModule,
     ExportsModule,
     AlertsCronModule,
+    AnalyticsSnapshotsModule,
     NotificationsEmailModule,
     ParentDigestModule,
     NotificationsDigestModule,

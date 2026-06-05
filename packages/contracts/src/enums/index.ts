@@ -63,6 +63,27 @@ export const NOTIFICATION_FREQUENCY = ['instant', 'daily', 'weekly', 'never'] as
 export const NOTIFICATION_CADENCE = ['instant', 'daily_digest', 'off'] as const;
 export type NotificationCadence = (typeof NOTIFICATION_CADENCE)[number];
 
+// E6 — Analytics Snapshots & pre-computation. Mirrors the Prisma
+// `SnapshotTriggerReason` / `SnapshotTriggerStatus` enums 1:1 (same pattern as
+// NOTIFICATION_CADENCE above) so client + server share one source of truth for the
+// snapshot-recompute dirty-queue. `SNAPSHOT_SOURCE` is the freshness-signal source
+// surfaced on the (later-slice) `freshness` block: 'snapshot' = served from the
+// materialised cache, 'live' = fall-through to the live AnalyticsService computation.
+export const SNAPSHOT_TRIGGER_REASON = [
+  'grade_published',
+  'grade_revised',
+  'coefficient_changed',
+  'manual_rebuild',
+  'backfill',
+] as const;
+export type SnapshotTriggerReason = (typeof SNAPSHOT_TRIGGER_REASON)[number];
+
+export const SNAPSHOT_TRIGGER_STATUS = ['pending', 'processing', 'done', 'failed'] as const;
+export type SnapshotTriggerStatus = (typeof SNAPSHOT_TRIGGER_STATUS)[number];
+
+export const SNAPSHOT_SOURCE = ['snapshot', 'live'] as const;
+export type SnapshotSource = (typeof SNAPSHOT_SOURCE)[number];
+
 export const IMPORT_TYPE = ['students', 'teachers', 'classes', 'grades', 'attendance', 'parents'] as const;
 export const IMPORT_STATUS = [
   'uploaded',
