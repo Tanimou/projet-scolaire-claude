@@ -9,11 +9,12 @@ import { TeachingModule } from '../teaching/teaching.module';
 import { AnalyticsController } from './analytics.controller';
 import { AnalyticsService } from './analytics.service';
 import { SchoolPerformanceDrilldownService } from './school-performance-drilldown.service';
+import { SnapshotOpsService } from './snapshot-ops.service';
 
 @Module({
   imports: [AuthModule, SchoolStructureModule, TeachingModule, StudentsModule, GradesModule],
   controllers: [AnalyticsController],
-  providers: [AnalyticsService, SchoolPerformanceDrilldownService],
+  providers: [AnalyticsService, SchoolPerformanceDrilldownService, SnapshotOpsService],
   exports: [AnalyticsService, SchoolPerformanceDrilldownService],
 })
 export class AnalyticsModule {}

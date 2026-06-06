@@ -20,6 +20,33 @@ const STALE_PROCESSING_MIN = Number(process.env.SNAPSHOT_RECOMPUTE_STALE_MIN ?? 
  * can never wedge a tick. Remaining classes converge over later ticks / the sweep.
  */
 const COEFFICIENT_FANOUT_TAKE = Number(process.env.SNAPSHOT_COEFFICIENT_FANOUT_TAKE ?? 200);
+/**
+ * E6-S5 — a parked (`failed`) trigger older than this is revived to `pending`
+ * (attempts reset) so a transient outage that exhausted the retry cap is not a
+ * permanent dark backlog (PM-G). Bounded by `FAILED_REVIVE_TAKE` per tick.
+ */
+const FAILED_RETRY_AFTER_MIN = Number(process.env.SNAPSHOT_FAILED_RETRY_AFTER_MIN ?? 60);
+const FAILED_REVIVE_TAKE = Number(process.env.SNAPSHOT_FAILED_REVIVE_TAKE ?? 100);
+/** E6-S5 — bounded per-tick orphan-snapshot prune (rows pointing at hard-deleted students/classes). */
+const ORPHAN_PRUNE_TAKE = Number(process.env.SNAPSHOT_ORPHAN_PRUNE_TAKE ?? 200);
+/** E6-S5 — coarser cadence for the orphan prune (run it every Nth tick, not every tick). */
+const ORPHAN_PRUNE_EVERY_TICKS = Number(process.env.SNAPSHOT_ORPHAN_PRUNE_EVERY_TICKS ?? 10);
+/** E6-S5 — bound the per-tick whole-tenant `manual_rebuild` fan-out over active class sections. */
+const REBUILD_FANOUT_TAKE = Number(process.env.SNAPSHOT_REBUILD_FANOUT_TAKE ?? 200);
+/**
+ * E6-S5 — the snapshot LOGIC-revision floor (PM-A). `revision` on a snapshot row
+ * is a per-row optimistic counter, so the spec's "revision < current" stale clause
+ * has no per-row `current` to compare against. We make it an explicit operator
+ * knob instead: a snapshot whose `revision < SNAPSHOT_REVISION_FLOOR` is treated as
+ * stale-by-logic and re-swept. Default `1` ⇒ the clause never fires (no behaviour
+ * change); after a recompute-logic change an operator bumps this env var and the
+ * sweep lazily rebuilds every below-floor row exactly once (then no-ops, because
+ * the rebuilt rows still carry their own incrementing revision ≥ floor only when a
+ * value changed — so stale-by-logic rows are caught by `computedAt < lastGradeAt`
+ * as the primary signal; the floor is the deploy-time convergence lever). NO schema
+ * change — reuses the existing `revision` column.
+ */
+const SNAPSHOT_REVISION_FLOOR = Number(process.env.SNAPSHOT_REVISION_FLOOR ?? 1);
 
 /**
  * E6-S1 — snapshot recompute drain cron. Structural sibling of `AlertsCronService`
@@ -44,6 +71,8 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
   private readonly logger = new Logger(SnapshotDrainCronService.name);
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  /** Monotonic tick counter — gates the coarser-cadence orphan prune (E6-S5). */
+  private tickCount = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -71,36 +100,86 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       return;
     }
     this.running = true;
+    this.tickCount += 1;
     const start = Date.now();
+    // E6-S5 — structured per-tick counts (AC-S5-6). Each pass is independently
+    // try/caught so one failing op never aborts the tick (AC-S5-5).
+    let recomputed = 0;
+    let failed = 0;
+    let revived = 0;
+    let pruned = 0;
+    let backfilled = 0;
+    let parked = 0;
+    let failedBacklog = 0;
+    let tenantCount = 0;
     try {
-      await this.reclaimStaleProcessing();
-      await this.backfillLaggingTenants();
+      await this.safe('reclaimStaleProcessing', () => this.reclaimStaleProcessing());
+      revived = await this.safe('reviveFailed', () => this.reviveFailedTriggers(), 0);
+      backfilled = await this.safe('backfill', () => this.backfillLaggingTenants(), 0);
+      // Orphan prune runs on a coarser cadence (every Nth tick) — best-effort.
+      if (this.tickCount % ORPHAN_PRUNE_EVERY_TICKS === 0) {
+        pruned = await this.safe('orphanPrune', () => this.pruneOrphanSnapshots(), 0);
+      }
 
       const tenants = await this.tenantsWithPending();
-      if (tenants.length === 0) {
-        this.logger.debug('No tenants with pending recompute triggers — tick is a no-op');
-        return;
-      }
-      let recomputed = 0;
-      let failed = 0;
+      tenantCount = tenants.length;
       for (const tenantId of tenants) {
         try {
           const r = await this.drainTenant(tenantId);
           recomputed += r.recomputed;
           failed += r.failed;
+          parked += r.parked;
         } catch (err) {
           this.logger.error(
             `Snapshot drain failed for tenant ${tenantId}: ${(err as Error).message}`,
           );
         }
       }
-      this.logger.log(
-        `Snapshot drain tick complete in ${Date.now() - start}ms — ${tenants.length} tenants, ` +
-          `${recomputed} scopes recomputed, ${failed} failed (event=${DOMAIN_EVENTS.SNAPSHOT_RECOMPUTED})`,
-      );
+      failedBacklog = await this.safe('failedBacklog', () => this.countFailed(), 0);
     } finally {
       this.running = false;
+      const durationMs = Date.now() - start;
+      // Single structured count line referencing analytics.SnapshotRecomputed —
+      // observability only, NO queue/outbox write, NO new event name (AC-S5-6).
+      this.logger.log(
+        `Snapshot drain tick complete (event=${DOMAIN_EVENTS.SNAPSHOT_RECOMPUTED}) ` +
+          JSON.stringify({
+            tenants: tenantCount,
+            recomputed,
+            failed,
+            parked,
+            revived,
+            pruned,
+            backfilled,
+            failedBacklog,
+            durationMs,
+          }),
+      );
     }
+  }
+
+  /**
+   * Run a sweep op inside a per-op try/catch so a single op's failure (a probe
+   * throw, a prune race) never aborts the whole tick (AC-S5-5). Returns the op's
+   * result, or `fallback` on throw.
+   */
+  private async safe(
+    label: string,
+    fn: () => Promise<void>,
+  ): Promise<void>;
+  private async safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T>;
+  private async safe<T>(label: string, fn: () => Promise<T>, fallback?: T): Promise<T | undefined> {
+    try {
+      return await fn();
+    } catch (err) {
+      this.logger.error(`Snapshot sweep op '${label}' failed (tick continues): ${(err as Error).message}`);
+      return fallback;
+    }
+  }
+
+  /** Standing count of parked (`failed`) triggers across all tenants (observability). */
+  private async countFailed(): Promise<number> {
+    return this.prisma.snapshotRecomputeTrigger.count({ where: { status: 'failed' } });
   }
 
   /** Distinct tenantIds with at least one pending trigger. */
@@ -117,11 +196,21 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
    * Reclaim `processing` rows stuck past the stale threshold (a worker died mid-tick)
    * back to `pending` so the scope is never wedged forever (PM-10). Tenant-agnostic
    * sweep — bounded by the threshold, not by tenant.
+   *
+   * E6-S5 (PM-C): key the staleness on `processedAt` — the timestamp stamped at
+   * CLAIM time (pending→processing) — NOT `enqueuedAt`. A trigger that waited a
+   * long time in the backlog (old `enqueuedAt`) but was claimed just now is still
+   * legitimately running; reclaiming it on `enqueuedAt` would double-recompute it.
+   * We reclaim only rows whose claim is older than the threshold (or, defensively,
+   * a processing row with a null `processedAt` — a pre-S5 legacy claim).
    */
   private async reclaimStaleProcessing(): Promise<void> {
     const cutoff = new Date(Date.now() - STALE_PROCESSING_MIN * 60 * 1000);
     const reclaimed = await this.prisma.snapshotRecomputeTrigger.updateMany({
-      where: { status: 'processing', enqueuedAt: { lt: cutoff } },
+      where: {
+        status: 'processing',
+        OR: [{ processedAt: { lt: cutoff } }, { processedAt: null }],
+      },
       data: { status: 'pending' },
     });
     if (reclaimed.count > 0) {
@@ -130,13 +219,122 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
   }
 
   /**
-   * Backfill safety-net: a tenant whose snapshots lag its latest published grade (or
-   * has published grades but NO snapshots at all) gets a coalesced `backfill` trigger
-   * for each lagging class so the next drain converges. Bounded, indexed probe
-   * (PM-11): we only look at tenants with NO pending/processing trigger already (the
-   * normal path covers those), and enqueue at most one trigger per affected class.
+   * E6-S5 (PM-G) — revive parked (`failed`) triggers older than
+   * `FAILED_RETRY_AFTER_MIN` back to `pending` with `attempts=0`, so a transient
+   * outage that exhausted the retry cap does not leave a permanent dark backlog.
+   * Bounded per tick (`FAILED_REVIVE_TAKE`). Returns the revived count.
    */
-  private async backfillLaggingTenants(): Promise<void> {
+  private async reviveFailedTriggers(): Promise<number> {
+    const cutoff = new Date(Date.now() - FAILED_RETRY_AFTER_MIN * 60 * 1000);
+    // Pick ids first so the revive is bounded (updateMany has no `take`).
+    const stale = await this.prisma.snapshotRecomputeTrigger.findMany({
+      where: { status: 'failed', processedAt: { lt: cutoff } },
+      orderBy: { processedAt: 'asc' },
+      take: FAILED_REVIVE_TAKE,
+      select: { id: true },
+    });
+    if (stale.length === 0) return 0;
+    const revived = await this.prisma.snapshotRecomputeTrigger.updateMany({
+      where: { id: { in: stale.map((s) => s.id) }, status: 'failed' },
+      data: { status: 'pending', attempts: 0, lastError: null },
+    });
+    if (revived.count > 0) {
+      this.logger.warn(`Revived ${revived.count} parked (failed) trigger(s) → pending (retry)`);
+    }
+    return revived.count;
+  }
+
+  /**
+   * E6-S5 (PM-F) — bounded, tenant-scoped prune of orphan snapshot rows whose
+   * `studentId` / `classSectionId` no longer exists in the live tables (hard
+   * delete). Snapshots are a disposable cache (ADR-019): a stranded row only
+   * wastes space + can serve a number for a student/class that is gone, so reaping
+   * it is no-op-correct. The predicate is strict — "NO matching `student` /
+   * `class_section` row at all" (hard delete), NEVER enrollment/active status (a
+   * pupil who merely changed class is NOT an orphan). Each pass is bounded by
+   * `ORPHAN_PRUNE_TAKE` and runs as its own deleteMany (best-effort, never blocks
+   * a recompute). Returns the deleted row count.
+   */
+  private async pruneOrphanSnapshots(): Promise<number> {
+    let deleted = 0;
+    // Sample a bounded window of snapshot rows, resolve which student/class ids are
+    // truly gone (tenant-scoped), then delete just those rows. Coarse cadence keeps
+    // this cheap; full convergence spans several prune ticks.
+    const sample = await this.prisma.studentGlobalSnapshot.findMany({
+      take: ORPHAN_PRUNE_TAKE,
+      select: { id: true, tenantId: true, studentId: true, classSectionId: true },
+    });
+    if (sample.length === 0) return 0;
+
+    const studentIds = [...new Set(sample.map((r) => r.studentId))];
+    const classIds = [...new Set(sample.map((r) => r.classSectionId))];
+    const liveStudents = new Set(
+      (
+        await this.prisma.student.findMany({
+          where: { id: { in: studentIds } },
+          select: { id: true },
+        })
+      ).map((s) => s.id),
+    );
+    const liveClasses = new Set(
+      (
+        await this.prisma.classSection.findMany({
+          where: { id: { in: classIds } },
+          select: { id: true },
+        })
+      ).map((c) => c.id),
+    );
+
+    const orphans = sample.filter(
+      (r) => !liveStudents.has(r.studentId) || !liveClasses.has(r.classSectionId),
+    );
+    if (orphans.length === 0) return 0;
+
+    // Delete the orphan rows across all three snapshot grains, tenant-scoped.
+    const orphanStudentIds = [...new Set(orphans.map((r) => r.studentId).filter((id) => !liveStudents.has(id)))];
+    const orphanClassIds = [...new Set(orphans.map((r) => r.classSectionId).filter((id) => !liveClasses.has(id)))];
+    const byTenant = new Map<string, true>();
+    for (const o of orphans) byTenant.set(o.tenantId, true);
+
+    for (const tenantId of byTenant.keys()) {
+      const studentClause = orphanStudentIds.length > 0 ? [{ studentId: { in: orphanStudentIds } }] : [];
+      const classClause = orphanClassIds.length > 0 ? [{ classSectionId: { in: orphanClassIds } }] : [];
+      const orClause = [...studentClause, ...classClause];
+      if (orClause.length === 0) continue;
+      const where = { tenantId, OR: orClause };
+      const g = await this.prisma.studentGlobalSnapshot.deleteMany({ where });
+      const s = await this.prisma.studentSubjectSnapshot.deleteMany({ where });
+      // ClassSubjectDistribution carries no studentId — prune only by orphan class.
+      const d =
+        orphanClassIds.length > 0
+          ? await this.prisma.classSubjectDistribution.deleteMany({
+              where: { tenantId, classSectionId: { in: orphanClassIds } },
+            })
+          : { count: 0 };
+      deleted += g.count + s.count + d.count;
+    }
+    if (deleted > 0) {
+      this.logger.warn(`Pruned ${deleted} orphan snapshot row(s) (hard-deleted student/class)`);
+    }
+    return deleted;
+  }
+
+  /**
+   * Backfill safety-net (E6-S5 PM-B — PRECISE stale detection). A class scope is
+   * stale, and gets a coalesced `backfill` trigger, when EITHER:
+   *   - it has NO snapshot at all (S1 preserved — fresh/migrated tenant), OR
+   *   - its freshest snapshot `computedAt < lastGradeAt` (a dropped best-effort
+   *     enqueue: the grade landed but the trigger never did → the snapshot now lags
+   *     a populated class), OR
+   *   - its snapshot `revision < SNAPSHOT_REVISION_FLOOR` (stale-by-logic after a
+   *     recompute-logic deploy bumps the floor).
+   * This replaces the S1 "only classes with ZERO snapshots" short-circuit, so a
+   * MISSED EVENT on an already-computed class now self-heals within one sweep — the
+   * literal S5 thesis. Bounded probe; enqueue at most one trigger per affected class;
+   * only tenants with NO open trigger (the normal drain covers the rest). Returns the
+   * number of backfill triggers enqueued.
+   */
+  private async backfillLaggingTenants(): Promise<number> {
     // Tenants that currently have NO open trigger at all — these are the only ones a
     // missed enqueue could have left stale. Tenants with open triggers self-heal via
     // the normal drain.
@@ -150,13 +348,14 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       ).map((r) => r.tenantId),
     );
 
-    // Class sections that have ≥1 published/revised grade but whose newest grade is
-    // newer than the freshest snapshot for that class (or have no snapshot yet).
-    // Cheap, indexed: one grouped query over the snapshot table's computedAt.
+    // Class sections that have ≥1 published/revised grade, with the freshest grade
+    // mutation time (`updatedAt` moves on publish AND revise) so we can compare it to
+    // the snapshot's `computedAt`. Bounded probe (full convergence over several ticks).
     const classesWithGrades = await this.prisma.grade.findMany({
       where: { status: { in: ['published', 'revised'] }, isAbsent: false },
       select: {
         tenantId: true,
+        updatedAt: true,
         assessment: {
           select: {
             teachingAssignment: {
@@ -165,10 +364,11 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
           },
         },
       },
-      distinct: ['assessmentId'],
-      take: 500, // bound the probe — full convergence still happens over several ticks
+      orderBy: { updatedAt: 'desc' },
+      take: 500,
     });
 
+    let enqueued = 0;
     const seen = new Set<string>();
     for (const g of classesWithGrades) {
       const ta = g.assessment.teachingAssignment;
@@ -178,11 +378,17 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       if (seen.has(dedup)) continue;
       seen.add(dedup);
 
-      const hasSnapshot = await this.prisma.studentSubjectSnapshot.findFirst({
+      // Freshest snapshot for this (class, subject) scope — the row the read path
+      // would serve. We compare ITS computedAt/revision against the latest grade.
+      const snapshot = await this.prisma.studentSubjectSnapshot.findFirst({
         where: { tenantId: g.tenantId, classSectionId: ta.classSectionId },
-        select: { id: true },
+        orderBy: { computedAt: 'desc' },
+        select: { computedAt: true, revision: true },
       });
-      if (hasSnapshot) continue; // S1: only backfill classes with NO snapshot at all
+      const noSnapshot = snapshot == null;
+      const lagsGrades = snapshot != null && snapshot.computedAt < g.updatedAt;
+      const staleByLogic = snapshot != null && snapshot.revision < SNAPSHOT_REVISION_FLOOR;
+      if (!noSnapshot && !lagsGrades && !staleByLogic) continue; // fresh — nothing to do
 
       const coalesceKey = [
         g.tenantId,
@@ -213,14 +419,18 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
           },
           update: {},
         });
+        enqueued += 1;
       } catch (err) {
         this.logger.debug(`Backfill enqueue skipped: ${(err as Error).message}`);
       }
     }
+    return enqueued;
   }
 
   /** Claim + drain a bounded FIFO batch of one tenant's pending triggers. */
-  private async drainTenant(tenantId: string): Promise<{ recomputed: number; failed: number }> {
+  private async drainTenant(
+    tenantId: string,
+  ): Promise<{ recomputed: number; failed: number; parked: number }> {
     // FIFO candidate ids (oldest first), bounded.
     const candidates = await this.prisma.snapshotRecomputeTrigger.findMany({
       where: { tenantId, status: 'pending' },
@@ -228,16 +438,20 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       take: BATCH_SIZE,
       select: { id: true },
     });
-    if (candidates.length === 0) return { recomputed: 0, failed: 0 };
+    if (candidates.length === 0) return { recomputed: 0, failed: 0, parked: 0 };
 
     let recomputed = 0;
     let failed = 0;
+    let parkedCount = 0;
     for (const { id } of candidates) {
       // ATOMIC claim (PM-9): only THIS tick flips pending → processing; a concurrent
-      // drain/backfill that lost the race claims 0 rows and skips.
+      // drain/backfill that lost the race claims 0 rows and skips. E6-S5 (PM-C): stamp
+      // `processedAt = now` AT CLAIM TIME so the stale-processing reclaim keys on the
+      // claim instant (how long it has been RUNNING), never on `enqueuedAt` (how long
+      // it waited in the backlog) — a freshly-claimed row is never reclaimed mid-run.
       const claim = await this.prisma.snapshotRecomputeTrigger.updateMany({
         where: { id, tenantId, status: 'pending' },
-        data: { status: 'processing' },
+        data: { status: 'processing', processedAt: new Date() },
       });
       if (claim.count === 0) continue; // someone else claimed it
 
@@ -256,7 +470,8 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       if (!trigger) continue;
 
       try {
-        if (trigger.classSectionId === null && trigger.reason === 'coefficient_changed') {
+        const classLess = trigger.classSectionId === null;
+        if (classLess && trigger.reason === 'coefficient_changed') {
           // E6-S3 (FR7) — a class-LESS coefficient-change trigger carries only
           // (subjectId, academicYearId). Re-weighting the subject coefficient
           // invalidates the weighted global of EVERY pupil in EVERY class teaching
@@ -266,7 +481,21 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
           // trigger is marked done only after the whole fan-out succeeds; a class
           // failure throws → the existing attempts/parking path retries the trigger.
           await this.fanOutCoefficientChange(trigger);
+        } else if (classLess && trigger.reason === 'manual_rebuild') {
+          // E6-S5 — a class-LESS `manual_rebuild` trigger. Two shapes (both bounded):
+          //   - (subjectId, academicYearId) present → coefficient-style fan-out over
+          //     every class teaching that subject in the year;
+          //   - fully unscoped (whole tenant) → fan-out over every active class section
+          //     (bounded by REBUILD_FANOUT_TAKE; the rest converge over later ticks /
+          //     the backfill sweep).
+          if (trigger.subjectId && trigger.academicYearId) {
+            await this.fanOutCoefficientChange(trigger);
+          } else {
+            await this.fanOutWholeTenantRebuild(trigger);
+          }
         } else {
+          // A class-scoped trigger (grade_published / grade_revised / backfill /
+          // class-scoped manual_rebuild) → a single class recompute.
           await this.recompute.recomputeScope(trigger);
         }
         await this.prisma.snapshotRecomputeTrigger.updateMany({
@@ -288,13 +517,46 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
           },
         });
         failed += 1;
+        if (parked) parkedCount += 1;
         this.logger.error(
           `Recompute failed (tenant=${tenantId}, trigger=${id}, attempt=${attempts}${parked ? ', PARKED' : ''}): ${(err as Error).message}`,
         );
         // One scope's failure must never abort the tenant batch.
       }
     }
-    return { recomputed, failed };
+    return { recomputed, failed, parked: parkedCount };
+  }
+
+  /**
+   * E6-S5 — expand a fully-unscoped (whole-tenant) `manual_rebuild` trigger into one
+   * class-scoped recompute per ACTIVE class section in the tenant. Bounded by
+   * `REBUILD_FANOUT_TAKE` so a huge tenant can never wedge a tick — the remaining
+   * classes converge over later ticks via the backfill sweep (their snapshots will
+   * still lag). Re-uses the unchanged `recomputeScope` per class. A per-class failure
+   * propagates so the trigger retries/parks via the normal path.
+   */
+  private async fanOutWholeTenantRebuild(trigger: {
+    id: string;
+    tenantId: string;
+  }): Promise<void> {
+    const { id: sourceEventId, tenantId } = trigger;
+    const sections = await this.prisma.classSection.findMany({
+      where: { tenantId },
+      select: { id: true, academicYearId: true },
+      take: REBUILD_FANOUT_TAKE,
+    });
+    for (const section of sections) {
+      await this.recompute.recomputeScope({
+        id: sourceEventId,
+        tenantId,
+        classSectionId: section.id,
+        subjectId: null,
+        academicYearId: section.academicYearId,
+      });
+    }
+    this.logger.debug(
+      `Whole-tenant rebuild fan-out (tenant=${tenantId}): ${sections.length} class section(s) recomputed`,
+    );
   }
 
   /**
