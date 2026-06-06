@@ -1,0 +1,503 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — E7 Remediation & Tutoring loop (API contract)
+  version: 0.1.0
+  description: >
+    E7 closes the cahier's action loop: an alert's recommendation promotes into a
+    RemediationPlan, the parent books a tutoring resource from an admin-curated catalogue, a
+    teacher confirms it from a remediation inbox, and a calm progress strip measures the
+    improvement (tying back to E3's positive IMPROVEMENT signal).
+
+    CONTRACT POSTURE — aggregate endpoints, convention-preserving, role-narrowed RBAC + ABAC:
+      * All new routes live under /api/v1/remediation/* (parent + teacher) and
+        /api/v1/admin/remediation/* (admin curation + uptake), each an AGGREGATE endpoint
+        (no client N+1) — same convention as /analytics/*, /conversations, /meeting-requests.
+      * Three NEW role-narrowed permissions (the E4 exports.execute.parent/.teacher house
+        style): remediation.read (parent+teacher+admin), remediation.manage (admin only),
+        remediation.book (parent only). Booking transitions ride remediation.read + the
+        tutor-ownership wall (the E2 teacher-reply-on-messaging.write+participant-wall idiom).
+      * Parent reads/writes touching a child pass StudentAccessService.canAccessStudent BEFORE
+        the operation (guardianship ABAC). Teacher booking transitions pass the tutor-ownership
+        wall. The catalogue is school-public to the school's parents (no per-child ABAC), but
+        the PLAN it is browsed from is guardianship-walled.
+      * NO money/price/payment anywhere (FR-9 / ADR-018) — costKind is a display LABEL only.
+      * The ONE new architectural decision is the booking concurrency guard (a deterministic
+        409 on an over-capacity slot) → ADR-020-booking-availability-concurrency.md, authored on S2.
+
+    All routes are under /api/v1 and require a Keycloak bearer JWT. Tenant scoping is implicit
+    on every operation (application-layer where:{tenantId}, ADR-019); tenantId/schoolId/userId
+    are server-derived from the JWT (SchoolContextService.forUser), never client-supplied.
+
+    Slice mapping (see tasks.md): S1 = plans (promote + read) + the read-only parent
+    catalogue read. S2 = bookings (create + cancel + the concurrency guard → ADR-020) +
+    publishing availability. S3 = the dashboard remediation block (additive). S4 = teacher
+    inbox transitions + teacher availability CRUD. S5 = admin tutor/availability curation.
+    S6 = admin uptake overview + cancellation/completion + the completed sweep.
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: remediation-plans
+    description: Alert→plan promotion + parent plan reads (S1). Guardianship ABAC.
+  - name: remediation-catalogue
+    description: Parent read-only published-catalogue read (S1) + admin tutor/availability curation (S5).
+  - name: remediation-bookings
+    description: Parent booking (S2, the ADR-020 concurrency guard) + teacher transitions (S4).
+  - name: remediation-admin
+    description: Admin uptake overview (S6). remediation.manage.
+
+paths:
+  # ===========================================================================
+  # S1 — Plans: promote an alert into a RemediationPlan + read the parent's plans.
+  # ===========================================================================
+  /remediation/plans:
+    post:
+      tags: [remediation-plans]
+      summary: "[S1] Promote an alert into a RemediationPlan (parent) — perm: remediation.book + guardianship ABAC"
+      description: >
+        Promotes an AlertInstance recommendation into a RemediationPlan scoped to
+        (tenant, student, subject, alert). IDEMPOTENT: a second promote for the same OPEN
+        (student, subject) reuses the existing open plan (P2002-safe on the @@unique). The
+        alert lifecycle is UNCHANGED (status-neutral — the plan is additive). Writes one
+        append-only `remediation.plan_created` AuditLog row. Guardianship ABAC
+        (canAccessStudent on the alert's student) BEFORE the write.
+      operationId: createRemediationPlan
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRemediationPlanRequest' }
+      responses:
+        '201': { description: Plan created., content: { application/json: { schema: { $ref: '#/components/schemas/RemediationPlan' } } } }
+        '200': { description: Existing open plan reused (idempotent)., content: { application/json: { schema: { $ref: '#/components/schemas/RemediationPlan' } } } }
+        '403': { description: Caller is not a guardian of the alert's student (ABAC) / missing remediation.book. }
+        '404': { description: Alert / student / subject not found in tenant. }
+
+    get:
+      tags: [remediation-plans]
+      summary: "[S1] List the caller's children's remediation plans (parent) — perm: remediation.read + guardianship ABAC"
+      description: >
+        Aggregate read: the caller's children's plans + per-plan session counts (planned /
+        completed) + the next confirmed session. One assembled payload, no client N+1.
+        Server-scoped to the caller's guarded students.
+      operationId: listRemediationPlans
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: studentId, in: query, required: false, schema: { type: string, format: uuid }, description: Narrow to one guarded child. }
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/RemediationPlanStatus' } }
+      responses:
+        '200': { description: The caller's plans., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/RemediationPlanWithCounts' } } } } }
+        '403': { description: Missing remediation.read. }
+
+  /remediation/plans/{planId}/close:
+    patch:
+      tags: [remediation-plans]
+      summary: "[S6] Close (or mark met) a plan — kind + reversible (parent) — perm: remediation.book + guardianship ABAC"
+      description: >
+        Flips the plan to `closed` or `met` (reversible — a follow-up can reopen). Append-only
+        `remediation.plan_closed` AuditLog row. Guardianship ABAC on the plan's student.
+      operationId: closeRemediationPlan
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: planId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: '#/components/schemas/CloseRemediationPlanRequest' } } }
+      responses:
+        '200': { description: Plan updated., content: { application/json: { schema: { $ref: '#/components/schemas/RemediationPlan' } } } }
+        '403': { description: Not a guardian of the plan's student. }
+        '404': { description: Plan not found in tenant. }
+
+  # ===========================================================================
+  # Catalogue: admin curation (remediation.manage, S5) + the parent published read (S1).
+  # ===========================================================================
+  /admin/remediation/tutors:
+    post:
+      tags: [remediation-catalogue]
+      summary: "[S5] Create a tutor (admin) — perm: remediation.manage"
+      operationId: createTutor
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertTutorRequest' } } } }
+      responses:
+        '201': { description: Tutor created., content: { application/json: { schema: { $ref: '#/components/schemas/Tutor' } } } }
+        '403': { description: Missing remediation.manage. }
+    get:
+      tags: [remediation-catalogue]
+      summary: "[S5] List the school's tutors incl. unpublished (admin) — perm: remediation.manage"
+      operationId: listTutorsAdmin
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: subjectId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: published, in: query, required: false, schema: { type: boolean } }
+      responses:
+        '200': { description: The school's tutor roster., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/TutorWithAvailability' } } } } }
+        '403': { description: Missing remediation.manage. }
+
+  /admin/remediation/tutors/{tutorId}:
+    patch:
+      tags: [remediation-catalogue]
+      summary: "[S5] Update / publish / unpublish a tutor (admin) — perm: remediation.manage"
+      operationId: updateTutor
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: tutorId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertTutorRequest' } } } }
+      responses:
+        '200': { description: Tutor updated., content: { application/json: { schema: { $ref: '#/components/schemas/Tutor' } } } }
+        '403': { description: Missing remediation.manage. }
+        '404': { description: Tutor not found in tenant. }
+
+  /admin/remediation/tutors/{tutorId}/availabilities:
+    post:
+      tags: [remediation-catalogue]
+      summary: "[S5] Add an availability slot to a tutor (admin) — perm: remediation.manage"
+      operationId: createAvailability
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: tutorId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertAvailabilityRequest' } } } }
+      responses:
+        '201': { description: Availability created., content: { application/json: { schema: { $ref: '#/components/schemas/TutorAvailability' } } } }
+        '400': { description: Invalid slot (recurring needs weekday+startTime; one_off needs startsAt/endsAt; capacity ≥ 1). }
+        '403': { description: Missing remediation.manage. }
+        '404': { description: Tutor not found in tenant. }
+
+  /remediation/catalogue:
+    get:
+      tags: [remediation-catalogue]
+      summary: "[S1] Parent catalogue (read-only) — PUBLISHED + tenant + subject-filtered tutors (parent) — perm: remediation.read"
+      description: >
+        Returns ONLY `published` tutors of the caller's tenant, server-filtered to the
+        requested subject, each with their ACTIVE availability slots. An unpublished or
+        cross-tenant tutor is NEVER returned (the published + tenant gate is server-side).
+        Browsed from a plan (the plan's subjectId is passed) — but the catalogue itself is
+        school-public to the school's parents (no per-child ABAC).
+      operationId: getCatalogue
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: subjectId, in: query, required: true, schema: { type: string, format: uuid }, description: The plan's subject (the catalogue filter). }
+      responses:
+        '200': { description: Published tutors for the subject + their open slots., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/TutorWithAvailability' } } } } }
+        '403': { description: Missing remediation.read. }
+
+  # ===========================================================================
+  # S2 — Bookings: parent create (THE ADR-020 concurrency guard) + parent cancel.
+  # S4 — Teacher transitions (confirm / decline / propose-alternative).
+  # ===========================================================================
+  /remediation/bookings:
+    post:
+      tags: [remediation-bookings]
+      summary: "[S2] Book a slot against a plan (parent) — perm: remediation.book + guardianship ABAC"
+      description: >
+        Creates a Booking against a RemediationPlan for a concrete dated session instance
+        (sessionAt). Guardianship ABAC on the plan's student BEFORE the write. IDEMPOTENT on
+        (availabilityId, sessionAt, planId) — a double-tap reuses/collapses. CONCURRENCY GUARD
+        (FR-7, ADR-020): a booking that would exceed the slot's capacity for that dated instance
+        is rejected with a DETERMINISTIC 409 Conflict (exactly one winner under concurrent
+        requests). Notifies the tutor/teacher via NotificationsService.createMany (additive
+        `remediation` NotificationKind). Append-only `remediation.booking_created` AuditLog row.
+      operationId: createBooking
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateBookingRequest' } } } }
+      responses:
+        '201': { description: Booking created (status=requested)., content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }
+        '200': { description: Existing active booking for this (slot instance, plan) reused (idempotent)., content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }
+        '403': { description: Not a guardian of the plan's student / missing remediation.book. }
+        '404': { description: Plan / availability / tutor not found in tenant. }
+        '409': { description: "Slot full for that session instance (the ADR-020 concurrency guard) — deterministic single-winner." }
+        '422': { description: Invalid sessionAt for the slot (not a valid dated instance of the availability). }
+
+    get:
+      tags: [remediation-bookings]
+      summary: "[S4] Teacher remediation inbox — bookings for the caller's tutor record (teacher) — perm: remediation.read + ownership wall"
+      description: >
+        The teacher's bookings (across their tutor record), for the /teacher/remediation inbox.
+        Server-scoped to bookings whose tutor.userProfileId === caller (the ownership wall).
+        Aggregate read (student name, subject, sessionAt, status) — no N+1.
+      operationId: listTeacherBookings
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/BookingStatus' } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: The caller's tutor bookings., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/BookingWithContext' } } } } }
+        '403': { description: Missing remediation.read / caller has no tutor record. }
+
+  /remediation/bookings/{bookingId}/transition:
+    patch:
+      tags: [remediation-bookings]
+      summary: "[S2/S4] Transition a booking (parent cancel OR teacher confirm/decline/propose) — perm: remediation.read|.book + wall"
+      description: >
+        A guarded state-machine step. PARENT may `cancelled` (guardianship wall, remediation.book).
+        TEACHER (the booking's tutor owner) may `confirmed` / `declined` / `proposed_alternative`
+        (ownership wall, remediation.read). An ILLEGAL transition (e.g. confirm a cancelled
+        booking) → 409/422. Each transition writes an append-only `remediation.booking_<status>`
+        AuditLog row + notifies the counterparty via createMany. History is NEVER deleted.
+      operationId: transitionBooking
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: bookingId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransitionBookingRequest' } } } }
+      responses:
+        '200': { description: Booking transitioned., content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }
+        '403': { description: Caller fails the relevant wall (guardianship / tutor-ownership) or lacks the role. }
+        '404': { description: Booking not found in tenant. }
+        '409': { description: Illegal transition for the current status. }
+        '422': { description: Missing required note for proposed_alternative. }
+
+  # ===========================================================================
+  # S3 — Parent dashboard gains an ADDITIVE `remediation` block (no new path).
+  # ===========================================================================
+  /analytics/parent-dashboard/{studentId}:
+    get:
+      tags: [remediation-plans]
+      summary: "[S3] Parent dashboard — ADDITIVE optional `remediation` block (perm UNCHANGED: students.read + guardianship ABAC)"
+      description: >
+        UNCHANGED contract EXCEPT an additive optional top-level `remediation` object: the
+        child's open plans + per-plan session counts + next confirmed session + the EXISTING
+        subjectEvolution trend delta (E6 snapshot-or-live) framed against the plan's createdAt.
+        E7 invents NO new metric — it reads the trend the dashboard already computes. The block
+        degrades to absent when no plan exists. Permission + ABAC UNCHANGED.
+      operationId: getParentDashboardWithRemediation
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: studentId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200':
+          description: Existing ParentDashboardResponse + additive `remediation` (and the E6 `freshness`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    description: Existing ParentDashboardResponse shape (unchanged — incl. E6 freshness).
+                  - $ref: '#/components/schemas/HasRemediation'
+        '403': { description: Not a guardian of this student (ABAC). }
+        '404': { description: Student not found in tenant. }
+
+  # ===========================================================================
+  # S6 — Admin uptake overview (aggregate).
+  # ===========================================================================
+  /admin/remediation/overview:
+    get:
+      tags: [remediation-admin]
+      summary: "[S6] Remediation uptake overview (admin) — perm: remediation.manage"
+      description: >
+        Tenant-scoped aggregate: open-plan count, bookings grouped by status, demand by subject.
+        Grouped counts only (no per-row fan-out, no child names exposed in aggregate). Feeds the
+        school's support strategy.
+      operationId: getRemediationOverview
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Uptake aggregate., content: { application/json: { schema: { $ref: '#/components/schemas/RemediationOverviewResponse' } } } }
+        '403': { description: Missing remediation.manage. }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  schemas:
+    # ---- Enums ----
+    TutorType: { type: string, enum: [teacher, external, peer] }
+    TutorCostKind:
+      type: string
+      enum: [free, volunteer, paid_offline]
+      description: Display LABEL only — NEVER a price (FR-9 / ADR-018).
+    AvailabilityKind: { type: string, enum: [recurring_weekly, one_off] }
+    RemediationPlanStatus: { type: string, enum: [open, met, closed] }
+    BookingStatus:
+      type: string
+      enum: [requested, confirmed, completed, cancelled, declined, proposed_alternative]
+
+    # ---- Plans ----
+    CreateRemediationPlanRequest:
+      type: object
+      required: [alertId]
+      description: >
+        Promote from an alert — studentId/subjectId are SERVER-DERIVED from the alert
+        (never trusted from the client), so the idempotency key + the ABAC student are the
+        alert's own. `objective` is an optional kind label.
+      properties:
+        alertId: { type: string, format: uuid }
+        objective: { type: [string, 'null'], maxLength: 280 }
+
+    CloseRemediationPlanRequest:
+      type: object
+      properties:
+        status: { $ref: '#/components/schemas/RemediationPlanStatus' }
+
+    RemediationPlan:
+      type: object
+      required: [id, studentId, subjectId, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        studentId: { type: string, format: uuid }
+        subjectId: { type: string, format: uuid }
+        alertId: { type: [string, 'null'], format: uuid }
+        status: { $ref: '#/components/schemas/RemediationPlanStatus' }
+        objective: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        closedAt: { type: [string, 'null'], format: date-time }
+
+    RemediationPlanWithCounts:
+      allOf:
+        - $ref: '#/components/schemas/RemediationPlan'
+        - type: object
+          properties:
+            subjectName: { type: string }
+            studentName: { type: string }
+            plannedSessions: { type: integer, description: requested + confirmed bookings. }
+            completedSessions: { type: integer }
+            nextSessionAt: { type: [string, 'null'], format: date-time, description: Next confirmed session. }
+
+    # ---- Catalogue ----
+    UpsertTutorRequest:
+      type: object
+      required: [type, displayName, subjectIds]
+      properties:
+        type: { $ref: '#/components/schemas/TutorType' }
+        costKind: { $ref: '#/components/schemas/TutorCostKind' }
+        displayName: { type: string }
+        blurb: { type: [string, 'null'], maxLength: 500 }
+        subjectIds: { type: array, items: { type: string, format: uuid } }
+        teacherProfileId: { type: [string, 'null'], format: uuid, description: Required when type=teacher. }
+        published: { type: boolean, default: false }
+
+    UpsertAvailabilityRequest:
+      type: object
+      required: [kind]
+      description: recurring_weekly needs weekday+startTime+endTime; one_off needs startsAt+endsAt.
+      properties:
+        kind: { $ref: '#/components/schemas/AvailabilityKind' }
+        weekday: { type: [integer, 'null'], minimum: 0, maximum: 6 }
+        startTime: { type: [string, 'null'], description: "HH:mm local school time." }
+        endTime: { type: [string, 'null'] }
+        startsAt: { type: [string, 'null'], format: date-time }
+        endsAt: { type: [string, 'null'], format: date-time }
+        capacity: { type: integer, minimum: 1, default: 1 }
+        active: { type: boolean, default: true }
+
+    Tutor:
+      type: object
+      required: [id, type, displayName, subjectIds, published]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/TutorType' }
+        costKind: { $ref: '#/components/schemas/TutorCostKind' }
+        displayName: { type: string }
+        blurb: { type: [string, 'null'] }
+        subjectIds: { type: array, items: { type: string, format: uuid } }
+        teacherProfileId: { type: [string, 'null'], format: uuid }
+        published: { type: boolean }
+
+    TutorAvailability:
+      type: object
+      required: [id, tutorId, kind, capacity, active]
+      properties:
+        id: { type: string, format: uuid }
+        tutorId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/AvailabilityKind' }
+        weekday: { type: [integer, 'null'] }
+        startTime: { type: [string, 'null'] }
+        endTime: { type: [string, 'null'] }
+        startsAt: { type: [string, 'null'], format: date-time }
+        endsAt: { type: [string, 'null'], format: date-time }
+        capacity: { type: integer }
+        active: { type: boolean }
+
+    TutorWithAvailability:
+      allOf:
+        - $ref: '#/components/schemas/Tutor'
+        - type: object
+          properties:
+            availabilities: { type: array, items: { $ref: '#/components/schemas/TutorAvailability' } }
+
+    # ---- Bookings ----
+    CreateBookingRequest:
+      type: object
+      required: [planId, availabilityId, sessionAt]
+      description: >
+        sessionAt is the concrete dated instance of the availability (a one_off uses its own
+        startsAt; a recurring_weekly resolves the booked date). studentId + tutorId are
+        SERVER-DERIVED from the plan + availability (not trusted from the client).
+      properties:
+        planId: { type: string, format: uuid }
+        availabilityId: { type: string, format: uuid }
+        sessionAt: { type: string, format: date-time }
+        note: { type: [string, 'null'], maxLength: 280 }
+
+    TransitionBookingRequest:
+      type: object
+      required: [toStatus]
+      properties:
+        toStatus: { $ref: '#/components/schemas/BookingStatus' }
+        note: { type: [string, 'null'], maxLength: 280, description: Required for proposed_alternative. }
+
+    Booking:
+      type: object
+      required: [id, planId, tutorId, availabilityId, studentId, sessionAt, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        planId: { type: string, format: uuid }
+        tutorId: { type: string, format: uuid }
+        availabilityId: { type: string, format: uuid }
+        studentId: { type: string, format: uuid }
+        sessionAt: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/BookingStatus' }
+        note: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+
+    BookingWithContext:
+      allOf:
+        - $ref: '#/components/schemas/Booking'
+        - type: object
+          properties:
+            studentName: { type: string }
+            subjectName: { type: string }
+            tutorDisplayName: { type: string }
+
+    # ---- Dashboard additive block (S5) ----
+    HasRemediation:
+      type: object
+      properties:
+        remediation:
+          $ref: '#/components/schemas/RemediationDashboardBlock'
+
+    RemediationDashboardBlock:
+      type: object
+      description: >
+        Additive, optional. The child's open plans + counts + next session + the EXISTING
+        subjectEvolution trend delta framed against the plan start. Degrades to absent with no
+        plan. NO new metric — reads the trend the dashboard already computes.
+      properties:
+        plans:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/RemediationPlanWithCounts'
+              - type: object
+                properties:
+                  trendDeltaSincePlan:
+                    type: [number, 'null']
+                    description: subjectEvolution delta (/20) for the plan's subject since createdAt.
+                  improving:
+                    type: boolean
+                    description: True when trendDeltaSincePlan crosses the IMPROVEMENT threshold (lights the E3-S2 emerald lane).
+
+    # ---- Admin overview (S6) ----
+    RemediationOverviewResponse:
+      type: object
+      required: [generatedAt, openPlans, bookingsByStatus, demandBySubject]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        openPlans: { type: integer }
+        bookingsByStatus:
+          type: object
+          additionalProperties: { type: integer }
+          description: Map of BookingStatus → count.
+        demandBySubject:
+          type: array
+          items:
+            type: object
+            properties:
+              subjectId: { type: string, format: uuid }
+              subjectName: { type: string }
+              openPlans: { type: integer }
+              bookings: { type: integer }

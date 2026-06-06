@@ -278,10 +278,33 @@ counts (PM-1/2/3/4, architect C-2); FR1/FR2/FR3 explicitly authorise falling thr
 can't hold. The trigger-driven `freshness` (open-trigger probe over every class scope) is the visible win
 the S4 chip renders. No schema/endpoint/permission/queue/contract change.
 
-### E7 — Remediation & Tutoring loop · `proposed` · ~L
-**Why:** closes alert → diagnosis → **resource**: turn a recommendation into a real booking.
-New models (Tutor, Availability, Booking, RemediationPlan), catalogue + booking UI, alert deep-link.
-The most ambitious epic — spec it carefully, slice thin.
+### E7 — Remediation & Tutoring loop · `in-progress` · ~L
+**Why:** closes alert → diagnosis → **resource** → **measured improvement**: turn a recommendation into a
+real, bookable tutoring resource, then watch the child improve on the parent dashboard.
+New models (`Tutor`, `TutorAvailability`, `RemediationPlan`, `Booking`), an admin-curated catalogue +
+booking UI, the E1-S2 alert deep-link ("Trouver un soutien en {matière}"), and a kind, non-stigmatising
+progress strip reading the E6 trend + tying into E3's `IMPROVEMENT` lane. The most ambitious epic —
+specced carefully, sliced thin.
+**Spec-kit:** ✅ landed `docs/spec/features/e7/` (this run, epic-spec, docs-only): spec/plan/data-model/
+contracts(openapi)/ux/tasks/quickstart/PROGRESS. Locked decisions: the loop reuses E1 (alert-promotion +
+`deriveAlertActions`), E2 (teaching wall), E3 (`IMPROVEMENT` emerald lane), E6 (`student_subject_snapshot`
+trend, snapshot-first + live fall-through); **four+ additive models** (`Tutor` teacher-linked-or-external
+— **no new Keycloak role**; `TutorAvailability` = a dated slot with finite **capacity**; `RemediationPlan`
+= alert-seeded/idempotent/baseline-capturing; `Booking` = a parent's append-only claim on one slot unit);
+**three role-narrowed permissions** (`remediation.read|manage|book`, the E4 house style); the visionary
+spine = the dashboard **progress strip** (trend delta vs baseline, kind framing, E3 tie-in). **The one new
+architectural decision = booking/availability concurrency** (never over-book a capacity-limited slot under
+concurrent writes) → **`docs/adr/ADR-020-booking-availability-concurrency.md`** on the **booking slice
+(S2)** (DB-level guard: a partial unique on active bookings for capacity-1 + a transactional capacity
+check for capacity-N, deterministic 409; no distributed lock / Redis / second BullMQ queue / denormalised
+counter). Hard non-goals: **no payments/PSP/price** (ADR-018/E12 parked — `costKind` is a label only), no
+open/cross-school marketplace, no new login / no student booking (E8), no calendar sync, no recurring
+bookings, no real-time push, no second queue, no new datastore. **Slice order (all 8 kit files
+reconciled):** S1 schema + alert→`RemediationPlan` promotion + read-only catalogue · S2 availability +
+booking (ADR-020) · S3 progress strip · S4 teacher capacity · S5 admin curation · S6 hardening
+(notifications + cancellation + completion + uptake overview). **None shipped yet → next run ships S1**
+(`epic-slice`: schema + plan promotion + read-only catalogue + the alert deep-link; no booking write → no
+ADR yet).
 
 ### E8 — Student Portal · `proposed` · ~M
 **Why:** the cahier's future "Portail élève." New Keycloak `student` role + read-only student views
