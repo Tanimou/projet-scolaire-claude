@@ -44,8 +44,13 @@ ENV_FILE="$ROOT_DIR/.env"
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
-APP_SERVICES_DEFAULT=(api worker web)
-HEALTH_SERVICES=(api web)
+# `migrator` MUST be rebuilt too: it runs `prisma db push` from the SAME source as
+# the apps, so a stale migrator image would sync an OLD schema (db push reports
+# "already in sync" → exit 0 but new tables are never created, and new-feature
+# endpoints then 500 on the missing tables). It builds the shared `build` stage of
+# Dockerfile.api, so it's a cache hit after `api` — negligible extra build time.
+APP_SERVICES_DEFAULT=(api worker web migrator)
+HEALTH_SERVICES=(api web)   # migrator is one-shot (exits 0) — never health-waited
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"   # seconds to wait for healthy
 
 # .env is optional but recommended (host port mapping). Fall back gracefully.
