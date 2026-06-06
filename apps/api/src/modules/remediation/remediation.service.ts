@@ -14,6 +14,8 @@ import type {
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
+import { resolveNextSessionAt } from './session-instance';
+
 const PLAN_INCLUDE = {
   student: { select: { firstName: true, lastName: true } },
   subject: { select: { code: true, name: true } },
@@ -186,6 +188,9 @@ export class RemediationService {
     tenantId: string;
     schoolId: string | null;
     subjectId: string;
+    /** The caller's UserProfile id — to surface their own existing active booking
+     * per slot (idempotency hint for the "Réservé" badge). */
+    userProfileId?: string;
   }): Promise<RemediationCatalogueDto> {
     const subject = await this.prisma.subject.findFirst({
       where: { id: args.subjectId, tenantId: args.tenantId },
@@ -208,10 +213,73 @@ export class RemediationService {
       orderBy: { displayName: 'asc' },
     });
 
+    // E7-S2: resolve, per active slot, its NEXT concrete dated instance, then
+    // compute the live remaining-seat count + the caller's own active booking id
+    // in ONE bounded grouped Booking query (never per-slot N+1). A slot whose next
+    // instance can't be resolved (a past one_off) renders nextSessionAt=null /
+    // remainingSeats=0 ("Indisponible").
+    const now = new Date();
+    const slotInstances = new Map<string, { availabilityId: string; sessionAt: Date }>();
+    for (const t of tutors) {
+      for (const a of t.availabilities) {
+        const next = resolveNextSessionAt(
+          { kind: a.kind, weekday: a.weekday, startTime: a.startTime, startsAt: a.startsAt },
+          now,
+        );
+        if (next) slotInstances.set(a.id, { availabilityId: a.id, sessionAt: next });
+      }
+    }
+
+    // One grouped query: active bookings (requested|confirmed) for every resolved
+    // (availabilityId, sessionAt) instance. We OR the precise instance keys so the
+    // count is exact (not "any sessionAt for this slot").
+    const instanceList = [...slotInstances.values()];
+    const activeBookings =
+      instanceList.length > 0
+        ? await this.prisma.booking.findMany({
+            where: {
+              tenantId: args.tenantId,
+              status: { in: ['requested', 'confirmed'] },
+              OR: instanceList.map((i) => ({
+                availabilityId: i.availabilityId,
+                sessionAt: i.sessionAt,
+              })),
+            },
+            select: { availabilityId: true, bookedBy: true },
+          })
+        : [];
+
+    const seatTaken = new Map<string, number>();
+    const myBooking = new Map<string, string>();
+    if (activeBookings.length > 0) {
+      // Re-read the booking ids only for the caller's own rows (small set), to
+      // surface myBookingId without widening the grouped query.
+      const mineRows = args.userProfileId
+        ? await this.prisma.booking.findMany({
+            where: {
+              tenantId: args.tenantId,
+              bookedBy: args.userProfileId,
+              status: { in: ['requested', 'confirmed'] },
+              OR: instanceList.map((i) => ({
+                availabilityId: i.availabilityId,
+                sessionAt: i.sessionAt,
+              })),
+            },
+            select: { id: true, availabilityId: true },
+          })
+        : [];
+      for (const b of activeBookings) {
+        seatTaken.set(b.availabilityId, (seatTaken.get(b.availabilityId) ?? 0) + 1);
+      }
+      for (const m of mineRows) myBooking.set(m.availabilityId, m.id);
+    }
+
     return {
       subjectId: args.subjectId,
       subjectName: subject?.name ?? null,
-      tutors: tutors.map((t) => this.toCatalogueTutorDto(t)),
+      tutors: tutors.map((t) =>
+        this.toCatalogueTutorDto(t, slotInstances, seatTaken, myBooking),
+      ),
     };
   }
 
@@ -319,6 +387,9 @@ export class RemediationService {
 
   private toCatalogueTutorDto(
     t: Prisma.TutorGetPayload<{ include: { availabilities: true } }>,
+    slotInstances: Map<string, { availabilityId: string; sessionAt: Date }>,
+    seatTaken: Map<string, number>,
+    myBooking: Map<string, string>,
   ): CatalogueTutorDto {
     return {
       id: t.id,
@@ -327,16 +398,137 @@ export class RemediationService {
       displayName: t.displayName,
       blurb: t.blurb,
       subjectIds: t.subjectIds,
-      slots: t.availabilities.map((a): CatalogueSlotDto => ({
-        id: a.id,
-        kind: a.kind,
-        weekday: a.weekday,
-        startTime: a.startTime,
-        endTime: a.endTime,
-        startsAt: a.startsAt?.toISOString() ?? null,
-        endsAt: a.endsAt?.toISOString() ?? null,
-        capacity: a.capacity,
-      })),
+      slots: t.availabilities.map((a): CatalogueSlotDto => {
+        const instance = slotInstances.get(a.id) ?? null;
+        const taken = seatTaken.get(a.id) ?? 0;
+        const remaining = instance ? Math.max(0, a.capacity - taken) : 0;
+        return {
+          id: a.id,
+          kind: a.kind,
+          weekday: a.weekday,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          startsAt: a.startsAt?.toISOString() ?? null,
+          endsAt: a.endsAt?.toISOString() ?? null,
+          capacity: a.capacity,
+          remainingSeats: remaining,
+          nextSessionAt: instance ? instance.sessionAt.toISOString() : null,
+          myBookingId: myBooking.get(a.id) ?? null,
+        };
+      }),
     };
+  }
+
+  // ----- S2 booking support reads --------------------------------------------
+
+  /**
+   * Load an availability slot tenant-scoped, incl. the tutor's linkage fields the
+   * booking controller needs for the E2 teaching wall + the capacity guard. Used
+   * by the booking verb BEFORE the write. Returns null on miss/inactive (404).
+   */
+  async loadBookableAvailability(args: {
+    tenantId: string;
+    availabilityId: string;
+  }): Promise<{
+    id: string;
+    tutorId: string;
+    capacity: number;
+    kind: 'recurring_weekly' | 'one_off';
+    weekday: number | null;
+    startTime: string | null;
+    startsAt: Date | null;
+    tutorTeacherProfileId: string | null;
+    tutorUserProfileId: string | null;
+    tutorPublished: boolean;
+  } | null> {
+    const a = await this.prisma.tutorAvailability.findFirst({
+      where: { id: args.availabilityId, tenantId: args.tenantId, active: true },
+      select: {
+        id: true,
+        tutorId: true,
+        capacity: true,
+        kind: true,
+        weekday: true,
+        startTime: true,
+        startsAt: true,
+        tutor: {
+          select: { teacherProfileId: true, userProfileId: true, published: true },
+        },
+      },
+    });
+    if (!a) return null;
+    return {
+      id: a.id,
+      tutorId: a.tutorId,
+      capacity: a.capacity,
+      kind: a.kind,
+      weekday: a.weekday,
+      startTime: a.startTime,
+      startsAt: a.startsAt,
+      tutorTeacherProfileId: a.tutor.teacherProfileId,
+      tutorUserProfileId: a.tutor.userProfileId,
+      tutorPublished: a.tutor.published,
+    };
+  }
+
+  /**
+   * Load a plan tenant-scoped for the booking verb — returns the student + status
+   * the controller needs (guardianship ABAC on the student; plan must be open).
+   * Null on miss (404). The controller re-checks guardianship BEFORE the write.
+   */
+  async loadPlanForBooking(args: {
+    tenantId: string;
+    planId: string;
+  }): Promise<{ studentId: string; status: string; schoolId: string | null } | null> {
+    const p = await this.prisma.remediationPlan.findFirst({
+      where: { id: args.planId, tenantId: args.tenantId },
+      select: { studentId: true, status: true, schoolId: true },
+    });
+    return p;
+  }
+
+  /**
+   * The E2 teaching wall, inlined to avoid a circular MessagingModule dependency
+   * (mirrors messaging.service.ts isTeacherOfStudent exactly): the student's active
+   * Enrollment in the active academic year → a TeachingAssignment for that
+   * (classSectionId, academicYearId) whose teacherProfile.userProfileId === the
+   * tutor's userProfileId. Returns false (never throws) when there is no active
+   * enrollment or no matching assignment — a lapsed/absent wall → the controller
+   * 403s. Only called for a teacher-linked tutor (userProfileId != null).
+   */
+  async isTeacherOfStudent(args: {
+    tenantId: string;
+    teacherUserProfileId: string;
+    studentId: string;
+  }): Promise<boolean> {
+    try {
+      const enrollment = await this.prisma.enrollment.findFirst({
+        where: {
+          tenantId: args.tenantId,
+          studentId: args.studentId,
+          status: 'active',
+          academicYear: { status: 'active' },
+        },
+        orderBy: { enrolledAt: 'desc' },
+        select: { classSectionId: true, academicYearId: true },
+      });
+      if (!enrollment) return false;
+
+      const assignment = await this.prisma.teachingAssignment.findFirst({
+        where: {
+          tenantId: args.tenantId,
+          classSectionId: enrollment.classSectionId,
+          academicYearId: enrollment.academicYearId,
+          teacherProfile: { userProfileId: args.teacherUserProfileId },
+        },
+        select: { id: true },
+      });
+      return assignment != null;
+    } catch (err) {
+      this.logger.error(
+        `isTeacherOfStudent failed (student ${args.studentId}, teacher ${args.teacherUserProfileId}): ${(err as Error).message}`,
+      );
+      return false;
+    }
   }
 }

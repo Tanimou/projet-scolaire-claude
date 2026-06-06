@@ -1955,6 +1955,15 @@ model Booking {
   /// This does NOT by itself enforce capacity across DIFFERENT plans — that is the
   /// concurrency guard (the partial unique on active status + the transactional
   /// count check), the subject of ADR-020 (S2).
+  ///
+  /// E7-S2 / ADR-020 — the capacity-1 over-book guard is a RAW PARTIAL UNIQUE INDEX
+  /// (Prisma @@unique cannot express a WHERE), applied alongside `db push`:
+  ///   CREATE UNIQUE INDEX IF NOT EXISTS booking_active_instance_unique
+  ///     ON booking (availability_id, session_at)
+  ///     WHERE status IN ('requested','confirmed');
+  /// Canonical artifact: apps/api/prisma/sql/booking-active-instance-uniq.sql;
+  /// applied idempotently on API boot by BookingIndexBootstrap. For capacity>1 the
+  /// transactional SELECT … FOR UPDATE count in BookingService is the sole authority.
   @@unique([availabilityId, sessionAt, planId])
   @@index([tenantId, tutorId, status, sessionAt])
   @@index([tenantId, planId, status])

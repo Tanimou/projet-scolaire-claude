@@ -317,8 +317,29 @@ read-only `GET /catalogue?subjectId=` published+tenant+subject-filtered, no N+1)
 the `/parent/remediation/[planId]` plan page (reuse-first, never a dead-end), and a 7-test
 `remediation.service.spec.ts`. **No booking write path → no over-booking surface → no ADR this slice**
 (ADR-020 lands with the S2 booking verb). **`prisma db push` is pending** (infra was down this run) — a
-human must apply the additive schema before `/remediation/*` is functional. **Next slice → S2**
-(`epic-slice`: availability + the parent booking verb + the never-over-book guard + **ADR-020**).
+human must apply the additive schema before `/remediation/*` is functional. **E7-S2 is now shipped**
+(`epic-slice` — P1 `[schema][auth][concurrency]`, needs human review): the load-bearing concurrency
+slice — the parent **booking** verb (`POST /remediation/bookings`, `remediation.book`; flow ORDER:
+plan 404 → guardianship ABAC before write (404-before-403) → plan-open 422 → availability load +
+published re-validate → E2 teaching-wall 403 on a teacher-linked tutor → capacity-guarded insert),
+**never over-books** under concurrency via the ADR-020 two-tier guard (a raw partial-unique index
+`booking_active_instance_unique … WHERE status IN ('requested','confirmed')` for capacity-1, applied
+idempotently on API boot by `BookingIndexBootstrap` + a `$transaction` `SELECT … FOR UPDATE`
+count-then-insert for capacity-N), with **server-canonicalised `sessionAt`** (the pure
+`session-instance.ts` resolver → 422 on a slot mismatch / past instance, never a 500) so the
+capacity-guard key is byte-identical across concurrent requests, deterministic **409** "ce créneau
+vient d'être réservé" (vs idempotent-200 re-tap, distinguished by `P2002` target), append-only parent
+**cancel** that atomically frees the seat (cancellable-status-guarded `updateMany`, double-cancel
+safe no-op), best-effort tutor+parent `NotificationsService.createMany` (kind `remediation`, no new
+queue) + append-only `remediation.booking_created`/`booking_cancelled` audit, the catalogue enriched
+with `nextSessionAt`/`remainingSeats`/`myBookingId` in ONE grouped Booking query (no N+1), the E2
+teaching wall **inlined** into `RemediationService` (no circular MessagingModule dep),
+**`docs/adr/ADR-020-booking-availability-concurrency.md`** (Accepted — the guard, idempotency-vs-capacity
+separation, deterministic-409 contract, rejected alternatives: distributed lock / Redis SETNX / 2nd
+BullMQ queue / denormalised counter), and a targeted two-concurrent-books `booking.service.spec.ts`
+proving exactly-one-succeeds (never a 500, exactly one active row). The ONLY schema step is the partial
+index (no model shape change). **Next slice → S3** (`epic-slice` `[web][a11y]`: the parent remediation
+progress strip — measured improvement vs the plan baseline from the E6 snapshot).
 
 ### E8 — Student Portal · `proposed` · ~M
 **Why:** the cahier's future "Portail élève." New Keycloak `student` role + read-only student views
