@@ -15,6 +15,32 @@ import {
 } from './snapshot-formula';
 
 /**
+ * E6-S5 — value-column equality helpers for the idempotent rebuild path.
+ *
+ * The per-term snapshot rows carry a `revision` optimistic counter that the S1
+ * upsert bumps on EVERY `update`. That makes a naive re-run advance `revision`
+ * even when the underlying grades did not change — violating the S5 AC
+ * "re-run on unchanged grades → identical rows AND identical revision". The fix
+ * (architect Concern 1, PM-A #3): **read-compare-write** — before each `update`
+ * we compare the freshly-derived value columns against the stored row and SKIP
+ * the write entirely (no `computedAt` move, no `revision` bump) when nothing
+ * changed. So a stable rebuild is a true no-op on the value rows. The first
+ * compute (no row yet) still `create`s; a real grade change still updates +
+ * bumps. This keeps byte-parity with live (the figures are unchanged) while
+ * making the full rebuild idempotent at the row level.
+ */
+function decEq(a: unknown, b: number | null): boolean {
+  const an = a == null ? null : Number(a);
+  if (an == null || b == null) return an == null && b == null;
+  // Both already at the Decimal(5,2) write boundary → exact compare.
+  return an === b;
+}
+function intEq(a: unknown, b: number | null): boolean {
+  const an = a == null ? null : Number(a);
+  return an === (b == null ? null : Number(b));
+}
+
+/**
  * E6-S1 — recompute one snapshot scope, byte-parity with the live
  * `AnalyticsService`, idempotently, in ONE transaction.
  *
@@ -393,6 +419,35 @@ export class SnapshotRecomputeService {
         if (r.termId === null) {
           await tx.studentSubjectSnapshot.create({ data: { ...data, termId: null } });
         } else {
+          // E6-S5 read-compare-write: skip the write (no revision/computedAt move)
+          // when the value columns are byte-identical to the stored row → a stable
+          // rebuild is a true no-op (AC-S5-2). A first compute / real change writes.
+          const existing = await tx.studentSubjectSnapshot.findUnique({
+            where: {
+              studentId_subjectId_termId: {
+                studentId: r.studentId,
+                subjectId: r.subjectId,
+                termId: r.termId,
+              },
+            },
+            select: {
+              average: true,
+              coefficient: true,
+              gradeCount: true,
+              classRank: true,
+              classSize: true,
+              trendDelta: true,
+            },
+          });
+          const unchanged =
+            existing != null &&
+            decEq(existing.average, round2(r.average)) &&
+            decEq(existing.coefficient, r.coefficient) &&
+            intEq(existing.gradeCount, r.gradeCount) &&
+            intEq(existing.classRank, r.classRank) &&
+            intEq(existing.classSize, r.classSize) &&
+            decEq(existing.trendDelta, round2(r.trendDelta));
+          if (unchanged) continue;
           await tx.studentSubjectSnapshot.upsert({
             where: {
               studentId_subjectId_termId: {
@@ -442,6 +497,27 @@ export class SnapshotRecomputeService {
         if (r.termId === null) {
           await tx.studentGlobalSnapshot.create({ data: { ...data, termId: null } });
         } else {
+          // E6-S5 read-compare-write (AC-S5-2): no-op a stable rebuild.
+          const existing = await tx.studentGlobalSnapshot.findUnique({
+            where: { studentId_termId: { studentId: r.studentId, termId: r.termId } },
+            select: {
+              globalAverage: true,
+              classAverage: true,
+              classRank: true,
+              classSize: true,
+              progressionDelta: true,
+              subjectCount: true,
+            },
+          });
+          const unchanged =
+            existing != null &&
+            decEq(existing.globalAverage, round2(r.globalAverage)) &&
+            decEq(existing.classAverage, round2(r.classAverage)) &&
+            intEq(existing.classRank, r.classRank) &&
+            intEq(existing.classSize, r.classSize) &&
+            decEq(existing.progressionDelta, round2(r.progressionDelta)) &&
+            intEq(existing.subjectCount, r.subjectCount);
+          if (unchanged) continue;
           await tx.studentGlobalSnapshot.upsert({
             where: { studentId_termId: { studentId: r.studentId, termId: r.termId } },
             create: { ...data, termId: r.termId },
@@ -500,6 +576,37 @@ export class SnapshotRecomputeService {
           if (tk === YEAR) {
             await tx.classSubjectDistribution.create({ data: { ...data, termId: null } });
           } else {
+            // E6-S5 read-compare-write (AC-S5-2): no-op a stable rebuild.
+            const existing = await tx.classSubjectDistribution.findUnique({
+              where: {
+                classSectionId_subjectId_termId: { classSectionId, subjectId, termId: tk },
+              },
+              select: {
+                average: true,
+                median: true,
+                minScore: true,
+                maxScore: true,
+                countLow: true,
+                countMid: true,
+                countHigh: true,
+                passRate: true,
+                gradeCount: true,
+                studentCount: true,
+              },
+            });
+            const unchanged =
+              existing != null &&
+              decEq(existing.average, round2(d.average)) &&
+              decEq(existing.median, round2(d.median)) &&
+              decEq(existing.minScore, round2(d.minScore)) &&
+              decEq(existing.maxScore, round2(d.maxScore)) &&
+              intEq(existing.countLow, d.countLow) &&
+              intEq(existing.countMid, d.countMid) &&
+              intEq(existing.countHigh, d.countHigh) &&
+              decEq(existing.passRate, round2(d.passRate)) &&
+              intEq(existing.gradeCount, d.gradeCount) &&
+              intEq(existing.studentCount, Number(data.studentCount));
+            if (unchanged) continue;
             await tx.classSubjectDistribution.upsert({
               where: {
                 classSectionId_subjectId_termId: { classSectionId, subjectId, termId: tk },

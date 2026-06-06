@@ -2,7 +2,8 @@
 
 > Epic: **E6 — Analytics Snapshots & pre-computation** · Tier 3 (Scale & new surfaces) · Size ~M
 > Spec-kit run: **2026-06-05** (docs-only; no code, no schema, no build). Roadmap status: `proposed`
-> → promoted to **in-progress** (spec authored). **S1–S4 shipped → next slice: S5** (`epic-slice`).
+> → promoted to **in-progress** (spec authored) → **shipped** (all 5 slices landed; S5 = operability
+> hardening + admin status/rebuild surface). **S1–S5 all shipped → E6 complete.**
 
 ## Slice status
 
@@ -12,7 +13,7 @@
 | S2 | Parent dashboard reads snapshots (headline perf win) | `[api]` | P1 | ✅ shipped | — |
 | S3 | Admin & teacher reads + revise/coefficient triggers | `[api][worker]` | P1-P2 | ✅ shipped | — |
 | S4 | Freshness chip (the visionary trust signal) | `[web][a11y]` | P2 | ✅ shipped | — |
-| S5 | Operability: idempotent full rebuild + sweep hardening | `[worker]` | P2 | ⬜ not started | — |
+| S5 | Operability: idempotent full rebuild + sweep hardening | `[worker][api]` | P2 | ✅ shipped | — |
 
 ## What landed this run (spec run)
 
@@ -172,6 +173,69 @@
   announcement only materialises across a full navigation/reload (informational, not interactive).
   Both recorded for an S5/polish follow-up; functionally the chip conveys state visually + via the
   accessible name on every paint.
+
+## What landed (S5 — operability: idempotent full rebuild + sweep hardening)
+
+- **Idempotent full rebuild — read-compare-write** (`snapshot-recompute.service.ts`): each per-term
+  `upsert` (StudentSubjectSnapshot / StudentGlobalSnapshot / ClassSubjectDistribution) now reads the
+  stored value columns first and **skips the write entirely** when they are byte-identical to the freshly
+  derived figures → a re-run on unchanged grades is a **true no-op** (no `computedAt` move, no `revision`
+  bump, AC-S5-2). The first compute / a real change still writes + bumps. Resolves the architect's
+  Concern 1 / PM-A #3 (the `revision: { increment: 1 }` upsert previously bumped on every re-run). Year
+  roll-up rows keep their delete-then-insert (always rebuilt); byte-parity with live unchanged.
+- **Precise stale detection** (`snapshot-drain-cron.service.ts` `backfillLaggingTenants`, PM-B): replaced
+  the S1 "only backfill classes with ZERO snapshots" short-circuit (`if (hasSnapshot) continue`) with a
+  three-way staleness gate — **no snapshot** (S1 preserved) **OR** freshest snapshot `computedAt <
+  lastGradeAt` (a dropped best-effort enqueue on a POPULATED class — the literal missed-event self-heal)
+  **OR** `revision < SNAPSHOT_REVISION_FLOOR` (stale-by-logic). `lastGradeAt` = the latest `Grade.updatedAt`
+  (moves on publish AND revise) over the bounded `take:500` probe; one coalesced `backfill` trigger per
+  affected class; only tenants with no open trigger.
+- **`SNAPSHOT_REVISION_FLOOR` operator knob** (PM-A): the spec's "`revision < current`" clause had no
+  per-row `current` (revision is a per-row optimistic counter). Resolved as an env-overridable module
+  constant (default `1` ⇒ inert, zero behaviour change) reusing the existing `revision` column — **no
+  schema change**. Primary stale signal is `computedAt < lastGradeAt`; the floor is the deploy-time
+  convergence lever after a recompute-logic change.
+- **Claim-time staleness** (PM-C): `drainTenant` now stamps `processedAt = now` **at claim time**
+  (pending→processing), and `reclaimStaleProcessing` keys the stale-processing reclaim on `processedAt`
+  (how long a row has been RUNNING) instead of `enqueuedAt` (how long it WAITED) — a freshly-claimed row
+  with an old `enqueuedAt` is no longer reclaimed mid-run (no double-recompute).
+- **Failed-row parking + recovery** (PM-G): `MAX_ATTEMPTS` parking kept; a new `reviveFailedTriggers`
+  pass revives a parked (`failed`) trigger older than `FAILED_RETRY_AFTER_MIN` back to `pending` with
+  `attempts=0` (bounded by `FAILED_REVIVE_TAKE`) so a transient outage is not a permanent dark backlog.
+  Per-tick log reports `parked` (crossed-cap this tick) + standing `failedBacklog`.
+- **Orphan-snapshot prune** (PM-F): a new bounded (`ORPHAN_PRUNE_TAKE`), tenant-scoped `pruneOrphanSnapshots`
+  on a coarser cadence (`ORPHAN_PRUNE_EVERY_TICKS`) deletes snapshot rows whose `studentId`/`classSectionId`
+  has **no live `student`/`class_section` row at all** (HARD delete only — never enrollment/active status;
+  a pupil who merely changed class is NOT an orphan). Best-effort, own deleteMany, never blocks a recompute,
+  no audit row.
+- **`manual_rebuild` routing** (the rebuild spine): `drainTenant` routes a `manual_rebuild` trigger through
+  the existing FIFO loop — class-scoped → one `recomputeScope`; class-less `(subjectId, academicYearId)` →
+  coefficient-style fan-out; fully unscoped → new bounded `fanOutWholeTenantRebuild` over every active class
+  section (`REBUILD_FANOUT_TAKE`, rest converge over later ticks). Never a single mega-transaction.
+- **Observability** (AC-S5-6): each tick logs one structured count object `{tenants, recomputed, failed,
+  parked, revived, pruned, backfilled, failedBacklog, durationMs}` referencing
+  `DOMAIN_EVENTS.SNAPSHOT_RECOMPUTED` — NO queue/outbox write, no new event. Each new sweep op runs inside a
+  `safe()` per-op try/catch so one op's failure never aborts the tick (AC-S5-5); the `running` guard prevents
+  overlap.
+- **Optional admin surface** (`apps/api/src/modules/analytics`, AC-S5-7): new `SnapshotOpsService` +
+  two `@RequiresPermission('schools.read')` endpoints (NO new permission). `GET /analytics/snapshots/
+  recompute-status` = tenant-scoped backlog counts + `oldestPendingAt` + a recent feed (read-only, no audit).
+  `POST /analytics/snapshots/rebuild` = validates every supplied scope id **in-tenant** (404 on a foreign id,
+  PM-E), idempotently coalesces a `manual_rebuild` trigger via the shared `snapshotCoalesceKey`, returns
+  `{triggerId, status, coalesced}` (202), and writes exactly ONE append-only `analytics.snapshot_rebuild`
+  audit row (best-effort, mirrors the `export.bulletin.request` precedent). `tenantId` is server-derived via
+  `ctx.forUser` (never client-supplied).
+- **Contracts** (additive only): `RebuildSnapshotsRequest/Response`, `SnapshotRecomputeStatusResponse`,
+  `SnapshotRecomputeRecentItem` Zod schemas + types added to `dto/snapshot.ts` (auto-barrel-exported). No
+  new enum, no new event, no schema change.
+- **Tests** (`snapshot-recompute.spec.ts`, extended — not forked): Part 5 idempotent-rebuild (no-op on
+  byte-identical stored rows / re-write on a real change); Part 6 `manual_rebuild` routing (class-scoped /
+  coefficient fan-out / whole-tenant fan-out, tenant-scoped); Part 7 failed-row revival, precise stale
+  detection (populated-lag self-heal / fresh-no-op / no-snapshot-still-backfills), orphan prune (orphan
+  deleted, live row kept, tenant-scoped). The harness gained `findUnique` (read-compare-write) +
+  `classSection.findMany` mocks.
+- **No schema change beyond S1, no second BullMQ queue, no new permission, no new shared contract
+  enum/event, no UI, no new ADR** (within ADR-019). **E6 complete — all 5 slices shipped.**
 
 ## Key decisions (locked in the spec)
 

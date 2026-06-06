@@ -86,3 +86,74 @@ export function snapshotCoalesceKey(
     s(scope.studentId),
   ].join('|');
 }
+
+/* ------------------------------------------------------------------------- *
+ * E6-S5 — optional admin operability surface (additive).
+ *
+ * Two read-only/explicit-action admin endpoints reusing the existing
+ * `schools.read` capability (NO new permission). The status read is pure
+ * observability; the rebuild enqueues an idempotently-coalesced
+ * `manual_rebuild` trigger and writes ONE append-only `analytics.snapshot_rebuild`
+ * audit row (the explicit-action concern stays API-side — the worker drain is
+ * unaudited bookkeeping, ADR-019 §Non-goals). These DTOs match the openapi the
+ * E6 spec-kit already wrote; they are additive contract types (convention reuse),
+ * never a new architectural decision.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Request body for `POST /analytics/snapshots/rebuild`. Every field is optional:
+ * a fully-unscoped request rebuilds the whole (server-derived) tenant; a
+ * `classSectionId` scopes to one class; a class-less `(subjectId, academicYearId)`
+ * fans out coefficient-style. Supplied scope ids are validated **in the caller's
+ * tenant** before enqueue (404 on a foreign id) so a rebuild can never carry
+ * another tenant's id.
+ */
+export const RebuildSnapshotsRequestSchema = z.object({
+  classSectionId: UuidSchema.nullable().optional(),
+  subjectId: UuidSchema.nullable().optional(),
+  studentId: UuidSchema.nullable().optional(),
+  termId: UuidSchema.nullable().optional(),
+  academicYearId: UuidSchema.nullable().optional(),
+});
+export type RebuildSnapshotsRequest = z.infer<typeof RebuildSnapshotsRequestSchema>;
+
+/**
+ * `202` response for a rebuild enqueue. `coalesced` is **truthful**: true when
+ * the `manual_rebuild` trigger folded onto an already-pending row for the same
+ * scope (no extra work), false when a fresh row was created.
+ */
+export const RebuildSnapshotsResponseSchema = z.object({
+  triggerId: UuidSchema,
+  status: z.enum(['pending', 'processing', 'done', 'failed']),
+  coalesced: z.boolean(),
+});
+export type RebuildSnapshotsResponse = z.infer<typeof RebuildSnapshotsResponseSchema>;
+
+/** One recent recompute-trigger row in the status feed (read-only, tenant-scoped). */
+export const SnapshotRecomputeRecentItemSchema = z.object({
+  id: UuidSchema,
+  reason: z.string(),
+  status: z.enum(['pending', 'processing', 'done', 'failed']),
+  classSectionId: UuidSchema.nullable(),
+  subjectId: UuidSchema.nullable(),
+  academicYearId: UuidSchema.nullable(),
+  attempts: z.number().int().nonnegative(),
+  enqueuedAt: z.string(),
+  processedAt: z.string().nullable(),
+});
+export type SnapshotRecomputeRecentItem = z.infer<typeof SnapshotRecomputeRecentItemSchema>;
+
+/**
+ * `GET /analytics/snapshots/recompute-status` — tenant-scoped backlog health for
+ * the admin ops view. Pure observability (no audit, no mutation).
+ */
+export const SnapshotRecomputeStatusResponseSchema = z.object({
+  pending: z.number().int().nonnegative(),
+  processing: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  oldestPendingAt: z.string().nullable(),
+  recent: z.array(SnapshotRecomputeRecentItemSchema),
+});
+export type SnapshotRecomputeStatusResponse = z.infer<
+  typeof SnapshotRecomputeStatusResponseSchema
+>;

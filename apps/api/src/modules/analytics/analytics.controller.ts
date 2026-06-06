@@ -1,5 +1,19 @@
-import { Controller, ForbiddenException, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  type RebuildSnapshotsRequest,
+  RebuildSnapshotsRequestSchema,
+} from '@pilotage/contracts';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -13,6 +27,7 @@ import { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { AnalyticsService } from './analytics.service';
 import { SchoolPerformanceDrilldownService } from './school-performance-drilldown.service';
+import { SnapshotOpsService } from './snapshot-ops.service';
 
 @ApiTags('analytics')
 @ApiBearerAuth()
@@ -26,6 +41,7 @@ export class AnalyticsController {
     private readonly teachers: TeacherProfileService,
     private readonly studentAccess: StudentAccessService,
     private readonly drilldown: SchoolPerformanceDrilldownService,
+    private readonly snapshotOps: SnapshotOpsService,
   ) {}
 
   /** Admin dashboard payload — REDESIGN-PLAN §6.2 analytics.dashboard */
@@ -241,5 +257,44 @@ export class AnalyticsController {
   async auditFacets(@CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
     return this.analytics.auditFacets({ tenantId: me.tenantId });
+  }
+
+  /**
+   * E6-S5 — admin snapshot-recompute backlog health (tenant-scoped, read-only).
+   * Reuses the existing `schools.read` admin-analytics capability (NO new permission);
+   * `tenantId` is server-derived from the caller (never client-supplied). Writes no
+   * audit (observability).
+   */
+  @Get('snapshots/recompute-status')
+  @RequiresPermission('schools.read')
+  async snapshotRecomputeStatus(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    const { tenantId } = await this.ctx.forUser(me);
+    return this.snapshotOps.getRecomputeStatus({ tenantId });
+  }
+
+  /**
+   * E6-S5 — admin manual snapshot rebuild (explicit action). Reuses `schools.read`
+   * (NO new permission). Validates every supplied scope id in the caller's tenant
+   * (404 on a foreign id), idempotently coalesces a `manual_rebuild` trigger the
+   * worker drains, returns `{triggerId, status, coalesced}` (202), and writes one
+   * append-only `analytics.snapshot_rebuild` audit row. `tenantId` is server-derived.
+   */
+  @Post('snapshots/rebuild')
+  @HttpCode(202)
+  @RequiresPermission('schools.read')
+  async snapshotRebuild(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Body() body: RebuildSnapshotsRequest,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { tenantId } = await this.ctx.forUser(me);
+    const parsed = RebuildSnapshotsRequestSchema.parse(body ?? {});
+    const roles = jwt.realm_access?.roles ?? [];
+    const actorRole =
+      ['super_admin', 'school_admin', 'teacher', 'parent'].find((r) => roles.includes(r)) ??
+      roles[0] ??
+      null;
+    return this.snapshotOps.enqueueRebuild({ tenantId, actorId: me.id, actorRole, body: parsed });
   }
 }

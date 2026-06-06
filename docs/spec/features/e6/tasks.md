@@ -158,7 +158,14 @@ the parent + admin (+ teacher) dashboards, rendered from the additive `freshness
 
 ---
 
-## [ ] S5 — Operability: idempotent full rebuild + sweep hardening · `[worker]` · P2 · ~S-M
+## [x] S5 — Operability: idempotent full rebuild + sweep hardening · `[worker][api]` · P2 · ~S-M
+
+> **Shipped.** Worker sweep hardening (precise stale detection, idempotent read-compare-write rebuild,
+> failed-row revival, orphan prune, `manual_rebuild` routing, claim-time staleness, structured counts)
+> + the optional admin surface (`GET recompute-status` + `POST rebuild`, `schools.read`, one append-only
+> `analytics.snapshot_rebuild` audit row). No schema change beyond S1, no second queue, no new permission,
+> no new shared contract enum/event (additive controller-local DTOs only in `dto/snapshot.ts`), no UI,
+> no new ADR (within ADR-019). **E6 complete — all 5 slices landed.**
 
 **Goal:** close the operability story — a missed event or a fresh/migrated tenant always converges, and a
 full rebuild is always safe. Optionally surfaces the admin rebuild/status endpoints (contracts).

@@ -223,7 +223,7 @@ Next slice → S3.**
 
 ## Tier 3 — Scale & new surfaces
 
-### E6 — Analytics Snapshots & pre-computation · `in-progress` · ~M
+### E6 — Analytics Snapshots & pre-computation · `shipped` · ~M
 **Why:** a **non-functional requirement** — parent dashboard <2 s at scale. Today analytics are
 computed live (40%). Add materialized `student_subject_snapshot` / `student_global_snapshot` /
 class distributions, recomputed by the worker on `GradePublished`/`GradeRevised`/coefficient change,
@@ -240,8 +240,20 @@ a `freshness { source, computedAt, recomputing }` dashboard chip ("à jour il y 
 zero new queue/permission. One ADR tripwire (durable dirty-queue + materialised cache + fall-through) to be
 authored on the S1 run (reconcile the ADR number against the index — data-model proposes `ADR-019`, already
 used for a real-time deferral, so take the next free number; **S1 shipped `ADR-019-analytics-snapshots`**).
-**Slices S1→S5 in `tasks.md`; S1 + S2 + S3 + S4 shipped → next slice → S5** (`[worker]`: idempotent
-full rebuild + sweep hardening). **S4 shipped** = the visionary freshness chip — a new app-level
+**Slices S1→S5 in `tasks.md`; ALL shipped → `E6` is `shipped`.** **S5 shipped** (`[worker][api]` P2):
+operability hardening — idempotent read-compare-write full rebuild (re-run on unchanged grades → no-op,
+no `revision` bump, byte-parity with live), precise stale detection (`computedAt < lastGradeAt` OR
+`revision < SNAPSHOT_REVISION_FLOOR` operator knob, replacing the S1 zero-snapshot-only rule → a dropped
+enqueue on a POPULATED class now self-heals within one sweep), claim-time stale-`processing` reclaim (PM-C
+`processedAt`-keyed, no double-recompute), failed-row revival after a back-off (`FAILED_RETRY_AFTER_MIN`,
+attempts reset), bounded tenant-scoped orphan-snapshot prune (hard-delete-only, coarser cadence, no audit),
+`manual_rebuild` routing through the existing drain (class-scoped / coefficient fan-out / bounded
+whole-tenant fan-out), structured per-tick count logging referencing `analytics.SnapshotRecomputed`, and an
+optional additive admin surface (`GET /analytics/snapshots/recompute-status` + `POST /analytics/snapshots/
+rebuild`, reusing `schools.read`, in-tenant scope-id validation, idempotent coalesce, one append-only
+`analytics.snapshot_rebuild` audit row). No schema change beyond S1, no second BullMQ queue, no new
+permission, no new shared contract enum/event (additive controller-local DTOs only), no UI, no new ADR
+(within ADR-019). **S4 shipped** = the visionary freshness chip — a new app-level
 `'use client'` `FreshnessChip` (`apps/web/src/components/freshness/FreshnessChip.tsx`) over the
 existing `@pilotage/ui` `Badge` + `formatRelativeTime` (no `packages/ui` change), three states
 (Recomputing / Fresh "À jour il y a Xs · N notes" / quiet neutral-live) derived purely from the
