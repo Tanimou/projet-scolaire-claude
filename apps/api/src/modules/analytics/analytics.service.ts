@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { SnapshotFreshness } from '@pilotage/contracts';
+import type { RemediationProgressDto, SnapshotFreshness } from '@pilotage/contracts';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { GradesService } from '../grades/grades.service';
+import { RemediationService } from '../remediation/remediation.service';
 
 export interface SparklinePoint {
   x: string; // ISO date
@@ -446,6 +447,16 @@ export interface ParentDashboardResponse {
    * byte-parity contract test). Reuses the S1 `SnapshotFreshness` contract type.
    */
   freshness?: SnapshotFreshness;
+  /**
+   * E7-S3 — additive, optional remediation progress block. One entry per OPEN
+   * `RemediationPlan` for the child (target subject, baseline/current/trend delta,
+   * sessions + next session), powering the parent-dashboard `RemediationProgressStrip`.
+   * Strictly additive (mirrors `freshness?`): a client that ignores it sees today's
+   * payload; an empty/absent array renders NO strip. Composed best-effort from
+   * `RemediationService.remediationProgress` — a throw degrades to `[]` so the strip
+   * can never error the surrounding dashboard.
+   */
+  remediation?: RemediationProgressDto[];
 }
 
 /** Variation annuelle d'une matière entre le premier et le dernier trimestre noté. */
@@ -474,6 +485,7 @@ export class AnalyticsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly grades: GradesService,
+    private readonly remediation: RemediationService,
   ) {}
 
   /**
@@ -978,6 +990,22 @@ export class AnalyticsService {
     // ── Progression annuelle (meilleure/pire matière + recommandations) ─────
     const annualProgression = this.annualProgression(bySubject);
 
+    // ── E7-S3 — remediation progress strip (additive, best-effort) ──────────
+    // Rides the SAME aggregate so the strip needs no client round-trip on first
+    // paint. Guarded: a throw degrades to `[]` (the dashboard NEVER errors because
+    // of the strip — the `freshness?` fall-through posture). No new class scan:
+    // the open-plan reads + one grouped Booking query + the shared per-subject
+    // snapshot reader, all bounded.
+    let remediation: RemediationProgressDto[] = [];
+    try {
+      remediation = await this.remediation.remediationProgress({ tenantId, studentId });
+    } catch (err) {
+      this.logger.debug(
+        `remediation progress block failed for student ${studentId}; degrading to no strip: ${String(err)}`,
+      );
+      remediation = [];
+    }
+
     return {
       student: {
         id: student.id,
@@ -1010,6 +1038,7 @@ export class AnalyticsService {
       recentGrades,
       upcomingAssessments,
       freshness: classContext.freshness,
+      remediation,
     };
   }
 

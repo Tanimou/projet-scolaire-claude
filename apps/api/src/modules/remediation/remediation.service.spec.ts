@@ -208,6 +208,139 @@ describe('RemediationService.promotePlan — idempotency + baseline', () => {
   });
 });
 
+describe('RemediationService.remediationProgress — S3 progress strip payload', () => {
+  function progressPrisma(overrides: Record<string, unknown> = {}) {
+    return {
+      remediationPlan: {
+        findMany: jest.fn().mockResolvedValue([planRow()]),
+      },
+      booking: { findMany: jest.fn().mockResolvedValue([]) },
+      studentSubjectSnapshot: {
+        findFirst: jest.fn().mockResolvedValue({
+          average: new Prisma.Decimal(11),
+          trendDelta: new Prisma.Decimal(2.5),
+        }),
+      },
+      grade: { findMany: jest.fn().mockResolvedValue([]) },
+      ...overrides,
+    };
+  }
+
+  it('scopes open plans to (tenant, student, status:open)', async () => {
+    const prisma = progressPrisma();
+    const service = new RemediationService(prisma as never);
+    await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    const where = (prisma.remediationPlan as { findMany: jest.Mock }).findMany.mock.calls[0][0]
+      .where;
+    expect(where).toEqual({ tenantId: TENANT, studentId: STUDENT, status: 'open' });
+  });
+
+  it('snapshot hit: trendDelta = current − baseline, improved at/above the threshold', async () => {
+    // baseline 8.5 (planRow), current snapshot 11 → delta +2.5 ≥ 1.5 → improved.
+    const prisma = progressPrisma();
+    const service = new RemediationService(prisma as never);
+    const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    expect(p?.baselineAvg).toBe(8.5);
+    expect(p?.currentAvg).toBe(11);
+    expect(p?.trendDelta).toBe(2.5);
+    expect(p?.improved).toBe(true);
+  });
+
+  it('a sub-threshold delta stays calm (not improved)', async () => {
+    // baseline 8.5, current 9 → +0.5 < 1.5 → calm, not emerald.
+    const prisma = progressPrisma({
+      studentSubjectSnapshot: {
+        findFirst: jest.fn().mockResolvedValue({ average: new Prisma.Decimal(9), trendDelta: null }),
+      },
+    });
+    const service = new RemediationService(prisma as never);
+    const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    expect(p?.trendDelta).toBe(0.5);
+    expect(p?.improved).toBe(false);
+  });
+
+  it('live fall-through when no snapshot row exists', async () => {
+    const prisma = progressPrisma({
+      studentSubjectSnapshot: { findFirst: jest.fn().mockResolvedValue(null) },
+      grade: {
+        findMany: jest.fn().mockResolvedValue([
+          { value: new Prisma.Decimal(10), assessment: { maxScore: new Prisma.Decimal(20) } },
+          { value: new Prisma.Decimal(12), assessment: { maxScore: new Prisma.Decimal(20) } },
+        ]),
+      },
+    });
+    const service = new RemediationService(prisma as never);
+    const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    // live avg (10+12)/2 = 11; delta vs 8.5 baseline = +2.5.
+    expect(p?.currentAvg).toBe(11);
+    expect(p?.trendDelta).toBe(2.5);
+    expect((prisma.grade as { findMany: jest.Mock }).findMany).toHaveBeenCalled();
+  });
+
+  it('null baseline → null delta, never a fabricated positive (PM-4)', async () => {
+    const prisma = progressPrisma({
+      remediationPlan: {
+        findMany: jest.fn().mockResolvedValue([planRow({ baselineAvg: null })]),
+      },
+    });
+    const service = new RemediationService(prisma as never);
+    const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    expect(p?.baselineAvg).toBeNull();
+    expect(p?.currentAvg).toBe(11); // current still read
+    expect(p?.trendDelta).toBeNull(); // but no delta vs a null baseline
+    expect(p?.improved).toBe(false);
+  });
+
+  it('null current (total miss) → trendDelta null → "en attente"', async () => {
+    const prisma = progressPrisma({
+      studentSubjectSnapshot: { findFirst: jest.fn().mockResolvedValue(null) },
+      grade: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+    const service = new RemediationService(prisma as never);
+    const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    expect(p?.currentAvg).toBeNull();
+    expect(p?.trendDelta).toBeNull();
+    expect(p?.improved).toBe(false);
+  });
+
+  it('session counts + nextSessionAt from ONE grouped Booking query (no N+1)', async () => {
+    const future = new Date(Date.now() + 86_400_000);
+    const past = new Date(Date.now() - 86_400_000);
+    const bookingFindMany = jest.fn().mockResolvedValue([
+      { planId: 'plan-1', status: 'confirmed', sessionAt: future },
+      { planId: 'plan-1', status: 'requested', sessionAt: past }, // past → not "prochaine"
+      { planId: 'plan-1', status: 'completed', sessionAt: past },
+    ]);
+    const prisma = progressPrisma({ booking: { findMany: bookingFindMany } });
+    const service = new RemediationService(prisma as never);
+    const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    expect(bookingFindMany).toHaveBeenCalledTimes(1);
+    expect(p?.sessionsPlanned).toBe(2); // confirmed + requested
+    expect(p?.sessionsDone).toBe(1); // completed
+    expect(p?.nextSessionAt).toBe(future.toISOString()); // soonest FUTURE active
+  });
+
+  it('empty booking tables → 0/0/null, trend still renders', async () => {
+    const prisma = progressPrisma();
+    const service = new RemediationService(prisma as never);
+    const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    expect(p?.sessionsPlanned).toBe(0);
+    expect(p?.sessionsDone).toBe(0);
+    expect(p?.nextSessionAt).toBeNull();
+    expect(p?.trendDelta).toBe(2.5); // trend independent of bookings
+  });
+
+  it('no open plan → empty array, no Booking query', async () => {
+    const prisma = progressPrisma({
+      remediationPlan: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+    const service = new RemediationService(prisma as never);
+    const res = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
+    expect(res).toEqual([]);
+    expect((prisma.booking as { findMany: jest.Mock }).findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('RemediationService.catalogue — tenant + published + subject filter', () => {
   it('queries only published, tenant-scoped, subject-matching tutors with active slots', async () => {
     const findMany = jest.fn().mockResolvedValue([

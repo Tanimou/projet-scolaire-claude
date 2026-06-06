@@ -10,7 +10,9 @@ import type {
   CatalogueTutorDto,
   RemediationCatalogueDto,
   RemediationPlanDto,
+  RemediationProgressDto,
 } from '@pilotage/contracts';
+import { IMPROVEMENT_DELTA_THRESHOLD } from '@pilotage/contracts';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
@@ -178,6 +180,96 @@ export class RemediationService {
   }
 
   /**
+   * E7-S3 — the parent remediation progress strip payload: one entry per OPEN
+   * (`status:'open'`) plan for the student, carrying the measured-improvement
+   * payoff the dashboard strip renders. Composed into the parent-dashboard
+   * aggregate by `AnalyticsService` (best-effort; a throw degrades to `[]` so the
+   * strip never errors the dashboard).
+   *
+   * Bounded work, no new class scan (FR2/FR3/FR10):
+   *  - ONE `remediationPlan.findMany` (open plans, tenant+student scoped).
+   *  - per plan, the SHARED {@link readSubjectAverage} (snapshot point-read + at most
+   *    one per-subject grade average on fall-through) — the SAME reader the baseline
+   *    used, so `current − baseline` can't diverge from the captured anchor.
+   *  - ONE grouped `booking.findMany` over ALL the open plans (no per-plan N+1) for
+   *    `sessionsPlanned`/`sessionsDone`/`nextSessionAt`.
+   *
+   * `trendDelta = round(currentAvg − baselineAvg, 2)` only when BOTH are non-null,
+   * else null (FR2 / PM-4: a null baseline NEVER fabricates a `current − 0` positive
+   * delta). `improved = trendDelta != null && trendDelta >= IMPROVEMENT_DELTA_THRESHOLD`
+   * (the shared E3 `1.5`, FR4 / PM-5: noise below threshold stays calm).
+   */
+  async remediationProgress(args: {
+    tenantId: string;
+    studentId: string;
+  }): Promise<RemediationProgressDto[]> {
+    const plans = await this.prisma.remediationPlan.findMany({
+      where: { tenantId: args.tenantId, studentId: args.studentId, status: 'open' },
+      include: PLAN_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    if (plans.length === 0) return [];
+
+    // ONE grouped Booking query over every open plan (no per-plan N+1). Empty
+    // booking tables (S2 db push pending) → no rows → counts 0 / nextSessionAt null,
+    // and the strip still renders the trend.
+    const now = new Date();
+    const planIds = plans.map((p) => p.id);
+    const bookings = await this.prisma.booking.findMany({
+      where: { tenantId: args.tenantId, planId: { in: planIds } },
+      select: { planId: true, status: true, sessionAt: true },
+    });
+
+    const planned = new Map<string, number>();
+    const done = new Map<string, number>();
+    const nextAt = new Map<string, Date>();
+    for (const b of bookings) {
+      if (b.status === 'requested' || b.status === 'confirmed') {
+        planned.set(b.planId, (planned.get(b.planId) ?? 0) + 1);
+        // soonest FUTURE active instance only (PM-8: never a past "prochaine").
+        if (b.sessionAt >= now) {
+          const cur = nextAt.get(b.planId);
+          if (!cur || b.sessionAt < cur) nextAt.set(b.planId, b.sessionAt);
+        }
+      } else if (b.status === 'completed') {
+        done.set(b.planId, (done.get(b.planId) ?? 0) + 1);
+      }
+    }
+
+    const out: RemediationProgressDto[] = [];
+    for (const p of plans) {
+      const baselineAvg = p.baselineAvg != null ? Number(p.baselineAvg) : null;
+      // Current subject average via the SAME shared reader the baseline used.
+      const current = await this.readSubjectAverage({
+        tenantId: args.tenantId,
+        studentId: args.studentId,
+        subjectId: p.subjectId,
+      });
+      const currentAvg = current.avg;
+      const trendDelta =
+        baselineAvg != null && currentAvg != null
+          ? Math.round((currentAvg - baselineAvg) * 100) / 100
+          : null;
+      out.push({
+        planId: p.id,
+        subjectId: p.subjectId,
+        subjectCode: p.subject?.code ?? null,
+        subjectName: p.subject?.name ?? null,
+        objective: p.objective,
+        baselineAvg,
+        currentAvg,
+        trendDelta,
+        improved: trendDelta != null && trendDelta >= IMPROVEMENT_DELTA_THRESHOLD,
+        sessionsPlanned: planned.get(p.id) ?? 0,
+        sessionsDone: done.get(p.id) ?? 0,
+        nextSessionAt: nextAt.get(p.id)?.toISOString() ?? null,
+        createdAt: p.createdAt.toISOString(),
+      });
+    }
+    return out;
+  }
+
+  /**
    * Read-only catalogue: published, tenant-scoped tutors that cover `subjectId`,
    * each with their active availability slots. One query + a bounded include — no
    * N+1. The plan the catalogue is browsed from is guardianship-walled by the
@@ -286,13 +378,34 @@ export class RemediationService {
   // ----- baseline ------------------------------------------------------------
 
   /**
-   * Capture the subject baseline figure at promotion time — snapshot-first (the
-   * E6 `StudentSubjectSnapshot` year row carries the materialised average +
-   * trendDelta), with a live fall-through (a simple published-grade average for
-   * the subject). A miss/throw on either path degrades to null (the strip shows
-   * "en attente des prochaines notes") — never an error, never blocks the promote.
+   * Capture the subject baseline figure at promotion time. Thin wrapper over the
+   * SHARED {@link readSubjectAverage} reader (the ONE code path), so the figure the
+   * S3 progress strip anchors against is read with byte-identical logic to the
+   * figure it later measures the current average with — no divergence is possible.
    */
   private async captureSubjectBaseline(args: {
+    tenantId: string;
+    studentId: string;
+    subjectId: string;
+  }): Promise<SubjectBaseline> {
+    return this.readSubjectAverage(args);
+  }
+
+  /**
+   * The single, shared snapshot-first / live-fall-through subject-average reader.
+   * Used by BOTH the baseline capture (at promote time) AND the S3 progress read
+   * (the "current" figure for the trend delta) — extracting it guarantees ONE code
+   * path, so the baseline anchor and the current measure can never diverge.
+   *
+   * Snapshot-first (the E6 `StudentSubjectSnapshot` YEAR row, `termId=null`, carries
+   * the materialised average + trendDelta), with a live fall-through (a simple
+   * published-grade average for the subject normalised to /20). A miss/throw on
+   * either path degrades to `{ avg: null, trendDelta: null }` — never an error,
+   * never blocks the caller (the strip then shows "en attente des prochaines notes").
+   * NO new class-wide scan: a single per-subject point-read, then at most one
+   * per-subject grade average on the fall-through.
+   */
+  private async readSubjectAverage(args: {
     tenantId: string;
     studentId: string;
     subjectId: string;
