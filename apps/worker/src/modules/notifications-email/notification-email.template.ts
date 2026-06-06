@@ -23,6 +23,7 @@ const KIND_META: Record<NotificationKind, { label: string; emoji: string }> = {
   system: { label: 'Information', emoji: 'ℹ️' },
   message: { label: 'Messagerie', emoji: '💬' },
   weekly_digest: { label: 'Récapitulatif hebdomadaire', emoji: '📊' },
+  remediation: { label: 'Soutien scolaire', emoji: '🎓' },
 };
 
 /** Accent colour per severity (also used for the header bar + CTA button). */

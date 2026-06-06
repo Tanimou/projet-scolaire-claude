@@ -194,6 +194,9 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['imports.execute', 'Exécuter bulk imports', 'import', 'execute'],
   ['exports.execute', 'Générer exports', 'export', 'execute'],
   ['integrations.write', 'Gérer intégrations', 'integration', 'write'],
+  ['remediation.read', 'Lire le soutien scolaire', 'remediation', 'read'],
+  ['remediation.manage', 'Gérer le catalogue de soutien', 'remediation', 'manage'],
+  ['remediation.book', 'Réserver un soutien', 'remediation', 'book'],
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
 ];

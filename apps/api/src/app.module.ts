@@ -18,6 +18,7 @@ import { ImportsModule } from './modules/imports/imports.module';
 import { LessonsModule } from './modules/lessons/lessons.module';
 import { MessagingModule } from './modules/messaging/messaging.module';
 import { ParentExportsModule } from './modules/parent-exports/parent-exports.module';
+import { RemediationModule } from './modules/remediation/remediation.module';
 import { SchoolsModule } from './modules/schools/schools.module';
 import { SchoolStructureModule } from './modules/school-structure/school-structure.module';
 import { StudentsModule } from './modules/students/students.module';
@@ -52,6 +53,7 @@ import { PrismaModule } from './shared/prisma/prisma.module';
     TeacherExportsModule,
     AlertsModule,
     MessagingModule,
+    RemediationModule,
   ],
   controllers: [HealthController],
 })

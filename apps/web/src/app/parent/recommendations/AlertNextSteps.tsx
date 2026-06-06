@@ -5,6 +5,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ChevronRight,
+  GraduationCap,
   LayoutGrid,
   ListChecks,
   Loader2,
@@ -12,15 +13,18 @@ import {
   UserRound,
 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 
 import { Button, formatDateLong } from '@pilotage/ui';
 
 import {
   deriveAlertActions,
+  deriveRemediationAction,
   type AlertNextStep,
 } from './alert-next-steps';
 import { requestMeetingIntentAction } from './intent-actions';
+import { promoteRemediationPlanAction } from './remediation-actions';
 import type { AlertCode } from './types';
 
 interface AlertNextStepsProps {
@@ -78,6 +82,32 @@ export function AlertNextSteps({
   meetingRequestedAt = null,
 }: AlertNextStepsProps) {
   const steps = deriveAlertActions({ code, studentId, subjectId, subjectCode, subjectName });
+  // E7-S1: the remediation CTA — offered only for a subject-scoped code WITH a
+  // known subject (else null → omitted, never a dead-end).
+  const remediation = deriveRemediationAction({
+    code,
+    studentId,
+    subjectId,
+    subjectCode,
+    subjectName,
+  });
+
+  const router = useRouter();
+  const [remediationPending, startRemediationTransition] = useTransition();
+  const [remediationError, setRemediationError] = useState<string | null>(null);
+
+  const findTutoring = () => {
+    if (!remediation) return;
+    setRemediationError(null);
+    startRemediationTransition(async () => {
+      const res = await promoteRemediationPlanAction(alertId);
+      if (res.ok) {
+        router.push(`/parent/remediation/${res.data.id}`);
+      } else {
+        setRemediationError(res.error);
+      }
+    });
+  };
 
   // Deep-link to the alert-seeded compose (E2): the body pre-fills + alertId is
   // forwarded so the created thread carries the alert context. The server
@@ -157,6 +187,55 @@ export function AlertNextSteps({
             </li>
           );
         })}
+
+        {/* E7-S1: "Trouver un soutien en {matière}" — promote-then-navigate.
+            Offered only for a subject-scoped alert with a known subject. A
+            distinct indigo lane (support being organised, not a warning); the
+            <=44px target + aria-busy mirror the teacher CTA. */}
+        {remediation && (
+          <li>
+            <div className="rounded-lg bg-indigo-50/70 px-3 py-2.5 ring-1 ring-indigo-200/70">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700">
+                  <GraduationCap className="h-4 w-4" aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold text-slate-800">
+                    {remediation.label}
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-snug text-slate-600">
+                    {remediation.helper}
+                  </span>
+                </span>
+              </div>
+              <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-11">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={remediationPending}
+                  aria-busy={remediationPending}
+                  onClick={findTutoring}
+                  className="min-h-11 shrink-0 bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:ring-indigo-500"
+                >
+                  {remediationPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <GraduationCap className="h-3.5 w-3.5" aria-hidden />
+                  )}
+                  {remediationPending ? 'Ouverture…' : 'Voir le soutien'}
+                </Button>
+              </div>
+              {remediationError && (
+                <p
+                  aria-live="polite"
+                  className="mt-2 rounded-lg bg-rose-100/80 px-3 py-1.5 text-xs font-medium text-rose-800"
+                >
+                  {remediationError}
+                </p>
+              )}
+            </div>
+          </li>
+        )}
 
         {/* Always-present "talk to the teacher" intent CTA. */}
         <li>

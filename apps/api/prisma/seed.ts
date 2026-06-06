@@ -65,6 +65,9 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['exports.execute.parent', 'Générer ses propres exports (bulletin)', 'export', 'execute.parent'],
   ['exports.execute.teacher', 'Générer la grille de notes de ses classes', 'export', 'execute.teacher'],
   ['integrations.write', 'Gérer intégrations', 'integration', 'write'],
+  ['remediation.read', 'Lire le soutien scolaire', 'remediation', 'read'],
+  ['remediation.manage', 'Gérer le catalogue de soutien', 'remediation', 'manage'],
+  ['remediation.book', 'Réserver un soutien', 'remediation', 'book'],
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
 ];
@@ -93,6 +96,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'notification_templates.write', 'report_templates.write',
     'roles.read', 'roles.write', 'roles.assign',
     'audit.read', 'imports.execute', 'exports.execute', 'integrations.write',
+    'remediation.read', 'remediation.manage',
     'profile.read.self', 'profile.write.self',
   ],
   teacher: [
@@ -104,12 +108,14 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'discipline.read', 'discipline.write',
     'announcements.read', 'announcements.write',
     'branding.read', 'exports.execute.teacher',
+    'remediation.read',
     'profile.read.self', 'profile.write.self',
   ],
   parent: [
     'students.read', 'grades.read', 'attendance.read',
     'lessons.read', 'discipline.read', 'announcements.read',
     'branding.read', 'exports.execute.parent',
+    'remediation.read', 'remediation.book',
     'profile.read.self', 'profile.write.self',
   ],
 };

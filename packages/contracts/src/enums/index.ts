@@ -84,6 +84,35 @@ export type SnapshotTriggerStatus = (typeof SNAPSHOT_TRIGGER_STATUS)[number];
 export const SNAPSHOT_SOURCE = ['snapshot', 'live'] as const;
 export type SnapshotSource = (typeof SNAPSHOT_SOURCE)[number];
 
+// E7 — Remediation & Tutoring loop. Each mirrors the Prisma enum 1:1 (same
+// pattern as NOTIFICATION_CADENCE / SNAPSHOT_* above) so client + server share one
+// source of truth for the catalogue + plan + booking surfaces.
+//  - TUTOR_TYPE       : a teacher tutor / external named partner / peer programme.
+//  - TUTOR_COST_KIND  : a DISPLAY LABEL only — NEVER a price (ADR-018 finance isolation).
+//  - AVAILABILITY_KIND: a repeating weekday slot vs a single dated one-off.
+//  - REMEDIATION_PLAN_STATUS / BOOKING_STATUS: the two small append-only state machines.
+export const TUTOR_TYPE = ['teacher', 'external', 'peer'] as const;
+export type TutorType = (typeof TUTOR_TYPE)[number];
+
+export const TUTOR_COST_KIND = ['free', 'volunteer', 'paid_offline'] as const;
+export type TutorCostKind = (typeof TUTOR_COST_KIND)[number];
+
+export const AVAILABILITY_KIND = ['recurring_weekly', 'one_off'] as const;
+export type AvailabilityKind = (typeof AVAILABILITY_KIND)[number];
+
+export const REMEDIATION_PLAN_STATUS = ['open', 'met', 'closed'] as const;
+export type RemediationPlanStatus = (typeof REMEDIATION_PLAN_STATUS)[number];
+
+export const BOOKING_STATUS = [
+  'requested',
+  'confirmed',
+  'completed',
+  'cancelled',
+  'declined',
+  'proposed_alternative',
+] as const;
+export type BookingStatus = (typeof BOOKING_STATUS)[number];
+
 export const IMPORT_TYPE = ['students', 'teachers', 'classes', 'grades', 'attendance', 'parents'] as const;
 export const IMPORT_STATUS = [
   'uploaded',
