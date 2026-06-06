@@ -56,10 +56,14 @@ const DEMO_USERS: KcUser[] = [
     tenantSlug: 'voltaire-demo',
   },
   {
+    // The demo TEACHER: he has a teacher_profile (real classes/assignments), so he
+    // also needs the `teacher` realm role — the web enforces a portal↔role match
+    // (REALM_ROLES_FOR_PORTAL.teacher = ['teacher']); without it the teacher-portal
+    // login fails with `wrong_portal`. He keeps `school_admin` too (admin access).
     email: 'm.lefebvre@voltaire.fr',
     firstName: 'Jacques',
     lastName: 'Lefebvre',
-    realmRoles: ['school_admin'],
+    realmRoles: ['school_admin', 'teacher'],
     tenantSlug: 'voltaire-demo',
   },
 ];
