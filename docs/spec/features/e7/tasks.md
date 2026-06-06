@@ -70,7 +70,7 @@ promoting an alert and browsing the (admin-seeded) catalogue.
 
 ---
 
-## [ ] S2 — Availability + Booking (the concurrency slice) → ADR-020 · `[schema][auth]` · P1 · ~M
+## [x] S2 — Availability + Booking (the concurrency slice) → ADR-020 · `[schema][auth]` · P1 · ~M · ✅ shipped
 
 **Goal:** the transactional verb — a tutor's slots become bookable and a parent **books** one, **never
 over-booking** under concurrency. **This is the ADR-020 slice** (the one schema step is the partial

@@ -8,8 +8,8 @@
 
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
-| S1 | Schema + alert → RemediationPlan promotion + read-only catalogue | `[schema][auth]` | P1 | ✅ shipped | this PR |
-| S2 | Availability + Booking (concurrency guard) → **ADR-020** | `[schema][auth]` | P1 | ⬜ not started | — |
+| S1 | Schema + alert → RemediationPlan promotion + read-only catalogue | `[schema][auth]` | P1 | ✅ shipped | #131 |
+| S2 | Availability + Booking (concurrency guard) → **ADR-020** | `[schema][auth][concurrency]` | P1 | ✅ shipped | this PR |
 | S3 | Parent remediation progress strip (measured improvement) | `[web][a11y]` | P2 | ⬜ not started | — |
 | S4 | Teacher capacity management + booking transitions | `[auth]` | P2 | ⬜ not started | — |
 | S5 | Admin catalogue curation & oversight | `[auth]` | P2 | ⬜ not started | — |
@@ -126,7 +126,65 @@ now internally consistent.
 > unit-test runner today and adding one would be a new architectural decision (out of scope) — the
 > substantive idempotency/ABAC/baseline logic is fully runner-backed on the API side.
 
+## What landed in S2 (this run — `epic-slice` — the load-bearing concurrency slice)
+
+- **Schema / DDL (the ONLY schema step):** the raw partial-unique over-book index
+  `booking_active_instance_unique ON booking (availability_id, session_at) WHERE status IN
+  ('requested','confirmed')` — Prisma `@@unique` can't express a `WHERE`. Canonical artifact
+  `apps/api/prisma/sql/booking-active-instance-uniq.sql`; **applied idempotently on API boot** by
+  `BookingIndexBootstrap` (`CREATE … IF NOT EXISTS`, best-effort if the booking table / DB isn't up
+  yet — the transactional count path is the defence-in-depth fallback, so a missing index degrades
+  to "slower but still correct", never "silent over-book"). The Booking `@@unique` comment in
+  `schema.prisma` documents where the index lives + how it's applied. **No model shape change.**
+- **API — booking write path (`apps/api/src/modules/remediation/`):**
+  - `booking.service.ts` — `createBooking()` (server-canonicalises `sessionAt` via the pure
+    `session-instance.ts` resolver → **422** on a slot-mismatch / past instance, never a 500;
+    capacity-1 → partial-unique P2002 → deterministic **409**, with a defence-in-depth fallback;
+    capacity-N → `$transaction` + `SELECT … FOR UPDATE` count-then-insert; idempotent re-tap →
+    reuse 200; cancel→re-book revives the row), `cancelBooking()` (cancellable-status-guarded
+    `updateMany`, double-cancel safe no-op, atomic seat free), plus `loadBooking`/`loadBookableAvailability`/
+    `loadPlanForBooking`/`isTeacherOfStudent` (the E2 teaching wall **inlined** to avoid a circular
+    MessagingModule dependency, mirroring `messaging.service.ts` exactly).
+  - `session-instance.ts` — the pure, unit-tested next-occurrence + canonical-instance resolver (the
+    capacity-guard key correctness — PM-A1).
+  - `remediation.controller.ts` — `POST /remediation/bookings` (`remediation.book`; flow ORDER:
+    plan 404 → guardianship ABAC before write (404-before-403) → plan-open 422 → availability load +
+    published re-validate → teacher-linked teaching-wall 403 → capacity-guarded insert) and
+    `PATCH /remediation/bookings/:id/cancel` (guardianship ABAC on the booking's student before the
+    write). Best-effort append-only `remediation.booking_created`/`booking_cancelled` audit +
+    `NotificationsService.createMany` kind `remediation` fan-out (tutor + parent), neither of which
+    can fail/roll back the booking (the S1 best-effort try/catch pattern).
+  - `remediation.service.ts` — `catalogue()` now resolves each active slot's NEXT dated instance +
+    the live remaining-seat count + the caller's own active booking id in ONE bounded grouped Booking
+    query (no N+1), populating the additive `nextSessionAt`/`remainingSeats`/`myBookingId`.
+  - `remediation.module.ts` — imports `NotificationsModule`; registers `BookingService` +
+    `BookingIndexBootstrap`.
+- **Contracts:** `dto/remediation.ts` adds `CreateBookingDto`/`BookingDto`; extends `CatalogueSlotDto`
+  with additive-optional `remainingSeats`/`nextSessionAt`/`myBookingId` (via `.default(...)`/`.nullable()`
+  so the S1 page keeps compiling). `dist/dto/remediation.js` patched to match (CJS runtime); `types`
+  resolves to `src` so no `.d.ts` regen needed.
+- **ADR:** `docs/adr/ADR-020-booking-availability-concurrency.md` (Accepted) — the partial-unique-for-1
+  + transactional-`FOR UPDATE`-count-for-N guard, the idempotency-vs-capacity separation, the
+  deterministic-409-vs-idempotent-200 contract, the sessionAt-canonicalisation correctness, the DDL
+  location + boot-apply (binding condition C-1), and the rejected alternatives (distributed lock /
+  Redis SETNX, second BullMQ queue, denormalised counter).
+- **Tests:** `booking.service.spec.ts` — the headline two-concurrent-books capacity-1 proof
+  (`Promise.allSettled` of two DISTINCT-plan books → exactly one 2xx + one `ConflictException`, never
+  a 500, exactly one active row) + capacity-N seat-fill + the idempotent re-tap reuse + the
+  sessionAt-mismatch/past 422 paths + the cancel/double-cancel no-op.
+
+> **Pending (human / infra):** the S1 `prisma db push` for the E7 tables remains pending (infra was
+> down at S1). Once the DB is up, the boot bootstrap applies the partial-unique index automatically (or
+> apply `apps/api/prisma/sql/booking-active-instance-uniq.sql` manually). No build/typecheck/db push
+> was run here (Murat owns the typecheck gate; the worktree has no `node_modules`).
+
 ## Next action
+
+Ship **S3** (`epic-slice` — the parent remediation progress strip, `[web][a11y]`, the
+measured-improvement payoff reading the E6 snapshot trend vs the plan baseline). The S2 slice below
+is now shipped.
+
+<details><summary>S2 original "next action" note (now shipped)</summary>
 
 Ship **S2** (`epic-slice` — the load-bearing concurrency slice): availability publish/read + the parent
 **booking** verb (`POST /remediation/bookings`, `remediation.book`, guardianship ABAC + the E2 teaching
@@ -136,3 +194,5 @@ transactional `FOR UPDATE` count for capacity-N) returning a deterministic **409
 tutor+parent `NotificationsService.createMany` (kind `remediation`, no new queue), append-only audit, the
 "Réserver" plan-page flow, **and `docs/adr/ADR-020-booking-availability-concurrency.md`** (Winston gate) +
 a targeted two-concurrent-books concurrency test.
+
+</details>

@@ -98,6 +98,16 @@ export const CatalogueSlotDtoSchema = z.object({
   startsAt: z.string().nullable(),
   endsAt: z.string().nullable(),
   capacity: z.number().int().positive(),
+
+  // ---- E7-S2: live booking availability (additive-optional so the S1 page keeps
+  // compiling; the server now populates these). The catalogue renders bookable /
+  // "Complet" state WITHOUT an N+1 — both are computed in one grouped Booking query.
+  /** capacity − active bookings on the resolvable next instance. */
+  remainingSeats: z.number().int().nonnegative().default(0),
+  /** The resolved next dated instance for this slot (ISO), or null if none resolvable. */
+  nextSessionAt: z.string().nullable().default(null),
+  /** This caller's own existing active booking id on the next instance (idempotency hint), or null. */
+  myBookingId: UuidSchema.nullable().default(null),
 });
 export type CatalogueSlotDto = z.infer<typeof CatalogueSlotDtoSchema>;
 
@@ -128,3 +138,42 @@ export type RemediationCatalogueDto = z.infer<typeof RemediationCatalogueDtoSche
 // Re-export the booking-status enum tuple at the DTO layer so downstream slices
 // (S2 booking, S4 teacher inbox) import it alongside the plan/catalogue DTOs.
 export const BOOKING_STATUS_VALUES = BOOKING_STATUS;
+
+// ---------------------------------------------------------------------------
+// E7-S2 — Booking (parent verb, concurrency-guarded). See ADR-020.
+// ---------------------------------------------------------------------------
+
+/**
+ * Request body for `POST /remediation/bookings`. The parent passes ONLY the plan,
+ * the availability slot, and the concrete dated `sessionAt` instance (plus an
+ * optional kind note) — `studentId`/`tutorId`/`schoolId` are derived SERVER-side
+ * (planId → plan.studentId; availabilityId → availability.tutorId), exactly the
+ * S1 "parent passes only the alert id" discipline.
+ *
+ * `sessionAt` is validated against the slot server-side (one_off: must equal the
+ * slot's `startsAt`; recurring_weekly: must fall on the slot weekday at startTime)
+ * and re-canonicalised before the write so two parents booking "the same instance"
+ * compute byte-identical keys — a mismatch is a deterministic 422, never a 500.
+ */
+export const CreateBookingDtoSchema = z.object({
+  planId: UuidSchema,
+  availabilityId: UuidSchema,
+  sessionAt: z.string().datetime(),
+  note: z.string().trim().max(280).optional(),
+});
+export type CreateBookingDto = z.infer<typeof CreateBookingDtoSchema>;
+
+/** The created/read booking shape returned by the booking verbs. */
+export const BookingDtoSchema = z.object({
+  id: UuidSchema,
+  planId: UuidSchema,
+  tutorId: UuidSchema,
+  tutorName: z.string(),
+  availabilityId: UuidSchema,
+  studentId: UuidSchema,
+  sessionAt: z.string(),
+  status: z.enum(BOOKING_STATUS),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type BookingDto = z.infer<typeof BookingDtoSchema>;
