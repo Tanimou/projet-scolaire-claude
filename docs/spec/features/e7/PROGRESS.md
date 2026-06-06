@@ -9,8 +9,8 @@
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
 | S1 | Schema + alert → RemediationPlan promotion + read-only catalogue | `[schema][auth]` | P1 | ✅ shipped | #131 |
-| S2 | Availability + Booking (concurrency guard) → **ADR-020** | `[schema][auth][concurrency]` | P1 | ✅ shipped | this PR |
-| S3 | Parent remediation progress strip (measured improvement) | `[web][a11y]` | P2 | ⬜ not started | — |
+| S2 | Availability + Booking (concurrency guard) → **ADR-020** | `[schema][auth][concurrency]` | P1 | ✅ shipped | #132 |
+| S3 | Parent remediation progress strip (measured improvement) | `[web][a11y]` | P2 | ✅ shipped | this PR |
 | S4 | Teacher capacity management + booking transitions | `[auth]` | P2 | ⬜ not started | — |
 | S5 | Admin catalogue curation & oversight | `[auth]` | P2 | ⬜ not started | — |
 | S6 | Loop hardening: notifications + cancellation + completion + uptake sweep | `[auth]` | P2-P3 | ⬜ not started | — |
@@ -178,11 +178,82 @@ now internally consistent.
 > apply `apps/api/prisma/sql/booking-active-instance-uniq.sql` manually). No build/typecheck/db push
 > was run here (Murat owns the typecheck gate; the worktree has no `node_modules`).
 
+## What landed in S3 (this run — `epic-slice` — the measured-improvement payoff, `[web][a11y][api][analytics][remediation]`)
+
+- **Contracts (`packages/contracts/src/dto/remediation.ts`):** the additive `RemediationProgressDto`
+  (`RemediationProgressDtoSchema` — `planId`/`subjectId`/`subjectCode`/`subjectName`/`objective`,
+  `baselineAvg`/`currentAvg`/`trendDelta` all nullable, `improved`, `sessionsPlanned`/`sessionsDone`,
+  `nextSessionAt`, `createdAt`) + `RemediationProgressListDto` + the SINGLE shared value-export
+  `IMPROVEMENT_DELTA_THRESHOLD = 1.5` (reuses the E3 `IMPROVEMENT`/`NEGATIVE_TREND` rule default — the
+  strip "improved" flag and the alert engine speak the SAME number, no new tunable). **Runtime note:**
+  this is a new **value** import (`RemediationService` imports it at runtime); `packages/contracts/dist`
+  must be rebuilt by the orchestrator's single `pnpm build` or the import resolves `undefined` at API
+  boot (typecheck/types→src won't catch it).
+- **API — producer (`apps/api/src/modules/remediation/remediation.service.ts`):** new
+  `remediationProgress({ tenantId, studentId })` — ONE `remediationPlan.findMany` (open plans,
+  tenant+student scoped) + ONE grouped `booking.findMany` over all open plans (no per-plan N+1) for
+  `sessionsPlanned`/`sessionsDone`/`nextSessionAt` (future-only, PM-8) + per plan the SHARED
+  `readSubjectAverage` snapshot-first/live reader. `trendDelta = round(current − baseline, 2)` only when
+  BOTH non-null (PM-4: a null baseline never fabricates a `current − 0` positive); `improved = trendDelta
+  >= IMPROVEMENT_DELTA_THRESHOLD`. **Byte-parity refactor:** `captureSubjectBaseline` becomes a thin
+  wrapper over the extracted `readSubjectAverage`, so the baseline anchor and the current measure share
+  ONE code path and can't diverge.
+- **API — composition (`apps/api/src/modules/analytics/analytics.service.ts` + `analytics.module.ts`):**
+  `AnalyticsModule` imports `RemediationModule` (one-way edge, no DI cycle); `AnalyticsService` injects
+  `RemediationService` (3rd constructor param) and composes the additive optional
+  `ParentDashboardResponse.remediation?: RemediationProgressDto[]` **best-effort** — a throw degrades to
+  `[]` so the strip can never error the <2 s parent dashboard (the established `freshness?` posture). Rides
+  the SAME aggregate the dashboard already fetches → no client round-trip. Tenant/ABAC unchanged
+  (`tenantId`/`studentId` are the already-ABAC-resolved dashboard values; every internal query re-scopes).
+- **Web (`apps/web/src/app/parent/dashboard/`):** new server-component
+  `_components/RemediationProgressStrip.tsx` (reuse-only `Badge`/`SectionHeader`/`SubjectChip`/`cn`/
+  `formatGrade` from `@pilotage/ui` + `lucide-react`, no `packages/ui` change) — one row per open plan,
+  four kind payoff states (`awaiting` "en attente des prochaines notes" / `progress` "+X pts" / `improved`
+  the E3 emerald lane "Le soutien porte ses fruits 🎉" / `patient` "les premiers effets prennent quelques
+  semaines", never "échec"), absolute FR next-session label (no relative-time tick), capped at 3 with a
+  "+N autres" overflow, deep-links to `/parent/remediation/[planId]`, degrades to NOTHING (no layout shift)
+  when absent/empty. Mounted on `page.tsx` with the additive optional `remediation?` on the local response
+  type.
+- **Tests:** 9 new producer cases in `remediation.service.spec.ts` (open-plan scoping, snapshot-hit
+  trend, sub-threshold-stays-calm, live fall-through, PM-4 null-baseline→null-delta, null-current→en
+  attente, grouped-booking no-N+1 counts + future-only `nextSessionAt`, empty-booking-tables, no-open-plan
+  short-circuit) + the 3 stale `new AnalyticsService(...)` call sites in `analytics.service.spec.ts`
+  updated for the new 3rd `remediation` param (the in-flight RED-gate fix). **No schema, no endpoint, no
+  permission, no new ADR** (additive optional field, reuse-first, no new architectural decision —
+  consistent with project-context §3).
+
+## Outstanding / pending for S3 (carry into S4 or human)
+
+- **No consumer-seam test on the Analytics→Remediation wiring** (Murat CONCERNS): every analytics spec
+  stubs `remediationProgress` to `[]`, so the best-effort try/catch (pass-through on success, `[]` on
+  throw) at the aggregate boundary has zero coverage. Recommended add (P1): two assertions on the real
+  seam in `analytics.service.spec.ts` — (1) a one-element result is surfaced on `response.remediation`;
+  (2) a thrown `remediationProgress` degrades to `response.remediation === []` and the dashboard still
+  resolves.
+- **`packages/contracts/dist` rebuild required** before this is functionally live (the runtime
+  `IMPROVEMENT_DELTA_THRESHOLD` value import) — handled by the orchestrator's single post-Workflow
+  `pnpm build`; confirm `contracts` is in the affected set.
+- **`prisma db push` for the E7 tables still pending from S1/S2** (infra was down) — the strip reads
+  `RemediationPlan`/`Booking`; until the additive schema is applied the producer returns `[]` (degrades
+  to no strip, never errors).
+- Edge Hunter minor a11y notes on the strip (sub-0.05 positive delta could render "+0,0 pts"; the
+  improved-lane `role=status` live region + the anchor-level `aria-label` overriding inner payoff text on
+  the deep-link) — non-blocking, queued for the S6 hardening / a11y pass.
+
 ## Next action
+
+Ship **S4** (`epic-slice` — teacher capacity management + booking transitions, `[auth]`, P2): the
+teacher surface to publish/adjust `TutorAvailability` capacity and move bookings through their
+lifecycle, riding `remediation.read` + the ownership wall (the E2 teacher-reply idiom). The S3 slice
+above is now shipped.
+
+<details><summary>S3 original "next action" note (now shipped)</summary>
 
 Ship **S3** (`epic-slice` — the parent remediation progress strip, `[web][a11y]`, the
 measured-improvement payoff reading the E6 snapshot trend vs the plan baseline). The S2 slice below
 is now shipped.
+
+</details>
 
 <details><summary>S2 original "next action" note (now shipped)</summary>
 

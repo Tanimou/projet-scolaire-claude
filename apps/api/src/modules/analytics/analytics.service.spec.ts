@@ -177,7 +177,8 @@ function makeService(overrides?: {
   };
 
   const grades = { statsForStudent: jest.fn().mockResolvedValue(null) };
-  const service = new AnalyticsService(prisma as never, grades as never);
+  const remediation = { remediationProgress: jest.fn().mockResolvedValue([]) };
+  const service = new AnalyticsService(prisma as never, grades as never, remediation as never);
   return { service, prisma };
 }
 
@@ -439,6 +440,8 @@ interface PdOpts {
   withSnapshots?: boolean;
   /** An open recompute trigger exists for the scope (forces fall-through to live). */
   openTrigger?: boolean;
+  /** Override the injected RemediationService stub (E7-S3 consumer-seam tests). */
+  remediationStub?: { remediationProgress: jest.Mock };
 }
 
 function makeParentDashboardService(opts: PdOpts = {}) {
@@ -486,8 +489,11 @@ function makeParentDashboardService(opts: PdOpts = {}) {
   };
 
   const grades = { statsForStudent: jest.fn().mockResolvedValue({ overallAverage: null }) };
-  const service = new AnalyticsService(prisma as never, grades as never);
-  return { service, prisma, classScan };
+  const remediation = opts.remediationStub ?? {
+    remediationProgress: jest.fn().mockResolvedValue([]),
+  };
+  const service = new AnalyticsService(prisma as never, grades as never, remediation as never);
+  return { service, prisma, classScan, remediation };
 }
 
 /** Deep-compare two payloads (minus `freshness`) within a 2-dp tolerance. */
@@ -634,6 +640,47 @@ describe('AnalyticsService.parentDashboard — E6-S2 snapshot reads', () => {
     expect(res.freshness!.source).toBe('live');
     expect(classScan).toHaveBeenCalledTimes(1);
   });
+
+  // E7-S3 — the Analytics→Remediation consumer seam. The producer is covered in
+  // remediation.service.spec.ts; these two pin the WIRING + best-effort contract that
+  // protects the <2 s core surface (the part every reviewer flagged as untested).
+  it('E7-S3 — the injected RemediationService result is surfaced on `remediation`', async () => {
+    const plan = {
+      planId: 'plan-1',
+      subjectId: SUB_MATH,
+      subjectCode: 'MATH',
+      subjectName: 'Mathématiques',
+      objective: null,
+      baselineAvg: 9,
+      currentAvg: 11.4,
+      trendDelta: 2.4,
+      improved: true,
+      sessionsPlanned: 2,
+      sessionsDone: 1,
+      nextSessionAt: null,
+      createdAt: PD_SNAPSHOT_COMPUTED_AT.toISOString(),
+    };
+    const remediationStub = { remediationProgress: jest.fn().mockResolvedValue([plan]) };
+    const { service, remediation } = makeParentDashboardService({ remediationStub });
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    expect(remediation.remediationProgress).toHaveBeenCalledWith({
+      tenantId: PD_TENANT,
+      studentId: PD_STUDENT,
+    });
+    expect(res.remediation).toEqual([plan]);
+  });
+
+  it('E7-S3 — a thrown remediation read degrades to [] and never errors the dashboard', async () => {
+    const remediationStub = {
+      remediationProgress: jest.fn().mockRejectedValue(new Error('no table')),
+    };
+    const { service } = makeParentDashboardService({ remediationStub });
+    const res = await service.parentDashboard({ tenantId: PD_TENANT, studentId: PD_STUDENT });
+    // Best-effort contract: the strip can never fail the core <2 s surface.
+    expect(res.remediation).toEqual([]);
+    expect(res.student).toBeDefined();
+    expect(res.globalPerformance).toBeDefined();
+  });
 });
 
 // =============================================================================
@@ -688,7 +735,8 @@ function makeTeacherReportsService(opts: { openTrigger?: boolean; triggerThrows?
     snapshotRecomputeTrigger: { findFirst: triggerFindFirst },
   };
   const grades = { statsForStudent: jest.fn() };
-  const service = new AnalyticsService(prisma as never, grades as never);
+  const remediation = { remediationProgress: jest.fn().mockResolvedValue([]) };
+  const service = new AnalyticsService(prisma as never, grades as never, remediation as never);
   return { service, prisma, triggerFindFirst };
 }
 

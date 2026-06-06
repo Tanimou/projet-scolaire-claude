@@ -177,3 +177,53 @@ export const BookingDtoSchema = z.object({
   createdAt: z.string(),
 });
 export type BookingDto = z.infer<typeof BookingDtoSchema>;
+
+// ---------------------------------------------------------------------------
+// E7-S3 — Parent remediation progress strip (measured-improvement payoff)
+// ---------------------------------------------------------------------------
+
+/**
+ * The IMPROVEMENT delta threshold — the SINGLE shared constant that decides when
+ * the strip flips into the E3 emerald celebration lane. It reuses the E3
+ * `IMPROVEMENT`/`NEGATIVE_TREND` rule default (`1.5` pts /20). Do NOT invent a new
+ * tunable: the strip "improved" flag and the alert engine speak the same number.
+ */
+export const IMPROVEMENT_DELTA_THRESHOLD = 1.5;
+
+/**
+ * Per-open-plan progress for the parent dashboard strip (S3). One entry per
+ * ACTIVE/open `RemediationPlan` for the student. Additive & optional on the
+ * dashboard response envelope (mirrors the E6 `freshness?` precedent) — a client
+ * that ignores it sees today's payload exactly, and an empty/absent array renders
+ * NO strip.
+ *
+ * The trend is framed PATIENTLY and kindly: `currentAvg`/`trendDelta` null means
+ * "en attente des prochaines notes" (never "no progress"); a flat/negative delta is
+ * met with "les premiers effets prennent quelques semaines" (never "échec"). The
+ * strip shows the MOVEMENT (delta), never the child's raw standing as a verdict.
+ */
+export const RemediationProgressDtoSchema = z.object({
+  planId: UuidSchema,
+  subjectId: UuidSchema,
+  subjectCode: z.string().nullable(),
+  subjectName: z.string().nullable(),
+  objective: z.string().nullable(),
+  /** Subject average at promotion time (the anchor); null when none was capturable. */
+  baselineAvg: z.number().nullable(),
+  /** Current subject average, read snapshot-first / live fall-through; null = "en attente". */
+  currentAvg: z.number().nullable(),
+  /** currentAvg − baselineAvg when BOTH present, else null (signed, /20). */
+  trendDelta: z.number().nullable(),
+  /** True once trendDelta ≥ the IMPROVEMENT threshold (the E3 emerald lane trigger). */
+  improved: z.boolean(),
+  sessionsPlanned: z.number().int().nonnegative(),
+  sessionsDone: z.number().int().nonnegative(),
+  /** ISO of the soonest future confirmed/requested booking instance, or null. */
+  nextSessionAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type RemediationProgressDto = z.infer<typeof RemediationProgressDtoSchema>;
+
+/** The additive `remediation` block on the parent-dashboard aggregate envelope. */
+export const RemediationProgressListDtoSchema = z.array(RemediationProgressDtoSchema);
+export type RemediationProgressListDto = z.infer<typeof RemediationProgressListDtoSchema>;

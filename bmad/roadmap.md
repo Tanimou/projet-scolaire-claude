@@ -338,8 +338,34 @@ teaching wall **inlined** into `RemediationService` (no circular MessagingModule
 separation, deterministic-409 contract, rejected alternatives: distributed lock / Redis SETNX / 2nd
 BullMQ queue / denormalised counter), and a targeted two-concurrent-books `booking.service.spec.ts`
 proving exactly-one-succeeds (never a 500, exactly one active row). The ONLY schema step is the partial
-index (no model shape change). **Next slice → S3** (`epic-slice` `[web][a11y]`: the parent remediation
-progress strip — measured improvement vs the plan baseline from the E6 snapshot).
+index (no model shape change). **E7-S3 is now shipped** (`epic-slice` — P1
+`[web][a11y][api][analytics][remediation]`, needs human review): the visionary measured-improvement
+payoff — the parent-dashboard **progress strip**. The new
+`RemediationService.remediationProgress({ tenantId, studentId })` producer returns one entry per OPEN
+plan (ONE open-plan `findMany` + ONE grouped `booking.findMany` over all plans, no N+1, + the SHARED
+snapshot-first/live `readSubjectAverage` reader per subject), with `trendDelta = round(current −
+baseline, 2)` ONLY when both non-null (PM-4: a null baseline never fabricates a `current − 0` positive)
+and `improved = trendDelta >= IMPROVEMENT_DELTA_THRESHOLD` (the SINGLE shared `1.5` value-export reusing
+the E3 rule default — strip and alert engine speak the same number). **Byte-parity refactor:**
+`captureSubjectBaseline` is now a thin wrapper over the extracted `readSubjectAverage`, so the baseline
+anchor and the current measure share ONE code path and can't diverge. `AnalyticsModule` imports
+`RemediationModule` (one-way edge, no DI cycle); `AnalyticsService` injects `RemediationService` and
+composes the additive optional `ParentDashboardResponse.remediation?` **best-effort** (a throw → `[]`,
+never errors the <2 s dashboard — the `freshness?` posture), riding the SAME aggregate (no client
+round-trip). FE = a new server-component `RemediationProgressStrip` (reuse-only `@pilotage/ui` `Badge`/
+`SectionHeader`/`SubjectChip`, no `packages/ui` change), four kind payoff states (`en attente` /
+`+X pts` / E3 emerald `Le soutien porte ses fruits 🎉` / `les premiers effets prennent quelques
+semaines` — never "échec"), absolute FR next-session label, deep-links to `/parent/remediation/[planId]`,
+degrades to nothing when absent/empty. Tenant + ABAC unchanged (the dashboard's already-resolved
+`tenantId`/`studentId`, every internal query re-scopes). **No schema, no endpoint, no permission, no new
+ADR** (additive optional field, reuse-first, no new architectural decision). Tests: 9 producer cases in
+`remediation.service.spec.ts`; the 3 stale `new AnalyticsService(...)` call sites updated for the new
+3rd `remediation` constructor param (in-flight RED-gate fix). **Pending (human/infra):** rebuild
+`packages/contracts/dist` (the runtime `IMPROVEMENT_DELTA_THRESHOLD` value import) via the single
+post-Workflow `pnpm build`; the S1/S2 `prisma db push` still pending (until applied the producer returns
+`[]` → no strip, never errors); and the missing consumer-seam test on the Analytics→Remediation best-effort
+wiring (recommended for S4/hardening). **Next slice → S4** (`epic-slice` `[auth]`: teacher capacity
+management + booking transitions, riding `remediation.read` + the E2 ownership wall).
 
 ### E8 — Student Portal · `proposed` · ~M
 **Why:** the cahier's future "Portail élève." New Keycloak `student` role + read-only student views

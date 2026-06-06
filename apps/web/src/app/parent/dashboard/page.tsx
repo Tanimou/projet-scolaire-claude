@@ -39,6 +39,10 @@ import {
   type ParentActionChild,
 } from './_components/ParentActionCenter';
 import { RecentGradesTable, type GradeRow } from './_components/RecentGradesTable';
+import {
+  RemediationProgressStrip,
+  type RemediationProgressItem,
+} from './_components/RemediationProgressStrip';
 import { SchoolEventsPanel } from './_components/SchoolEventsPanel';
 import { SupportStrip } from './_components/SupportStrip';
 import { UpcomingPanel, type UpcomingItem } from './_components/UpcomingPanel';
@@ -119,6 +123,9 @@ interface ParentDashboardResponse {
     recomputing: boolean;
     gradeCount?: number;
   };
+  // E7-S3: additive/optional remediation progress block (one entry per OPEN plan).
+  // Optional so an older / un-rewired payload still type-checks → no strip.
+  remediation?: RemediationProgressItem[];
 }
 
 interface ParentAlertItem {
@@ -547,6 +554,12 @@ export default async function ParentDashboardPage({
           </div>
         </section>
       </div>
+
+      {/* ─────────── E7-S3 : Remediation progress strip (measured-improvement
+          payoff). Additive — renders only when the active child has an OPEN
+          plan; absent/empty → nothing, no layout shift. Rides the SAME dashboard
+          aggregate (no extra round-trip). ─────────── */}
+      <RemediationProgressStrip plans={dashboard?.remediation} />
 
       {/* ─────────── Row 2 : Subject perf cards + Upcoming right rail ─────────── */}
       <div className="mt-6 grid gap-4 lg:grid-cols-12 lg:grid-rows-[auto_1fr]">
