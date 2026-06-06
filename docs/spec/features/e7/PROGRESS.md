@@ -2,13 +2,13 @@
 
 > Epic: **E7 — Remediation & Tutoring loop** · Tier 3 (Scale & new surfaces) · Size ~L
 > Spec-kit run: **2026-06-06** (docs-only; no code, no schema, no build). Roadmap status: `proposed`
-> → promoted to **in-progress** (spec authored this run). **No slices shipped yet — S1 is next.**
+> → promoted to **in-progress** (spec authored on the spec run). **S1 shipped (this run); S2 is next.**
 
 ## Slice status
 
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
-| S1 | Schema + alert → RemediationPlan promotion + read-only catalogue | `[schema][auth]` | P1 | ⬜ not started | — |
+| S1 | Schema + alert → RemediationPlan promotion + read-only catalogue | `[schema][auth]` | P1 | ✅ shipped | this PR |
 | S2 | Availability + Booking (concurrency guard) → **ADR-020** | `[schema][auth]` | P1 | ⬜ not started | — |
 | S3 | Parent remediation progress strip (measured improvement) | `[web][a11y]` | P2 | ⬜ not started | — |
 | S4 | Teacher capacity management + booking transitions | `[auth]` | P2 | ⬜ not started | — |
@@ -88,11 +88,51 @@ content was identical** everywhere). Both were **canonicalised across all 8 file
 The S1 implementer should still re-verify these against the index/code at authoring time, but the kit is
 now internally consistent.
 
+## What landed in S1 (this run — `epic-slice`)
+
+- **Schema (`db push`, additive):** 6 enums (`TutorType`/`TutorCostKind`/`AvailabilityKind`/
+  `RemediationPlanStatus`/`BookingStatus` + the additive `remediation` `NotificationKind` value) + the 4
+  models (`Tutor`, `TutorAvailability`, `RemediationPlan`, `Booking`), tenant-scoped with tenant-first
+  indexes + the open-plan `@@unique([tenantId, studentId, subjectId, status])` idempotency guard + the
+  booking idempotency `@@unique([availabilityId, sessionAt, planId])`. The ONLY existing-model edits are
+  additive back-relation arrays on `School`/`Subject`/`Student`/`UserProfile`/`TeacherProfile`/
+  `AlertInstance` (no column changed). `RemediationPlan` carries the captured `baselineAvg`/
+  `baselineTrendDelta`. **`prisma generate` + `prisma format` pass; `prisma db push` is pending the DB
+  being up (infra Docker was down this run) — additive + safe on existing rows.** No SQL `migrations/`.
+- **Permissions:** `remediation.read` (parent+teacher+admin), `remediation.manage` (admin),
+  `remediation.book` (parent) added to `permissions.constants.ts` (the runtime-authoritative
+  `REALM_ROLE_PERMISSIONS`) + the seed/seed-demo permission catalogs + role grants.
+- **Contracts:** E7 enums (`TUTOR_TYPE`/`TUTOR_COST_KIND`/`AVAILABILITY_KIND`/`REMEDIATION_PLAN_STATUS`/
+  `BOOKING_STATUS`) + `dto/remediation.ts` (promote DTO, `RemediationPlanDto`, catalogue tutor/slot DTOs).
+- **API:** `RemediationModule` (`apps/api/src/modules/remediation/`) — `POST /remediation/plans`
+  (parent `remediation.book`, guardianship ABAC `canAccessStudent` re-checked BEFORE the write,
+  idempotent on the open-plan key with a P2002 race catch, server-derived student/subject from the alert,
+  baseline captured snapshot-first/live-fall-through, append-only `remediation.plan_created` audit ONLY on
+  a fresh promote), `GET /remediation/plans` + `GET /remediation/plans/:id` (guardianship-walled,
+  404-before-403), and the read-only `GET /remediation/catalogue?subjectId=` (published + tenant +
+  subject-filtered tutors with their active slots, one query + bounded include, no N+1).
+- **Web:** `deriveRemediationAction` (pure, subject-scoped + null-subject guard) + the
+  "Trouver un soutien en {matière}" CTA on `AlertNextSteps` (promote-then-`router.push`, indigo lane,
+  ≥44px, aria-busy) + the `/parent/remediation/[planId]` plan page (target card + read-only catalogue
+  grid + a kind `EmptyState` falling back to the E1 recommendations / E2 message CTAs — never a dead-end).
+  The existing E1/E2 alert actions are unchanged.
+- **Tests:** `remediation.service.spec.ts` (7 passing) pins promotion idempotency (reuse open plan / fresh
+  create / P2002-race collapse), the snapshot-first → live baseline fall-through, the tenant/no-subject
+  404s, and the catalogue published+tenant+subject filter. `pnpm typecheck` clean across api/worker/
+  contracts/web (verified per-package; Murat owns the authoritative gate).
+
+> **Honest note:** the pure `deriveRemediationAction`/`formatSlotLabel` web helpers are provable by
+> construction (reuse the already-vetted `SUBJECT_SCOPED` set + the null-subject guard); `apps/web` has no
+> unit-test runner today and adding one would be a new architectural decision (out of scope) — the
+> substantive idempotency/ABAC/baseline logic is fully runner-backed on the API side.
+
 ## Next action
 
-Ship **S1** (`epic-slice`): the schema (4 models + enums + additive back-relations, `db push`) + the 3
-permissions + the parent **alert → RemediationPlan promotion** (idempotent, guardianship-ABAC, audited,
-baseline-capturing) + the **"Trouver un soutien en {matière}"** action on the E1-S2 `AlertNextSteps`
-surface + the `/parent/remediation/[planId]` plan page (target + the **read-only catalogue** / kind
-empty-state fallback). **No booking write path → no concurrency surface → no ADR this slice** (ADR-020
-lands with the first `Booking` write in S2). Write the self-contained `stories/S1-*.md` on that run.
+Ship **S2** (`epic-slice` — the load-bearing concurrency slice): availability publish/read + the parent
+**booking** verb (`POST /remediation/bookings`, `remediation.book`, guardianship ABAC + the E2 teaching
+wall on a teacher tutor BEFORE the write), idempotent per `(availability, sessionAt, plan)`, with the
+**never-over-book guard** (the raw partial unique index for capacity-1 added alongside `db push` + a
+transactional `FOR UPDATE` count for capacity-N) returning a deterministic **409**, parent cancel,
+tutor+parent `NotificationsService.createMany` (kind `remediation`, no new queue), append-only audit, the
+"Réserver" plan-page flow, **and `docs/adr/ADR-020-booking-availability-concurrency.md`** (Winston gate) +
+a targeted two-concurrent-books concurrency test.

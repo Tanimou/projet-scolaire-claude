@@ -105,6 +105,11 @@ export const PERMISSIONS = [
   ['exports.execute.teacher', 'Générer la grille de notes de ses classes', 'export', 'execute.teacher'],
   ['integrations.write', 'Gérer intégrations', 'integration', 'write'],
 
+  // Remediation & tutoring (E7) — three role-narrowed permissions (E4 house style).
+  ['remediation.read', 'Lire le soutien scolaire', 'remediation', 'read'],
+  ['remediation.manage', 'Gérer le catalogue de soutien', 'remediation', 'manage'],
+  ['remediation.book', 'Réserver un soutien', 'remediation', 'book'],
+
   // Profile (everyone)
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
@@ -191,6 +196,8 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'imports.execute',
     'exports.execute',
     'integrations.write',
+    'remediation.read',
+    'remediation.manage',
     'profile.read.self',
     'profile.write.self',
   ],
@@ -226,6 +233,7 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'messaging.read',
     'messaging.write',
     'exports.execute.teacher',
+    'remediation.read',
     'profile.read.self',
     'profile.write.self',
   ],
@@ -245,6 +253,8 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'messaging.read',
     'messaging.write',
     'exports.execute.parent',
+    'remediation.read',
+    'remediation.book',
     'profile.read.self',
     'profile.write.self',
   ],

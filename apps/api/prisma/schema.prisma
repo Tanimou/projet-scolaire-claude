@@ -245,6 +245,9 @@ model School {
   importBatches   ImportBatch[]
   calendarEvents  CalendarEvent[]
   announcements   Announcement[]
+  // E7 — remediation & tutoring catalogue (additive back-relations).
+  tutors              Tutor[]
+  tutorAvailabilities TutorAvailability[]
 
   @@index([tenantId])
   @@map("school")
@@ -363,6 +366,8 @@ model Subject {
   alertInstances      AlertInstance[]
   meetingRequests     MeetingRequest[]
   conversations       Conversation[]
+  // E7 — remediation plans targeting this subject (additive back-relation).
+  remediationPlans    RemediationPlan[]
 
   @@unique([schoolId, code])
   @@index([tenantId, schoolId])
@@ -452,6 +457,9 @@ model Student {
   alertInstances    AlertInstance[]
   meetingRequests   MeetingRequest[]
   conversations     Conversation[]
+  // E7 — remediation plans + bookings for this student (additive back-relations).
+  remediationPlans  RemediationPlan[]
+  bookings          Booking[]
 
   @@unique([schoolId, externalRef])
   @@index([tenantId, schoolId])
@@ -684,6 +692,11 @@ model UserProfile {
   conversationParticipants  ConversationParticipant[]
   conversationMessages      ConversationMessage[]     @relation("ConversationMessageSender")
   conversationReports       ConversationReport[]      @relation("ConversationReportReporter")
+  // E7 — a UserProfile can BE a (teacher) tutor, CREATE remediation plans, and
+  // BOOK tutor slots (additive back-relations; disambiguated like the messaging ones).
+  tutorAccounts             Tutor[]                   @relation("TutorUser")
+  remediationPlansCreated   RemediationPlan[]         @relation("RemediationPlanCreator")
+  bookingsMade              Booking[]                 @relation("BookingBooker")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -775,6 +788,8 @@ model TeacherProfile {
   assessments         Assessment[]
   lessons             LessonEntry[]
   classSessions       ClassSession[]
+  // E7 — a teacher can be linked to one or more tutor catalogue rows (additive).
+  tutorRoles          Tutor[]
 
   @@unique([schoolId, externalRef])
   @@index([tenantId, schoolId])
@@ -1197,6 +1212,11 @@ enum NotificationKind {
   // ConversationMessage notifies the OTHER participant in-app via
   // NotificationsService.createMany(kind=message, sourceType=conversation).
   message
+  // E7-S1 — remediation & tutoring loop. Additive enum value; no new table. A
+  // booking created/confirmed (S2) notifies the tutor + parent in-app via
+  // NotificationsService.createMany(kind=remediation, sourceType=booking). The
+  // enum value lands in S1 so the dispatcher seam exists before the booking write.
+  remediation
 }
 
 enum NotificationSeverity {
@@ -1311,6 +1331,8 @@ model AlertInstance {
   classSection ClassSection? @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
   meetingRequests MeetingRequest[]
   conversations   Conversation[]
+  // E7 — remediation plans promoted from this alert (additive back-relation).
+  remediationPlans RemediationPlan[]
 
   @@index([tenantId, status, severity, detectedAt])
   @@index([studentId, status, detectedAt])
@@ -1703,4 +1725,239 @@ model SnapshotRecomputeTrigger {
   @@unique([tenantId, coalesceKey, status])
   @@index([tenantId, status, enqueuedAt])
   @@map("snapshot_recompute_trigger")
+}
+
+// ===========================================================================
+// E7 — Remediation & Tutoring loop
+//
+// Closes the cahier's action loop: an alert's recommendation promotes into a
+// RemediationPlan, the parent books a school-curated tutoring resource, and a
+// calm progress strip measures the improvement (tying back to E3's IMPROVEMENT
+// signal). Four net-new, tenant-scoped, additive (`db push`) models. S1 lands
+// the WHOLE schema but ships NO booking write — the Booking/TutorAvailability
+// tables exist with no write path, so there is provably no over-booking surface
+// (the booking verb + the ADR-020 concurrency guard arrive in S2).
+// ===========================================================================
+
+/// E7 — what the tutoring resource is. A `teacher` tutor links a
+/// TeacherProfile/UserProfile (an in-house teacher offering support); `external`
+/// is a named partner with no platform account; `peer` is a peer-tutoring
+/// programme. Display + filtering only — NO new Keycloak role.
+enum TutorType {
+  teacher
+  external
+  peer
+}
+
+/// E7 — the COST LABEL of a tutor (display-only — NEVER a price; ADR-018 finance
+/// isolation). `paid_offline` = a paid tutor settled OUTSIDE the platform; E7
+/// stores no money.
+enum TutorCostKind {
+  free
+  volunteer
+  paid_offline
+}
+
+/// E7 — recurrence shape of an availability slot. `recurring_weekly` = a
+/// weekday+time that repeats (the parent books a dated instance of it);
+/// `one_off` = a single dated datetime.
+enum AvailabilityKind {
+  recurring_weekly
+  one_off
+}
+
+/// E7 — lifecycle of a RemediationPlan. `open` = the parent is actively pursuing
+/// support; `met` = the objective was reached (kind, reversible); `closed` =
+/// parent/admin closed it. NEVER deleted — the append-only AuditLog carries the
+/// history.
+enum RemediationPlanStatus {
+  open
+  met
+  closed
+}
+
+/// E7 — booking state machine (mirrors MeetingRequestStatus discipline). A
+/// parent books (`requested`); the tutor/teacher confirms (`confirmed`) -> the
+/// session happens (`completed`); or the parent cancels (`cancelled`), or the
+/// tutor declines (`declined`) or proposes another slot (`proposed_alternative`).
+/// A small, auditable, append-only machine. The write paths arrive in S2.
+enum BookingStatus {
+  requested
+  confirmed
+  completed
+  cancelled
+  declined
+  proposed_alternative
+}
+
+/// E7 — a tutoring resource curated by the school admin. Parents discover only
+/// `published` tutors of their tenant, filtered to the subject. A teacher tutor
+/// links a TeacherProfile (notify + ownership wall); external/peer tutors are
+/// display-only. `costKind` is a LABEL, never a price (ADR-018). Subjects offered
+/// are denormalised as an id array (display + filter) — the catalogue read
+/// filters on it; a relation table is overkill for a small set.
+model Tutor {
+  id               String        @id @default(uuid()) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  schoolId         String        @map("school_id") @db.Uuid
+  type             TutorType
+  costKind         TutorCostKind @default(free) @map("cost_kind")
+  /// Display name (the teacher or partner name, "Tutorat entre pairs — 3e").
+  displayName      String        @map("display_name")
+  /// Short public blurb shown in the catalogue card (kind, non-stigmatising).
+  blurb            String?
+  /// Subjects this tutor offers support in (Subject ids). The catalogue read filters on this.
+  subjectIds       String[]      @map("subject_ids") @db.Uuid
+  /// For a `teacher` tutor: the linked teacher (notify target + ownership wall). Null otherwise.
+  teacherProfileId String?       @map("teacher_profile_id") @db.Uuid
+  userProfileId    String?       @map("user_profile_id") @db.Uuid
+  /// Only published tutors are discoverable by parents. Admin toggles this.
+  published        Boolean       @default(false)
+  createdBy        String        @map("created_by") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school         School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacherProfile TeacherProfile?     @relation(fields: [teacherProfileId], references: [id], onDelete: SetNull)
+  user           UserProfile?        @relation("TutorUser", fields: [userProfileId], references: [id], onDelete: SetNull)
+  availabilities TutorAvailability[]
+  bookings       Booking[]
+
+  @@index([tenantId, schoolId, published])
+  @@index([tenantId, teacherProfileId])
+  @@map("tutor")
+}
+
+/// E7 — a bookable availability slot for a Tutor. `recurring_weekly` repeats on
+/// `weekday` at `startTime`; `one_off` is a single `startsAt`/`endsAt`.
+/// `capacity` (default 1) is the number of seats — the concurrency guard (S2 /
+/// ADR-020) rejects a booking that would exceed it. Published/active slots only
+/// are discoverable; a closed slot keeps its bookings (history). S1 reads slots
+/// into the catalogue (no booking write).
+model TutorAvailability {
+  id        String           @id @default(uuid()) @db.Uuid
+  tenantId  String           @map("tenant_id") @db.Uuid
+  schoolId  String           @map("school_id") @db.Uuid
+  tutorId   String           @map("tutor_id") @db.Uuid
+  kind      AvailabilityKind
+  /// recurring_weekly: 0=Mon … 6=Sun (null for one_off).
+  weekday   Int?
+  /// recurring_weekly: "HH:mm" local school time (null for one_off).
+  startTime String?          @map("start_time")
+  endTime   String?          @map("end_time")
+  /// one_off: the concrete datetimes (null for recurring_weekly).
+  startsAt  DateTime?        @map("starts_at") @db.Timestamptz(6)
+  endsAt    DateTime?        @map("ends_at") @db.Timestamptz(6)
+  /// Number of seats. The capacity guard (S2) rejects an over-capacity booking (default 1).
+  capacity  Int              @default(1)
+  /// Soft-close a slot without deleting it (its bookings + history survive).
+  active    Boolean          @default(true)
+  createdBy String           @map("created_by") @db.Uuid
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school   School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  tutor    Tutor     @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@index([tenantId, tutorId, active])
+  @@index([tenantId, schoolId, startsAt])
+  @@map("tutor_availability")
+}
+
+/// E7 — a support plan promoted from an alert's recommendation. One OPEN plan per
+/// (tenant, student, subject) — the @@unique makes "promote this alert into a
+/// plan" idempotent (a second promote reuses the open plan), exactly the
+/// MeetingRequest discipline. Status-neutral on the alert (the plan is additive;
+/// the alert lifecycle is untouched). `baselineAvg`/`baselineTrendDelta` capture
+/// the subject figure at promotion time (from the E6 snapshot, live fall-through)
+/// — the baseline the S3 progress strip frames the trend against. NEVER deleted.
+model RemediationPlan {
+  id                 String                @id @default(uuid()) @db.Uuid
+  tenantId           String                @map("tenant_id") @db.Uuid
+  schoolId           String?               @map("school_id") @db.Uuid
+  studentId          String                @map("student_id") @db.Uuid
+  subjectId          String                @map("subject_id") @db.Uuid
+  /// The alert this plan was promoted from (the diagnosis). SetNull — a
+  /// deleted/resolved alert doesn't delete the plan the parent is acting on.
+  alertId            String?               @map("alert_id") @db.Uuid
+  status             RemediationPlanStatus @default(open)
+  /// Kind, non-stigmatising objective ("Rattraper les bases en mathématiques ce trimestre").
+  objective          String?
+  /// The subject average captured at promotion time (the strip's baseline). Nullable
+  /// when no published grade exists yet (the strip shows "en attente des prochaines notes").
+  baselineAvg        Decimal?              @map("baseline_avg") @db.Decimal(5, 2)
+  /// The subject trend delta captured at promotion time (signed, /20), or null.
+  baselineTrendDelta Decimal?              @map("baseline_trend_delta") @db.Decimal(5, 2)
+  /// The parent UserProfile that created the plan (audit actorId parity).
+  createdBy          String                @map("created_by") @db.Uuid
+  /// Set when status flips to met/closed (kind, reversible).
+  closedAt           DateTime?             @map("closed_at") @db.Timestamptz(6)
+  closedBy           String?               @map("closed_by") @db.Uuid
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  student  Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject  Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  alert    AlertInstance? @relation(fields: [alertId], references: [id], onDelete: SetNull)
+  creator  UserProfile    @relation("RemediationPlanCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  /// One plan per (tenant, student, subject, status). The promote upserts on the
+  /// open-status tuple => idempotent "promote this alert into a plan" while still
+  /// letting closed/met historical rows coexist (Postgres treats every status as
+  /// distinct). A stricter open-only partial unique is deferred (no concurrency
+  /// surface in S1 — single-parent promote, P2002-safe upsert).
+  @@unique([tenantId, studentId, subjectId, status])
+  @@index([tenantId, studentId, status])
+  @@index([tenantId, schoolId, status, createdAt])
+  @@map("remediation_plan")
+}
+
+/// E7 — a parent's booking of a tutor availability slot, tracked against a
+/// RemediationPlan. `sessionAt` is the CONCRETE dated instance (a recurring slot
+/// resolves to a date; a one-off is its own startsAt) — the capacity guard (S2)
+/// counts ACTIVE bookings per (availability, sessionAt). Idempotent: one active
+/// booking per (availability, sessionAt, plan). The status machine + append-only
+/// AuditLog carry the lifecycle. NO money stored (ADR-018). The WRITE PATH lands
+/// in S2 (with ADR-020); S1 only stands up the table.
+model Booking {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @map("tenant_id") @db.Uuid
+  schoolId       String?       @map("school_id") @db.Uuid
+  planId         String        @map("plan_id") @db.Uuid
+  tutorId        String        @map("tutor_id") @db.Uuid
+  availabilityId String        @map("availability_id") @db.Uuid
+  studentId      String        @map("student_id") @db.Uuid
+  /// The concrete dated session instance (the capacity-guard key). For a one_off
+  /// this is the slot's startsAt; for a recurring_weekly it is the booked date's
+  /// resolved datetime.
+  sessionAt      DateTime      @map("session_at") @db.Timestamptz(6)
+  status         BookingStatus @default(requested)
+  /// Optional kind note (parent ask / tutor proposed-alternative note). Free text, reversible.
+  note           String?
+  /// The parent UserProfile that booked (audit actorId parity + the guardianship wall).
+  bookedBy       String        @map("booked_by") @db.Uuid
+  /// Set on confirm/decline/cancel/complete (who + when), append-only audit alongside.
+  decidedBy      String?       @map("decided_by") @db.Uuid
+  decidedAt      DateTime?     @map("decided_at") @db.Timestamptz(6)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  plan         RemediationPlan   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  tutor        Tutor             @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+  availability TutorAvailability @relation(fields: [availabilityId], references: [id], onDelete: Cascade)
+  student      Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  booker       UserProfile       @relation("BookingBooker", fields: [bookedBy], references: [id], onDelete: Cascade)
+
+  /// Idempotent booking — one row per (availability, sessionAt, plan). A
+  /// double-tap of the SAME slot instance for the SAME plan collapses (P2002-safe).
+  /// This does NOT by itself enforce capacity across DIFFERENT plans — that is the
+  /// concurrency guard (the partial unique on active status + the transactional
+  /// count check), the subject of ADR-020 (S2).
+  @@unique([availabilityId, sessionAt, planId])
+  @@index([tenantId, tutorId, status, sessionAt])
+  @@index([tenantId, planId, status])
+  @@index([availabilityId, sessionAt, status])
+  @@map("booking")
 }

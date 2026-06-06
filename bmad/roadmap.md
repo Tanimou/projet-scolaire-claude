@@ -302,9 +302,23 @@ open/cross-school marketplace, no new login / no student booking (E8), no calend
 bookings, no real-time push, no second queue, no new datastore. **Slice order (all 8 kit files
 reconciled):** S1 schema + alert→`RemediationPlan` promotion + read-only catalogue · S2 availability +
 booking (ADR-020) · S3 progress strip · S4 teacher capacity · S5 admin curation · S6 hardening
-(notifications + cancellation + completion + uptake overview). **None shipped yet → next run ships S1**
-(`epic-slice`: schema + plan promotion + read-only catalogue + the alert deep-link; no booking write → no
-ADR yet).
+(notifications + cancellation + completion + uptake overview). **S1 shipped** (`epic-slice` — P1
+`[schema][auth]`, needs human review): the 4 additive `db push` models (`Tutor`/`TutorAvailability`/
+`RemediationPlan`/`Booking`) + 6 enums (strictly additive — existing models only gain back-relation
+arrays, zero column changed; open-plan `@@unique([tenantId, studentId, subjectId, status])` +
+`@@unique([availabilityId, sessionAt, planId])` idempotency guards), the 3 role-narrowed permissions
+(`remediation.read` parent+teacher+admin / `remediation.manage` admin / `remediation.book` parent) in
+`permissions.constants.ts` + both seeds, the parent-walled `RemediationModule` (`POST /remediation/plans`
+= guardianship-ABAC-before-write + idempotent open-plan reuse + P2002-race collapse + server-derived
+student/subject from the alert + baseline snapshot-first/live-fall-through + append-only
+`remediation.plan_created` audit only on fresh promote; `GET /plans` + `/plans/:id` 404-before-403;
+read-only `GET /catalogue?subjectId=` published+tenant+subject-filtered, no N+1), the
+`deriveRemediationAction` CTA ("Trouver un soutien en {matière}") on the E1-S2 `AlertNextSteps` panel +
+the `/parent/remediation/[planId]` plan page (reuse-first, never a dead-end), and a 7-test
+`remediation.service.spec.ts`. **No booking write path → no over-booking surface → no ADR this slice**
+(ADR-020 lands with the S2 booking verb). **`prisma db push` is pending** (infra was down this run) — a
+human must apply the additive schema before `/remediation/*` is functional. **Next slice → S2**
+(`epic-slice`: availability + the parent booking verb + the never-over-book guard + **ADR-020**).
 
 ### E8 — Student Portal · `proposed` · ~M
 **Why:** the cahier's future "Portail élève." New Keycloak `student` role + read-only student views

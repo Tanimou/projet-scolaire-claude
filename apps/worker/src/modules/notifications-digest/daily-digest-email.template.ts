@@ -30,6 +30,7 @@ const KIND_META: Record<NotificationKind, { label: string; plural: string; emoji
   system: { label: 'Information', plural: 'informations', emoji: 'ℹ️', color: '#64748B' },
   message: { label: 'Message', plural: 'nouveaux messages', emoji: '💬', color: '#7C3AED' },
   weekly_digest: { label: 'Récapitulatif', plural: 'récapitulatifs', emoji: '📊', color: '#7C3AED' },
+  remediation: { label: 'Soutien scolaire', plural: 'soutiens scolaires', emoji: '🎓', color: '#4F46E5' },
 };
 
 const FALLBACK_META = {
@@ -49,6 +50,7 @@ const KIND_FALLBACK_LINK: Record<NotificationKind, string> = {
   system: '/parent/dashboard',
   message: '/parent/messages',
   weekly_digest: '/parent/dashboard',
+  remediation: '/parent/dashboard',
 };
 
 function metaFor(kind: NotificationKind) {

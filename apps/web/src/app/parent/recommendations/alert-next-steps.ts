@@ -107,6 +107,44 @@ function childProfileStep(input: AlertNextStepInput): AlertNextStep {
 }
 
 /**
+ * E7-S1 — the "Trouver un soutien en {matière}" remediation action.
+ *
+ * A separately-testable, pure derivation (keeps the tested `deriveAlertActions`
+ * untouched). The remediation CTA is offered ONLY for a subject-scoped alert code
+ * WITH a known subject id — it promotes the alert into a `RemediationPlan` and
+ * navigates to the plan page + the filtered catalogue, so without a subject there
+ * is nothing to remediate (omitted → no broken/dead-end link). The kind, non-
+ * stigmatising label frames it as support being organised, never a deficit.
+ */
+export interface RemediationAction {
+  /** Self-describing French label (WCAG 2.4.4 — names the subject). */
+  label: string;
+  /** One-line, kind helper. */
+  helper: string;
+  /** The diagnosed subject id forwarded for the catalogue filter. */
+  subjectId: string;
+  /** Display label for the subject (name → code → generic fallback). */
+  subjectLabel: string;
+}
+
+/**
+ * Returns the remediation action for an alert, or `null` when it must be omitted
+ * (a non-subject-scoped code, or a null subject id — never a dead-end link).
+ */
+export function deriveRemediationAction(input: AlertNextStepInput): RemediationAction | null {
+  if (!SUBJECT_SCOPED.includes(input.code)) return null;
+  if (!input.subjectId) return null;
+  const subjectLabel = input.subjectName ?? input.subjectCode ?? 'cette matière';
+  return {
+    label: `Trouver un soutien en ${subjectLabel}`,
+    helper:
+      'Découvrir le soutien proposé par l’école pour cette matière et suivre les progrès.',
+    subjectId: input.subjectId,
+    subjectLabel,
+  };
+}
+
+/**
  * Map an alert to its 1–2 navigation next-steps (most-actionable first),
  * capped at {@link MAX_NAV_STEPS}. The "talk to the teacher" CTA is NOT
  * included here — the component always appends it so the panel never renders

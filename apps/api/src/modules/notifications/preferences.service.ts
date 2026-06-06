@@ -32,6 +32,11 @@ export const NOTIFICATION_KIND_LABEL: Record<NotificationKind, string> = {
   system: 'Messages système',
   message: 'Messagerie (parent ↔ enseignant)',
   weekly_digest: 'Récapitulatif hebdomadaire',
+  // E7-S1 — remediation & tutoring. The enum value exists now; the booking
+  // notifications (and thus a visible prefs channel) arrive in S2, so this kind
+  // is intentionally NOT in NOTIFICATION_KINDS yet — only the label map (which is
+  // exhaustive over NotificationKind) carries it.
+  remediation: 'Soutien scolaire',
 };
 
 export const NOTIFICATION_KIND_DESCRIPTION: Record<NotificationKind, string> = {
@@ -45,6 +50,8 @@ export const NOTIFICATION_KIND_DESCRIPTION: Record<NotificationKind, string> = {
     "Quand un enseignant (ou un parent) vous envoie un nouveau message dans une conversation.",
   weekly_digest:
     'Un récapitulatif chaque lundi matin : tendance globale, nouvelles alertes, évaluations à venir et l’action recommandée. Envoyé par email uniquement.',
+  remediation:
+    'Quand un créneau de soutien est réservé ou confirmé pour votre enfant.',
 };
 
 export interface PreferenceDto {
