@@ -8,6 +8,7 @@ import { ExportsModule } from './modules/exports/exports.module';
 import { NotificationsDigestModule } from './modules/notifications-digest/notifications-digest.module';
 import { NotificationsEmailModule } from './modules/notifications-email/notifications-email.module';
 import { ParentDigestModule } from './modules/parent-digest/parent-digest.module';
+import { RemediationSweepModule } from './modules/remediation-sweep/remediation-sweep.module';
 import { PrismaModule } from './shared/prisma/prisma.module';
 import { QueueModule } from './shared/queue/queue.module';
 import { StorageModule } from './shared/storage/storage.module';
@@ -33,6 +34,7 @@ import { StorageModule } from './shared/storage/storage.module';
     NotificationsEmailModule,
     ParentDigestModule,
     NotificationsDigestModule,
+    RemediationSweepModule,
   ],
 })
 export class AppModule {}

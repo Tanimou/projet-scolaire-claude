@@ -170,7 +170,17 @@ export class AdminRemediationService {
     schoolId: string;
     userProfileId: string;
     dto: CreateAdminTutorInput;
-  }): Promise<{ tutor: AdminTutorDto; tutorId: string }> {
+  }): Promise<{
+    tutor: AdminTutorDto;
+    tutorId: string;
+    /** FR-6: true when this "create" REUSED an existing teacher tutor (idempotent
+     * FM-8 branch) — the controller then writes `remediation.tutor_updated` with the
+     * published before/after instead of `tutor_created`, so a retire/approve flip on
+     * a live teacher tutor stays traceable (never a silent untraceable retire). */
+    reused: boolean;
+    /** The published state BEFORE a reuse update (for the tutor_updated audit). */
+    publishedBefore?: boolean;
+  }> {
     const { dto } = args;
 
     let teacherProfileId: string | null = null;
@@ -204,7 +214,7 @@ export class AdminRemediationService {
       // than creating a duplicate catalogue card.
       const existing = await this.prisma.tutor.findFirst({
         where: { tenantId: args.tenantId, userProfileId: teacherUserProfileId, type: 'teacher' },
-        select: { id: true, subjectIds: true },
+        select: { id: true, subjectIds: true, published: true },
       });
       if (existing) {
         const merged = [...new Set([...existing.subjectIds, ...subjectIds])];
@@ -215,7 +225,12 @@ export class AdminRemediationService {
             blurb: dto.blurb?.trim() || null,
             costKind: dto.costKind ?? 'free',
             subjectIds: { set: merged },
-            published: dto.published ?? false,
+            // FR-6: do NOT default a reuse to `published:false` — that would silently
+            // RETIRE a live self-published teacher tutor with no traceable audit. Only
+            // change `published` when the admin EXPLICITLY provided it (the create-DTO
+            // `.default(false)` is applied by Zod pre-parse, so the *input* shape's
+            // `published` is `undefined` when the admin left the toggle untouched).
+            ...(dto.published !== undefined ? { published: dto.published } : {}),
           },
           include: { availabilities: { where: { active: true }, select: { id: true } } },
         });
@@ -223,7 +238,12 @@ export class AdminRemediationService {
           tenantId: args.tenantId,
           tutorIds: [updated.id],
         });
-        return { tutor: this.toAdminTutorDto(updated, counts.get(updated.id) ?? 0), tutorId: updated.id };
+        return {
+          tutor: this.toAdminTutorDto(updated, counts.get(updated.id) ?? 0),
+          tutorId: updated.id,
+          reused: true,
+          publishedBefore: existing.published,
+        };
       }
     }
 
@@ -243,7 +263,7 @@ export class AdminRemediationService {
       },
       include: { availabilities: { where: { active: true }, select: { id: true } } },
     });
-    return { tutor: this.toAdminTutorDto(created, 0), tutorId: created.id };
+    return { tutor: this.toAdminTutorDto(created, 0), tutorId: created.id, reused: false };
   }
 
   // ----- write: update / approve / retire a tutor ----------------------------
@@ -335,11 +355,19 @@ export class AdminRemediationService {
       capacity?: number;
       active?: boolean;
     };
-  }): Promise<{ availability: AdminTutorAvailabilityDto; created: boolean; tutorId: string }> {
+    /** The actor admin's UserProfile id — the slot's `createdBy` provenance (FR-7). */
+    userProfileId: string;
+  }): Promise<{
+    availability: AdminTutorAvailabilityDto;
+    created: boolean;
+    tutorId: string;
+    /** The linked teacher's UserProfile id (null for external/peer) — FR-4 notify target. */
+    tutorUserProfileId: string | null;
+  }> {
     // Re-scope the tutor to the caller's tenant (404 — never leaks cross-tenant).
     const tutor = await this.prisma.tutor.findFirst({
       where: { id: args.tutorId, tenantId: args.tenantId },
-      select: { id: true, schoolId: true },
+      select: { id: true, schoolId: true, userProfileId: true },
     });
     if (!tutor) throw new NotFoundException('Tuteur introuvable');
 
@@ -357,7 +385,10 @@ export class AdminRemediationService {
       endsAt: args.dto.kind === 'one_off' && args.dto.endsAt ? new Date(args.dto.endsAt) : null,
       capacity: args.dto.capacity ?? 1,
       active: args.dto.active ?? true,
-      createdBy: tutor.id, // admin-published slot; the audit row carries the actor.
+      // FR-7: write the actor admin's userProfileId (not the Tutor id), matching
+      // every other write path (the teacher path writes the actor) — audit/forensic
+      // "who published this slot" now resolves the actor, not the tutor.
+      createdBy: args.userProfileId,
     };
 
     if (args.availabilityId) {
@@ -397,11 +428,21 @@ export class AdminRemediationService {
           active: data.active,
         },
       });
-      return { availability: this.toAvailabilityDto(updated), created: false, tutorId: tutor.id };
+      return {
+        availability: this.toAvailabilityDto(updated),
+        created: false,
+        tutorId: tutor.id,
+        tutorUserProfileId: tutor.userProfileId,
+      };
     }
 
     const created = await this.prisma.tutorAvailability.create({ data });
-    return { availability: this.toAvailabilityDto(created), created: true, tutorId: tutor.id };
+    return {
+      availability: this.toAvailabilityDto(created),
+      created: true,
+      tutorId: tutor.id,
+      tutorUserProfileId: tutor.userProfileId,
+    };
   }
 
   // ----- read: the school-scoped aggregate overview --------------------------
@@ -445,7 +486,11 @@ export class AdminRemediationService {
     const tutorCountBySubject = new Map<string, number>();
     let publishedTutors = 0;
     for (const t of tutors) {
-      if (t.published) publishedTutors += 1;
+      // FR-8: count ONLY published (parent-discoverable) tutors per subject, so a
+      // subject covered solely by a retired tutor reads as a genuine capacity gap
+      // (tutorCount:0 → the "aucun intervenant publié" copy is accurate).
+      if (!t.published) continue;
+      publishedTutors += 1;
       for (const subjectId of t.subjectIds) {
         tutorCountBySubject.set(subjectId, (tutorCountBySubject.get(subjectId) ?? 0) + 1);
       }

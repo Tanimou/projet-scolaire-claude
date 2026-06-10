@@ -284,6 +284,54 @@ describe('AdminRemediationService.createTutor', () => {
     expect(tutorCreate).not.toHaveBeenCalled(); // reused, not duplicated
     expect(tutorUpdate).toHaveBeenCalled();
   });
+
+  it('FR-6: a reuse with NO `published` field does NOT silently retire a live teacher tutor + flags reused:true', async () => {
+    const existing = { id: TUTOR, subjectIds: [SUBJECT], published: true }; // LIVE self-published
+    const tutorUpdate = jest.fn().mockResolvedValue({
+      id: TUTOR,
+      type: 'teacher',
+      costKind: 'free',
+      displayName: 'M. Diallo',
+      blurb: null,
+      subjectIds: [SUBJECT],
+      teacherProfileId: TEACHER_PROFILE,
+      userProfileId: TEACHER_USER,
+      published: true, // STAYS published — never silently retired
+      createdAt: new Date(),
+      availabilities: [],
+    });
+    const prisma = {
+      teacherProfile: {
+        findFirst: jest.fn().mockResolvedValue({ id: TEACHER_PROFILE, userProfileId: TEACHER_USER }),
+      },
+      teachingAssignment: { findMany: jest.fn().mockResolvedValue([{ subjectId: SUBJECT }]) },
+      tutor: {
+        findFirst: jest.fn().mockResolvedValue(existing),
+        update: tutorUpdate,
+        create: jest.fn(),
+      },
+      tutorAvailability: { findMany: jest.fn().mockResolvedValue([]) },
+      booking: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = svcWith(prisma);
+    const res = await svc.createTutor({
+      tenantId: TENANT,
+      schoolId: SCHOOL,
+      userProfileId: ME,
+      dto: {
+        type: 'teacher',
+        displayName: 'M. Diallo',
+        subjectIds: [SUBJECT],
+        teacherProfileId: TEACHER_PROFILE,
+        // NO `published` field — the admin left the toggle untouched.
+      } as never,
+    });
+    // The update data must NOT include `published` (so the live state is preserved).
+    expect(tutorUpdate.mock.calls[0][0].data).not.toHaveProperty('published');
+    // The controller is signalled this was a reuse → it writes tutor_updated, not tutor_created.
+    expect(res.reused).toBe(true);
+    expect(res.publishedBefore).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -391,12 +439,13 @@ describe('AdminRemediationService.upsertAvailability', () => {
       svc.upsertAvailability({
         tenantId: TENANT,
         tutorId: 'other',
+        userProfileId: ME,
         dto: { kind: 'recurring_weekly', weekday: 1, startTime: '14:00' },
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('publishes a slot for ANY tutor (no subject-ownership wall)', async () => {
+  it('publishes a slot for ANY tutor (no subject-ownership wall); FR-7 createdBy = actor, FR-4 surfaces the teacher link', async () => {
     const tutorAvailabilityCreate = jest.fn().mockResolvedValue({
       id: 'a1',
       kind: 'recurring_weekly',
@@ -409,17 +458,26 @@ describe('AdminRemediationService.upsertAvailability', () => {
       active: true,
     });
     const prisma = {
-      tutor: { findFirst: jest.fn().mockResolvedValue({ id: TUTOR, schoolId: SCHOOL }) },
+      tutor: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: TUTOR, schoolId: SCHOOL, userProfileId: TEACHER_USER }),
+      },
       tutorAvailability: { create: tutorAvailabilityCreate },
     };
     const svc = svcWith(prisma);
     const res = await svc.upsertAvailability({
       tenantId: TENANT,
       tutorId: TUTOR,
+      userProfileId: ME,
       dto: { kind: 'recurring_weekly', weekday: 1, startTime: '14:00' },
     });
     expect(res.created).toBe(true);
     expect(res.availability.id).toBe('a1');
+    // FR-7: the slot's createdBy is the ACTOR admin's userProfileId, not the Tutor id.
+    expect(tutorAvailabilityCreate.mock.calls[0][0].data.createdBy).toBe(ME);
+    // FR-4: the linked teacher's userProfileId is surfaced so the controller can notify.
+    expect(res.tutorUserProfileId).toBe(TEACHER_USER);
   });
 
   it('rejects lowering capacity below active bookings on the next instance → 422 (ADR-020)', async () => {
@@ -444,6 +502,7 @@ describe('AdminRemediationService.upsertAvailability', () => {
         tenantId: TENANT,
         tutorId: TUTOR,
         availabilityId: 'a1',
+        userProfileId: ME,
         dto: { kind: 'one_off', startsAt: next.toISOString(), capacity: 1 }, // 1 < 3
       }),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
@@ -500,6 +559,29 @@ describe('AdminRemediationService.overview', () => {
 
     expect(res.totals).toEqual({ openPlans: 2, activeBookings: 2, publishedTutors: 1 });
     const maths = res.bySubject.find((s) => s.subjectId === SUBJECT);
-    expect(maths).toMatchObject({ openPlans: 2, activeBookings: 2, tutorCount: 2 });
+    // FR-8: tutorCount counts ONLY published tutors — SUBJECT has 1 published + 1
+    // retired → tutorCount:1 (the retired tutor no longer masks the real capacity).
+    expect(maths).toMatchObject({ openPlans: 2, activeBookings: 2, tutorCount: 1 });
+  });
+
+  it('FR-8: a subject covered ONLY by a retired tutor reads as tutorCount:0 (a genuine gap)', async () => {
+    const prisma = {
+      remediationPlan: {
+        groupBy: jest.fn().mockResolvedValue([{ subjectId: SUBJECT, _count: { _all: 1 } }]),
+      },
+      booking: { findMany: jest.fn().mockResolvedValue([]) },
+      tutor: {
+        findMany: jest.fn().mockResolvedValue([
+          { subjectIds: [SUBJECT], published: false }, // the ONLY tutor is retired
+        ]),
+      },
+      subject: {
+        findMany: jest.fn().mockResolvedValue([{ id: SUBJECT, name: 'Mathématiques' }]),
+      },
+    };
+    const res = await svcWith(prisma).overview({ tenantId: TENANT });
+    const maths = res.bySubject.find((s) => s.subjectId === SUBJECT);
+    expect(maths?.tutorCount).toBe(0); // the gap surfaces
+    expect(res.totals.publishedTutors).toBe(0);
   });
 });

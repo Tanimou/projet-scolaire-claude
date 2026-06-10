@@ -13,7 +13,7 @@
 | S3 | Parent remediation progress strip (measured improvement) | `[web][a11y]` | P2 | ✅ shipped | this PR |
 | S4 | Teacher capacity management + booking transitions | `[auth]` | P2 | ✅ shipped | this PR |
 | S5 | Admin catalogue curation & oversight | `[auth]` | P1 | ✅ shipped | this PR |
-| S6 | Loop hardening: notifications + cancellation + completion + uptake sweep | `[auth]` | P2-P3 | ⬜ not started | — |
+| S6 | Loop hardening: notifications + cancellation + completion + uptake sweep | `[auth]` | P2-P3 | ✅ shipped | this PR |
 
 ## What landed this run (spec run)
 
@@ -382,13 +382,91 @@ now internally consistent.
   "lapsed teaching → read-only" discipline). Same-tenant, their own tutor's booking → not a breach, arguably
   acceptable; confirm intent in S6.
 
+## What landed in S6 (this run — `epic-slice` — loop hardening, `[auth][remediation][worker][abac][rgpd]`, P2-P3)
+
+- **Contracts (`packages/contracts/src/dto/remediation.ts`):** additive `CloseRemediationPlanDtoSchema`
+  (`{ resolution: 'met' | 'closed' }`) + `ReopenRemediationPlanDtoSchema` (`{}`). **Types-only on the API
+  side** (the response reuses the EXISTING `RemediationPlanDto` — already carries `status`/`closedAt`); NO
+  new runtime VALUE import → **no `packages/contracts/dist` rebuild required for S6 to function**.
+- **API — plan completion verb (`remediation.controller.ts` + `remediation.service.ts`):** FR-1/FR-2 —
+  parent + admin, kind + reversible. **Parent** `PATCH /remediation/plans/:id/{close,reopen}`
+  (`remediation.book` + guardianship ABAC `canAccessStudent` BEFORE the write, 404-before-403); **admin**
+  `PATCH /remediation/admin/plans/:id/{close,reopen}` (`remediation.manage`, in-tenant) — two sibling
+  routes express the "parent OR admin" gate because the guards differ. The flip is a **from-status-guarded
+  `updateMany`** (`where:{ id, tenantId, status:'open' }` for close; `status:{in:['met','closed']}` for
+  reopen) — a concurrent double-close yields exactly one success + one deterministic **409** (never
+  last-writer-wins / never a 500); `closedAt=now()`/`closedBy` set on close, cleared on reopen. Reopen
+  catches the open-plan `@@unique` **P2002** → kind 409 *"un autre plan est déjà ouvert pour cette
+  matière"* (a newer open plan for the same student/subject blocks the reopen). Append-only
+  `remediation.plan_closed` / `remediation.plan_reopened` audit (before/after) + best-effort parent notify
+  (kind `remediation`, no new queue). The sweep NEVER auto-closes (suggestion only).
+- **API — admin curation notification parity (`remediation.controller.ts`):** FR-4 — on a tutor APPROVE
+  (`published` false→true) and on a NEW slot published on a teacher-linked tutor, best-effort notify the
+  linked teacher (`tutor.userProfileId`, null for external/peer → no notify) via
+  `NotificationsService.createMany` (kind `remediation`, deep-link `/teacher/remediation`,
+  `NotificationPreference`-gated by the existing `createMany` gating, no new queue). A notify failure never
+  rolls back the curation write (the established try/catch).
+- **API — the four S5-deferred fixes (`admin-remediation.service.ts` + `remediation.controller.ts`):**
+  FR-6 (FM-8 retire audit) — the create-reuse branch only LOWERS `published` true→false when EXPLICITLY
+  provided (never defaults a reuse to false → no silent retire of a live self-published teacher tutor) and
+  signals `reused:true` so the controller routes through `remediation.tutor_updated` (published
+  before/after), not `tutor_created`. FR-7 — admin slot create writes `createdBy = actor userProfileId`
+  (was the Tutor id). FR-8 — `overview.tutorCountBySubject` counts only `published:true` tutors (a
+  retired-only subject reads as a genuine capacity gap). FR-9 — admin `?subjectId=` is
+  `ParseUUIDPipe({ optional: true })`-validated (malformed → 400, not a Postgres 500 on the `uuid[]` query;
+  undefined/empty still means no filter).
+- **Worker — auto-suggest-complete sweep (`apps/worker/src/modules/remediation-sweep/`):** FR-5 — a NEW
+  cron (the `AlertsCronService` shape verbatim — plain `setInterval`, a `running` re-entrancy guard, a
+  startup delay, a per-tenant + per-plan try/catch). Each tick resolves tenants with ≥1 OPEN plan; per
+  tenant, finds OPEN plans whose subject's year-row `StudentSubjectSnapshot.trendDelta` (`termId=null`,
+  snapshot-first; a miss simply SKIPS, no live fall-through, never errors) ≥ `IMPROVEMENT_DELTA_THRESHOLD`
+  (1.5, asserted byte-identical to the contracts value by a guard test); for each writes an IDEMPOTENT
+  best-effort `remediation` Notification SUGGESTING completion (`sourceId=${planId}:improvement_suggested`
+  so a re-tick never re-sends). The sweep NEVER auto-closes — it only suggests (the close is a human,
+  reversible act). Tenant-scoped on EVERY query; env-tunable (`REMEDIATION_SWEEP_INTERVAL_MS` default 6h,
+  `REMEDIATION_SWEEP_STARTUP_DELAY_MS`). Registered in `apps/worker/src/app.module.ts`. **No second BullMQ
+  queue, no new datastore.**
+- **Tests:** `remediation.service.spec.ts` adds the close from-status-guarded concurrency (two concurrent
+  closes → exactly one success + one null→409) + reopen (open flip / already-open null / P2002
+  conflict_open_exists) suites; `admin-remediation.service.spec.ts` adds FR-6 (reuse with no `published`
+  preserves the live state + `reused:true`), FR-7 (`createdBy === actor`), FR-8 (published-only tutorCount
+  + a retired-only-subject gap), FR-4 (`tutorUserProfileId` surfaced) and updates the existing
+  upsertAvailability calls for the new `userProfileId` arg; `remediation-sweep-cron.spec.ts` proves the
+  threshold byte-parity, suggestion-only (no plan update/updateMany), idempotency (two ticks → one notify),
+  sub-threshold/null/snapshot-miss skips, and tenant-scoping.
+- **No schema change** (the `met`/`closed` enum values + `closedAt`/`closedBy` columns exist from S1), no
+  new permission, no new ADR, no second BullMQ queue. **Web** (the "Annulé"/"Refusé" StatusBadge polish +
+  the completion verb island + the auto-suggest banner) is the disjoint FE agent's slice (apps/web only).
+
+## Outstanding / pending for S6 (carry into the next epic or human)
+
+- **`prisma db push` for the E7 tables remains pending from S1/S2** (infra was down across S1→S5) — this
+  slice adds **zero** schema, but the whole loop (plans/bookings/tutors/sweep) is non-functional until an
+  operator applies the pending additive E7 migration to dev/prod.
+- **Sentinel S4/S5 residual (intent confirmed, not a breach):** the booking-`transition` ownership wall
+  checks `tutor.userProfileId === me` (same-tenant, own-tutor's-own-booking) but does not re-verify the
+  teacher CURRENTLY teaches the pupil. Per the architect ruling this is **acceptable** (same-tenant,
+  own-tutor) — recorded here as a deliberate decision, not left ambiguous.
+- **No controller-level integration test** on the new close/reopen routes (the from-status-guard /
+  P2002 / suggestion logic is proven at the service + cron layers; `apps/web` has no unit-test runner —
+  consistent with S1–S5). The curation-notify wiring is proven by the service-layer `tutorUserProfileId`
+  surface; the controller try/catch fan-out mirrors the S2/S4 best-effort pattern.
+
 ## Next action
+
+Ship the next epic slice (E7 is now complete — all 6 slices shipped). Per `bmad/roadmap.md`, the next
+proposed epic is **E8 — Student Portal** (or interleave a Tier-4 foundation item: E9 enrollment
+self-service UI, E10 quality bar / E2E + WCAG).
+
+<details><summary>S6 original "next action" note (now shipped)</summary>
 
 Ship **S6** (`epic-slice` — loop hardening: notifications + cancellation + completion + uptake sweep,
 `[auth]`, P2-P3): close out the remediation loop — parent/tutor notification parity on admin curation
 events, booking cancellation/completion edge polish, an uptake/utilisation sweep, and the S5-deferred
 fixes (FM-8 retire audit, `createdBy` provenance, overview published-only `tutorCount`, the
 `?subjectId=` `ParseUUIDPipe`). No schema change beyond S1/S2. The S5 slice above is now shipped.
+
+</details>
 
 <details><summary>S5 original "next action" note (now shipped)</summary>
 

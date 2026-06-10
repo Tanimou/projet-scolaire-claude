@@ -180,6 +180,102 @@ export class RemediationService {
   }
 
   /**
+   * E7-S6 — Mark an OPEN plan complete (kind + reversible). `resolution`
+   * discriminates the celebratory `met` ("objectif atteint") from the
+   * administrative `closed` ("clôturé sans suite"). The flip is a
+   * from-status-guarded `updateMany` (`where:{ id, tenantId, status:'open' }`,
+   * the ADR-020 idiom) so a concurrent double-close matches 0 rows on the loser →
+   * deterministic 409, never last-writer-wins / never a 500. Sets `closedAt=now()`
+   * + `closedBy`. The caller (controller) has already run guardianship ABAC (parent)
+   * or is `remediation.manage`-gated (admin) BEFORE this write.
+   *
+   * Returns the updated plan DTO, or null when nothing was open to close (already
+   * met/closed → the controller maps to a kind 409).
+   */
+  async closePlan(args: {
+    tenantId: string;
+    planId: string;
+    resolution: 'met' | 'closed';
+    userProfileId: string;
+  }): Promise<{ plan: RemediationPlanDto } | null> {
+    const result = await this.prisma.remediationPlan.updateMany({
+      where: { id: args.planId, tenantId: args.tenantId, status: 'open' },
+      data: {
+        status: args.resolution,
+        closedAt: new Date(),
+        closedBy: args.userProfileId,
+      },
+    });
+    if (result.count === 0) return null;
+
+    const row = await this.prisma.remediationPlan.findFirst({
+      where: { id: args.planId, tenantId: args.tenantId },
+      include: PLAN_INCLUDE,
+    });
+    if (!row) return null;
+    return { plan: this.toPlanDto(row) };
+  }
+
+  /**
+   * E7-S6 — Reopen a met/closed plan back to `open` (the reversibility). A
+   * from-status-guarded `updateMany` (`where:{ id, tenantId, status:{in:['met',
+   * 'closed']} }`) clears `closedAt`/`closedBy`. Idempotent/safe: reopening an
+   * already-open plan matches 0 rows → the controller returns a kind 409, never a
+   * 500. MUST respect the open-plan `@@unique([tenantId, studentId, subjectId,
+   * status])`: if a NEW open plan for the same (student, subject) was created after
+   * this one closed, reopening would collide on P2002 → we surface a sentinel
+   * `'conflict_open_exists'` so the controller returns a kind 409 ("un autre plan
+   * est déjà ouvert pour cette matière"), never a 500.
+   *
+   * Returns the reopened plan DTO; `null` = nothing reopenable (already open);
+   * `'conflict_open_exists'` = another open plan blocks the reopen.
+   */
+  async reopenPlan(args: {
+    tenantId: string;
+    planId: string;
+    userProfileId: string;
+  }): Promise<{ plan: RemediationPlanDto } | null | 'conflict_open_exists'> {
+    try {
+      const result = await this.prisma.remediationPlan.updateMany({
+        where: {
+          id: args.planId,
+          tenantId: args.tenantId,
+          status: { in: ['met', 'closed'] },
+        },
+        data: { status: 'open', closedAt: null, closedBy: null },
+      });
+      if (result.count === 0) return null;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return 'conflict_open_exists';
+      }
+      throw err;
+    }
+
+    const row = await this.prisma.remediationPlan.findFirst({
+      where: { id: args.planId, tenantId: args.tenantId },
+      include: PLAN_INCLUDE,
+    });
+    if (!row) return null;
+    return { plan: this.toPlanDto(row) };
+  }
+
+  /**
+   * Load a plan tenant-scoped for the close/reopen verbs — returns the student +
+   * status the controller needs for guardianship ABAC (parent path) BEFORE the
+   * write (404-before-403). Null on miss (404).
+   */
+  async loadPlanForLifecycle(args: {
+    tenantId: string;
+    planId: string;
+  }): Promise<{ studentId: string; status: string } | null> {
+    return this.prisma.remediationPlan.findFirst({
+      where: { id: args.planId, tenantId: args.tenantId },
+      select: { studentId: true, status: true },
+    });
+  }
+
+  /**
    * E7-S3 — the parent remediation progress strip payload: one entry per OPEN
    * (`status:'open'`) plan for the student, carrying the measured-improvement
    * payoff the dashboard strip renders. Composed into the parent-dashboard

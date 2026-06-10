@@ -23,7 +23,8 @@ import {
   formatDateLong,
 } from '@pilotage/ui';
 
-import { formatSlotLabel, type CatalogueSlotShape } from './slot-format';
+import { PlanCompletion } from './PlanCompletion';
+import { formatSlotLabel, slotAvailabilityMeta, type CatalogueSlotShape } from './slot-format';
 
 export const metadata: Metadata = { title: 'Soutien scolaire' };
 export const dynamic = 'force-dynamic';
@@ -41,6 +42,8 @@ interface PlanResponse {
   baselineAvg: number | null;
   baselineTrendDelta: number | null;
   createdAt: string;
+  /** E7-S6: set once the plan is completed (met|closed), else null. */
+  closedAt?: string | null;
 }
 
 interface CatalogueTutor {
@@ -88,10 +91,15 @@ const TUTOR_TYPE_ICON: Record<CatalogueTutor['type'], typeof GraduationCap> = {
 
 export default async function RemediationPlanPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ planId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { planId } = await params;
+  const sp = (await searchParams) ?? {};
+  // The cron auto-suggest deep-link (FR-5) may append `?suggest=1`; harmless if absent.
+  const suggestImproved = sp.suggest === '1';
 
   const plan = await safe(
     api<PlanResponse>(`/api/v1/remediation/plans/${planId}`, { cache: 'no-store' }),
@@ -150,12 +158,9 @@ export default async function RemediationPlanPage({
                     size="sm"
                   />
                 )}
-                <StatusBadge
-                  label={plan.status === 'open' ? 'Soutien en cours' : 'Clôturé'}
-                  tone={plan.status === 'open' ? 'sky' : 'neutral'}
-                  size="sm"
-                  withDot
-                />
+                {plan.status === 'open' && (
+                  <StatusBadge label="Soutien en cours" tone="sky" size="sm" withDot />
+                )}
               </div>
               <p className="mt-1.5 text-sm text-slate-600">
                 {plan.objective ??
@@ -166,7 +171,21 @@ export default async function RemediationPlanPage({
                 {plan.baselineAvg != null && (
                   <> · Moyenne de départ : {plan.baselineAvg.toFixed(1)}/20</>
                 )}
+                {plan.closedAt && plan.status !== 'open' && (
+                  <> · Clôturé le {formatDateLong(plan.closedAt)}</>
+                )}
               </p>
+
+              {/* E7-S6 — kind, reversible completion verb (met|closed) + reopen +
+                  the calm auto-suggest banner. The only client island on the page. */}
+              <div className="mt-3">
+                <PlanCompletion
+                  planId={plan.id}
+                  status={plan.status}
+                  subjectLabel={subjectLabel}
+                  suggestImproved={suggestImproved}
+                />
+              </div>
             </div>
           </div>
         </CardContent>
@@ -252,20 +271,32 @@ export default async function RemediationPlanPage({
                           </p>
                         ) : (
                           <ul className="flex flex-wrap gap-1.5" role="list">
-                            {tutor.slots.map((slot) => (
-                              <li
-                                key={slot.id}
-                                className="inline-flex items-center gap-1 rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
-                              >
-                                {formatSlotLabel(slot)}
-                              </li>
-                            ))}
+                            {tutor.slots.map((slot) => {
+                              const avail = slotAvailabilityMeta(slot);
+                              return (
+                                <li
+                                  key={slot.id}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
+                                >
+                                  {formatSlotLabel(slot)}
+                                  {avail && (
+                                    <StatusBadge
+                                      label={avail.label}
+                                      tone={avail.tone}
+                                      size="sm"
+                                    />
+                                  )}
+                                </li>
+                              );
+                            })}
                           </ul>
                         )}
-                        {/* No booking verb in S1 — a calm, honest hint. */}
+                        {/* Booking is handled with the school — a calm, honest hint
+                            (an already-booked seat shows the "Réservé" badge above;
+                            a cancellation frees the seat and is never a dead-row). */}
                         <p className="mt-2 text-[11px] text-slate-500">
-                          La réservation en ligne arrive bientôt — contactez l’école
-                          pour réserver un créneau.
+                          Pour réserver ou annuler un créneau, contactez l’école — un
+                          créneau annulé redevient disponible pour une autre famille.
                         </p>
                       </div>
                     </CardContent>
