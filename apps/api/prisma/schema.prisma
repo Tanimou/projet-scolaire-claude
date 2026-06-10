@@ -469,6 +469,8 @@ model Student {
   // E7 — remediation plans + bookings for this student (additive back-relations).
   remediationPlans  RemediationPlan[]
   bookings          Booking[]
+  // E9-S1 — guardianship-claims whose matcher resolved to THIS student (additive).
+  claims            GuardianshipClaim[] @relation("ClaimMatchedStudent")
 
   @@unique([schoolId, externalRef])
   @@index([tenantId, schoolId])
@@ -494,6 +496,8 @@ model Guardian {
   school        School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   userProfile   UserProfile?   @relation(fields: [userProfileId], references: [id], onDelete: SetNull)
   guardianships Guardianship[]
+  // E9-S1 — the parent's self-service child-claims (additive back-relation array).
+  claims        GuardianshipClaim[]
 
   @@index([tenantId, schoolId])
   @@index([lastName, firstName])
@@ -521,11 +525,69 @@ model Guardianship {
 
   guardian Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
   student  Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // E9-S1 — the claim this link was driven by, if any (additive, 1:1 back-relation).
+  claim    GuardianshipClaim?
 
   @@unique([guardianId, studentId])
   @@index([tenantId])
   @@index([studentId, status])
   @@map("guardianship")
+}
+
+// ---------------------------------------------------------------------------
+// E9-S1 — Enrollment self-service: the parent child-claim (GuardianshipClaim)
+// ---------------------------------------------------------------------------
+
+/// E9 — a parent's self-service request to be attached to a child. The provenance
+/// + lifecycle record that DRIVES a Guardianship (the request→link pattern, the
+/// E1-S3 MeetingRequest precedent). The claim is the request; the Guardianship is
+/// the access grant. A claim is created on EVERY parent submit (matched or not);
+/// only a matched claim also drives a `pending` Guardianship. A `match_failed`
+/// claim has matchedStudentId=null + guardianshipId=null — no Guardianship orphan.
+/// Carries tenantId+schoolId (the ADR-002 application-level scoping family).
+/// See docs/adr/ADR-022-enrollment-self-service-child-claim.md.
+model GuardianshipClaim {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  tenantId           String                  @map("tenant_id") @db.Uuid
+  schoolId           String                  @map("school_id") @db.Uuid
+  guardianId         String                  @map("guardian_id") @db.Uuid
+  // What the parent typed (the audit/non-leak evidence; never echoed on a no-match):
+  claimedFirstName   String                  @map("claimed_first_name")
+  claimedLastName    String                  @map("claimed_last_name")
+  claimedDob         DateTime?               @map("claimed_dob") @db.Date
+  claimedExternalRef String?                 @map("claimed_external_ref")
+  relationship       GuardianRelationship
+  // The matcher decision + the driven link (null on a no-match):
+  matchedStudentId   String?                 @map("matched_student_id") @db.Uuid
+  guardianshipId     String?                 @unique @map("guardianship_id") @db.Uuid
+  status             GuardianshipClaimStatus @default(submitted)
+  decisionReason     String?                 @map("decision_reason")
+  decidedBy          String?                 @map("decided_by") @db.Uuid
+  decidedAt          DateTime?               @map("decided_at") @db.Timestamptz(6)
+  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  guardian     Guardian      @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+  student      Student?      @relation("ClaimMatchedStudent", fields: [matchedStudentId], references: [id], onDelete: SetNull)
+  guardianship Guardianship? @relation(fields: [guardianshipId], references: [id], onDelete: SetNull)
+
+  // Idempotency: at most ONE open (submitted) claim per (guardian, matched child).
+  // A partial unique on (guardianId, matchedStudentId) WHERE status='submitted'
+  // is applied as a raw partial index (the ADR-020/E7-S2 BookingIndexBootstrap
+  // idiom) since Prisma cannot express a partial @@unique. See
+  // guardianship-claim-index.bootstrap.ts.
+  @@index([tenantId, status])
+  @@index([guardianId, status])
+  @@map("guardianship_claim")
+}
+
+// ── E9 — additive enum (net-new type; no existing enum touched) ──
+enum GuardianshipClaimStatus {
+  submitted // pending admin review (the queue). Drives a `pending` Guardianship on a match.
+  approved // admin approved → the driven Guardianship is now `active` (access granted).
+  rejected // admin rejected (decisionReason set). The parent may re-submit corrected details.
+  match_failed // deny-by-default no/ambiguous match — NO Guardianship driven, never leaked.
+  withdrawn // the parent cancelled a still-`submitted` claim.
 }
 
 /// Student enrollment in a class section for a given academic year.

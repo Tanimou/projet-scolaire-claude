@@ -520,8 +520,27 @@ filler (E9 enrollment self-service / E10 quality bar).**
   one new parent-only `guardianships.claim` permission (admin rides existing `guardianships.approve`); the one
   new architectural decision (claim→link lifecycle + non-leak match + open-claim concurrency) →
   **`docs/adr/ADR-022`** authored on the **S1** run. **Two thin slices:** S1 parent claim+match+pending (→
-  ADR-022, `[schema][auth]`) · S2 admin approval queue + atomic `pending→active` grant. Next slice → **E9-S1**
-  (`epic-slice`).
+  ADR-022, `[schema][auth]`) · S2 admin approval queue + atomic `pending→active` grant.
+  - [x] **S1** — parent self-service child-claim + deny-by-default match + `pending` link. **Shipped**
+    (`epic-slice` — P1 `[schema][auth][abac][rgpd]`, **needs human review — RED gate fixed in-flight**): the
+    one additive `GuardianshipClaim` model + `GuardianshipClaimStatus` enum + additive back-relations on
+    `Guardian`/`Student`/`Guardianship` (no existing column/enum value changed) + the boot-applied
+    partial-unique open-claim index (`guardianship-claim-index.bootstrap.ts`, the E7-S2
+    `BookingIndexBootstrap` idiom); the new parent-only `guardianships.claim` permission (`permissions.constants.ts`
+    line 261 + both seeds — admin/teacher/student get 403); a parent-walled `child-claims` module
+    (`POST /parent/child-claims` server-derived `Guardian`/tenant/school + a **pure deny-by-default matcher**
+    `claim-match.ts` — exact `externalRef` else name+mandatory-DOB, exactly-one candidate, no fuzzy, never
+    cross-school — driving a **`pending` Guardianship, NEVER `active`**; **byte-identical `UNIFORM_RECEIVED`**
+    across matched/no-match/ambiguous; per-guardian rate-limit; `GET` self-scoped list; `POST :id/withdraw`
+    404-before-403, double-withdraw no-op), append-only audit, P2002-race collapse; the
+    `packages/contracts/src/dto/child-claim.ts` DTO; the parent FE (`ChildClaimDrawer` +
+    `ChildClaimsStatusStrip` on `/parent/children`, graceful "indisponible" degrade when the additive
+    `db push` is still pending); `docs/adr/ADR-022-enrollment-self-service-child-claim.md`. RED gate fixed
+    in-flight: the 8 stale-Prisma-client TS2551/TS7006 errors cleared by `prisma generate` (the E7-S5/E8-S1
+    stale-client pattern — no source edit). **Operator pre-req (gates demoability, not merge):** the additive
+    `guardianship_claim` `prisma db push`. *(schema [schema][auth][abac][rgpd] tag)*
+  - [ ] **S2** — admin approval queue + atomic `pending→active` grant + approve/reject notify + UIs.
+  Next slice → **E9-S2** (`epic-slice`, `[auth][abac]`, P2).
 - **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `proposed` · ongoing — Playwright journeys
   (grade publish → parent alert; parent claims child; messaging) + fix axe-core violations on
   authenticated pages. Maps to R9/R10.

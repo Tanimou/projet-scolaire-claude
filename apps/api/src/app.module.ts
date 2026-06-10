@@ -8,6 +8,7 @@ import { AnnouncementsModule } from './modules/announcements/announcements.modul
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { CalendarModule } from './modules/calendar/calendar.module';
+import { ChildClaimsModule } from './modules/child-claims/child-claims.module';
 import { EnrollmentsModule } from './modules/enrollments/enrollments.module';
 import { ExportsModule } from './modules/exports/exports.module';
 import { GradesModule } from './modules/grades/grades.module';
@@ -56,6 +57,7 @@ import { PrismaModule } from './shared/prisma/prisma.module';
     MessagingModule,
     RemediationModule,
     StudentPortalModule,
+    ChildClaimsModule,
   ],
   controllers: [HealthController],
 })

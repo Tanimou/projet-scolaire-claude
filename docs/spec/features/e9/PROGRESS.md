@@ -9,8 +9,8 @@
 
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
-| S1 | `GuardianshipClaim` schema + deny-by-default match + parent self-claim + status/manage → **ADR-022** | `[schema][auth][abac][rgpd]` | P1 | ⬜ not started (spec authored this run) | — |
-| S2 | Admin approval queue + approve/reject + notify + UIs | `[auth][abac]` | P2 | ⬜ not started | — |
+| S1 | `GuardianshipClaim` schema + deny-by-default match + parent self-claim + status/manage → **ADR-022** | `[schema][auth][abac][rgpd]` | P1 | ✅ **shipped** (needs human review; RED gate fixed in-flight via `prisma generate`) | — |
+| S2 | Admin approval queue + approve/reject + notify + UIs | `[auth][abac]` | P2 | ⬜ not started (**next slice**) | — |
 
 ## What landed this run (spec run)
 
@@ -108,8 +108,54 @@
    without a guardianship; keeps the admin path untouched). The alternative (columns on `Guardianship`) is
    rejected with rationale in `data-model.md` §1.3 / ADR-022.
 
+## What landed on the S1 run (epic-slice)
+
+- **Schema (additive only):** `model GuardianshipClaim` + `enum GuardianshipClaimStatus`
+  (`submitted/approved/rejected/match_failed/withdrawn`) + additive back-relations on
+  `Guardian.claims` / `Student.claims` (`@relation("ClaimMatchedStudent")`) / `Guardianship.claim` (1:1) —
+  **zero existing column/enum value changed**; `GuardianshipStatus` and the `POST /guardians/guardianships`
+  admin path are byte-untouched. The partial-unique open-claim index is applied on API boot by
+  `guardianship-claim-index.bootstrap.ts` (the E7-S2 `BookingIndexBootstrap` idiom — Prisma can't express a
+  partial `@@unique`).
+- **Permission:** the new parent-only `guardianships.claim` in `permissions.constants.ts` (line 261, `parent`
+  block only) + `seed.ts` + `seed-demo.ts`. Admin/teacher/student tokens → 403.
+- **API module `apps/api/src/modules/child-claims/`:** `child-claims.controller.ts` (server-derived
+  `Guardian`/tenant/school, no client `guardianId`; `POST` submit, `GET` self-scoped list, `POST :id/withdraw`
+  404-before-403), `child-claims.service.ts` (uniform `UNIFORM_RECEIVED` response, transaction + idempotency +
+  P2002-collapse, per-guardian rate-limit, append-only audit), the **pure** `claim-match.ts` matcher
+  (deny-by-default, exact-normalised, no fuzzy, exactly-one-candidate), `dto/`, wired in `app.module.ts`. Specs:
+  `claim-match.spec.ts` + `child-claims.service.spec.ts`.
+- **Contracts:** `packages/contracts/src/dto/child-claim.ts` (+ `dto/index.ts` export).
+- **FE (`apps/web`):** `ChildClaimDrawer` + `ChildClaimsStatusStrip` (`components/parent/`) mounted on
+  `/parent/children` (+ the dashboard empty-state CTA), with `claim-actions.ts` / `claim-types.ts`; graceful
+  "indisponible" degrade on 404/501/503 while the `db push` is pending.
+- **ADR:** `docs/adr/ADR-022-enrollment-self-service-child-claim.md`.
+- **RED gate fixed in-flight:** 8 stale-Prisma-client TS2551/TS7006 errors cleared by `prisma generate`
+  (the E7-S5/E8-S1 stale-client pattern — no source edit; the code was correct against the new schema).
+  `pnpm typecheck` → 11/11 GREEN, `git diff --check` clean.
+- **Two CONFIRMED `major` correctness bugs fixed by the lock-holding session before land** (from the
+  verify panel): (1) **withdraw→reclaim P2002 swallow** — `withdraw()` now also nulls `guardianshipId`
+  when flipping the claim to `withdrawn`, so a later re-claim's revoked-link reuse can attach a fresh
+  `submitted` claim without colliding on the `@unique guardianshipId` (previously the target-agnostic
+  P2002 catch silently swallowed it, leaving the link stuck `revoked` with nothing in the S2 queue);
+  (2) **full-ISO DOB false `match_failed`** — `submitClaim()` normalises `birthDate` to its `yyyy-mm-dd`
+  date portion up-front, so a non-form/API/E2E caller sending a full ISO datetime no longer misses the
+  matcher's exact compare nor resolves to the wrong calendar day in the `@db.Date` filter.
+- **Murat's P0 cross-tenant/cross-school no-match test added** to `child-claims.service.spec.ts` (asserts
+  `where.tenantId`+`where.schoolId` on the candidate fetch and proves deny-by-default across schools) +
+  a withdraw-decouple regression test + a full-ISO-DOB normalisation test. **child-claims suite → 21/21
+  GREEN**; full build → **7/7 successful**.
+- **Remaining (non-blocking, deferred to S2 / polish):** 3 `minor` findings — the parent-dashboard
+  empty-state CTA renders `<ChildClaimDrawer>` without the `available` prop (not-migrated UX inconsistent
+  with `/parent/children`); the FE re-declares the contract types in `claim-types.ts` instead of importing
+  `@pilotage/contracts` (swap once dist is consumed); and a `ChildClaimDrawer` `aria-describedby` dangling-id
+  edge in the empty-name state.
+
 ## Next action
 
-Implement **E9-S1** from `tasks.md` + `stories/S1-…md` (the next `epic-slice` run). Re-verify the ADR number
-(`022`) against `docs/adr/` at authoring time. Apply the additive `db push` (operator step) before the
-parent surface is functional end-to-end.
+Implement **E9-S2** (the next `epic-slice` run): the **admin approval queue** — list `submitted` claims
+(rides the existing `guardianships.read`), atomic `pending→active` grant on approve / `rejected` +
+`decisionReason` on reject (from-status-guarded `updateMany`, ADR-020 idiom), parent notification reusing the
+existing `enrollment_status` `NotificationKind` (`sourceType='guardianship_claim'`), admin UI. **No schema.**
+Fix the `kind=guardianship` typo in `contracts/openapi.yaml` (`tasks.md` ledger R2). **Operator pre-req
+(gates demoability, not merge):** apply the additive `guardianship_claim` `prisma db push`.

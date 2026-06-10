@@ -1,6 +1,7 @@
 import { AlertTriangle, Sparkles, TrendingDown, UserX, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
 import { PortalShell } from '@/components/PortalShell';
 import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 import { FreshnessChip } from '@/components/freshness/FreshnessChip';
@@ -211,10 +212,14 @@ export default async function ParentDashboardPage({
       >
         <EmptyState
           icon={Sparkles}
-          title="Aucun enfant rattaché à votre compte"
-          description="Contactez l'administration de l'établissement pour faire le lien entre votre compte et le dossier de votre enfant."
+          title="Ajoutez votre enfant pour suivre sa scolarité"
+          description="Rattachez le dossier de votre enfant à votre compte. L'établissement validera la demande avant de vous donner accès au suivi."
           tone="amber"
-        />
+        >
+          <div className="mt-2">
+            <ChildClaimDrawer />
+          </div>
+        </EmptyState>
       </PortalShell>
     );
   }

@@ -33,6 +33,8 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['enrollments.write', 'Modifier inscriptions', 'enrollment', 'write'],
   ['enrollments.approve', 'Valider inscriptions', 'enrollment', 'approve'],
   ['guardianships.approve', 'Valider rattachements parents', 'guardianship', 'approve'],
+  // E9-S1 — parent-only self-service child-claim (granted to `parent` only).
+  ['guardianships.claim', 'Rattacher son enfant', 'guardianship', 'claim'],
   ['teaching_assignments.write', 'Affecter professeurs', 'teaching_assignment', 'write'],
   ['assessments.read', 'Lire évaluations', 'assessment', 'read'],
   ['assessments.write', 'Créer évaluations', 'assessment', 'write'],
@@ -120,6 +122,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
   parent: [
     'students.read', 'grades.read', 'attendance.read',
     'lessons.read', 'discipline.read', 'announcements.read',
+    'guardianships.read', 'guardianships.claim',
     'branding.read', 'exports.execute.parent',
     'remediation.read', 'remediation.book',
     'profile.read.self', 'profile.write.self',

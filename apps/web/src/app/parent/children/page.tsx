@@ -9,6 +9,8 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
+import { ChildClaimsStatusStrip } from '@/components/parent/ChildClaimsStatusStrip';
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
 import {
@@ -18,6 +20,8 @@ import {
   StatusBadge,
   formatDateShort,
 } from '@pilotage/ui';
+
+import type { ChildClaimListResponse, ChildClaimStatusRow } from './claim-types';
 
 export const metadata: Metadata = { title: 'Mes enfants' };
 export const dynamic = 'force-dynamic';
@@ -54,6 +58,30 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
   }
 }
 
+/**
+ * Fetch the parent's own child-claims (`GET /parent/child-claims`). Distinguishes
+ * the "backend not migrated yet" edge (404/501/503 — the additive `db push` is an
+ * operator pre-req) from no-claims so the strip degrades to a calm "indisponible"
+ * banner rather than crashing. Any other error → empty list.
+ */
+async function fetchClaims(): Promise<{
+  claims: ChildClaimStatusRow[];
+  available: boolean;
+}> {
+  try {
+    const resp = await api<ChildClaimListResponse>('/api/v1/parent/child-claims', {
+      cache: 'no-store',
+    });
+    return { claims: resp.claims ?? [], available: true };
+  } catch (err) {
+    if (err instanceof ApiError && [404, 501, 503].includes(err.status)) {
+      return { claims: [], available: false };
+    }
+    if (err instanceof ApiError) return { claims: [], available: true };
+    throw err;
+  }
+}
+
 function computeAge(birthIso: string | null | undefined): number | null {
   if (!birthIso) return null;
   const birth = new Date(birthIso);
@@ -70,9 +98,10 @@ function initials(first?: string | null, last?: string | null): string {
 }
 
 export default async function ParentChildrenPage() {
-  const resp = await safe(
-    api<{ data: Child[]; total: number }>('/api/v1/students', { cache: 'no-store' }),
-  );
+  const [resp, claimsResult] = await Promise.all([
+    safe(api<{ data: Child[]; total: number }>('/api/v1/students', { cache: 'no-store' })),
+    fetchClaims(),
+  ]);
   const children = resp?.data ?? [];
 
   const total = children.length;
@@ -108,6 +137,7 @@ export default async function ParentChildrenPage() {
         ]}
         title="Mes enfants"
         subtitle="Tous les enfants rattachés à votre compte parent — cliquez pour voir le profil complet"
+        actions={<ChildClaimDrawer available={claimsResult.available} />}
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -142,9 +172,13 @@ export default async function ParentChildrenPage() {
           <EmptyState
             icon={User}
             title="Aucun enfant rattaché"
-            description="Aucun enfant n'est lié à votre compte parent. Contactez l'administration de l'établissement pour rattacher le dossier de votre enfant à votre compte."
+            description="Aucun enfant n'est lié à votre compte parent. Rattachez le dossier de votre enfant, ou contactez l'administration de l'établissement."
             tone="amber"
-          />
+          >
+            <div className="mt-2">
+              <ChildClaimDrawer available={claimsResult.available} />
+            </div>
+          </EmptyState>
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {children.map((c) => {
@@ -270,6 +304,12 @@ export default async function ParentChildrenPage() {
           </ul>
         )}
       </section>
+
+      {/* E9-S1 — "Mes demandes" : self-scoped child-claim status surface. */}
+      <ChildClaimsStatusStrip
+        claims={claimsResult.claims}
+        available={claimsResult.available}
+      />
     </PortalShell>
   );
 }
