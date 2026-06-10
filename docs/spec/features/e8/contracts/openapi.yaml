@@ -1,0 +1,468 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — E8 Student Portal (API contract)
+  version: 0.1.0
+  description: >
+    E8 adds a FOURTH, READ-ONLY audience — the learner — seeing ONLY their own dossier
+    (my grades, upcoming assessments, attendance, announcements, the E6 trend, the E7 plan).
+    It activates the already-reserved `student` Keycloak realm-role (ADR-004/ADR-015), a
+    student-self ABAC wall (deny-by-default, self-only, NEVER peer comparison), and a thin
+    role-narrowed READ-ONLY permission family.
+
+    CONTRACT POSTURE — aggregate endpoints, convention-preserving, deny-by-default ABAC:
+      * All new routes live under /api/v1/student/* — each an AGGREGATE endpoint (no client
+        N+1), same convention as /analytics/*. There is NO `:studentId` path param on ANY
+        student route: the target student is resolved SERVER-SIDE from the JWT identity via
+        Student.userProfileId === me.id (the additive nullable @unique link E8-S1 adds via
+        db push — verified ABSENT on the live Student model today; see data-model.md §1.1). A
+        client-supplied student id has nowhere to go — it is IGNORED, not validated.
+      * Five NEW role-narrowed READ-ONLY permissions (the E4 exports.execute.parent / E7
+        remediation.read|book house style), granted ONLY to the `student` realm-role:
+        grades.read.self, assessments.read.self, attendance.read.self,
+        announcements.read.self, analytics.read.self. They never widen an existing
+        permission and are never granted to parent/teacher/admin.
+      * The student-self ABAC scope is EXACTLY [ownStudentId] or [] — NEVER null
+        (the admin/teacher "unrestricted" sentinel). A student can read their own dossier
+        and nothing else.
+      * NO peer comparison ANYWHERE: the student dashboard payload STRUCTURALLY LACKS
+        studentRank / classAverage / classRankTotal (a narrowed projection of the parent
+        dashboard response — the E4 ParentExportJobDto narrowing precedent), so the
+        RGPD/non-stigmatising wall lives in the payload SHAPE, not just the UI.
+      * READ-ONLY: there is NO student write verb anywhere (no booking, no messaging
+        initiation, no flag/ack/revise) — the read-only wall is in the grant list itself.
+
+    All routes are under /api/v1 and require a Keycloak bearer JWT carrying the `student`
+    realm-role. Tenant scoping is implicit on every operation (application-layer
+    where:{tenantId}, ADR-019); tenantId/schoolId/studentId are server-derived from the JWT
+    (UserSyncService.ensureUser + SchoolContextService.forUser + the self-resolve), never
+    client-supplied.
+
+    The ONE new architectural decision is the `student` role activation + the student-self
+    ABAC wall + the client/permission posture → ADR-021-student-role-and-self-abac.md,
+    authored on S1. E8 makes exactly ONE additive schema change in S1: the nullable
+    Student.userProfileId @unique account link (db push; verified absent today — it mirrors
+    Guardian.userProfileId, NOT a pre-existing Student column). No further schema change.
+
+    Slice mapping (see tasks.md): S1 = role + ABAC + auth wiring + /student/me + /student/grades.
+    S2 = /student/upcoming + /student/attendance. S3 = /student/announcements + the
+    /student/dashboard "Mon objectif" composite (E6 trend + next assessments + E7 progress).
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: student-identity
+    description: "[S1] The student's own identity + activation gate. analytics.read.self."
+  - name: student-grades
+    description: "[S1] The student's own published grades. grades.read.self."
+  - name: student-schedule
+    description: "[S2] The student's own upcoming assessments + attendance. assessments/attendance.read.self."
+  - name: student-announcements
+    description: "[S3] Announcements relevant to the student. announcements.read.self."
+  - name: student-dashboard
+    description: "[S3] The 'Mon objectif' actionable dashboard (E6 trend + E7 progress, NO peer comparison). analytics.read.self."
+
+paths:
+  # ===========================================================================
+  # S1 — Identity + activation gate.
+  # ===========================================================================
+  /student/me:
+    get:
+      tags: [student-identity]
+      summary: "[S1] The caller's own student identity + activation gate — perm: analytics.read.self"
+      description: >
+        Resolves the caller's Student via Student.userProfileId === me.id within the caller's
+        tenant (server-derived). Returns the student header identity + an `activated` flag.
+        When the account has NO linked Student (activated=false), `student` is null and the
+        portal shows a kind empty state (NEVER a 500, NEVER another student's data).
+      operationId: getStudentMe
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The caller's own student identity (or the not-activated gate).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentMeResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenNotStudent' }
+
+  # ===========================================================================
+  # S1 — My grades (read-only).
+  # ===========================================================================
+  /student/grades:
+    get:
+      tags: [student-grades]
+      summary: "[S1] The student's own published grades by subject + teacher comment — perm: grades.read.self"
+      description: >
+        The caller's OWN published grades, by subject, with the teacher comment — reusing the
+        parent grade producer logic, resolved to the SELF student id (no path param). READ-ONLY
+        (no flag / revise / ack reachable). Tenant-scoped; sensitive read audited
+        (student.read.grades). A not-activated caller → 200 with an empty payload + activated=false.
+      operationId: getStudentGrades
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/TermIdQuery'
+      responses:
+        '200':
+          description: The student's own grades.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentGradesResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenNotStudent' }
+
+  # ===========================================================================
+  # S2 — Upcoming assessments + attendance (read-only).
+  # ===========================================================================
+  /student/upcoming:
+    get:
+      tags: [student-schedule]
+      summary: "[S2] The student's own upcoming assessments — perm: assessments.read.self"
+      description: >
+        The caller's OWN upcoming assessments for their OWN class (subject, date, coefficient),
+        soonest first — reusing the parent-upcoming aggregate resolved to self. Tenant-scoped,
+        self-only, no other-student leak, no peer comparison.
+      operationId: getStudentUpcoming
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The student's own upcoming assessments.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentUpcomingResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenNotStudent' }
+
+  /student/attendance:
+    get:
+      tags: [student-schedule]
+      summary: "[S2] The student's own attendance record — perm: attendance.read.self"
+      description: >
+        The caller's OWN attendance records (present / absent / late, justified or not),
+        self-scoped, factual and kind — NEVER compared to classmates. Tenant-scoped; sensitive
+        read audited (student.read.attendance).
+      operationId: getStudentAttendance
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/TermIdQuery'
+      responses:
+        '200':
+          description: The student's own attendance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentAttendanceResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenNotStudent' }
+
+  # ===========================================================================
+  # S3 — Announcements (read-only).
+  # ===========================================================================
+  /student/announcements:
+    get:
+      tags: [student-announcements]
+      summary: "[S3] Announcements relevant to the student — perm: announcements.read.self"
+      description: >
+        Announcements relevant to the student (school / their class / personal scope), newest
+        first — reusing the announcement scope-resolution narrowed to the student's OWN class +
+        person. No staff-only or other-class announcement is disclosed. Tenant-scoped.
+      operationId: getStudentAnnouncements
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Announcements relevant to the student.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentAnnouncementsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenNotStudent' }
+
+  # ===========================================================================
+  # S3 — The "Mon objectif" actionable dashboard (NO peer comparison).
+  # ===========================================================================
+  /student/dashboard:
+    get:
+      tags: [student-dashboard]
+      summary: "[S3] The 'Mon objectif' actionable student dashboard — perm: analytics.read.self"
+      description: >
+        The first-person, kind composite: the student's OWN E6 per-subject trend (snapshot-first,
+        live fall-through — reused, no new metric), the next assessments to prepare, and — where an
+        E7 RemediationPlan exists for the student — a kind 'ton soutien en {matière}' progress line
+        (reused read-only; the student NEVER books). Best-effort composition (a sub-read throw →
+        omit that block, never errors the <2 s dashboard).
+
+        RGPD WALL IN THE SHAPE: this payload STRUCTURALLY LACKS studentRank / classAverage /
+        classRankTotal — it is a NARROWED projection of the parent dashboard response, so no
+        peer-relative figure can leak even if the UI is wrong. NO rank, NO class average framed
+        against the student, NO other child's data, NO peer comparison anywhere. Tenant-scoped;
+        sensitive read audited (student.read.dashboard).
+      operationId: getStudentDashboard
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The 'Mon objectif' dashboard composite.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentDashboardResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenNotStudent' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TermIdQuery:
+      name: termId
+      in: query
+      required: false
+      description: Optional term filter; omitted → the active academic year.
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid bearer token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ForbiddenNotStudent:
+      description: >
+        The caller lacks the student permission (not a `student`-role token), OR a `student`-role
+        token reached a non-student endpoint. Deny-by-default. (Note: a student supplying a
+        FOREIGN student id is NOT a 403 — there is no id parameter to supply; self is resolved
+        from identity and any incoming id is ignored.)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        statusCode: { type: integer }
+        message: { type: string }
+        error: { type: string }
+      required: [statusCode, message]
+
+    StudentHeader:
+      type: object
+      description: The student's own header identity (NO peer-relative field).
+      properties:
+        id: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+        classSectionName: { type: string, nullable: true }
+        gradeLevelName: { type: string, nullable: true }
+        photoUrl: { type: string, nullable: true }
+      required: [id, firstName, lastName]
+
+    StudentMeResponse:
+      type: object
+      description: The activation gate + the student's own header. `student` null when not activated.
+      properties:
+        activated:
+          type: boolean
+          description: True when the caller's UserProfile is linked to a Student.
+        student:
+          oneOf:
+            - $ref: '#/components/schemas/StudentHeader'
+            - type: 'null'
+      required: [activated, student]
+
+    StudentSubjectGrade:
+      type: object
+      properties:
+        subjectId: { type: string, format: uuid }
+        subjectName: { type: string }
+        average:
+          type: number
+          nullable: true
+          description: The student's own subject average (own figure only — NEVER a class average).
+        grades:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              value: { type: number, nullable: true }
+              scale: { type: number }
+              coefficient: { type: number }
+              assessmentName: { type: string, nullable: true }
+              gradedAt: { type: string, format: date-time, nullable: true }
+              teacherComment: { type: string, nullable: true }
+            required: [id, scale, coefficient]
+      required: [subjectId, subjectName, grades]
+
+    StudentGradesResponse:
+      type: object
+      properties:
+        activated: { type: boolean }
+        subjects:
+          type: array
+          items: { $ref: '#/components/schemas/StudentSubjectGrade' }
+      required: [activated, subjects]
+
+    StudentUpcomingItem:
+      type: object
+      properties:
+        assessmentId: { type: string, format: uuid }
+        subjectId: { type: string, format: uuid }
+        subjectName: { type: string }
+        title: { type: string, nullable: true }
+        scheduledAt: { type: string, format: date-time }
+        coefficient: { type: number, nullable: true }
+        termName: { type: string, nullable: true }
+      required: [assessmentId, subjectId, subjectName, scheduledAt]
+
+    StudentUpcomingResponse:
+      type: object
+      properties:
+        activated: { type: boolean }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/StudentUpcomingItem' }
+      required: [activated, items]
+
+    StudentAttendanceItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        date: { type: string, format: date }
+        status:
+          type: string
+          enum: [present, absent, late, excused]
+        justified: { type: boolean }
+        subjectName: { type: string, nullable: true }
+      required: [id, date, status, justified]
+
+    StudentAttendanceResponse:
+      type: object
+      properties:
+        activated: { type: boolean }
+        summary:
+          type: object
+          description: The student's OWN counts only (no peer comparison).
+          properties:
+            present: { type: integer }
+            absent: { type: integer }
+            late: { type: integer }
+            excused: { type: integer }
+          required: [present, absent, late, excused]
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/StudentAttendanceItem' }
+      required: [activated, summary, items]
+
+    StudentAnnouncementItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        body: { type: string }
+        scope:
+          type: string
+          enum: [school, cycle, grade_level, class_section, student]
+        priority:
+          type: string
+          enum: [low, normal, high]
+        pinned: { type: boolean }
+        publishedAt: { type: string, format: date-time, nullable: true }
+        readAt: { type: string, format: date-time, nullable: true }
+      required: [id, title, body, scope, priority, pinned]
+
+    StudentAnnouncementsResponse:
+      type: object
+      properties:
+        activated: { type: boolean }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/StudentAnnouncementItem' }
+        total: { type: integer }
+      required: [activated, items, total]
+
+    StudentSubjectTrend:
+      type: object
+      description: >
+        The student's OWN per-subject trend (E6 snapshot, snapshot-first/live). First-person,
+        kind. NO class average, NO rank — own movement only.
+      properties:
+        subjectId: { type: string, format: uuid }
+        subjectName: { type: string }
+        current:
+          type: number
+          nullable: true
+          description: The student's own current subject average (own figure only).
+        trendDelta:
+          type: number
+          nullable: true
+          description: The student's own term-over-term delta (kind framing; never vs a peer).
+        direction:
+          type: string
+          enum: [up, flat, down, unknown]
+          description: Used for kind, non-stigmatising copy/icon (never a rank).
+      required: [subjectId, subjectName, direction]
+
+    StudentRemediationLine:
+      type: object
+      description: >
+        The kind 'ton soutien en {matière}' line — reused from E7 RemediationPlan + progress
+        (READ-ONLY; the student never books). Present only when an E7 plan exists for the student.
+      properties:
+        planId: { type: string, format: uuid }
+        subjectId: { type: string, format: uuid }
+        subjectName: { type: string }
+        sessionsDone: { type: integer }
+        nextSessionAt: { type: string, format: date-time, nullable: true }
+        trendDelta:
+          type: number
+          nullable: true
+          description: The student's own delta since the plan baseline (kind; never vs a peer).
+        improved:
+          type: boolean
+          description: True when the E3 IMPROVEMENT threshold holds (the emerald celebration framing).
+      required: [planId, subjectId, subjectName, sessionsDone, improved]
+
+    StudentDashboardResponse:
+      type: object
+      description: >
+        The 'Mon objectif' composite. A NARROWED projection of the parent dashboard — it
+        STRUCTURALLY LACKS studentRank / classAverage / classRankTotal (the RGPD wall in the
+        shape). Every block is best-effort + degrades to empty.
+      properties:
+        activated: { type: boolean }
+        student:
+          oneOf:
+            - $ref: '#/components/schemas/StudentHeader'
+            - type: 'null'
+        subjectTrends:
+          type: array
+          description: The student's own per-subject trends (E6). NO peer comparison.
+          items: { $ref: '#/components/schemas/StudentSubjectTrend' }
+        upcoming:
+          type: array
+          description: The next assessments to prepare (FR-5, a bounded preview).
+          items: { $ref: '#/components/schemas/StudentUpcomingItem' }
+        remediation:
+          type: array
+          description: Kind 'ton soutien en {matière}' lines (E7), where a plan exists. May be empty.
+          items: { $ref: '#/components/schemas/StudentRemediationLine' }
+        freshness:
+          type: object
+          nullable: true
+          description: Reused E6 freshness envelope ({ source, computedAt, recomputing }); optional.
+          properties:
+            source: { type: string, enum: [snapshot, live] }
+            computedAt: { type: string, format: date-time, nullable: true }
+            recomputing: { type: boolean }
+      required: [activated, student, subjectTrends, upcoming, remediation]
