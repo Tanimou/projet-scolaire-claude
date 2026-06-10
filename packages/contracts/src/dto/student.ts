@@ -93,3 +93,85 @@ export const StudentGradesResponseSchema = z.object({
   data: z.array(StudentGradeRowSchema),
 });
 export type StudentGradesResponse = z.infer<typeof StudentGradesResponseSchema>;
+
+/**
+ * One upcoming assessment in "À venir" (S2) — an assessment scheduled for the
+ * learner's own class section in the coming weeks, framed forward/kind. Produced
+ * by `AnalyticsService.parentUpcoming` re-scoped to the self-resolved studentId.
+ * A flat scalar shape: NO classAverage, NO rank, NO peer field.
+ */
+export const StudentUpcomingRowSchema = z.object({
+  id: UuidSchema,
+  title: z.string(),
+  description: z.string().nullable(),
+  /** ISO datetime — the producer always returns a date (scheduledAt ?? createdAt). */
+  scheduledAt: z.string(),
+  /** The assessment kind code (e.g. `written_test`) → a French label in the UI. */
+  kind: z.string(),
+  maxScore: z.number(),
+  coefficient: z.number(),
+  subjectId: UuidSchema,
+  subjectCode: z.string().nullable(),
+  subjectName: z.string(),
+  subjectColor: z.string().nullable(),
+  termId: UuidSchema.nullable(),
+  termName: z.string().nullable(),
+});
+export type StudentUpcomingRow = z.infer<typeof StudentUpcomingRowSchema>;
+
+/**
+ * `GET /student/upcoming` — "Mes prochaines évaluations" (S2). The caller's own
+ * upcoming assessments, soonest-first. `classSectionName`/`gradeLevelName` label
+ * the learner's own class; `data` is empty for an unlinked / un-enrolled caller.
+ */
+export const StudentUpcomingResponseSchema = z.object({
+  classSectionName: z.string().nullable(),
+  gradeLevelName: z.string().nullable(),
+  data: z.array(StudentUpcomingRowSchema),
+});
+export type StudentUpcomingResponse = z.infer<typeof StudentUpcomingResponseSchema>;
+
+/**
+ * One of the learner's own attendance records in "Mon assiduité" (S2). A strict
+ * SUBSET of what staff/parents see: status + the learner's own justification +
+ * the session date + subject/class label. Deliberately carries NO actor metadata
+ * (`recordedBy`/`justifiedBy`/staff comment) — RGPD minimisation (the data
+ * subject reads only the factual record, never who flagged it).
+ */
+export const StudentAttendanceRecordSchema = z.object({
+  id: UuidSchema,
+  /** present | absent | absent_excused | late | left_early. */
+  status: z.string(),
+  justification: z.string().nullable(),
+  /** ISO date of the class session. */
+  date: z.string(),
+  subjectName: z.string().nullable(),
+  subjectColor: z.string().nullable(),
+  classSectionName: z.string().nullable(),
+});
+export type StudentAttendanceRecord = z.infer<typeof StudentAttendanceRecordSchema>;
+
+/**
+ * Factual attendance counts for "Mon assiduité" (S2) — stated, never a verdict,
+ * never a peer comparison. All zero for an unlinked caller.
+ */
+export const StudentAttendanceSummarySchema = z.object({
+  total: z.number(),
+  present: z.number(),
+  absent: z.number(),
+  absentExcused: z.number(),
+  late: z.number(),
+  leftEarly: z.number(),
+});
+export type StudentAttendanceSummary = z.infer<typeof StudentAttendanceSummarySchema>;
+
+/**
+ * `GET /student/attendance` — "Mon assiduité" (S2). The caller's own attendance
+ * summary + recent records (bounded). Structurally lacks every peer-relative and
+ * actor-metadata field.
+ */
+export const StudentAttendanceResponseSchema = z.object({
+  summary: StudentAttendanceSummarySchema,
+  records: z.array(StudentAttendanceRecordSchema),
+});
+export type StudentAttendanceResponse = z.infer<typeof StudentAttendanceResponseSchema>;

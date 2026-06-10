@@ -460,8 +460,25 @@ RGPD-safe learner-own scalars (`kind`, `status`) so the card stays complete; (4)
 (Winston-ratified); (5) the AppShell branding 403 crash fixed (grant `student` `branding.read` +
 harden `fetchBranding` to degrade on 403); (6) the `/student/dashboard` login 404 fixed with a
 portal-aware landing map. **Operator step (not a code blocker):** activate the `student` realm-role +
-demo user in `infra/keycloak/realm-export.json` and run the additive `db push`. **Next slice → E8-S2**
-("Mes prochaines évaluations" + "Mon assiduité"), building on the now-green S1.
+demo user in `infra/keycloak/realm-export.json` and run the additive `db push`. **E8-S2 shipped** (this run — `epic-slice`,
+P1 `[auth][api][web][rgpd][abac]`, GREEN: build 7/7, typecheck 11/11, spec 6/6): two read-only
+student-portal surfaces behind the proven S1 student-self wall, **no schema / no new permission / no new
+ADR**. `GET /student/upcoming` (`assessments.read.self`) reuses `AnalyticsService.parentUpcoming` **verbatim**
+re-scoped to the self-resolved `studentId`, projected into the narrowed peer-free `StudentUpcomingResponse`.
+`GET /student/attendance` (`attendance.read.self`) reads the caller's own bounded (`take:100`)
+`attendanceRecord.findMany` + the `{total,present,absent,absentExcused,late,leftEarly}` summary reduce →
+`StudentAttendanceResponse`, **RGPD-minimised in the payload shape** (NO `recordedBy`/`justifiedBy`/staff-
+`comment` actor metadata — only status/justification/date/subject/class). Both run `resolveSelf`
+(server-derived `userProfileId === me.id`, no `:studentId` path param → IDOR structurally absent) →
+`canAccessStudent(ownId)` defence-in-depth → `ForbiddenException` rather than leak; tenant-scoped; unlinked →
+kind empty payload. `AnalyticsModule` wired into `StudentPortalModule`; new `student-portal.service.spec.ts`
+(6 cases). FE: `/student/upcoming` (grouped soonest-first) + `/student/attendance` (calm factual summary
+strip + non-stigmatising status badges) reusing `@pilotage/ui` + `PortalShell portal="student"`; two new
+`studentSidebarItems` ("À venir", "Mon assiduité"). **Recovery note:** the BMAD Workflow's implement/verify
+agents all hit the daily session limit (only intake + the S2 story spec landed); the lock-holding session
+implemented the slice directly from the story spec, then ran the single build + typecheck + targeted spec.
+**Operator step unchanged:** activate the `student` realm-role + demo user and run the additive S1
+`prisma db push`. **Next slice → E8-S3** ("Les annonces" + the visionary "Mon objectif" dashboard).
 
 ---
 
