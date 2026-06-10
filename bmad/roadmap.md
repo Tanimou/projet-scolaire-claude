@@ -418,7 +418,7 @@ wiring (recommended for S4/hardening). **S4 shipped (this run); next slice → S
 admin catalogue curation & oversight — `/admin/remediation` on `remediation.manage`, no schema change). See
 the **E7 update** note above for the S4 detail.
 
-### E8 — Student Portal · `in-progress` · ~M
+### E8 — Student Portal · `shipped` · ~M
 **Why:** the cahier's future "Portail élève." Activates the **reserved** Keycloak `student` role
 (ADR-004/015 "(futur)") + read-only student views (my grades, assessments, attendance, announcements)
 with a **deny-by-default student-self ABAC** (never a peer). Net-new, read-only learner surface.
@@ -478,7 +478,30 @@ strip + non-stigmatising status badges) reusing `@pilotage/ui` + `PortalShell po
 agents all hit the daily session limit (only intake + the S2 story spec landed); the lock-holding session
 implemented the slice directly from the story spec, then ran the single build + typecheck + targeted spec.
 **Operator step unchanged:** activate the `student` realm-role + demo user and run the additive S1
-`prisma db push`. **Next slice → E8-S3** ("Les annonces" + the visionary "Mon objectif" dashboard).
+`prisma db push`. **E8-S3 is now shipped** (`epic-slice` — P1 `[auth][abac][rgpd][api][web][student-portal][announcements]`,
+needs human review): the final slice — **"Les annonces"** + the visionary **"Mon objectif"** student dashboard.
+`GET /student/announcements` (`announcements.read.self`) returns the caller's OWN `AnnouncementReceipt` rows for
+published/non-expired/tenant-scoped announcements (pinned-first), narrowed to the peer-free `StudentAnnouncementRow`
+(NO roster / read-stats / author email); `POST /student/announcements/:id/read` is the ONE student mutation —
+idempotent receipt `readAt` flip keyed on `(announcementId, me.id)` (IDOR structurally absent; 404-no-leak when no
+receipt); `GET /student/dashboard` (`analytics.read.self`) composes "Mon objectif" best-effort from a SELF-ONLY
+`StudentSubjectSnapshot` trend read (snapshot-first + single-aggregate live fall-through, NEVER `parentDashboard`
+nor the O(class) scan — architect P0-2), the next-3 `parentUpcoming` re-scoped to self, and the E7
+`remediationProgress` line reused verbatim. `StudentDashboardResponse` **structurally lacks** every peer-relative
+field (type-level wall, asserted no-peer-key). The §5 FR-S3-7 design gap is closed: `computeRecipients` now
+additively unions each enrolled+linked student's OWN `UserProfile` into the class/grade/cycle/individual scopes
+(guarded `userProfileId != null`, guardians/teachers unchanged, no back-fill → publish-time-only semantics). FE:
+`/student/dashboard` (`SubjectTrendCard` + next-3 preview + second-person `StudentSupportStrip` reusing the E3
+emerald IMPROVEMENT lane) + `/student/announcements` (`StudentAnnouncementCard` + self-scoped mark-read
+`'use server'` action), reuse-first on `@pilotage/ui` (no `packages/ui` change); `PORTAL_LANDING.student`
+re-pointed to `/student/dashboard`. Wall on every read: `resolveSelf` → `canAccessStudent(ownId)` →
+`ForbiddenException`; tenant-scoped. New `announcements.service.spec.ts` (3 cases) + extended
+`student-portal.service.spec.ts`. **No schema, no new permission (S1-seeded `announcements.read.self` +
+`analytics.read.self` cover it), no new ADR, no second queue.** **`E8` is now `shipped` (all 3 slices landed).**
+**Operator pre-req unchanged (gates demoability, not merge):** apply the additive S1 `Student.userProfileId`
+`prisma db push` + activate the `student` realm-role/demo user. **Next epic → resume `E7 — Remediation &
+Tutoring loop` (`in-progress`; S6 loop-hardening was the next open slice), else promote the highest Tier-4
+filler (E9 enrollment self-service / E10 quality bar).**
 
 ---
 

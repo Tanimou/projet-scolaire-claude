@@ -30,6 +30,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Target,
   Trophy,
   Upload,
   User,
@@ -238,11 +239,17 @@ export const parentSidebarItems: SidebarItemConfig[] = [
   { key: 'settings', icon: Settings, label: 'Paramètres', href: '/parent/settings' },
 ];
 
-// Student portal — E8. The fourth, read-only learner audience. "Mes notes" (S1)
-// + "À venir" / "Mon assiduité" (S2) are live; the S3 surfaces (annonces, "Mon
-// objectif") stay OMITTED here until their slice lands — we never render a nav
-// item that 404s.
+// Student portal — E8. The fourth, read-only learner audience. "Mon objectif"
+// (S3 dashboard, the hero/landing) leads, then "Mes notes" (S1) + "À venir" /
+// "Mon assiduité" (S2), then "Annonces" (S3) last.
 export const studentSidebarItems: SidebarItemConfig[] = [
+  {
+    key: 'dashboard',
+    icon: Target,
+    label: 'Mon objectif',
+    href: '/student/dashboard',
+    matches: /^\/student\/dashboard(\/|$)/,
+  },
   {
     key: 'grades',
     icon: BookOpenCheck,
@@ -263,6 +270,13 @@ export const studentSidebarItems: SidebarItemConfig[] = [
     label: 'Mon assiduité',
     href: '/student/attendance',
     matches: /^\/student\/attendance(\/|$)/,
+  },
+  {
+    key: 'announcements',
+    icon: Megaphone,
+    label: 'Annonces',
+    href: '/student/announcements',
+    matches: /^\/student\/announcements(\/|$)/,
   },
 ];
 
@@ -326,6 +340,7 @@ export {
   Send,
   Settings,
   ShieldCheck,
+  Target,
   Trophy,
   Upload,
   User,

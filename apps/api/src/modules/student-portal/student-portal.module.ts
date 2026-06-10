@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../../shared/auth/auth.module';
 import { AnalyticsModule } from '../analytics/analytics.module';
+import { RemediationModule } from '../remediation/remediation.module';
 import { SchoolStructureModule } from '../school-structure/school-structure.module';
 import { StudentsModule } from '../students/students.module';
 
@@ -18,7 +19,7 @@ import { StudentPortalService } from './student-portal.service';
  * module (not a parent-controller edit) so the parent surface stays untouched.
  */
 @Module({
-  imports: [AuthModule, StudentsModule, SchoolStructureModule, AnalyticsModule],
+  imports: [AuthModule, StudentsModule, SchoolStructureModule, AnalyticsModule, RemediationModule],
   controllers: [StudentPortalController],
   providers: [StudentPortalService],
 })

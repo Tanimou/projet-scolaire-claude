@@ -1,7 +1,9 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type {
+  StudentAnnouncementsResponse,
   StudentAttendanceResponse,
+  StudentDashboardResponse,
   StudentGradesResponse,
   StudentMeResponse,
   StudentUpcomingResponse,
@@ -77,5 +79,42 @@ export class StudentPortalController {
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
     return this.portal.attendance(me, jwt, schoolId);
+  }
+
+  @Get('announcements')
+  @RequiresPermission('announcements.read.self')
+  @ApiOperation({ summary: "Les annonces — the announcements addressed to the learner" })
+  async announcements(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ): Promise<StudentAnnouncementsResponse> {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    return this.portal.announcements(me, jwt, schoolId);
+  }
+
+  /**
+   * The ONE student mutation: flip the caller's OWN receipt readAt (idempotent).
+   * `:id` is an ANNOUNCEMENT id (the receipt is keyed on `(announcementId, me.id)`),
+   * never a studentId — no IDOR. 404 when the caller has no receipt for it.
+   */
+  @Post('announcements/:id/read')
+  @RequiresPermission('announcements.read.self')
+  @ApiOperation({ summary: "Marquer une annonce comme lue (le seul écrit élève, sur son propre reçu)" })
+  async markAnnouncementRead(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ): Promise<{ ok: true; alreadyRead?: boolean }> {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    return this.portal.markAnnouncementRead(me, jwt, schoolId, id);
+  }
+
+  @Get('dashboard')
+  @RequiresPermission('analytics.read.self')
+  @ApiOperation({ summary: "Mon objectif — the actionable, peer-free student dashboard" })
+  async dashboard(@CurrentJwt() jwt: KeycloakJwtPayload): Promise<StudentDashboardResponse> {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    return this.portal.dashboard(me, jwt, schoolId);
   }
 }

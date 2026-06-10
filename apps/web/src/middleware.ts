@@ -15,13 +15,13 @@ const PORTAL_REQUIRED_ROLES = {
 /**
  * Where each portal lands after a successful login. Most portals land on their
  * dashboard; the student portal has no dashboard until E8-S3, so it lands on
- * "Mes notes" (its only live S1 surface).
+ * "Mon objectif" (the E8-S3 hero dashboard; `/student/grades` stays valid).
  */
 const PORTAL_LANDING: Record<keyof typeof PORTAL_REQUIRED_ROLES, string> = {
   admin: '/admin/dashboard',
   teacher: '/teacher/dashboard',
   parent: '/parent/dashboard',
-  student: '/student/grades',
+  student: '/student/dashboard',
 };
 
 const PUBLIC_PREFIXES = ['/_next', '/api/auth', '/api/healthz', '/favicon', '/legal'];
