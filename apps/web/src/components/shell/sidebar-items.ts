@@ -238,10 +238,10 @@ export const parentSidebarItems: SidebarItemConfig[] = [
   { key: 'settings', icon: Settings, label: 'Paramètres', href: '/parent/settings' },
 ];
 
-// Student portal — E8-S1. The fourth, read-only learner audience. Only "Mes
-// notes" is live this slice; the S2/S3 surfaces (assiduité, prochaines
-// évaluations, annonces, "Mon objectif") are intentionally OMITTED here until
-// their slice lands — we never render a nav item that 404s.
+// Student portal — E8. The fourth, read-only learner audience. "Mes notes" (S1)
+// + "À venir" / "Mon assiduité" (S2) are live; the S3 surfaces (annonces, "Mon
+// objectif") stay OMITTED here until their slice lands — we never render a nav
+// item that 404s.
 export const studentSidebarItems: SidebarItemConfig[] = [
   {
     key: 'grades',
@@ -249,6 +249,20 @@ export const studentSidebarItems: SidebarItemConfig[] = [
     label: 'Mes notes',
     href: '/student/grades',
     matches: /^\/student\/grades(\/|$)/,
+  },
+  {
+    key: 'upcoming',
+    icon: CalendarClock,
+    label: 'À venir',
+    href: '/student/upcoming',
+    matches: /^\/student\/upcoming(\/|$)/,
+  },
+  {
+    key: 'attendance',
+    icon: ClipboardCheck,
+    label: 'Mon assiduité',
+    href: '/student/attendance',
+    matches: /^\/student\/attendance(\/|$)/,
   },
 ];
 

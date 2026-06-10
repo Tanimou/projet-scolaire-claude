@@ -1,6 +1,11 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { StudentGradesResponse, StudentMeResponse } from '@pilotage/contracts';
+import type {
+  StudentAttendanceResponse,
+  StudentGradesResponse,
+  StudentMeResponse,
+  StudentUpcomingResponse,
+} from '@pilotage/contracts';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -54,5 +59,23 @@ export class StudentPortalController {
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
     return this.portal.grades(me, jwt, schoolId);
+  }
+
+  @Get('upcoming')
+  @RequiresPermission('assessments.read.self')
+  @ApiOperation({ summary: "Mes prochaines évaluations — the learner's own upcoming assessments" })
+  async upcoming(@CurrentJwt() jwt: KeycloakJwtPayload): Promise<StudentUpcomingResponse> {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    return this.portal.upcoming(me, jwt, schoolId);
+  }
+
+  @Get('attendance')
+  @RequiresPermission('attendance.read.self')
+  @ApiOperation({ summary: "Mon assiduité — the learner's own attendance summary + records" })
+  async attendance(@CurrentJwt() jwt: KeycloakJwtPayload): Promise<StudentAttendanceResponse> {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    return this.portal.attendance(me, jwt, schoolId);
   }
 }

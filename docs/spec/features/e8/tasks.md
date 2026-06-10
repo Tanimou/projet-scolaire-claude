@@ -89,7 +89,7 @@ provisioning UI, a 4th OIDC client (unless the reviewer chooses it in ADR-021).
 
 ---
 
-## [ ] S2 — "Mes prochaines évaluations" + "Mon assiduité" · `[auth]` · P2 · ~S-M
+## [x] S2 — "Mes prochaines évaluations" + "Mon assiduité" · `[auth]` · P2 · ~S-M · **shipped**
 
 **Goal:** breadth — two more read-only student surfaces, each **re-scoping an existing aggregate** behind
 the *same* S1 wall. No new security surface (the wall is proven in S1); pure read re-scoping + UI.

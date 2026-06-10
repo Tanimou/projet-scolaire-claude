@@ -1,12 +1,16 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import type {
+  StudentAttendanceRecord,
+  StudentAttendanceResponse,
   StudentGradeRow,
   StudentGradesResponse,
   StudentMeResponse,
+  StudentUpcomingResponse,
 } from '@pilotage/contracts';
 
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 import { StudentAccessService } from '../students/student-access.service';
 
 /**
@@ -25,6 +29,7 @@ export class StudentPortalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly studentAccess: StudentAccessService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   /**
@@ -161,5 +166,125 @@ export class StudentPortalService {
     });
 
     return { data };
+  }
+
+  /**
+   * `GET /student/upcoming` — "Mes prochaines évaluations". The caller's own
+   * upcoming assessments (soonest-first), produced by `AnalyticsService.
+   * parentUpcoming` re-scoped to the self-resolved studentId. Server-resolved id;
+   * `canAccessStudent(ownId)` runs before the read as a defence-in-depth assertion
+   * of the wall (true only for `self.id` on a `student` token). An unlinked caller
+   * gets the kind empty payload — never a 500, never a peer's calendar.
+   */
+  async upcoming(
+    me: { id: string; tenantId: string },
+    jwt: KeycloakJwtPayload,
+    schoolId: string,
+  ): Promise<StudentUpcomingResponse> {
+    const self = await this.resolveSelf(me);
+    if (!self) return { classSectionName: null, gradeLevelName: null, data: [] };
+
+    const allowed = await this.studentAccess.canAccessStudent(me, jwt, self.id, schoolId);
+    if (!allowed) throw new ForbiddenException('Forbidden');
+
+    // Reuse the parent producer verbatim, re-scoped to the learner's own id.
+    const res = await this.analytics.parentUpcoming({
+      tenantId: me.tenantId,
+      studentId: self.id,
+    });
+
+    return {
+      classSectionName: res.classSectionName,
+      gradeLevelName: res.gradeLevelName,
+      // Project into the narrowed, peer-free student DTO (the producer row carries
+      // a `classSectionName` the learner doesn't need — drop it, keep only the
+      // self-relevant scalars).
+      data: res.data.map((a) => ({
+        id: a.id,
+        title: a.title,
+        description: a.description,
+        scheduledAt: a.scheduledAt,
+        kind: a.kind,
+        maxScore: a.maxScore,
+        coefficient: a.coefficient,
+        subjectId: a.subjectId,
+        subjectCode: a.subjectCode,
+        subjectName: a.subjectName,
+        subjectColor: a.subjectColor,
+        termId: a.termId,
+        termName: a.termName,
+      })),
+    };
+  }
+
+  /**
+   * `GET /student/attendance` — "Mon assiduité". The caller's own attendance
+   * summary + recent records (bounded, newest-first), framed factually/kindly.
+   * Server-resolved id; `canAccessStudent(ownId)` runs before the read. The
+   * mapped rows expose ONLY status/justification/date/subject/class — never the
+   * `recordedBy`/`justifiedBy` actor metadata the parent endpoint can carry (RGPD
+   * minimisation). An unlinked caller gets a zero summary + empty records.
+   */
+  async attendance(
+    me: { id: string; tenantId: string },
+    jwt: KeycloakJwtPayload,
+    schoolId: string,
+  ): Promise<StudentAttendanceResponse> {
+    const empty: StudentAttendanceResponse = {
+      summary: { total: 0, present: 0, absent: 0, absentExcused: 0, late: 0, leftEarly: 0 },
+      records: [],
+    };
+
+    const self = await this.resolveSelf(me);
+    if (!self) return empty;
+
+    const allowed = await this.studentAccess.canAccessStudent(me, jwt, self.id, schoolId);
+    if (!allowed) throw new ForbiddenException('Forbidden');
+
+    const records = await this.prisma.attendanceRecord.findMany({
+      where: { studentId: self.id, tenantId: me.tenantId },
+      select: {
+        id: true,
+        status: true,
+        justification: true,
+        classSession: {
+          select: {
+            date: true,
+            teachingAssignment: {
+              select: {
+                subject: { select: { name: true, color: true } },
+                classSection: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { classSession: { date: 'desc' } },
+      take: 100,
+    });
+
+    const mapped: StudentAttendanceRecord[] = records.map((r) => {
+      const ta = r.classSession.teachingAssignment;
+      return {
+        id: r.id,
+        status: r.status,
+        justification: r.justification ?? null,
+        date: r.classSession.date.toISOString(),
+        subjectName: ta?.subject?.name ?? null,
+        subjectColor: ta?.subject?.color ?? null,
+        classSectionName: ta?.classSection?.name ?? null,
+      };
+    });
+
+    const summary = {
+      total: mapped.length,
+      present: mapped.filter((r) => r.status === 'present').length,
+      absent: mapped.filter((r) => r.status === 'absent').length,
+      absentExcused: mapped.filter((r) => r.status === 'absent_excused').length,
+      late: mapped.filter((r) => r.status === 'late').length,
+      leftEarly: mapped.filter((r) => r.status === 'left_early').length,
+    };
+
+    return { summary, records: mapped };
   }
 }

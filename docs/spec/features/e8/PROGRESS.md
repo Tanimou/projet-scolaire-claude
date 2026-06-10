@@ -9,7 +9,7 @@
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
 | S1 | Student role + self-ABAC + auth wiring + "Mes notes" → **ADR-021** | `[schema][auth]` | P1 | 🟢 shipped — green (all blockers reconciled; build 7/7; auto-merged) | this run |
-| S2 | "À venir" + "Mon assiduité" | `[auth]` | P2 | ⬜ not started ← **next** | — |
+| S2 | "À venir" + "Mon assiduité" | `[auth][rgpd][abac]` | P1 | 🟢 shipped — green (build 7/7, typecheck 11/11, spec 6/6) | this run |
 | S3 | Announcements + "Mon objectif" actionable student dashboard (E6 trend + E7 progress) | `[web][a11y][analytics]` | P2 | ⬜ not started | — |
 
 ## What landed this run (spec run)
@@ -151,8 +151,30 @@ gate; the reconciliation pass consolidated both halves onto one branch and fixed
 in `infra/keycloak/realm-export.json`, and run the additive `prisma db push`, before the portal is reachable
 end-to-end at runtime.
 
+## What landed (E8-S2, this run — GREEN: build 7/7, typecheck 11/11, spec 6/6)
+
+Two read-only student-portal surfaces behind the proven S1 student-self wall, **no schema / no new
+permission / no new ADR**:
+- `GET /student/upcoming` (`assessments.read.self`) — reuses `AnalyticsService.parentUpcoming` **verbatim**,
+  re-scoped to the self-resolved `studentId`, projected into the narrowed peer-free `StudentUpcomingResponse`;
+  unlinked → `{ classSectionName:null, gradeLevelName:null, data:[] }`.
+- `GET /student/attendance` (`attendance.read.self`) — the caller's own bounded (`take:100`)
+  `attendanceRecord.findMany` + the `{total,present,absent,absentExcused,late,leftEarly}` summary reduce,
+  mapped to `StudentAttendanceResponse`. **RGPD minimisation in the payload shape:** NO
+  `recordedBy`/`justifiedBy`/staff-`comment` actor metadata — only status/justification/date/subject/class.
+- Wall on every read: `resolveSelf` (server-derived `userProfileId === me.id`, no `:studentId` path param)
+  → `canAccessStudent(ownId)` defence-in-depth → `ForbiddenException` rather than leak. Tenant-scoped.
+- `AnalyticsModule` wired into `StudentPortalModule`; new `student-portal.service.spec.ts` (6 cases).
+- FE: `/student/upcoming` (grouped soonest-first) + `/student/attendance` (calm factual summary strip +
+  non-stigmatising status badges) pages; two new `studentSidebarItems`.
+
+> **Recovery note:** the BMAD Workflow's implement/verify agents all hit the daily session limit (only the
+> intake + the S2 story spec landed before the cap); the lock-holding session implemented the slice directly
+> from the story spec and ran the single build + typecheck + targeted spec.
+
 ## Next action
 
-Ship **E8-S2** (`epic-slice`, `[auth]`, P2): "Mes prochaines évaluations" + "Mon assiduité" — the
-self-resolved upcoming-assessments + attendance read pair behind the same student-self wall (no new
-schema), building on the now-green S1.
+Ship **E8-S3** (`epic-slice`, `[web][a11y][analytics]`, P2): "Les annonces" + the visionary **"Mon
+objectif"** student dashboard (E6 trend + E7 progress, re-framed second-person), building on the now-green
+S1/S2. Operator pre-req unchanged: activate the `student` realm-role + demo user and run the additive S1
+`prisma db push`.
