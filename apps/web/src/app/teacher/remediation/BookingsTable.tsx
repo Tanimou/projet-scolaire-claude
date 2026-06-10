@@ -2,12 +2,17 @@
 
 import {
   CalendarClock,
+  CalendarPlus,
   Check,
+  CheckCircle2,
+  Clock,
   Loader2,
   MessageSquarePlus,
   UserX,
   X,
+  XCircle,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
 import { Badge, FormDrawer, StatusBadge } from '@pilotage/ui';
@@ -17,6 +22,20 @@ import { transitionBookingAction } from './remediation-actions';
 import { bookingStatusMeta, formatSessionAt } from './slot-format';
 
 type ToStatus = 'confirmed' | 'declined' | 'completed' | 'no_show' | 'proposed_alternative';
+
+/**
+ * E7-S6 — status → icon so the booking badge is icon+text, never colour-alone
+ * (WCAG 1.4.1). A cancelled/declined booking is visibly NON-active (an "Annulé"/
+ * "Refusé" StatusBadge with an `XCircle`), never a dead row, never "échec" copy.
+ */
+const BOOKING_STATUS_ICON: Record<string, LucideIcon> = {
+  requested: Clock,
+  confirmed: Check,
+  completed: CheckCircle2,
+  cancelled: XCircle,
+  declined: XCircle,
+  proposed_alternative: CalendarPlus,
+};
 
 /**
  * E7-S4 — the teacher booking inbox (client island).
@@ -84,6 +103,7 @@ export function BookingsTable({ bookings }: { bookings: TeacherBookingDto[] }) {
       <ul className="space-y-2.5" role="list">
         {bookings.map((b) => {
           const meta = bookingStatusMeta(b.status);
+          const StatusIcon = BOOKING_STATUS_ICON[b.status] ?? null;
           const rowBusy = pending && busyId === b.id;
           const isRequested = b.status === 'requested';
           const isConfirmed = b.status === 'confirmed';
@@ -101,7 +121,12 @@ export function BookingsTable({ bookings }: { bookings: TeacherBookingDto[] }) {
                       {b.subjectName}
                     </Badge>
                   )}
-                  <StatusBadge label={meta.label} tone={meta.tone} size="sm" withDot />
+                  <StatusBadge
+                    label={meta.label}
+                    tone={meta.tone}
+                    size="sm"
+                    icon={StatusIcon ? <StatusIcon className="h-3.5 w-3.5" aria-hidden /> : undefined}
+                  />
                 </div>
                 <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-600">
                   <CalendarClock className="h-3.5 w-3.5 text-slate-400" aria-hidden />

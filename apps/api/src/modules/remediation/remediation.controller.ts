@@ -8,6 +8,7 @@ import {
   Logger,
   NotFoundException,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -30,6 +31,7 @@ import { StudentAccessService } from '../students/student-access.service';
 import { AdminRemediationService } from './admin-remediation.service';
 import { AdminUpsertAvailabilityDto } from './dto/admin-upsert-availability.dto';
 import { BookingService } from './booking.service';
+import { CloseRemediationPlanDto } from './dto/close-remediation-plan.dto';
 import { CreateAdminTutorDto } from './dto/create-admin-tutor.dto';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -350,6 +352,173 @@ export class RemediationController {
   }
 
   // ===========================================================================
+  // E7-S6 — Plan completion verb (kind + reversible) — parent + admin.
+  //
+  // A parent (guardianship ABAC on the plan's student) or a school admin
+  // (`remediation.manage`) marks an OPEN plan `met` ("objectif atteint") or
+  // `closed` ("clôturé sans suite"), and may REOPEN a met/closed plan back to
+  // `open` (the reversibility — completion is never a trap). The flip is a
+  // from-status-guarded `updateMany` (ADR-020 idiom) so a concurrent double-flip
+  // is a deterministic 409, never last-writer-wins. Each flip writes an append-only
+  // `remediation.plan_closed` / `remediation.plan_reopened` audit row. No schema
+  // change (the `met`/`closed` enum values + `closedAt`/`closedBy` exist from S1).
+  // Two sibling routes express the "parent OR admin" gate (the guards differ):
+  // the parent path is `remediation.book` + guardianship-walled; the admin path is
+  // `remediation.manage` (no guardianship — the admin curates within their tenant).
+  // ===========================================================================
+
+  /**
+   * Parent completion: mark the parent's OWN child's OPEN plan met|closed.
+   * Guardianship ABAC on the plan's student BEFORE the write (404-before-403).
+   */
+  @Patch('plans/:id/close')
+  @RequiresPermission('remediation.book')
+  @ApiOperation({ summary: 'Mark a plan complete (parent, kind + reversible, guardianship ABAC)' })
+  async closePlan(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Body() dto: CloseRemediationPlanDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+
+    const plan = await this.remediation.loadPlanForLifecycle({ tenantId: me.tenantId, planId: id });
+    if (!plan) throw new NotFoundException('Plan not found');
+    const allowed = await this.studentAccess.canAccessStudent(me, jwt, plan.studentId, schoolId);
+    if (!allowed) throw new NotFoundException('Plan not found');
+
+    return this.doClosePlan(jwt, me, id, dto.resolution);
+  }
+
+  /** Parent reopen: flip a met/closed plan back to open (guardianship-walled). */
+  @Patch('plans/:id/reopen')
+  @RequiresPermission('remediation.book')
+  @ApiOperation({ summary: 'Reopen a completed plan (parent, reversible, guardianship ABAC)' })
+  async reopenPlan(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+
+    const plan = await this.remediation.loadPlanForLifecycle({ tenantId: me.tenantId, planId: id });
+    if (!plan) throw new NotFoundException('Plan not found');
+    const allowed = await this.studentAccess.canAccessStudent(me, jwt, plan.studentId, schoolId);
+    if (!allowed) throw new NotFoundException('Plan not found');
+
+    return this.doReopenPlan(jwt, me, id);
+  }
+
+  /** Admin completion: mark ANY in-tenant OPEN plan met|closed (manage-gated). */
+  @Patch('admin/plans/:id/close')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Mark a plan complete (admin, kind + reversible, manage-gated)' })
+  async adminClosePlan(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Body() dto: CloseRemediationPlanDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const plan = await this.remediation.loadPlanForLifecycle({ tenantId: me.tenantId, planId: id });
+    if (!plan) throw new NotFoundException('Plan not found');
+    return this.doClosePlan(jwt, me, id, dto.resolution);
+  }
+
+  /** Admin reopen: flip ANY in-tenant met/closed plan back to open (manage-gated). */
+  @Patch('admin/plans/:id/reopen')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Reopen a completed plan (admin, reversible, manage-gated)' })
+  async adminReopenPlan(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id') id: string) {
+    const me = await this.users.ensureUser(jwt);
+    const plan = await this.remediation.loadPlanForLifecycle({ tenantId: me.tenantId, planId: id });
+    if (!plan) throw new NotFoundException('Plan not found');
+    return this.doReopenPlan(jwt, me, id);
+  }
+
+  /**
+   * Shared close path (after the parent/admin guard branch). The from-status-guarded
+   * flip → a concurrent double-close is a deterministic 409. Append-only
+   * `remediation.plan_closed` audit (before/after) + best-effort parent notify
+   * (kind `remediation`, no new queue) on success.
+   */
+  private async doClosePlan(
+    jwt: KeycloakJwtPayload,
+    me: { id: string; tenantId: string },
+    planId: string,
+    resolution: 'met' | 'closed',
+  ) {
+    const result = await this.remediation.closePlan({
+      tenantId: me.tenantId,
+      planId,
+      resolution,
+      userProfileId: me.id,
+    });
+    if (!result) {
+      // Nothing was open to close (already met/closed) — a deterministic kind 409.
+      throw new ConflictException('Ce plan de soutien est déjà clôturé');
+    }
+
+    await this.writePlanLifecycleAudit(jwt, me, 'remediation.plan_closed', result.plan.id, {
+      status: result.plan.status,
+      resolution,
+      closedBy: me.id,
+    });
+
+    // Best-effort parent notify — celebrate the close (kind, reversible framing).
+    try {
+      await this.notifications.createMany([
+        {
+          tenantId: me.tenantId,
+          userProfileId: me.id,
+          kind: 'remediation',
+          title: resolution === 'met' ? 'Objectif atteint 🎉' : 'Plan de soutien clôturé',
+          body:
+            resolution === 'met'
+              ? 'Bravo — ce plan de soutien est marqué comme atteint. Vous pourrez le rouvrir à tout moment.'
+              : 'Ce plan de soutien a été clôturé. Vous pourrez le rouvrir à tout moment.',
+          link: `/parent/remediation/${result.plan.id}`,
+          sourceType: 'remediation_plan',
+          sourceId: `${result.plan.id}:${resolution}`,
+        },
+      ]);
+    } catch (err) {
+      this.logger.error(
+        `Best-effort plan-close notify failed for plan ${result.plan.id} (plan unaffected): ${(err as Error).message}`,
+      );
+    }
+
+    return result.plan;
+  }
+
+  /**
+   * Shared reopen path. `null` = already open (kind 409); `conflict_open_exists` =
+   * a newer open plan for the same (student, subject) blocks the reopen (the
+   * open-plan @@unique P2002, caught in the service → kind 409, never a 500).
+   * Append-only `remediation.plan_reopened` audit on success.
+   */
+  private async doReopenPlan(
+    jwt: KeycloakJwtPayload,
+    me: { id: string; tenantId: string },
+    planId: string,
+  ) {
+    const result = await this.remediation.reopenPlan({
+      tenantId: me.tenantId,
+      planId,
+      userProfileId: me.id,
+    });
+    if (result === 'conflict_open_exists') {
+      throw new ConflictException('Un autre plan de soutien est déjà ouvert pour cette matière');
+    }
+    if (!result) {
+      throw new ConflictException('Ce plan de soutien est déjà ouvert');
+    }
+
+    await this.writePlanLifecycleAudit(jwt, me, 'remediation.plan_reopened', result.plan.id, {
+      status: result.plan.status,
+      reopenedBy: me.id,
+    });
+
+    return result.plan;
+  }
+
+  // ===========================================================================
   // E7-S4 — Teacher capacity management + booking transitions.
   //
   // A teacher publishes/edits the availability of their OWN auto-derived `Tutor`
@@ -528,7 +697,10 @@ export class RemediationController {
   @ApiOperation({ summary: 'Admin catalogue — full tutor roster (tenant-scoped, manage-gated)' })
   async adminTutors(
     @CurrentJwt() jwt: KeycloakJwtPayload,
-    @Query('subjectId') subjectId?: string,
+    // FR-9: a malformed subjectId is a deterministic 400 (never a Postgres 500 on
+    // the `subjectIds:{ has }` uuid[] query); an empty/undefined value still means
+    // "no filter" (optional ParseUUIDPipe passes undefined through unchanged).
+    @Query('subjectId', new ParseUUIDPipe({ optional: true })) subjectId?: string,
   ) {
     const me = await this.users.ensureUser(jwt);
     const tutors = await this.admin.listTutors({
@@ -566,17 +738,30 @@ export class RemediationController {
   ) {
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
-    const { tutor } = await this.admin.createTutor({
+    const { tutor, reused, publishedBefore } = await this.admin.createTutor({
       tenantId: me.tenantId,
       schoolId,
       userProfileId: me.id,
       dto,
     });
-    await this.writeTutorAudit(jwt, me, 'remediation.tutor_created', {
-      id: tutor.id,
-      type: tutor.type,
-      published: tutor.published,
-    });
+    // FR-6: a REUSE of an existing teacher tutor is an UPDATE, not a create — route
+    // it through `remediation.tutor_updated` with the published before/after so a
+    // retire/approve flip on a live teacher tutor stays traceable (never an
+    // untraceable silent retire via a `tutor_created` row).
+    if (reused) {
+      await this.writeTutorAudit(jwt, me, 'remediation.tutor_updated', {
+        id: tutor.id,
+        type: tutor.type,
+        published: tutor.published,
+        ...(publishedBefore !== undefined ? { publishedBefore } : {}),
+      });
+    } else {
+      await this.writeTutorAudit(jwt, me, 'remediation.tutor_created', {
+        id: tutor.id,
+        type: tutor.type,
+        published: tutor.published,
+      });
+    }
     return tutor;
   }
 
@@ -607,6 +792,18 @@ export class RemediationController {
       published: publishedAfter,
       publishedBefore,
     });
+    // FR-4: on an APPROVE (published false→true) of a teacher-linked tutor,
+    // best-effort notify the linked teacher their profile is now parent-discoverable.
+    if (!publishedBefore && publishedAfter && tutor.userProfileId) {
+      await this.notifyLinkedTeacher({
+        tenantId: me.tenantId,
+        userProfileId: tutor.userProfileId,
+        title: 'Votre profil de soutien est publié',
+        body: 'Votre profil de soutien scolaire est désormais visible par les familles de l’école.',
+        sourceType: 'tutor',
+        sourceId: `${tutor.id}:published`,
+      });
+    }
     return tutor;
   }
 
@@ -627,12 +824,25 @@ export class RemediationController {
     const result = await this.admin.upsertAvailability({
       tenantId: me.tenantId,
       tutorId,
+      userProfileId: me.id,
       dto,
     });
     await this.writeAvailabilityAudit(jwt, me, 'remediation.availability_created', {
       id: result.availability.id,
       tutorId: result.tutorId,
     });
+    // FR-4: a NEW slot published on a teacher-linked tutor best-effort notifies the
+    // linked teacher (external/peer tutors — userProfileId null — get no notify).
+    if (result.tutorUserProfileId) {
+      await this.notifyLinkedTeacher({
+        tenantId: me.tenantId,
+        userProfileId: result.tutorUserProfileId,
+        title: 'Un créneau de soutien a été publié',
+        body: 'Un nouveau créneau de soutien scolaire a été publié sur votre profil.',
+        sourceType: 'tutor_availability',
+        sourceId: `${result.availability.id}:published`,
+      });
+    }
     return result.availability;
   }
 
@@ -656,6 +866,7 @@ export class RemediationController {
       tenantId: me.tenantId,
       tutorId,
       availabilityId: id,
+      userProfileId: me.id,
       dto,
     });
     await this.writeAvailabilityAudit(jwt, me, 'remediation.availability_updated', {
@@ -666,6 +877,40 @@ export class RemediationController {
   }
 
   // ----- best-effort side-effects (never fail/roll back the booking) ----------
+
+  /**
+   * Append-only audit for a plan lifecycle change (close → met|closed, reopen →
+   * open). The `after` payload carries the new status + resolution / actor so the
+   * kind, reversible completion is fully traceable. Best-effort: a failure never
+   * blocks the status flip (the flip already committed via the guarded updateMany).
+   */
+  private async writePlanLifecycleAudit(
+    jwt: KeycloakJwtPayload,
+    me: { id: string; tenantId: string },
+    action: 'remediation.plan_closed' | 'remediation.plan_reopened',
+    planId: string,
+    after: Record<string, string | number | boolean | null>,
+  ): Promise<void> {
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: me.tenantId,
+          actorId: me.id,
+          actorRole,
+          portal,
+          action,
+          resourceType: 'remediation_plan',
+          resourceId: planId,
+          after: after as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write ${action} audit row for plan ${planId} (plan unaffected): ${(err as Error).message}`,
+      );
+    }
+  }
 
   /**
    * Append-only audit for a tutor curation change (create / update / approve /
@@ -702,6 +947,43 @@ export class RemediationController {
     } catch (err) {
       this.logger.error(
         `Failed to write ${action} audit row for tutor ${tutor.id} (tutor unaffected): ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * FR-4 — best-effort notification parity on admin curation: notify the linked
+   * teacher (the tutor's `userProfileId`) when their profile is approved or a slot
+   * is published, deep-linking `/teacher/remediation`. Routed through
+   * `NotificationsService.createMany` so the existing `NotificationPreference`
+   * cadence/in-app gating applies (no re-implementation). Best-effort: a notify
+   * failure NEVER rolls back the curation write (the established S1/S2 pattern).
+   * External/peer tutors (userProfileId null) are never passed here (no account).
+   */
+  private async notifyLinkedTeacher(args: {
+    tenantId: string;
+    userProfileId: string;
+    title: string;
+    body: string;
+    sourceType: string;
+    sourceId: string;
+  }): Promise<void> {
+    try {
+      await this.notifications.createMany([
+        {
+          tenantId: args.tenantId,
+          userProfileId: args.userProfileId,
+          kind: 'remediation',
+          title: args.title,
+          body: args.body,
+          link: '/teacher/remediation',
+          sourceType: args.sourceType,
+          sourceId: args.sourceId,
+        },
+      ]);
+    } catch (err) {
+      this.logger.error(
+        `Best-effort curation notify failed (target ${args.userProfileId}, ${args.sourceType}/${args.sourceId}; curation unaffected): ${(err as Error).message}`,
       );
     }
   }

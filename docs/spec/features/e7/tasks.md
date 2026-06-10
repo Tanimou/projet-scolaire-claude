@@ -170,7 +170,7 @@ reading the **trend delta vs the plan baseline** from the E6 snapshot.
 
 ---
 
-## [ ] S6 — Loop hardening: notifications + cancellation + completion + uptake sweep · `[auth]` · P2-P3 · ~S
+## [x] S6 — Loop hardening: notifications + cancellation + completion + uptake sweep · `[auth]` · P2-P3 · ~S · ✅ shipped
 
 **Goal:** close the lifecycle — best-effort notifications, cancellation, kind completion, and a
 self-healing completion sweep.

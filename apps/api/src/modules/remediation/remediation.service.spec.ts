@@ -381,3 +381,81 @@ describe('RemediationService.catalogue — tenant + published + subject filter',
     expect(res.tutors[0]?.slots).toHaveLength(1);
   });
 });
+
+describe('RemediationService.closePlan — S6 from-status-guarded completion', () => {
+  it('flips an OPEN plan to met via a from-status-guarded updateMany', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const findFirst = jest.fn().mockResolvedValue(planRow({ status: 'met', closedAt: new Date() }));
+    const prisma = makePrisma({ remediationPlan: { updateMany, findFirst } });
+    const service = new RemediationService(prisma as never);
+
+    const res = await service.closePlan({
+      tenantId: TENANT,
+      planId: 'plan-1',
+      resolution: 'met',
+      userProfileId: PARENT,
+    });
+
+    expect(res).not.toBeNull();
+    expect(res?.plan.status).toBe('met');
+    // The guard pins status:'open' in the WHERE (ADR-020 idiom).
+    expect(updateMany.mock.calls[0][0].where).toEqual({
+      id: 'plan-1',
+      tenantId: TENANT,
+      status: 'open',
+    });
+    expect(updateMany.mock.calls[0][0].data.status).toBe('met');
+    expect(updateMany.mock.calls[0][0].data.closedBy).toBe(PARENT);
+  });
+
+  it('concurrent double-close: the loser matches 0 rows → null (controller → 409)', async () => {
+    // Simulate two concurrent closes: first wins (count 1), second guard misses (count 0).
+    const updateMany = jest
+      .fn()
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    const findFirst = jest.fn().mockResolvedValue(planRow({ status: 'met' }));
+    const prisma = makePrisma({ remediationPlan: { updateMany, findFirst } });
+    const service = new RemediationService(prisma as never);
+
+    const first = await service.closePlan({ tenantId: TENANT, planId: 'plan-1', resolution: 'met', userProfileId: PARENT });
+    const second = await service.closePlan({ tenantId: TENANT, planId: 'plan-1', resolution: 'closed', userProfileId: 'other' });
+
+    expect(first).not.toBeNull(); // exactly one success
+    expect(second).toBeNull(); // exactly one deterministic miss (→ 409)
+  });
+});
+
+describe('RemediationService.reopenPlan — S6 reversible + unique-safe', () => {
+  it('reopens a met/closed plan back to open, clearing closedAt/closedBy', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const findFirst = jest.fn().mockResolvedValue(planRow({ status: 'open' }));
+    const prisma = makePrisma({ remediationPlan: { updateMany, findFirst } });
+    const service = new RemediationService(prisma as never);
+
+    const res = await service.reopenPlan({ tenantId: TENANT, planId: 'plan-1', userProfileId: PARENT });
+
+    expect(res).not.toBeNull();
+    expect(res === 'conflict_open_exists').toBe(false);
+    expect(updateMany.mock.calls[0][0].where.status).toEqual({ in: ['met', 'closed'] });
+    expect(updateMany.mock.calls[0][0].data).toEqual({ status: 'open', closedAt: null, closedBy: null });
+  });
+
+  it('reopening an already-open plan matches 0 rows → null (controller → kind 409)', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const prisma = makePrisma({ remediationPlan: { updateMany, findFirst: jest.fn() } });
+    const service = new RemediationService(prisma as never);
+    const res = await service.reopenPlan({ tenantId: TENANT, planId: 'plan-1', userProfileId: PARENT });
+    expect(res).toBeNull();
+  });
+
+  it('catches the open-plan @@unique P2002 → conflict_open_exists (never a 500)', async () => {
+    const updateMany = jest.fn().mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'x' }),
+    );
+    const prisma = makePrisma({ remediationPlan: { updateMany, findFirst: jest.fn() } });
+    const service = new RemediationService(prisma as never);
+    const res = await service.reopenPlan({ tenantId: TENANT, planId: 'plan-1', userProfileId: PARENT });
+    expect(res).toBe('conflict_open_exists');
+  });
+});

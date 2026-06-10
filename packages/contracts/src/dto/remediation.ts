@@ -503,3 +503,33 @@ export const AdminRemediationCatalogueDtoSchema = z.object({
   tutors: z.array(AdminTutorDtoSchema),
 });
 export type AdminRemediationCatalogueDto = z.infer<typeof AdminRemediationCatalogueDtoSchema>;
+
+// ---------------------------------------------------------------------------
+// E7-S6 — Plan completion verb (kind + reversible) + reopen (the reverse)
+// ---------------------------------------------------------------------------
+
+/**
+ * Request body for `PATCH /remediation/plans/:id/close` (the kind completion
+ * verb — parent via guardianship ABAC, or admin via `remediation.manage`).
+ * `resolution` discriminates the celebratory "objectif atteint" (`met`) from the
+ * administrative "clôturé sans suite" (`closed`). The flip is from-status-guarded
+ * (`open` → met|closed) so a concurrent double-close yields exactly one success +
+ * one deterministic 409 (ADR-020 idiom). The response reuses the EXISTING
+ * `RemediationPlanDto` (already carries `status`/`closedAt`) — no shape change.
+ *
+ * Types-only on the API side (`import type`) — NO new runtime VALUE export, so no
+ * `packages/contracts/dist` rebuild is required for S6 to function.
+ */
+export const CloseRemediationPlanDtoSchema = z.object({
+  resolution: z.enum(['met', 'closed']),
+});
+export type CloseRemediationPlanDto = z.infer<typeof CloseRemediationPlanDtoSchema>;
+
+/**
+ * Request body for `PATCH /remediation/plans/:id/reopen` (the reverse verb —
+ * the reversibility that makes completion never a trap). An empty body: reopening
+ * flips a met/closed plan back to `open`, clearing `closedAt`/`closedBy`. Declared
+ * for symmetry/Swagger; the route accepts no fields.
+ */
+export const ReopenRemediationPlanDtoSchema = z.object({});
+export type ReopenRemediationPlanDto = z.infer<typeof ReopenRemediationPlanDtoSchema>;
