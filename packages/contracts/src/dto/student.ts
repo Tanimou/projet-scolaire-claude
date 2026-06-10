@@ -59,6 +59,18 @@ export const StudentGradeRowSchema = z.object({
   subjectColor: z.string().nullable(),
   assessmentId: UuidSchema,
   assessmentTitle: z.string(),
+  /**
+   * The assessment kind code (e.g. `written_test`, `homework`) — the learner's
+   * OWN assessment type, rendered as a French label in the UI. A flat scalar,
+   * NOT peer-relative, so it does not breach the non-stigmatising wall.
+   */
+  kind: z.string(),
+  /**
+   * Publication status of THIS grade. Only `published`/`revised` ever reach the
+   * learner (never a draft); `revised` lets the UI flag a corrected note. The
+   * learner's own datum — no peer figure.
+   */
+  status: z.enum(['published', 'revised']),
   /** The grade value (over `maxScore`), null when the learner was absent. */
   value: z.number().nullable(),
   maxScore: z.number(),

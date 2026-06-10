@@ -104,10 +104,12 @@ export class StudentPortalService {
         value: true,
         isAbsent: true,
         comment: true,
+        status: true,
         assessment: {
           select: {
             id: true,
             title: true,
+            kind: true,
             maxScore: true,
             coefficientOverride: true,
             scheduledAt: true,
@@ -142,6 +144,11 @@ export class StudentPortalService {
         subjectColor: subject.color,
         assessmentId: a.id,
         assessmentTitle: a.title,
+        kind: a.kind,
+        // Narrowed at the source by the `status: { in: ['published','revised'] }`
+        // where-clause above, so this cast can never widen past what reaches the
+        // learner (never a draft).
+        status: g.status as 'published' | 'revised',
         value: g.value === null ? null : Number(g.value),
         maxScore: Number(a.maxScore),
         isAbsent: g.isAbsent,

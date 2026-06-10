@@ -40,7 +40,11 @@ export async function fetchBranding(): Promise<BrandingResponse | null> {
   try {
     return await api<BrandingResponse>('/api/v1/branding/me', { cache: 'no-store' });
   } catch (err) {
-    if (err instanceof ApiError && (err.status === 401 || err.status === 404)) return null;
+    // Branding is cosmetic chrome (school name/logo/colours) — a missing or
+    // forbidden branding read must NEVER crash a portal shell. Degrade to
+    // defaults (null) on 401 (unauthenticated), 404 (no branding configured)
+    // AND 403 (a role without `branding.read`); only a genuine 5xx propagates.
+    if (err instanceof ApiError && [401, 403, 404].includes(err.status)) return null;
     throw err;
   }
 }

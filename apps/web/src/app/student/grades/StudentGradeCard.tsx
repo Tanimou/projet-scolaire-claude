@@ -14,18 +14,11 @@ import { kindLabel } from './kinds';
  * alone.
  */
 export function StudentGradeCard({ grade }: { grade: StudentGradeRow }) {
-  const subject = grade.assessment.subject;
-  const color = subject.color ?? 'oklch(0.56 0.19 292)';
-  const max = Number(grade.assessment.maxScore);
+  const color = grade.subjectColor ?? 'oklch(0.56 0.19 292)';
+  const max = Number(grade.maxScore);
   const rawValue = grade.value != null ? Number(grade.value) : null;
-  const coefficient = grade.assessment.coefficientOverride
-    ? Number(grade.assessment.coefficientOverride)
-    : 1;
-  const dateLabel = grade.assessment.scheduledAt
-    ? formatDateShort(grade.assessment.scheduledAt)
-    : grade.publishedAt
-      ? formatDateShort(grade.publishedAt)
-      : '—';
+  const coefficient = grade.coefficient ?? 1;
+  const dateLabel = grade.scheduledAt ? formatDateShort(grade.scheduledAt) : '—';
 
   const onTwenty = rawValue != null && max > 0 ? (rawValue / max) * 20 : null;
   const bucket = grade.isAbsent ? null : gradeBucket(rawValue, max);
@@ -41,16 +34,16 @@ export function StudentGradeCard({ grade }: { grade: StudentGradeRow }) {
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
               <FileEdit className="h-3 w-3" />
-              {kindLabel(grade.assessment.kind)}
+              {kindLabel(grade.kind)}
             </span>
             <span className="text-[11px] text-slate-300">·</span>
             <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
               <CalendarDays className="h-3 w-3" />
               {dateLabel}
             </span>
-            {grade.assessment.term && (
+            {grade.termName && (
               <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-600">
-                {grade.assessment.term.name}
+                {grade.termName}
               </span>
             )}
             <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-slate-500 ring-1 ring-slate-200/80">
@@ -59,7 +52,7 @@ export function StudentGradeCard({ grade }: { grade: StudentGradeRow }) {
           </div>
 
           <h3 className="mt-2 text-sm font-bold leading-snug text-slate-900">
-            {grade.assessment.title}
+            {grade.assessmentTitle}
           </h3>
 
           {grade.comment && (

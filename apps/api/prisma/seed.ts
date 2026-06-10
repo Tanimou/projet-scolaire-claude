@@ -133,6 +133,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'announcements.read.self',
     'analytics.read.self',
     'profile.read.self',
+    // School-identity read so the portal shell can render the établissement's
+    // branding — shared, non-peer chrome (see ADR-021). The ONE non-self grant.
+    'branding.read',
   ],
 };
 

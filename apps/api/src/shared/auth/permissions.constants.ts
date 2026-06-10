@@ -270,11 +270,17 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'profile.write.self',
   ],
   // E8-S1 — the student portal audience. A read-only, self-scoped learner.
-  // Carries ONLY the five `*.read.self` permissions + read-own-profile, and
-  // ZERO write permissions: `remediation.book`, `messaging.*`, any `grades.*`
-  // write, and every other write are DELIBERATELY ABSENT (the read-only wall is
-  // in the grant list itself). The student-self ABAC (StudentAccessService)
-  // narrows every read to the caller's own dossier — never a peer. See ADR-021.
+  // Carries ONLY the five `*.read.self` permissions + read-own-profile + the
+  // school-identity read, and ZERO write permissions: `remediation.book`,
+  // `messaging.*`, any `grades.*` write, and every other write are DELIBERATELY
+  // ABSENT (the read-only wall is in the grant list itself). The student-self
+  // ABAC (StudentAccessService) narrows every self-scoped read to the caller's
+  // own dossier — never a peer. `branding.read` is the ONE non-self grant: it
+  // returns the school's public identity (name/logo/colours), the SAME data
+  // every audience of that school already sees (admin/teacher/parent all carry
+  // it) — not student-specific, not peer data — so the student portal shell can
+  // render the établissement's branding without breaching the RGPD-narrowed,
+  // non-stigmatising posture. See ADR-021.
   student: [
     'grades.read.self',
     'assessments.read.self',
@@ -282,5 +288,6 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'announcements.read.self',
     'analytics.read.self',
     'profile.read.self',
+    'branding.read',
   ],
 };

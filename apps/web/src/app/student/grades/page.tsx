@@ -37,7 +37,7 @@ async function fetchGrades(): Promise<GradesFetch> {
 /** /20 equivalent for a single grade (null when absent / unscored). */
 function valueOn20(g: StudentGradeRow): number | null {
   if (g.isAbsent || g.value == null) return null;
-  const max = Number(g.assessment.maxScore);
+  const max = Number(g.maxScore);
   const raw = Number(g.value);
   if (!Number.isFinite(raw) || !Number.isFinite(max) || max <= 0) return null;
   return (raw / max) * 20;
@@ -89,15 +89,15 @@ export default async function StudentGradesPage({
   // learner can actually see).
   const termMap = new Map<string, { id: string; name: string }>();
   for (const g of allGrades) {
-    if (g.assessment.term && !termMap.has(g.assessment.term.id)) {
-      termMap.set(g.assessment.term.id, { id: g.assessment.term.id, name: g.assessment.term.name });
+    if (g.termId && g.termName && !termMap.has(g.termId)) {
+      termMap.set(g.termId, { id: g.termId, name: g.termName });
     }
   }
   const terms = Array.from(termMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   const activeTermId = sp.termId && termMap.has(sp.termId) ? sp.termId : '';
 
   const filtered = activeTermId
-    ? allGrades.filter((g) => g.assessment.term?.id === activeTermId)
+    ? allGrades.filter((g) => g.termId === activeTermId)
     : allGrades;
 
   // Group by subject, preserving a stable French sort.
@@ -106,10 +106,11 @@ export default async function StudentGradesPage({
     { id: string; name: string; color: string | null; rows: StudentGradeRow[] }
   >();
   for (const g of filtered) {
-    const s = g.assessment.subject;
-    const entry = bySubject.get(s.id) ?? { id: s.id, name: s.name, color: s.color, rows: [] };
+    const entry =
+      bySubject.get(g.subjectId) ??
+      { id: g.subjectId, name: g.subjectName, color: g.subjectColor, rows: [] };
     entry.rows.push(g);
-    bySubject.set(s.id, entry);
+    bySubject.set(g.subjectId, entry);
   }
   const subjects = Array.from(bySubject.values()).sort((a, b) =>
     a.name.localeCompare(b.name, 'fr'),

@@ -17,6 +17,19 @@ import {
 const KEYCLOAK_URL = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? 'http://localhost:8180';
 const KEYCLOAK_REALM = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? 'pilotage-scolaire';
 
+/**
+ * The default post-login landing per portal. Most portals open on their
+ * dashboard; the student portal (E8-S1) ships no dashboard yet — its landing is
+ * "Mes notes" (`/student/grades`). Used only when no explicit `?callbackUrl=` is
+ * present, so a fresh student login never 404s on `/student/dashboard`.
+ */
+const DEFAULT_LANDING: Record<PortalAccent, string> = {
+  admin: '/admin/dashboard',
+  teacher: '/teacher/dashboard',
+  parent: '/parent/dashboard',
+  student: '/student/grades',
+};
+
 function buildKeycloakResetUrl(portal: PortalAccent): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3100';
   // The student portal reuses the parent OIDC client (ADR-021) — there is no
@@ -61,7 +74,7 @@ function PortalLoginFormInner({
 }) {
   const router = useRouter();
   const params = useSearchParams();
-  const callbackUrl = params.get('callbackUrl') ?? `/${accent}/dashboard`;
+  const callbackUrl = params.get('callbackUrl') ?? DEFAULT_LANDING[accent];
   const errorParam = params.get('error');
 
   const [email, setEmail] = useState('');

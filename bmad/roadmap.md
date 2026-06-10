@@ -440,8 +440,8 @@ the next free number after ADR-020). Hard non-goals: no student write/self-servi
 metric, no medical/guardian-private exposure, no provisioning UI, no real-time/second queue, no LTI.
 **Slice order:** S1 student role + self-ABAC + auth wiring + `/student/me` + "Mes notes" (→ ADR-021) ·
 S2 "Mes prochaines évaluations" + "Mon assiduité" · S3 announcements + the "Mon objectif" dashboard.
-**E8-S1 shipped this run — `epic-slice`, P1 `[schema][auth][security][rgpd][abac]`, RED gate / needs
-human review (NOT auto-merged).** The fourth, read-only `/student/*` portal: a DISJOINT `student`
+**E8-S1 shipped — `epic-slice`, P1 `[schema][auth][security][rgpd][abac]`, GREEN (build 7/7,
+auto-merged after a follow-up reconciliation pass).** The fourth, read-only `/student/*` portal: a DISJOINT `student`
 realm-role (INV-1) routed through `auth.ts` (4th provider; ADR-021 `portal-parent` OIDC-client reuse, a
 4th client the recorded alternative) + `middleware.ts` (deny-by-default + `PORTAL_LANDING.student =
 /student/grades`); the deny-by-default **student-self ABAC** (`student-access.service.ts` — scope is
@@ -453,13 +453,15 @@ the `*.read.self` permission family (student-only, ZERO writes) + both seeds; th
 PAYLOAD SHAPE** (DTOs structurally lack `studentRank`/`classAverage`/`classRankTotal`/`classSize`, only
 published/revised grades, no medical/guardian-private fields); the violet `student` design-token ramp +
 `/student/login` + `/student/grades` + activation-gate FE; and `docs/adr/ADR-021-student-role-and-self-abac.md`.
-**Held open (RED gate) — known blockers carried to human review:** (1) the slice landed SPLIT across two
-checkouts (worktree-path bug — FE/DS/contracts in the slice branch, BE/schema/ADR uncommitted in the MAIN
-checkout); (2) `prisma generate` (part of the pending additive `db push`) clears the 2 stale-client TS2353
-errors — same infra-pending pattern as E6-S1/E7-S1–S5; (3) an internal FE↔contract `StudentGradeRow`
-shape mismatch (nested vs flat) to reconcile; (4) ADR-021 + (5) the `student` realm-role/demo-user in
-`infra/keycloak/realm-export.json` must be in the diff/applied. **Next slice → E8-S2** ("Mes prochaines
-évaluations" + "Mon assiduité"), after S1's blockers are reconciled.
+**Blockers reconciled in the green-fix pass:** (1) both checkouts consolidated onto ONE branch
+(worktree-path bug); (2) `prisma generate` cleared the 2 stale-client TS2353 errors; (3) the FE↔contract
+`StudentGradeRow` mismatch fixed by conforming the FE to the canonical FLAT shape + adding two flat,
+RGPD-safe learner-own scalars (`kind`, `status`) so the card stays complete; (4) `ADR-021` landed
+(Winston-ratified); (5) the AppShell branding 403 crash fixed (grant `student` `branding.read` +
+harden `fetchBranding` to degrade on 403); (6) the `/student/dashboard` login 404 fixed with a
+portal-aware landing map. **Operator step (not a code blocker):** activate the `student` realm-role +
+demo user in `infra/keycloak/realm-export.json` and run the additive `db push`. **Next slice → E8-S2**
+("Mes prochaines évaluations" + "Mon assiduité"), building on the now-green S1.
 
 ---
 
