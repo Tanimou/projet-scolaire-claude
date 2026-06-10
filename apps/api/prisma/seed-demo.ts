@@ -155,6 +155,8 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['guardianships.read', 'Lire rattachements parents', 'guardianship', 'read'],
   ['guardianships.write', 'Créer rattachements parents', 'guardianship', 'write'],
   ['guardianships.approve', 'Valider rattachements parents', 'guardianship', 'approve'],
+  // E9-S1 — parent-only self-service child-claim (granted to `parent` only).
+  ['guardianships.claim', 'Rattacher son enfant', 'guardianship', 'claim'],
   ['calendar.read', 'Lire calendrier', 'calendar', 'read'],
   ['calendar.write', 'Gérer calendrier', 'calendar', 'write'],
   ['teaching_assignments.read', 'Lire affectations profs', 'teaching_assignment', 'read'],

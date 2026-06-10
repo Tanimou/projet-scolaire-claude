@@ -38,6 +38,12 @@ export const PERMISSIONS = [
   ['guardianships.read', 'Lire rattachements parents', 'guardianship', 'read'],
   ['guardianships.write', 'Créer rattachements parents', 'guardianship', 'write'],
   ['guardianships.approve', 'Valider rattachements parents', 'guardianship', 'approve'],
+  // E9-S1 — a thin, PARENT-ONLY permission for the self-service child-claim
+  // (the exports.execute.parent / *.read.self role-narrowed house style). Granted
+  // ONLY to the parent realm-role — NEVER admin/teacher/student. A parent can never
+  // self-create an `active` link (that rides guardianships.write, NOT granted here);
+  // admin approval (S2) rides the existing guardianships.approve. See ADR-022.
+  ['guardianships.claim', 'Rattacher son enfant', 'guardianship', 'claim'],
 
   // Calendar
   ['calendar.read', 'Lire calendrier', 'calendar', 'read'],
@@ -252,6 +258,7 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'students.read',
     'enrollments.read',
     'guardianships.read',
+    'guardianships.claim',
     'assessments.read',
     'grades.read',
     'class_sessions.read',
