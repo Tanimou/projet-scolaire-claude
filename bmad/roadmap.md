@@ -418,9 +418,29 @@ wiring (recommended for S4/hardening). **S4 shipped (this run); next slice → S
 admin catalogue curation & oversight — `/admin/remediation` on `remediation.manage`, no schema change). See
 the **E7 update** note above for the S4 detail.
 
-### E8 — Student Portal · `proposed` · ~M
-**Why:** the cahier's future "Portail élève." New Keycloak `student` role + read-only student views
-(my grades, assessments, attendance, announcements) with student ABAC. Net-new surface.
+### E8 — Student Portal · `in-progress` · ~M
+**Why:** the cahier's future "Portail élève." Activates the **reserved** Keycloak `student` role
+(ADR-004/015 "(futur)") + read-only student views (my grades, assessments, attendance, announcements)
+with a **deny-by-default student-self ABAC** (never a peer). Net-new, read-only learner surface.
+**Spec-kit:** ✅ landed `docs/spec/features/e8/` (this run, epic-spec, docs-only): spec/plan/data-model/
+contracts(openapi)/ux/tasks/quickstart/PROGRESS. Locked decisions: a **fourth, read-only audience** (the
+learner, seeing **only their own** dossier) reusing the existing aggregate producers re-scoped to *self*;
+the **one schema change** = an additive optional `Student.userProfileId String? @unique` link (the
+`Guardian.userProfileId` precedent — **verified absent from `model Student` today**, so S1 is
+`[schema][auth]`); a thin role-narrowed read-only permission family (`grades.read.self` /
+`assessments.read.self` / `attendance.read.self` / `announcements.read.self` / `analytics.read.self`,
+student-only, **zero writes**); the visionary spine = the **"Mon objectif"** actionable dashboard (E6
+per-subject trend snapshot-first + the E7 `remediationProgress` line re-framed second-person + next
+assessments, never a peer comparison, RGPD-minimal). **The one new architectural decision = the `student`
+role activation + the student-self ABAC** (deny-by-default singleton `[ownId]`/`[]`, never `null`; the
+peer-comparison wall in the payload shape; the `portal-parent` OIDC client reused, a 4th client the
+recorded alternative) → **`docs/adr/ADR-021-student-role-and-self-abac.md`** on the **S1** run (ADR-021 is
+the next free number after ADR-020). Hard non-goals: no student write/self-service (no booking —
+`remediation.book` never granted to `student`), no peer data/roster/ranking, no second realm, no new
+metric, no medical/guardian-private exposure, no provisioning UI, no real-time/second queue, no LTI.
+**Slice order:** S1 student role + self-ABAC + auth wiring + `/student/me` + "Mes notes" (→ ADR-021) ·
+S2 "Mes prochaines évaluations" + "Mon assiduité" · S3 announcements + the "Mon objectif" dashboard.
+**Next slice → E8-S1.**
 
 ---
 
