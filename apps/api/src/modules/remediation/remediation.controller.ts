@@ -27,13 +27,17 @@ import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
 
+import { AdminRemediationService } from './admin-remediation.service';
+import { AdminUpsertAvailabilityDto } from './dto/admin-upsert-availability.dto';
 import { BookingService } from './booking.service';
+import { CreateAdminTutorDto } from './dto/create-admin-tutor.dto';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PromoteRemediationPlanDto } from './dto/promote-remediation-plan.dto';
 import { RemediationService } from './remediation.service';
 import { TeacherRemediationService } from './teacher-remediation.service';
 import { TransitionBookingDto } from './dto/transition-booking.dto';
+import { UpdateAdminTutorDto } from './dto/update-admin-tutor.dto';
 import { UpsertTeacherAvailabilityDto } from './dto/upsert-teacher-availability.dto';
 
 /**
@@ -63,6 +67,7 @@ export class RemediationController {
     private readonly remediation: RemediationService,
     private readonly bookings: BookingService,
     private readonly teacher: TeacherRemediationService,
+    private readonly admin: AdminRemediationService,
     private readonly notifications: NotificationsService,
     private readonly users: UserSyncService,
     private readonly ctx: SchoolContextService,
@@ -500,7 +505,206 @@ export class RemediationController {
     return booking;
   }
 
+  // ===========================================================================
+  // E7-S5 — Admin catalogue curation & oversight.
+  //
+  // A school admin (the `remediation.manage` authority — already seeded, narrowed
+  // to school_admin) creates/approves/retires tenant-scoped `Tutor` resources,
+  // publishes/edits their slots, and reads a school-scoped AGGREGATE overview.
+  // EVERY route rides `@RequiresPermission('remediation.manage')` (a parent/teacher
+  // holding only remediation.read|book gets 403). Every read/write is tenant-scoped
+  // (server-derived); a tutor/availability outside the caller's tenant 404s. Each
+  // curation write appends an append-only audit row. No schema change.
+  // ===========================================================================
+
+  /**
+   * The admin catalogue list — the FULL tenant-scoped tutor roster (every type +
+   * published state; the admin sees what parents can't), each enriched with
+   * availability + active-booking counts (one grouped query, no N+1). Optional
+   * `?subjectId=` filter drives the FilterBar.
+   */
+  @Get('admin/tutors')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Admin catalogue — full tutor roster (tenant-scoped, manage-gated)' })
+  async adminTutors(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Query('subjectId') subjectId?: string,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const tutors = await this.admin.listTutors({
+      tenantId: me.tenantId,
+      subjectId: subjectId || undefined,
+    });
+    return { tutors };
+  }
+
+  /**
+   * The school-scoped aggregate overview — per-subject openPlans/activeBookings/
+   * tutorCount + tenant totals. RGPD-clean: AGGREGATE COUNTS ONLY, no child-by-name
+   * anywhere (the response carries no studentId/studentName/per-child row).
+   */
+  @Get('admin/overview')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Admin remediation overview — aggregate counts per subject (RGPD-clean)' })
+  async adminOverview(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    return this.admin.overview({ tenantId: me.tenantId });
+  }
+
+  /**
+   * Create a tutor (teacher-linked or external/peer). For a teacher tutor the
+   * `teacherProfileId` is validated in-tenant + its `userProfileId` resolved
+   * server-side, and the subjects are constrained to what the teacher teaches.
+   * `costKind` is a label only (ADR-018). Append-only `remediation.tutor_created`.
+   */
+  @Post('tutors')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Create a tutor (teacher-linked or external/peer, manage-gated)' })
+  async createTutor(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Body() dto: CreateAdminTutorDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    const { tutor } = await this.admin.createTutor({
+      tenantId: me.tenantId,
+      schoolId,
+      userProfileId: me.id,
+      dto,
+    });
+    await this.writeTutorAudit(jwt, me, 'remediation.tutor_created', {
+      id: tutor.id,
+      type: tutor.type,
+      published: tutor.published,
+    });
+    return tutor;
+  }
+
+  /**
+   * Update / approve / retire a tutor. `published:true` = approve (parent-
+   * discoverable); `published:false` = retire (history-preserving — the row, its
+   * slots, and its bookings survive). `type` is immutable. Append-only
+   * `remediation.tutor_updated` carrying the published before/after (so approve/
+   * retire is traceable).
+   */
+  @Patch('tutors/:id')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Update / approve / retire a tutor (manage-gated, audited)' })
+  async updateTutor(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateAdminTutorDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { tutor, publishedBefore, publishedAfter } = await this.admin.updateTutor({
+      tenantId: me.tenantId,
+      tutorId: id,
+      dto,
+    });
+    await this.writeTutorAudit(jwt, me, 'remediation.tutor_updated', {
+      id: tutor.id,
+      type: tutor.type,
+      published: publishedAfter,
+      publishedBefore,
+    });
+    return tutor;
+  }
+
+  /**
+   * Publish a slot for ANY tutor (no subject-ownership wall — manage IS the
+   * authority). Re-scoped to the caller's tenant (404 otherwise). Slot shape +
+   * capacity-floor re-validated. Append-only `remediation.availability_created`.
+   */
+  @Post('tutors/:tutorId/availabilities')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Publish a slot for a tutor (admin, manage-gated)' })
+  async adminPublishAvailability(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('tutorId') tutorId: string,
+    @Body() dto: AdminUpsertAvailabilityDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const result = await this.admin.upsertAvailability({
+      tenantId: me.tenantId,
+      tutorId,
+      dto,
+    });
+    await this.writeAvailabilityAudit(jwt, me, 'remediation.availability_created', {
+      id: result.availability.id,
+      tutorId: result.tutorId,
+    });
+    return result.availability;
+  }
+
+  /**
+   * Edit a tutor's slot (capacity / time / active). Re-scoped to the caller's
+   * tenant + the path tutor (404 otherwise). Editing capacity below the active-
+   * booking count on the next instance → 422 (ADR-020). Append-only
+   * `remediation.availability_updated`.
+   */
+  @Patch('tutors/:tutorId/availabilities/:id')
+  @RequiresPermission('remediation.manage')
+  @ApiOperation({ summary: 'Edit a tutor slot (admin, manage-gated, capacity-floor safe)' })
+  async adminEditAvailability(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('tutorId') tutorId: string,
+    @Param('id') id: string,
+    @Body() dto: AdminUpsertAvailabilityDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const result = await this.admin.upsertAvailability({
+      tenantId: me.tenantId,
+      tutorId,
+      availabilityId: id,
+      dto,
+    });
+    await this.writeAvailabilityAudit(jwt, me, 'remediation.availability_updated', {
+      id: result.availability.id,
+      tutorId: result.tutorId,
+    });
+    return result.availability;
+  }
+
   // ----- best-effort side-effects (never fail/roll back the booking) ----------
+
+  /**
+   * Append-only audit for a tutor curation change (create / update / approve /
+   * retire). The `after` payload carries the published state (+ before on update)
+   * so an approve/retire flip — the parent-catalogue trust gate — is traceable.
+   * Best-effort: a failure never blocks the curation write.
+   */
+  private async writeTutorAudit(
+    jwt: KeycloakJwtPayload,
+    me: { id: string; tenantId: string },
+    action: 'remediation.tutor_created' | 'remediation.tutor_updated',
+    tutor: { id: string; type: string; published: boolean; publishedBefore?: boolean },
+  ): Promise<void> {
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: me.tenantId,
+          actorId: me.id,
+          actorRole,
+          portal,
+          action,
+          resourceType: 'tutor',
+          resourceId: tutor.id,
+          after: {
+            type: tutor.type,
+            published: tutor.published,
+            ...(tutor.publishedBefore !== undefined
+              ? { publishedBefore: tutor.publishedBefore }
+              : {}),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write ${action} audit row for tutor ${tutor.id} (tutor unaffected): ${(err as Error).message}`,
+      );
+    }
+  }
 
   private async writeAvailabilityAudit(
     jwt: KeycloakJwtPayload,

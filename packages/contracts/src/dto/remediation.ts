@@ -362,3 +362,144 @@ export const TransitionBookingDtoSchema = z.object({
   note: z.string().trim().max(280).optional(),
 });
 export type TransitionBookingDto = z.infer<typeof TransitionBookingDtoSchema>;
+
+// ---------------------------------------------------------------------------
+// E7-S5 — Admin remediation catalogue curation & oversight (remediation.manage)
+// ---------------------------------------------------------------------------
+
+/**
+ * An admin catalogue row (`GET /remediation/admin/tutors`). Unlike the parent
+ * catalogue, the admin sees the FULL roster — every type and every published
+ * state — so curation (publish / retire / edit) is possible. `published` is the
+ * lifecycle flag: `published:true` = discoverable in the parent catalogue,
+ * `published:false` = retired (the row + its slots/bookings survive). The Tutor
+ * model carries no separate `active` column, so retirement == toggling
+ * `published` (we deliberately omit a tutor-level `active`). `costKind` is a
+ * DISPLAY LABEL only — never a price (ADR-018). `availabilityCount` and
+ * `activeBookingCount` are resolved in ONE grouped query (no N+1).
+ */
+export const AdminTutorDtoSchema = z.object({
+  id: UuidSchema,
+  type: z.enum(TUTOR_TYPE),
+  costKind: z.enum(TUTOR_COST_KIND),
+  displayName: z.string(),
+  blurb: z.string().nullable(),
+  subjectIds: z.array(UuidSchema),
+  teacherProfileId: UuidSchema.nullable(),
+  userProfileId: UuidSchema.nullable(),
+  published: z.boolean(),
+  availabilityCount: z.number().int().nonnegative(),
+  activeBookingCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+});
+export type AdminTutorDto = z.infer<typeof AdminTutorDtoSchema>;
+
+/**
+ * An admin availability slot — REUSES the teacher availability shape verbatim
+ * (id, kind, weekday, startTime, endTime, startsAt, endsAt, capacity, active,
+ * bookedCount). Aliased (not redefined) so the two surfaces never diverge.
+ */
+export const AdminTutorAvailabilityDtoSchema = TeacherAvailabilityDtoSchema;
+export type AdminTutorAvailabilityDto = TeacherAvailabilityDto;
+
+/**
+ * Request body for `POST /remediation/tutors` (create a tutor, remediation.manage).
+ * For `type:'teacher'` the `teacherProfileId` is REQUIRED (validated in-tenant
+ * server-side; the linked teacher's `userProfileId` is resolved + persisted so
+ * the S2 booking teaching-wall + notify resolve). For `external`/`peer` the
+ * teacher link is forbidden (and stays null). `costKind` is a label only.
+ */
+export const CreateAdminTutorDtoSchema = z
+  .object({
+    type: z.enum(TUTOR_TYPE),
+    costKind: z.enum(TUTOR_COST_KIND).default('free'),
+    displayName: z.string().trim().min(1).max(160),
+    blurb: z.string().trim().max(500).optional(),
+    subjectIds: z.array(UuidSchema).min(1),
+    teacherProfileId: UuidSchema.optional(),
+    published: z.boolean().default(false),
+  })
+  .refine(
+    (v) => (v.type === 'teacher' ? !!v.teacherProfileId : !v.teacherProfileId),
+    {
+      message:
+        "teacherProfileId is required for a 'teacher' tutor and forbidden otherwise",
+      path: ['teacherProfileId'],
+    },
+  );
+export type CreateAdminTutorDto = z.infer<typeof CreateAdminTutorDtoSchema>;
+
+/**
+ * Request body for `PATCH /remediation/tutors/:id` (update / approve / retire).
+ * `type` is IMMUTABLE post-create (omitted here); toggling `published` is the
+ * approve/retire verb. For a teacher tutor the teacher link is NOT editable here
+ * (resolved at create). All fields optional (partial update).
+ */
+export const UpdateAdminTutorDtoSchema = z.object({
+  costKind: z.enum(TUTOR_COST_KIND).optional(),
+  displayName: z.string().trim().min(1).max(160).optional(),
+  blurb: z.string().trim().max(500).nullable().optional(),
+  subjectIds: z.array(UuidSchema).min(1).optional(),
+  published: z.boolean().optional(),
+});
+export type UpdateAdminTutorDto = z.infer<typeof UpdateAdminTutorDtoSchema>;
+
+/**
+ * Request body for `POST /remediation/tutors/:tutorId/availabilities` +
+ * `PATCH .../:id` (admin publish/edit a slot). Same recurring/one_off .refine as
+ * the teacher DTO, MINUS the teacher subject-ownership semantics — the admin
+ * curates ANY tutor's slots (remediation.manage IS the authority); `tutorId` is
+ * the path param (carried here for the service). The capacity-floor guard
+ * (reject a capacity edit below the active-booking count on the next instance)
+ * is re-applied server-side, identical to the teacher path.
+ */
+export const AdminUpsertAvailabilityDtoSchema = z
+  .object({
+    tutorId: UuidSchema,
+    kind: z.enum(AVAILABILITY_KIND),
+    weekday: z.number().int().min(0).max(6).nullable().optional(),
+    startTime: z.string().nullable().optional(),
+    endTime: z.string().nullable().optional(),
+    startsAt: z.string().nullable().optional(),
+    endsAt: z.string().nullable().optional(),
+    capacity: z.number().int().min(1).max(50).default(1),
+    active: z.boolean().default(true),
+  })
+  .refine(
+    (v) =>
+      v.kind === 'recurring_weekly'
+        ? v.weekday != null && !!v.startTime
+        : !!v.startsAt,
+    { message: 'recurring_weekly needs weekday+startTime; one_off needs startsAt' },
+  );
+export type AdminUpsertAvailabilityDto = z.infer<typeof AdminUpsertAvailabilityDtoSchema>;
+
+/**
+ * The school-scoped aggregate overview (`GET /remediation/admin/overview`).
+ * AGGREGATE COUNTS ONLY — per subject (openPlans, activeBookings, tutorCount) +
+ * tenant totals. RGPD-clean: NO studentId, NO studentName, NO per-child row
+ * anywhere (the non-stigmatising mandate). Every figure is a groupBy/count.
+ */
+export const AdminRemediationOverviewDtoSchema = z.object({
+  bySubject: z.array(
+    z.object({
+      subjectId: UuidSchema,
+      subjectName: z.string().nullable(),
+      openPlans: z.number().int().nonnegative(),
+      activeBookings: z.number().int().nonnegative(),
+      tutorCount: z.number().int().nonnegative(),
+    }),
+  ),
+  totals: z.object({
+    openPlans: z.number().int().nonnegative(),
+    activeBookings: z.number().int().nonnegative(),
+    publishedTutors: z.number().int().nonnegative(),
+  }),
+});
+export type AdminRemediationOverviewDto = z.infer<typeof AdminRemediationOverviewDtoSchema>;
+
+/** The list response for `GET /remediation/admin/tutors`. */
+export const AdminRemediationCatalogueDtoSchema = z.object({
+  tutors: z.array(AdminTutorDtoSchema),
+});
+export type AdminRemediationCatalogueDto = z.infer<typeof AdminRemediationCatalogueDtoSchema>;

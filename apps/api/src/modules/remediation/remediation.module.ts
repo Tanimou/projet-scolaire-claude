@@ -5,6 +5,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { SchoolStructureModule } from '../school-structure/school-structure.module';
 import { StudentsModule } from '../students/students.module';
 
+import { AdminRemediationService } from './admin-remediation.service';
 import { BookingIndexBootstrap } from './booking-index.bootstrap';
 import { BookingService } from './booking.service';
 import { RemediationController } from './remediation.controller';
@@ -32,6 +33,7 @@ import { TeacherRemediationService } from './teacher-remediation.service';
     RemediationService,
     BookingService,
     TeacherRemediationService,
+    AdminRemediationService,
     BookingIndexBootstrap,
   ],
   exports: [RemediationService, BookingService],
