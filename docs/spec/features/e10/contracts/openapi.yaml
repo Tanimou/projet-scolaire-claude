@@ -1,0 +1,221 @@
+openapi: 3.0.3
+info:
+  title: Pilotage Scolaire - E10 Quality bar (authenticated E2E + WCAG 2.2 AA) - endpoint TRACEABILITY
+  version: 0.1.0-spec
+  description: >
+    E10 ships NO new REST endpoint and NO schema change. This file is a
+    DOCUMENTARY traceability map of the EXISTING /api/v1 endpoints (shipped in
+    E1-E9) that the authenticated Playwright journeys (J1/J2/J3) exercise through
+    the product's real auth stack. Every operation is annotated x-reused: true /
+    x-e10-new: false. A drift checker can use this to confirm E10 introduced no
+    new surface. The real harness contract lives in auth-fixture.contract.md,
+    a11y-scan.contract.md and journeys.contract.md; the data record (no Prisma
+    delta) in ../data-model.md; the architectural decision in
+    docs/adr/ADR-023-authenticated-e2e-and-a11y-layer.md.
+servers:
+  - url: /api/v1
+    description: All endpoints are mounted under the /api/v1 prefix (existing).
+
+x-e10-meta:
+  newEndpoints: 0
+  schemaChange: false
+  prismaDbPush: false
+  newAdr: docs/adr/ADR-023-authenticated-e2e-and-a11y-layer.md
+  note: >
+    All paths below already exist (E1-E9). They appear here only so the E10
+    journeys are traceable to the surface they regress. Do NOT implement these
+    from this file - they are shipped. Authoritative request/response shapes live
+    in each owning epic's contracts (e2, e9, alerts/analytics).
+
+tags:
+  - name: j1-grade-to-alert
+    description: J1 - teacher publishes grade then parent explainable alert (existing endpoints).
+  - name: j2-messaging
+    description: J2 - parent <-> teacher messaging (existing E2 endpoints).
+  - name: j3-child-claim
+    description: J3 - parent child-claim then admin approval (existing E9 endpoints).
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak JWT obtained by the E10 fixture via the product's real NextAuth
+        credentials then ROPC login (no mock). The fixture stores the session as a
+        per-portal Playwright storageState; see auth-fixture.contract.md.
+
+security:
+  - bearerAuth: []
+
+paths:
+  # J1: grade publish -> parent explainable alert (S1)
+  /grades:
+    post:
+      tags: [j1-grade-to-alert]
+      operationId: publishGradeExisting
+      summary: '[EXISTING] Teacher publishes a grade (drives the alert engine).'
+      description: >
+        Reused, not defined. J1 drives the gradebook publish that crosses an
+        alert threshold; the alert engine evaluates inline + via the worker cron.
+        Ownership/teaching-assignment ABAC + tenant scope are the product's
+        existing guards. Exact shape: the grades module contract.
+      x-reused: true
+      x-e10-new: false
+      responses:
+        '200': { description: '[existing] grade published.' }
+
+  /analytics/parent-dashboard:
+    get:
+      tags: [j1-grade-to-alert]
+      operationId: parentDashboardExisting
+      summary: '[EXISTING] Parent dashboard aggregate (where J1 asserts the alert).'
+      description: >
+        Reused, not defined. The aggregate the parent surface renders; J1 asserts
+        the explainable alert (rule/subject/threshold/trend + action CTA) and that
+        the parent sees ONLY their own child (ABAC). May be polled for cron latency.
+      x-reused: true
+      x-e10-new: false
+      responses:
+        '200': { description: '[existing] parent dashboard payload.' }
+
+  # J2: parent <-> teacher messaging (E2)
+  /conversations:
+    post:
+      tags: [j2-messaging]
+      operationId: createConversationExisting
+      summary: '[EXISTING, E2] Parent opens a thread (dual-wall ABAC).'
+      x-reused: true
+      x-e10-new: false
+      responses:
+        '200': { description: '[existing] conversation created/reused.' }
+    get:
+      tags: [j2-messaging]
+      operationId: listConversationsExisting
+      summary: '[EXISTING, E2] Inbox (parent or teacher).'
+      x-reused: true
+      x-e10-new: false
+      responses:
+        '200': { description: '[existing] inbox list.' }
+
+  /conversations/{id}:
+    get:
+      tags: [j2-messaging]
+      operationId: getConversationExisting
+      summary: '[EXISTING, E2] Thread header + alert context.'
+      x-reused: true
+      x-e10-new: false
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: '[existing] thread.' }
+
+  /conversations/{id}/messages:
+    get:
+      tags: [j2-messaging]
+      operationId: listMessagesExisting
+      summary: '[EXISTING, E2] Paged message history.'
+      x-reused: true
+      x-e10-new: false
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: '[existing] messages page.' }
+    post:
+      tags: [j2-messaging]
+      operationId: sendMessageExisting
+      summary: '[EXISTING, E2] Send / reply (append-only; J2 uses a nonce text).'
+      x-reused: true
+      x-e10-new: false
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: '[existing] message appended.' }
+
+  /conversations/{id}/read:
+    patch:
+      tags: [j2-messaging]
+      operationId: markReadExisting
+      summary: '[EXISTING, E2] Mark thread read.'
+      x-reused: true
+      x-e10-new: false
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: '[existing] read receipt set.' }
+
+  # J3: parent child-claim -> admin approval (E9)
+  /parent/child-claims:
+    post:
+      tags: [j3-child-claim]
+      operationId: createChildClaimExisting
+      summary: '[EXISTING, E9] Parent self-claim (uniform non-leaking response).'
+      description: >
+        Reused, not defined. J3 asserts the SECURITY invariant: a confident match
+        and a no/ambiguous match return the BYTE-IDENTICAL "received" shape (no
+        enumeration oracle). See docs/spec/features/e9/contracts/openapi.yaml.
+      x-reused: true
+      x-e10-new: false
+      responses:
+        '200': { description: '[existing] uniform claim-received response.' }
+    get:
+      tags: [j3-child-claim]
+      operationId: listMyChildClaimsExisting
+      summary: '[EXISTING, E9] Parent reads their own claim statuses.'
+      x-reused: true
+      x-e10-new: false
+      responses:
+        '200': { description: '[existing] caller-scoped claims.' }
+
+  /admin/child-claims:
+    get:
+      tags: [j3-child-claim]
+      operationId: listChildClaimQueueExisting
+      summary: '[EXISTING, E9] Admin approval queue (tenant-scoped aggregate).'
+      x-reused: true
+      x-e10-new: false
+      responses:
+        '200': { description: '[existing] pending-claim queue.' }
+
+  /admin/child-claims/{claimId}/approve:
+    post:
+      tags: [j3-child-claim]
+      operationId: approveChildClaimExisting
+      summary: '[EXISTING, E9] Approve (atomic pending->active; grants access).'
+      x-reused: true
+      x-e10-new: false
+      parameters:
+        - in: path
+          name: claimId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: '[existing] approved; guardianship active.' }
+
+  /admin/child-claims/{claimId}/reject:
+    post:
+      tags: [j3-child-claim]
+      operationId: rejectChildClaimExisting
+      summary: '[EXISTING, E9] Reject (required reason; pending->revoked).'
+      x-reused: true
+      x-e10-new: false
+      parameters:
+        - in: path
+          name: claimId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: '[existing] rejected.' }

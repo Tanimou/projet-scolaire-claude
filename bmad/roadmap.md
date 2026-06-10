@@ -566,9 +566,27 @@ filler (E9 enrollment self-service / E10 quality bar).**
     **No schema change, no new permission, no new ADR, no second queue, no new `NotificationKind`** (reuses
     ADR-020/ADR-022). **`E9` is now `shipped` (both slices landed).** **Operator pre-req (gates demoability,
     not merge):** the additive `guardianship_claim` `prisma db push` + `packages/contracts/dist` rebuild.
-- **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `proposed` · ongoing — Playwright journeys
+- **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `in-progress` · ongoing — Playwright journeys
   (grade publish → parent alert; parent claims child; messaging) + fix axe-core violations on
-  authenticated pages. Maps to R9/R10.
+  authenticated pages. Maps to R9/R10. **Spec-kit:** ✅ landed `docs/spec/features/e10/` (2026-06-10,
+  epic-spec, docs-only): spec/plan/data-model/contracts(openapi + auth-fixture/journeys/a11y-scan
+  notes)/ux/tasks/quickstart/PROGRESS. Locked decisions: E10 extends the **existing** Playwright harness
+  (`apps/web/playwright.config.ts` + `tests/e2e/smoke.spec.ts` + `@axe-core/playwright`, all on disk) for
+  **authenticated** journeys + an authenticated WCAG-2.2-AA axe sweep — the public smoke spec stays
+  unchanged; **zero production schema/endpoint/permission/`NotificationKind`/queue change** in any slice;
+  the visionary spine = a reusable portal-aware authenticated-session fixture (admin/teacher/parent/student,
+  auth-once-per-role → cached gitignored `storageState`, seeded from the `voltaire-demo` tenant) so every
+  future epic appends a one-line end-to-end journey (a permanent regression net, not a one-off QA pass);
+  tests skip-when-stack-down (never a false-red); the one new architectural decision (a CI-runnable
+  authenticated E2E + a11y test layer) → **`docs/adr/ADR-023-authenticated-e2e-and-a11y-layer.md`** authored
+  on the **S1** run (ADR-022 confirmed last on disk → 023 is next-free). **Four thin slices:** S1 auth-session
+  fixture + journey #1 (grade publish → parent explainable alert) + first authenticated axe AA scan (→ ADR-023)
+  · S2 journey #2 (parent child-claim → admin approval, E9) · S3 journey #3 (parent ↔ teacher messaging, E2,
+  dual-wall round-trip) · S4 cross-portal WCAG 2.2 AA sweep + remediation (on land → E10 `shipped`). Hard
+  non-goals: no new product capability/endpoint/schema/permission/queue; no CI-provider pipeline standup
+  (recorded follow-on); no build/rebuild in the E2E path; no new seed or real children's data;
+  no visual-diff/perf/cross-browser/AAA/manual-audit; no widening of any ABAC/tenant/portal wall.
+  **Next slice → E10-S1.**
 - **E11 — Standards interop (OneRoster/LTI) + async imports** · `proposed` · ~M — move bulk import
   to the worker (today blocking in-request) + OneRoster roster sync. Interoperability per the cahier.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
