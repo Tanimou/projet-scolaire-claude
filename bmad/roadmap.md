@@ -507,8 +507,21 @@ filler (E9 enrollment self-service / E10 quality bar).**
 
 ## Tier 4 — Foundation, quality & interop (interleave as filler)
 
-- **E9 — Enrollment self-service UI** · `proposed` · ~S — parent child-claim form + admin approval
+- **E9 — Enrollment self-service UI** · `in-progress` · ~S — parent child-claim form + admin approval
   page (backend 90% ready). Completes the cahier's parent→admin validation workflow.
+  **Spec-kit:** ✅ landed `docs/spec/features/e9/` (2026-06-10, epic-spec, docs-only): spec/plan/data-model/
+  contracts(openapi)/ux/tasks/quickstart/PROGRESS + `stories/S1-…`. Locked decisions: reuse the existing
+  `Guardianship.status` (pending/active/revoked) + `approvedBy`/`approvedAt` backbone (verified in
+  `schema.prisma`); the **one additive schema** = a new `GuardianshipClaim` model + `GuardianshipClaimStatus`
+  enum + a boot-applied partial-unique open-claim index (E7-S2 `BookingIndexBootstrap` idiom), **no new
+  datastore/queue/`NotificationKind`** (approve/reject reuse `enrollment_status`); a **deny-by-default,
+  non-enumerating** server-side matcher (exact `externalRef` else name + mandatory DOB, exactly-one candidate
+  → `pending` link; shape-identical no-leak response + rate-limit; child name surfaces only post-approval);
+  one new parent-only `guardianships.claim` permission (admin rides existing `guardianships.approve`); the one
+  new architectural decision (claim→link lifecycle + non-leak match + open-claim concurrency) →
+  **`docs/adr/ADR-022`** authored on the **S1** run. **Two thin slices:** S1 parent claim+match+pending (→
+  ADR-022, `[schema][auth]`) · S2 admin approval queue + atomic `pending→active` grant. Next slice → **E9-S1**
+  (`epic-slice`).
 - **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `proposed` · ongoing — Playwright journeys
   (grade publish → parent alert; parent claims child; messaging) + fix axe-core violations on
   authenticated pages. Maps to R9/R10.

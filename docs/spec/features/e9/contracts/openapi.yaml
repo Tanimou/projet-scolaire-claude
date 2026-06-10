@@ -1,0 +1,511 @@
+openapi: 3.0.3
+info:
+  title: Pilotage Scolaire — E9 Enrollment self-service (parent child-claim → admin approval)
+  version: 0.1.0-spec
+  description: >
+    API contract for E9. A parent self-claims a child (deny-by-default match) →
+    a `pending` Guardianship is created with claim provenance → a school admin
+    approves (atomic `pending → active`, parent notified, access granted) or
+    rejects (kind reason, `pending → revoked`, re-submit stays open). Reuses the
+    existing Guardianship.status backbone + the in-app notification spine +
+    append-only audit. Docs-only (spec run) — no code, no schema change this run.
+    Authoritative schema/match rule: ../data-model.md. New ADR:
+    docs/adr/ADR-022-enrollment-self-service-child-claim.md.
+servers:
+  - url: /api/v1
+    description: All endpoints are mounted under the /api/v1 prefix.
+
+tags:
+  - name: parent-child-claims
+    description: Parent self-service child-claim (S1). Parent-permitted, self-scoped.
+  - name: admin-child-claims
+    description: Admin approval queue + approve/reject (S2). Admin-permitted, tenant-scoped.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak JWT. realm_access.roles gates the portal; the per-endpoint
+        x-required-permission (RBAC) + the deny-by-default match / self-scope
+        (ABAC) narrow further. All endpoints require bearerAuth.
+
+  schemas:
+    GuardianRelationship:
+      type: string
+      enum: [mother, father, legal_guardian, grandparent, sibling, other]
+
+    GuardianshipClaimStatus:
+      type: string
+      description: The claim provenance row's own lifecycle (see data-model.md §1.2).
+      enum: [submitted, approved, rejected, match_failed, withdrawn]
+
+    # --- S1: parent self-claim request ----------------------------------------
+    CreateChildClaimRequest:
+      type: object
+      required: [firstName, lastName, relationship]
+      description: >
+        The evidence a parent supplies about THEIR OWN child. The server matches
+        it deny-by-default against the caller's school roster (data-model.md §3):
+        a confident match needs the normalised name PLUS a corroborating factor
+        (externalRef OR birthDate). At least one of birthDate / externalRef SHOULD
+        be supplied; a name-only claim always resolves to a non-leaking no-match.
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 80
+          example: Awa
+        lastName:
+          type: string
+          minLength: 1
+          maxLength: 80
+          example: Diallo
+        birthDate:
+          type: string
+          format: date
+          nullable: true
+          description: The child's date of birth (a corroborating factor).
+          example: '2015-03-12'
+        externalRef:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: >
+            The school-issued pupil reference (the strongest corroborating
+            factor — printed on official documents).
+          example: 'VOLT-2024-0188'
+        relationship:
+          $ref: '#/components/schemas/GuardianRelationship'
+
+    # --- The uniform claim-status view (match OR no-match share this shape) ----
+    ChildClaimStatus:
+      type: object
+      description: >
+        A parent's view of one of THEIR OWN claims. Used BOTH as the synchronous
+        POST response AND as a row in the status-read list.
+        CRITICAL ANTI-ENUMERATION WALL (ux.md Principles / FR-9 / AC-2): on the
+        SYNCHRONOUS POST response, a confident match and a no/weak/ambiguous match
+        return the BYTE-IDENTICAL shape — same `outcome=received`, same `message`,
+        `child`=null in BOTH — so a parent fishing with a guessed name+DOB can
+        NEVER tell a match from a non-match. The matched child's identity is NEVER
+        echoed at claim time (echoing it would itself be a roster oracle). The
+        `child` ref appears ONLY later, in the STATUS-READ list, and ONLY once the
+        claim is `approved` (access has been legitimately granted by an admin) —
+        never on a `submitted` (pending) or `match_failed`/`rejected` row.
+        NOTE (reconciliation): `data-model.md` §3 / `ux.md` discuss a *binary*
+        `outcome=submitted`/`not_found` variant; this contract ships the STRICTER
+        fully-uniform `outcome=received` — which `data-model.md` §3 + `tasks.md`
+        S1 explicitly elect as the fallback "the stricter reading wins." Treat the
+        binary discussion as superseded by this `received` shape.
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [received]
+          description: >
+            The ONLY value on the synchronous POST response — deliberately
+            non-discriminating: a match and a non-match are indistinguishable to
+            the caller (the link, if any, is created server-side and only ever
+            `pending`). The true claim state is surfaced LATER via the status read.
+        claimId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >
+            The GuardianshipClaim id. Present on a status-read row; on the
+            synchronous POST it is OMITTED/null (returning it on a match but not a
+            no-match would be an oracle) — the parent uses the status read to track.
+        status:
+          allOf: [{ $ref: '#/components/schemas/GuardianshipClaimStatus' }]
+          nullable: true
+          description: >
+            The claim's own state — present on STATUS-READ rows only
+            (`submitted`/`approved`/`rejected`/`match_failed`/`withdrawn`); null on
+            the synchronous POST response (anti-enumeration).
+        guardianshipStatus:
+          type: string
+          enum: [pending, active, revoked]
+          nullable: true
+          description: >
+            The driven Guardianship.status — present on STATUS-READ rows only;
+            null on the synchronous POST response.
+        child:
+          nullable: true
+          description: >
+            The child ref — populated ONLY on a STATUS-READ row whose claim is
+            `approved` (access legitimately granted). NULL on the synchronous POST
+            response, and NULL on `submitted`/`match_failed`/`rejected`/`withdrawn`
+            rows. NEVER a match-time echo, NEVER a guessed/near-match student.
+          allOf: [{ $ref: '#/components/schemas/ClaimedChildRef' }]
+        claimedName:
+          type: object
+          nullable: true
+          description: >
+            Echoes back ONLY the parent's OWN typed input (never roster-resolved),
+            so a status row is recognisable before approval without leaking whether
+            it matched. Safe — it is the caller's own input.
+          properties:
+            firstName: { type: string }
+            lastName: { type: string }
+        decisionReason:
+          type: string
+          nullable: true
+          description: The admin's kind reason when this claim was rejected (status read only).
+        message:
+          type: string
+          description: >
+            Kind, non-stigmatising FR copy. On the synchronous POST it is the
+            IDENTICAL "Demande envoyée — l'établissement va la vérifier." for both
+            match and no-match (the no-leak copy from ux.md).
+          example: Demande envoyée — l'établissement va la vérifier et vous serez notifié·e dès qu'elle sera validée.
+        submittedAt:
+          type: string
+          format: date-time
+
+    ClaimedChildRef:
+      type: object
+      description: >
+        Minimal display ref for a child whose claim is APPROVED (no medical / peer
+        data). Surfaced only post-approval — never as a match-time confirmation.
+      properties:
+        studentId: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+
+    ChildClaimListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ChildClaimStatus' }
+
+    # --- S2: admin queue row --------------------------------------------------
+    AdminChildClaimRow:
+      type: object
+      description: >
+        One pending claim for the admin queue — the submitted evidence + the
+        matched student + the requesting parent + timestamps (one aggregate, no
+        client N+1). Tenant-scoped.
+      properties:
+        claimId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/GuardianshipClaimStatus' }
+        guardianshipId:
+          type: string
+          format: uuid
+          nullable: true
+        submittedAt: { type: string, format: date-time }
+        relationship: { $ref: '#/components/schemas/GuardianRelationship' }
+        evidence:
+          type: object
+          description: Exactly what the parent typed (the match inputs).
+          properties:
+            firstName: { type: string }
+            lastName: { type: string }
+            birthDate: { type: string, format: date, nullable: true }
+            externalRef: { type: string, nullable: true }
+            matchMethod:
+              type: string
+              nullable: true
+              example: name+dob
+        matchedStudent:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/AdminMatchedStudent' }]
+        requestingParent:
+          $ref: '#/components/schemas/AdminRequestingParent'
+
+    AdminMatchedStudent:
+      type: object
+      properties:
+        studentId: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+        birthDate: { type: string, format: date, nullable: true }
+        externalRef: { type: string, nullable: true }
+
+    AdminRequestingParent:
+      type: object
+      properties:
+        guardianId: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+        userProfileId: { type: string, format: uuid, nullable: true }
+        email: { type: string, nullable: true }
+
+    AdminChildClaimQueueResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/AdminChildClaimRow' }
+
+    RejectChildClaimRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Kind, non-stigmatising reason (stored in provenance + audit).
+          example: La date de naissance ne correspond pas — merci de vérifier.
+
+    ApproveChildClaimResponse:
+      type: object
+      properties:
+        claimId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/GuardianshipClaimStatus' }
+        guardianshipId: { type: string, format: uuid }
+        guardianshipStatus:
+          type: string
+          enum: [active]
+        studentId: { type: string, format: uuid }
+
+    Error:
+      type: object
+      properties:
+        statusCode: { type: integer }
+        message: { type: string }
+        error: { type: string }
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ===========================================================================
+  # S1 — PARENT self-service child-claim (parent-permitted, self-scoped)
+  # ===========================================================================
+  /parent/child-claims:
+    post:
+      tags: [parent-child-claims]
+      operationId: createChildClaim
+      summary: Parent self-claims a child (deny-by-default match → pending Guardianship).
+      description: >
+        [S1] Matches the supplied evidence against the caller's school roster
+        server-side (data-model.md §3, deny-by-default). A CONFIDENT match
+        creates/reuses a `pending` Guardianship (the caller's server-derived
+        Guardian ↔ the matched Student) + a GuardianshipClaim(submitted) +
+        append-only `guardianship.claim_submitted` audit. Anything else writes
+        GuardianshipClaim(match_failed) + `guardianship.claim_match_failed` audit
+        and creates NO link. CRITICAL: the synchronous response is
+        BYTE-IDENTICAL for match and no-match — `outcome=received`, the same
+        `message`, `child`=null, `claimId`=null in BOTH — so the caller can NEVER
+        distinguish a match from a non-match (anti-enumeration; ux.md). The true
+        state is surfaced LATER via GET /parent/child-claims (and the matched
+        child's identity only post-approval). Idempotent: a repeat for an
+        already-pending/active child does NOT create a duplicate link; a P2002
+        race collapses to the existing row. NEVER grants access (only `pending`).
+        Rate-limited per guardian (429 past the cap).
+      x-required-permission: guardianships.claim
+      x-abac: >
+        Caller's Guardian is server-derived from their UserProfile (never
+        client-supplied). Match is tenant + school-scoped. No access is granted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateChildClaimRequest' }
+      responses:
+        '200':
+          description: >
+            Claim received. The response is the UNIFORM, non-discriminating
+            `received` shape (ChildClaimStatus with `outcome=received`,
+            `child`=null, `claimId`=null) — DELIBERATELY the same status code and
+            body whether a confident match created a pending link, a no/weak/
+            ambiguous match created none, or the (guardian, child) was already
+            pending/active. Returning a different status (201 vs 200) or body for
+            "matched/new" vs "no-match/existing" would be an enumeration oracle;
+            it is avoided. The parent learns the real state via GET
+            /parent/child-claims (post-approval for the matched child's name).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChildClaimStatus' }
+        '400':
+          description: Malformed body (missing name / relationship, bad date).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '401':
+          description: Unauthenticated.
+        '403':
+          description: Caller lacks `guardianships.claim` (not a parent).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '429':
+          description: Rate-limit exceeded (anti-enumeration); retry later.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    get:
+      tags: [parent-child-claims]
+      operationId: listMyChildClaims
+      summary: Parent reads the status of THEIR OWN claims (self-scoped).
+      description: >
+        [S1] Returns the caller's own GuardianshipClaim rows (their Guardian
+        only) with status (`submitted`=pending / `approved`=active /
+        `rejected`), the matched child (only for legitimately-initiated claims),
+        and the rejection reason where applicable. Never another parent's claims.
+      x-required-permission: guardianships.read
+      x-abac: Self-scoped to the caller's Guardian (server-derived).
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema: { $ref: '#/components/schemas/GuardianshipClaimStatus' }
+          description: Optional filter (e.g. only `submitted`).
+      responses:
+        '200':
+          description: The caller's own claims.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChildClaimListResponse' }
+        '401': { description: Unauthenticated. }
+        '403':
+          description: Caller lacks `guardianships.read`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /parent/child-claims/{claimId}/withdraw:
+    post:
+      tags: [parent-child-claims]
+      operationId: withdrawChildClaim
+      summary: Parent withdraws their OWN still-pending claim.
+      description: >
+        [S1, optional] The parent cancels a claim that is still `submitted`
+        (pending). The driven Guardianship moves to `revoked`; the claim →
+        `withdrawn`; append-only `guardianship.claim_withdrawn` audit. Self-scoped
+        (the caller's own claim only); 404 when not the caller's or not pending.
+      x-required-permission: guardianships.claim
+      x-abac: Self-scoped to the caller's Guardian; only a `submitted` claim.
+      parameters:
+        - in: path
+          name: claimId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Withdrawn.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChildClaimStatus' }
+        '403':
+          description: Not the caller's claim.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404':
+          description: No such claim, or not the caller's, or not pending (no leak).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: Claim already decided (no longer pending).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  # ===========================================================================
+  # S2 — ADMIN approval queue + approve/reject (admin-permitted, tenant-scoped)
+  # ===========================================================================
+  /admin/child-claims:
+    get:
+      tags: [admin-child-claims]
+      operationId: listChildClaimQueue
+      summary: Admin approval queue — pending guardianship claims (aggregate).
+      description: >
+        [S2] Tenant-scoped list of claims (default `status=submitted`) with the
+        submitted evidence + matched student + requesting parent + timestamps —
+        ONE aggregate, no client N+1. Gated by `guardianships.read`.
+      x-required-permission: guardianships.read
+      x-abac: Tenant-scoped (server-derived me.tenantId); no cross-tenant leak.
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema: { $ref: '#/components/schemas/GuardianshipClaimStatus' }
+          description: Defaults to `submitted` (the pending queue).
+      responses:
+        '200':
+          description: The claim queue.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminChildClaimQueueResponse' }
+        '401': { description: Unauthenticated. }
+        '403':
+          description: Caller lacks `guardianships.read`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /admin/child-claims/{claimId}/approve:
+    post:
+      tags: [admin-child-claims]
+      operationId: approveChildClaim
+      summary: Approve a pending claim (atomic pending→active + notify + grant).
+      description: >
+        [S2] Atomically flips the claim's `pending` Guardianship to `active`
+        (`approvedBy`/`approvedAt` set) via a from-status-guarded updateMany
+        (ADR-020 idiom → deterministic on concurrent double-approve); sets the
+        claim `approved` (`decidedBy`/`decidedAt`); writes append-only
+        `guardianship.claim_approved` audit; best-effort fans out an in-app
+        notification (kind=enrollment_status, success,
+        sourceType=guardianship_claim — there is NO `guardianship` kind; reuse the
+        existing `enrollment_status`, data-model.md §1.4/§6) to the claiming parent
+        with a deep-link to the child. Access is granted IMPLICITLY (the parent ABAC
+        reads `active` guardianships). Idempotent: re-approving an already-active
+        claim is a no-op 200.
+      x-required-permission: guardianships.approve
+      x-abac: Tenant-scoped; 404-before-403; only a `submitted`/`pending` claim flips.
+      parameters:
+        - in: path
+          name: claimId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Approved (or idempotent no-op for an already-active claim).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApproveChildClaimResponse' }
+        '403':
+          description: Caller lacks `guardianships.approve`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404':
+          description: No such claim in this tenant (no leak).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: Claim no longer pending (already rejected/withdrawn).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /admin/child-claims/{claimId}/reject:
+    post:
+      tags: [admin-child-claims]
+      operationId: rejectChildClaim
+      summary: Reject a pending claim (required reason; pending→revoked; notify).
+      description: >
+        [S2] Moves the claim's `pending` Guardianship to `revoked` (`revokedAt`
+        set) with a REQUIRED kind reason (stored in `decisionReason` + audit);
+        sets the claim `rejected`; writes append-only `guardianship.claim_rejected`
+        audit; best-effort notifies the parent kindly (kind=enrollment_status, info,
+        sourceType=guardianship_claim — reuse the existing kind, no new
+        `guardianship` kind) with a re-submit deep-link. The parent may re-submit
+        corrected details
+        (the revoked row is reused). Non-stigmatising; no peer data.
+      x-required-permission: guardianships.approve
+      x-abac: Tenant-scoped; 404-before-403; only a `submitted`/`pending` claim.
+      parameters:
+        - in: path
+          name: claimId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectChildClaimRequest' }
+      responses:
+        '200':
+          description: Rejected.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChildClaimStatus' }
+        '400':
+          description: Missing reason.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '403':
+          description: Caller lacks `guardianships.approve`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404':
+          description: No such claim in this tenant (no leak).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: Claim no longer pending.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
