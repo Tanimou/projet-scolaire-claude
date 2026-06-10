@@ -197,6 +197,12 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['remediation.read', 'Lire le soutien scolaire', 'remediation', 'read'],
   ['remediation.manage', 'Gérer le catalogue de soutien', 'remediation', 'manage'],
   ['remediation.book', 'Réserver un soutien', 'remediation', 'book'],
+  // E8 — student portal read-only, self-scoped family (granted to `student` only).
+  ['grades.read.self', 'Lire ses propres notes', 'grade', 'read.self'],
+  ['assessments.read.self', 'Lire ses évaluations à venir', 'assessment', 'read.self'],
+  ['attendance.read.self', 'Lire sa propre assiduité', 'attendance', 'read.self'],
+  ['announcements.read.self', 'Lire les annonces le concernant', 'announcement', 'read.self'],
+  ['analytics.read.self', 'Lire son tableau de bord élève', 'analytics', 'read.self'],
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
 ];
@@ -222,10 +228,14 @@ async function main() {
   }
 
   // System roles (school_admin / teacher / parent) — idempotent
-  const systemRoles = [
+  const systemRoles: Array<{ slug: string; name: string; portal: Portal | null }> = [
     { slug: 'school_admin', name: 'Administrateur établissement', portal: Portal.admin },
     { slug: 'teacher', name: 'Professeur', portal: Portal.teacher },
     { slug: 'parent', name: 'Parent', portal: Portal.parent },
+    // E8 — the student portal audience. `portal: null` keeps the schema delta to
+    // ONE additive column (the Student.userProfileId link); no `student` Portal
+    // enum value is added this slice.
+    { slug: 'student', name: 'Élève', portal: null },
   ];
   for (const r of systemRoles) {
     const existing = await prisma.role.findFirst({
@@ -1396,6 +1406,59 @@ async function main() {
   console.info(`     ✓ ${calCreated} événements de calendrier créés`);
 
   // ───────────────────────────────────────────────────────────────────────
+  // STEP 14 — E8 demo student account (the fourth, read-only learner audience)
+  //   Link ONE pupil to a `student`-role UserProfile so the portal is demoable
+  //   end-to-end: log in as the student, read ONLY their own grades, see the
+  //   activation gate go green. The link write goes through an append-only
+  //   `student.account_linked` AuditLog row (children's-data governance) — the
+  //   exact provisioning shape production uses (seed/import; no provisioning UI).
+  // ───────────────────────────────────────────────────────────────────────
+  console.info('  ▸ Compte élève démo (E8 — portail élève)…');
+  // Prefer a collège pupil who has grades (richer "Mes notes"); fall back to any.
+  const demoStudentSeed =
+    studentsCreated.find((s) => s.cycleCode === 'college') ?? studentsCreated[0];
+  if (demoStudentSeed) {
+    const demoStudent = await prisma.student.findUnique({
+      where: { id: demoStudentSeed.id },
+      select: { id: true, firstName: true, lastName: true, userProfileId: true },
+    });
+    if (demoStudent && !demoStudent.userProfileId) {
+      const studentUser = await prisma.userProfile.create({
+        data: {
+          tenantId: T,
+          email: 'student@pilotage.local',
+          firstName: demoStudent.firstName,
+          lastName: demoStudent.lastName,
+          status: 'active',
+        },
+      });
+      await prisma.student.update({
+        where: { id: demoStudent.id },
+        data: { userProfileId: studentUser.id },
+      });
+      // Append-only provisioning audit — one row per link, best-effort posture
+      // mirrored from the API write paths (a failure must never break the seed,
+      // but here it is the canonical record of who linked the account).
+      await prisma.auditLog.create({
+        data: {
+          tenantId: T,
+          actorId: userDupont.id,
+          actorRole: 'school_admin',
+          portal: 'admin',
+          action: 'student.account_linked',
+          resourceType: 'student',
+          resourceId: demoStudent.id,
+          before: { userProfileId: null },
+          after: { userProfileId: studentUser.id },
+        },
+      });
+      console.info(
+        `     ✓ Élève ${demoStudent.firstName} ${demoStudent.lastName} rattaché → student@pilotage.local`,
+      );
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
   // FINISH
   // ───────────────────────────────────────────────────────────────────────
   console.info('');
@@ -1406,6 +1469,7 @@ async function main() {
   console.info(`  AuditLogs 54 · ExportJobs 3 · Événements calendrier ${calCreated}`);
   console.info('');
   console.info('  Comptes admin : mme.dupont@voltaire.fr  /  m.lefebvre@voltaire.fr');
+  console.info('  Compte élève (E8) : student@pilotage.local  (rôle realm `student`)');
   console.info('  → provisionner via : pnpm prisma:seed:keycloak  (étape suivante)');
 }
 

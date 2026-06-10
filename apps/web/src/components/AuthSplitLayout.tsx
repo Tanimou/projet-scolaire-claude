@@ -1,7 +1,7 @@
 import { ArrowLeft, Sparkles, Check, ShieldCheck, Zap } from 'lucide-react';
 import Link from 'next/link';
 
-export type PortalAccent = 'admin' | 'teacher' | 'parent';
+export type PortalAccent = 'admin' | 'teacher' | 'parent' | 'student';
 
 const portals = {
   admin: {
@@ -50,6 +50,24 @@ const portals = {
       { Icon: Zap, title: 'Temps réel', body: 'Les notes apparaissent dès leur publication.' },
       { Icon: ShieldCheck, title: 'Alertes explicables', body: 'Jamais alarmistes — toujours actionables.' },
       { Icon: Sparkles, title: 'App installable', body: 'PWA mobile, notifications natives.' },
+    ],
+  },
+  // Student portal (E8) — a warm violet→indigo, the learner's own space.
+  // Second-person, encouraging copy; never comparative.
+  student: {
+    gradient: 'from-violet-500 via-indigo-500 to-indigo-700',
+    ring: 'focus-visible:ring-violet-500/40 focus-visible:border-violet-500',
+    primaryText: 'text-violet-700',
+    primaryHover: 'hover:text-violet-700',
+    button: 'bg-gradient-to-br from-violet-500 via-indigo-600 to-indigo-700 hover:shadow-violet-500/40',
+    badge: 'bg-violet-50 text-violet-700 border-violet-200',
+    blob1: 'from-violet-400 to-indigo-600',
+    blob2: 'from-indigo-400 to-purple-600',
+    tagline: 'Tes notes, ta progression, à toi.',
+    benefits: [
+      { Icon: Zap, title: 'Tes notes en direct', body: 'Dès qu’un professeur publie, tu la retrouves ici.' },
+      { Icon: Sparkles, title: 'Matière par matière', body: 'Une vue claire de chaque matière, rien de comparatif.' },
+      { Icon: ShieldCheck, title: 'Ton espace privé', body: 'Seulement tes données — jamais celles des autres.' },
     ],
   },
 } as const;

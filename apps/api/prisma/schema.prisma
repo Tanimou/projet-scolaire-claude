@@ -445,10 +445,19 @@ model Student {
   status       StudentStatus @default(active)
   notes        String?
   customFields Json          @default("{}") @map("custom_fields")
+  // E8-S1 — the learner's login link (additive, nullable, @unique). One pupil ↔
+  // one `student`-role account (the Guardian.userProfileId precedent). Severable
+  // without data loss (onDelete: SetNull); existing rows stay null until an admin
+  // provisions the account, so the change is expand-only (no backfill). See
+  // docs/adr/ADR-021-student-role-and-self-abac.md.
+  userProfileId String?       @unique @map("user_profile_id") @db.Uuid
   createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   school            School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  // E8-S1 — the linked learner login (1:1, additive). Named relation avoids any
+  // collision with the other Student↔* relations.
+  userProfile       UserProfile?       @relation("StudentAccount", fields: [userProfileId], references: [id], onDelete: SetNull)
   guardianships     Guardianship[]
   enrollments       Enrollment[]
   grades            Grade[]
@@ -697,6 +706,9 @@ model UserProfile {
   tutorAccounts             Tutor[]                   @relation("TutorUser")
   remediationPlansCreated   RemediationPlan[]         @relation("RemediationPlanCreator")
   bookingsMade              Booking[]                 @relation("BookingBooker")
+  // E8-S1 — the linked pupil dossier (1:1, additive). A `student`-role login
+  // resolves its one Student via this back-relation. Most UserProfiles have none.
+  studentAccount            Student?                  @relation("StudentAccount")
 
   @@unique([tenantId, email])
   @@index([tenantId])

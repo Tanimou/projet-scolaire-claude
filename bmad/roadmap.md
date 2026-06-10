@@ -440,7 +440,26 @@ the next free number after ADR-020). Hard non-goals: no student write/self-servi
 metric, no medical/guardian-private exposure, no provisioning UI, no real-time/second queue, no LTI.
 **Slice order:** S1 student role + self-ABAC + auth wiring + `/student/me` + "Mes notes" (→ ADR-021) ·
 S2 "Mes prochaines évaluations" + "Mon assiduité" · S3 announcements + the "Mon objectif" dashboard.
-**Next slice → E8-S1.**
+**E8-S1 shipped this run — `epic-slice`, P1 `[schema][auth][security][rgpd][abac]`, RED gate / needs
+human review (NOT auto-merged).** The fourth, read-only `/student/*` portal: a DISJOINT `student`
+realm-role (INV-1) routed through `auth.ts` (4th provider; ADR-021 `portal-parent` OIDC-client reuse, a
+4th client the recorded alternative) + `middleware.ts` (deny-by-default + `PORTAL_LANDING.student =
+/student/grades`); the deny-by-default **student-self ABAC** (`student-access.service.ts` — scope is
+EXACTLY `[ownId]` or `[]`, **never `null`**, never a peer; self resolved server-side from
+`Student.userProfileId === me.id`, no `:studentId` path param → IDOR structurally removed); the additive
+`Student.userProfileId String? @unique` link (`onDelete: SetNull`, `Guardian.userProfileId` precedent);
+the `*.read.self` permission family (student-only, ZERO writes) + both seeds; the `student-portal` module
+(`GET /student/me` activation gate, `GET /student/grades`); the **RGPD non-stigmatising wall in the
+PAYLOAD SHAPE** (DTOs structurally lack `studentRank`/`classAverage`/`classRankTotal`/`classSize`, only
+published/revised grades, no medical/guardian-private fields); the violet `student` design-token ramp +
+`/student/login` + `/student/grades` + activation-gate FE; and `docs/adr/ADR-021-student-role-and-self-abac.md`.
+**Held open (RED gate) — known blockers carried to human review:** (1) the slice landed SPLIT across two
+checkouts (worktree-path bug — FE/DS/contracts in the slice branch, BE/schema/ADR uncommitted in the MAIN
+checkout); (2) `prisma generate` (part of the pending additive `db push`) clears the 2 stale-client TS2353
+errors — same infra-pending pattern as E6-S1/E7-S1–S5; (3) an internal FE↔contract `StudentGradeRow`
+shape mismatch (nested vs flat) to reconcile; (4) ADR-021 + (5) the `student` realm-role/demo-user in
+`infra/keycloak/realm-export.json` must be in the diff/applied. **Next slice → E8-S2** ("Mes prochaines
+évaluations" + "Mon assiduité"), after S1's blockers are reconciled.
 
 ---
 

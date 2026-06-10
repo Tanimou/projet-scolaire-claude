@@ -8,8 +8,8 @@
 
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
-| S1 | Student role + self-ABAC + auth wiring + "Mes notes" → **ADR-021** | `[schema][auth]` | P1 | ⬜ not started | — |
-| S2 | "À venir" + "Mon assiduité" | `[auth]` | P2 | ⬜ not started | — |
+| S1 | Student role + self-ABAC + auth wiring + "Mes notes" → **ADR-021** | `[schema][auth]` | P1 | 🟥 shipped — needs human review (RED gate; see notes) | this run |
+| S2 | "À venir" + "Mon assiduité" | `[auth]` | P2 | ⬜ not started ← **next** | — |
 | S3 | Announcements + "Mon objectif" actionable student dashboard (E6 trend + E7 progress) | `[web][a11y][analytics]` | P2 | ⬜ not started | — |
 
 ## What landed this run (spec run)
@@ -110,9 +110,43 @@ discipline) so the kit ships internally consistent. Nothing about scope changed:
    the additive recipient rule so the student's own `UserProfile` gets a receipt when a scope reaches them).
    Either grouping is one PR + one build — the placement is a label, not a scope change.
 
+## What landed this run (E8-S1 — `epic-slice`, RED gate, needs human review)
+
+The S1 capability was implemented end-to-end across the codebase, but it landed **split across two
+checkouts** (the documented worktree-path bug, `MEMORY.md`) and ships with a **RED typecheck gate** —
+so it is marked **shipped → needs human review**, not green-auto-merged.
+
+- **FE / DS / contracts (this worktree):** the fourth `/student/*` portal — `auth.ts` (4th provider +
+  `student` realm-role mapping INV-1 + ADR-021 `portal-parent` OIDC-client reuse), `middleware.ts`
+  (`/student/*` deny-by-default + `PORTAL_LANDING.student = /student/grades`), `student` design-token
+  ramp (violet hue 292, ≥4.5:1), `studentSidebarItems` ("Mes notes" only), the `/student/login` +
+  `/student/grades` + activation-gate surfaces, and `packages/contracts/src/dto/student.ts`.
+- **BE / schema / ADR (uncommitted in the MAIN checkout — the worktree-path bug):** the additive
+  `Student.userProfileId String? @unique` link, the `student` self-ABAC branch in
+  `student-access.service.ts` (+ its 6-case spec), the `student-portal` NestJS module
+  (`GET /student/me`, `GET /student/grades`), the `*.read.self` permission family + both seeds,
+  `app.module` registration, and **`docs/adr/ADR-021-student-role-and-self-abac.md`**.
+
+## Open blockers before this slice is truly done (carry into the human review)
+
+1. **Vertical-slice split (worktree-path bug).** Salvage the E8 BE files from the MAIN checkout into the
+   slice branch (`git stash push -u` the E8 BE paths in main → pop in the worktree) so DB+API+UI+ADR land
+   as ONE PR. The FE 404s/403s its own data until the BE is in the same branch.
+2. **Prisma client stale → 2 TS2353 errors** (`student-portal.service.ts`, `student-access.service.ts`)
+   resolve via `prisma generate` (part of the pending additive `db push` for `Student.userProfileId`) —
+   no code fix; same infra-pending pattern as E6-S1 / E7-S1–S5.
+3. **FE ↔ contract shape mismatch (internal to this worktree).** `StudentGradeCard.tsx` + `grades/page.tsx`
+   read a **NESTED** `grade.assessment.{subject,maxScore,kind,term}` + `grade.status` + `grade.publishedAt`,
+   but the worktree's own `dto/student.ts` (and the BE producer) are **FLAT**
+   (`subjectName`/`maxScore`/`coefficient`/`termId`/`termName`, no status/publishedAt/kind). Reconcile to
+   ONE shape — fails typecheck and crashes render otherwise.
+4. **ADR-021 must be in the diff** (referenced by ~8 code comments; currently a dangling pointer).
+5. **`student` Keycloak realm-role + demo user** not in `infra/keycloak/realm-export.json` — the portal is
+   unreachable until an operator activates it (or it is documented as a release gate).
+
 ## Next action
 
-Ship **E8-S1** (`epic-slice`, `[schema][auth]`, P1): activate the `student` role + add the additive
-`Student.userProfileId` link + the fails-closed student-self ABAC + the thin read-only grant + the
-`/student/*` auth routing + `GET /student/grades` ("Mes notes") + **`docs/adr/ADR-021-student-role-and-
-self-abac.md`**. Land the per-slice `story` spec under [`stories/`](./stories/) on that run.
+Ship **E8-S2** (`epic-slice`, `[auth]`, P2): "Mes prochaines évaluations" + "Mon assiduité" — the
+self-resolved upcoming-assessments + attendance read pair behind the same student-self wall (no new
+schema). First reconcile the S1 blockers above (single PR, `prisma generate`, FE↔contract shape, ADR-021,
+realm role) so S2 builds on a green S1.

@@ -68,6 +68,12 @@ const PERMISSIONS: Array<[code: string, label: string, resourceType: string, act
   ['remediation.read', 'Lire le soutien scolaire', 'remediation', 'read'],
   ['remediation.manage', 'Gérer le catalogue de soutien', 'remediation', 'manage'],
   ['remediation.book', 'Réserver un soutien', 'remediation', 'book'],
+  // E8 — student portal read-only, self-scoped family (granted to `student` only).
+  ['grades.read.self', 'Lire ses propres notes', 'grade', 'read.self'],
+  ['assessments.read.self', 'Lire ses évaluations à venir', 'assessment', 'read.self'],
+  ['attendance.read.self', 'Lire sa propre assiduité', 'attendance', 'read.self'],
+  ['announcements.read.self', 'Lire les annonces le concernant', 'announcement', 'read.self'],
+  ['analytics.read.self', 'Lire son tableau de bord élève', 'analytics', 'read.self'],
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
 ];
@@ -118,6 +124,16 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'remediation.read', 'remediation.book',
     'profile.read.self', 'profile.write.self',
   ],
+  // E8 — the student portal audience: read-only, self-scoped, ZERO writes.
+  // Keep aligned with REALM_ROLE_PERMISSIONS.student in permissions.constants.ts.
+  student: [
+    'grades.read.self',
+    'assessments.read.self',
+    'attendance.read.self',
+    'announcements.read.self',
+    'analytics.read.self',
+    'profile.read.self',
+  ],
 };
 
 async function main() {
@@ -160,10 +176,15 @@ async function main() {
     });
   }
 
-  const systemRoles = [
+  const systemRoles: Array<{ slug: string; name: string; portal: Portal | null }> = [
     { slug: 'school_admin', name: 'Administrateur établissement', portal: Portal.admin },
     { slug: 'teacher', name: 'Professeur', portal: Portal.teacher },
     { slug: 'parent', name: 'Parent', portal: Portal.parent },
+    // E8 — the student portal audience. `portal: null` keeps the additive change
+    // to ONE column (the Student.userProfileId link) — no `student` value is added
+    // to the Prisma `Portal` enum this slice; the realm-role mapping is code-side
+    // (REALM_ROLE_PERMISSIONS.student).
+    { slug: 'student', name: 'Élève', portal: null },
   ];
 
   for (const r of systemRoles) {
