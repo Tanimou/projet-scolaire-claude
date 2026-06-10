@@ -21,10 +21,22 @@ const PORTAL_FROM_PROVIDER = {
   'keycloak-admin': 'admin',
   'keycloak-teacher': 'teacher',
   'keycloak-parent': 'parent',
+  'keycloak-student': 'student',
 } as const;
 
-type Portal = 'admin' | 'teacher' | 'parent';
-const PORTALS: ReadonlyArray<Portal> = ['admin', 'teacher', 'parent'];
+type Portal = 'admin' | 'teacher' | 'parent' | 'student';
+const PORTALS: ReadonlyArray<Portal> = ['admin', 'teacher', 'parent', 'student'];
+
+/**
+ * OIDC client reuse — E8-S1 / ADR-021. The student portal does NOT get a 4th
+ * Keycloak client: it reuses the existing `portal-parent` client (recorded
+ * alternative = a dedicated `portal-student` client, not taken in S1). So the
+ * student credential lookup resolves to the parent client id/secret. A future
+ * dedicated client is opt-in via the `KEYCLOAK_STUDENT_CLIENT_*` env override.
+ */
+const CLIENT_PORTAL_OVERRIDE: Partial<Record<Portal, Portal>> = {
+  student: 'parent',
+};
 
 declare module 'next-auth' {
   interface Session {
@@ -56,12 +68,21 @@ declare module 'next-auth/jwt' {
 }
 
 function clientCreds(portal: Portal) {
+  // An explicit per-portal env var always wins (lets an operator promote the
+  // student portal to its own client later). Absent that, a portal may reuse
+  // another portal's client (ADR-021: student → parent client reuse).
+  const explicitId = process.env[`KEYCLOAK_${portal.toUpperCase()}_CLIENT_ID`];
+  const explicitSecret = process.env[`KEYCLOAK_${portal.toUpperCase()}_CLIENT_SECRET`];
+  const clientPortal = CLIENT_PORTAL_OVERRIDE[portal] ?? portal;
   return {
     clientId:
-      process.env[`KEYCLOAK_${portal.toUpperCase()}_CLIENT_ID`] ?? `portal-${portal}`,
+      explicitId ??
+      process.env[`KEYCLOAK_${clientPortal.toUpperCase()}_CLIENT_ID`] ??
+      `portal-${clientPortal}`,
     clientSecret:
-      process.env[`KEYCLOAK_${portal.toUpperCase()}_CLIENT_SECRET`] ??
-      `change-me-portal-${portal}`,
+      explicitSecret ??
+      process.env[`KEYCLOAK_${clientPortal.toUpperCase()}_CLIENT_SECRET`] ??
+      `change-me-portal-${clientPortal}`,
   };
 }
 
@@ -120,6 +141,11 @@ const REALM_ROLES_FOR_PORTAL: Record<Portal, string[]> = {
   admin: ['super_admin', 'school_admin'],
   teacher: ['teacher'],
   parent: ['parent'],
+  // E8-S1: the fourth portal. Its role set is DISJOINT from the other three —
+  // `student` is never added to admin/teacher/parent (so a student can never
+  // reach /parent|/teacher|/admin), and those roles never appear here (so a
+  // parent/teacher/admin is never routed into /student). INV-1.
+  student: ['student'],
 };
 
 /**
@@ -253,7 +279,13 @@ const credentialsProvider = Credentials({
 });
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  providers: [portalClient('admin'), portalClient('teacher'), portalClient('parent'), credentialsProvider],
+  providers: [
+    portalClient('admin'),
+    portalClient('teacher'),
+    portalClient('parent'),
+    portalClient('student'),
+    credentialsProvider,
+  ],
   session: { strategy: 'jwt' },
   secret: process.env.AUTH_SECRET,
   trustHost: true,

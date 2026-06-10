@@ -49,12 +49,14 @@ const PORTAL_DEFAULT_TITLE: Record<PortalKey, string> = {
   admin: 'Tableau de bord',
   teacher: 'Tableau de bord',
   parent: 'Tableau de bord',
+  student: 'Mes notes',
 };
 
 const PORTAL_DEFAULT_SUBTITLE: Record<PortalKey, string> = {
   admin: "Vue d'ensemble de l'établissement",
   teacher: 'Bienvenue dans votre espace pédagogique',
   parent: "Vue d'ensemble des performances et activités",
+  student: 'Ton espace élève',
 };
 
 /**
@@ -104,7 +106,7 @@ export async function AppShellRoot({
       groups={sidebarGroups}
       items={sidebarItems}
       footer={
-        portal === 'parent' ? (
+        portal === 'parent' || portal === 'student' ? (
           <HelpSidebarCard />
         ) : (
           <TipOfTheDayCard
@@ -126,7 +128,8 @@ export async function AppShellRoot({
         <>
           {topbarExtras}
           <TopbarTodayChip />
-          <TopbarBell portal={portal} />
+          {/* E8-S1: the student portal has no notification channel — omit the bell. */}
+          {portal !== 'student' && <TopbarBell portal={portal} />}
           <TopbarUserMenu
             portal={portal}
             firstName={me.firstName || 'Utilisateur'}

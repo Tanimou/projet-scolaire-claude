@@ -2,6 +2,7 @@ import {
   BarChart3,
   Bell,
   BookOpen,
+  BookOpenCheck,
   Building2,
   Calendar,
   CalendarClock,
@@ -39,7 +40,7 @@ import {
 } from 'lucide-react';
 import type { SidebarGroup, SidebarItemDef } from '@pilotage/ui';
 
-export type PortalKey = 'admin' | 'teacher' | 'parent';
+export type PortalKey = 'admin' | 'teacher' | 'parent' | 'student';
 
 /** Internal item config used at module level — adds `matches` regex helper. */
 export interface SidebarItemConfig extends Omit<SidebarItemDef, 'active'> {
@@ -237,6 +238,20 @@ export const parentSidebarItems: SidebarItemConfig[] = [
   { key: 'settings', icon: Settings, label: 'Paramètres', href: '/parent/settings' },
 ];
 
+// Student portal — E8-S1. The fourth, read-only learner audience. Only "Mes
+// notes" is live this slice; the S2/S3 surfaces (assiduité, prochaines
+// évaluations, annonces, "Mon objectif") are intentionally OMITTED here until
+// their slice lands — we never render a nav item that 404s.
+export const studentSidebarItems: SidebarItemConfig[] = [
+  {
+    key: 'grades',
+    icon: BookOpenCheck,
+    label: 'Mes notes',
+    href: '/student/grades',
+    matches: /^\/student\/grades(\/|$)/,
+  },
+];
+
 // =============================================================================
 // Resolver entry points used by AppShellRoot
 // =============================================================================
@@ -257,6 +272,8 @@ export function sidebarItemsFor(
       return teacherSidebarItems;
     case 'parent':
       return parentSidebarItems;
+    case 'student':
+      return studentSidebarItems;
   }
 }
 
@@ -267,6 +284,7 @@ export {
   BarChart3,
   Bell,
   BookOpen,
+  BookOpenCheck,
   Building2,
   Calendar,
   CalendarClock,

@@ -11,6 +11,11 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
  *   - teacher → can see all students in the school (Phase 3D simplification — once teaching
  *     assignments exist, restrict to students in the teacher's classes)
  *   - parent → can ONLY see students they have an `active` Guardianship for
+ *   - student (E8-S1) → can ONLY see the SINGLE Student linked to their own
+ *     account (`Student.userProfileId === me.id`), tenant-scoped. Deny-by-default:
+ *     the scope is EXACTLY `[ownStudentId]` (linked) or `[]` (unlinked) — NEVER
+ *     `null` (the admin/teacher "unrestricted" sentinel), NEVER a peer id. This is
+ *     the strictest wall the platform has (the data subject reads it). See ADR-021.
  *
  * The service returns a "scope" object that controllers fold into their `where` clauses.
  * `studentIds: null` means "no restriction"; a non-null array narrows the result set.
@@ -42,6 +47,18 @@ export class StudentAccessService {
         select: { studentId: true },
       });
       return { studentIds: guardianships.map((g) => g.studentId), reason: 'parent' };
+    }
+    // E8-S1 — student-self ABAC (deny-by-default, self-only, NEVER peer comparison).
+    // Resolve the ONE Student linked to this account within the caller's tenant.
+    // The scope is EXACTLY `[ownId]` (linked) or `[]` (unlinked) — never `null`
+    // (unrestricted), never a peer. A client-supplied studentId can never widen
+    // this: `canAccessStudent` only ever returns true for the resolved own id.
+    if (roles.includes('student')) {
+      const self = await this.prisma.student.findFirst({
+        where: { tenantId: user.tenantId, userProfileId: user.id },
+        select: { id: true },
+      });
+      return { studentIds: self ? [self.id] : [], reason: 'student-self' };
     }
     return { studentIds: [], reason: 'no role with student access' };
   }

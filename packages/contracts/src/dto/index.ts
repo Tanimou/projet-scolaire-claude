@@ -7,3 +7,4 @@ export * from './conversation';
 export * from './export';
 export * from './snapshot';
 export * from './remediation';
+export * from './student';

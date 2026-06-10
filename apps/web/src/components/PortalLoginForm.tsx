@@ -17,9 +17,24 @@ import {
 const KEYCLOAK_URL = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? 'http://localhost:8180';
 const KEYCLOAK_REALM = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? 'pilotage-scolaire';
 
+/**
+ * The default post-login landing per portal. Most portals open on their
+ * dashboard; the student portal (E8-S1) ships no dashboard yet — its landing is
+ * "Mes notes" (`/student/grades`). Used only when no explicit `?callbackUrl=` is
+ * present, so a fresh student login never 404s on `/student/dashboard`.
+ */
+const DEFAULT_LANDING: Record<PortalAccent, string> = {
+  admin: '/admin/dashboard',
+  teacher: '/teacher/dashboard',
+  parent: '/parent/dashboard',
+  student: '/student/grades',
+};
+
 function buildKeycloakResetUrl(portal: PortalAccent): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3100';
-  const clientId = `portal-${portal}`;
+  // The student portal reuses the parent OIDC client (ADR-021) — there is no
+  // `portal-student` client to address for a password reset.
+  const clientId = `portal-${portal === 'student' ? 'parent' : portal}`;
   const redirectUri = `${origin}/${portal}/login`;
   const qs = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri });
   return `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/login-actions/reset-credentials?${qs.toString()}`;
@@ -29,8 +44,10 @@ export function PortalLoginForm(props: {
   accent: PortalAccent;
   title: string;
   subtitle: string;
-  registerHref: string;
-  registerLabel: string;
+  /** Self-service registration link. Omit for portals provisioned by the school
+   *  (e.g. the student portal — accounts are created by the établissement). */
+  registerHref?: string;
+  registerLabel?: string;
   otherPortals: { label: string; href: string }[];
 }) {
   return (
@@ -51,13 +68,13 @@ function PortalLoginFormInner({
   accent: PortalAccent;
   title: string;
   subtitle: string;
-  registerHref: string;
-  registerLabel: string;
+  registerHref?: string;
+  registerLabel?: string;
   otherPortals: { label: string; href: string }[];
 }) {
   const router = useRouter();
   const params = useSearchParams();
-  const callbackUrl = params.get('callbackUrl') ?? `/${accent}/dashboard`;
+  const callbackUrl = params.get('callbackUrl') ?? DEFAULT_LANDING[accent];
   const errorParam = params.get('error');
 
   const [email, setEmail] = useState('');
@@ -271,13 +288,20 @@ function PortalLoginFormInner({
         Recommandé si votre établissement utilise une fédération d&apos;identité (Google, Microsoft…).
       </p>
 
-      <p className="mt-8 text-center text-sm text-slate-600">
-        {registerLabel}{' '}
-        <Link href={registerHref} className={`font-bold hover:underline ${authPrimaryText(accent)}`}>
-          {accent === 'parent' ? 'Créer un compte' : 'Demander une invitation'}
-          <ArrowRight className="ml-0.5 inline h-3.5 w-3.5" />
-        </Link>
-      </p>
+      {registerHref ? (
+        <p className="mt-8 text-center text-sm text-slate-600">
+          {registerLabel}{' '}
+          <Link href={registerHref} className={`font-bold hover:underline ${authPrimaryText(accent)}`}>
+            {accent === 'parent' ? 'Créer un compte' : 'Demander une invitation'}
+            <ArrowRight className="ml-0.5 inline h-3.5 w-3.5" />
+          </Link>
+        </p>
+      ) : (
+        <p className="mt-8 text-center text-sm text-slate-500">
+          Ton compte est créé par ton établissement. Rapproche-toi de lui si tu n’as pas encore tes
+          identifiants.
+        </p>
+      )}
     </AuthSplitLayout>
   );
 }

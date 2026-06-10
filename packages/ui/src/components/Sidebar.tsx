@@ -3,7 +3,7 @@ import type { ComponentType, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 
 export type SidebarVariant = 'rich' | 'compact';
-export type PortalKey = 'admin' | 'teacher' | 'parent' | 'super-admin';
+export type PortalKey = 'admin' | 'teacher' | 'parent' | 'student' | 'super-admin';
 
 export interface SidebarItemDef {
   key: string;

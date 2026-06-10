@@ -110,6 +110,17 @@ export const PERMISSIONS = [
   ['remediation.manage', 'Gérer le catalogue de soutien', 'remediation', 'manage'],
   ['remediation.book', 'Réserver un soutien', 'remediation', 'book'],
 
+  // Student portal (E8) — a thin, read-only, student-scoped permission family
+  // (the `<resource>.<action>.self` role-narrowed house style). Granted ONLY to
+  // the `student` realm-role; NEVER added to parent/teacher/admin; ZERO writes.
+  // A grant is necessary-but-not-sufficient — the student-self ABAC narrows every
+  // read to self (see StudentAccessService + ADR-021).
+  ['grades.read.self', 'Lire ses propres notes', 'grade', 'read.self'],
+  ['assessments.read.self', 'Lire ses évaluations à venir', 'assessment', 'read.self'],
+  ['attendance.read.self', 'Lire sa propre assiduité', 'attendance', 'read.self'],
+  ['announcements.read.self', 'Lire les annonces le concernant', 'announcement', 'read.self'],
+  ['analytics.read.self', 'Lire son tableau de bord élève', 'analytics', 'read.self'],
+
   // Profile (everyone)
   ['profile.read.self', 'Lire son profil', 'profile', 'read.self'],
   ['profile.write.self', 'Modifier son profil', 'profile', 'write.self'],
@@ -257,5 +268,26 @@ export const REALM_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
     'remediation.book',
     'profile.read.self',
     'profile.write.self',
+  ],
+  // E8-S1 — the student portal audience. A read-only, self-scoped learner.
+  // Carries ONLY the five `*.read.self` permissions + read-own-profile + the
+  // school-identity read, and ZERO write permissions: `remediation.book`,
+  // `messaging.*`, any `grades.*` write, and every other write are DELIBERATELY
+  // ABSENT (the read-only wall is in the grant list itself). The student-self
+  // ABAC (StudentAccessService) narrows every self-scoped read to the caller's
+  // own dossier — never a peer. `branding.read` is the ONE non-self grant: it
+  // returns the school's public identity (name/logo/colours), the SAME data
+  // every audience of that school already sees (admin/teacher/parent all carry
+  // it) — not student-specific, not peer data — so the student portal shell can
+  // render the établissement's branding without breaching the RGPD-narrowed,
+  // non-stigmatising posture. See ADR-021.
+  student: [
+    'grades.read.self',
+    'assessments.read.self',
+    'attendance.read.self',
+    'announcements.read.self',
+    'analytics.read.self',
+    'profile.read.self',
+    'branding.read',
   ],
 };

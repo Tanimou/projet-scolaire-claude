@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 
 import { AppShellRoot, getCurrentUser as appShellGetCurrentUser } from './shell/AppShellRoot';
 
-type Portal = 'admin' | 'teacher' | 'parent';
+type Portal = 'admin' | 'teacher' | 'parent' | 'student';
 
 export async function PortalShell({
   portal,

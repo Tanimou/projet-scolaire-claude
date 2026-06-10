@@ -440,7 +440,28 @@ the next free number after ADR-020). Hard non-goals: no student write/self-servi
 metric, no medical/guardian-private exposure, no provisioning UI, no real-time/second queue, no LTI.
 **Slice order:** S1 student role + self-ABAC + auth wiring + `/student/me` + "Mes notes" (→ ADR-021) ·
 S2 "Mes prochaines évaluations" + "Mon assiduité" · S3 announcements + the "Mon objectif" dashboard.
-**Next slice → E8-S1.**
+**E8-S1 shipped — `epic-slice`, P1 `[schema][auth][security][rgpd][abac]`, GREEN (build 7/7,
+auto-merged after a follow-up reconciliation pass).** The fourth, read-only `/student/*` portal: a DISJOINT `student`
+realm-role (INV-1) routed through `auth.ts` (4th provider; ADR-021 `portal-parent` OIDC-client reuse, a
+4th client the recorded alternative) + `middleware.ts` (deny-by-default + `PORTAL_LANDING.student =
+/student/grades`); the deny-by-default **student-self ABAC** (`student-access.service.ts` — scope is
+EXACTLY `[ownId]` or `[]`, **never `null`**, never a peer; self resolved server-side from
+`Student.userProfileId === me.id`, no `:studentId` path param → IDOR structurally removed); the additive
+`Student.userProfileId String? @unique` link (`onDelete: SetNull`, `Guardian.userProfileId` precedent);
+the `*.read.self` permission family (student-only, ZERO writes) + both seeds; the `student-portal` module
+(`GET /student/me` activation gate, `GET /student/grades`); the **RGPD non-stigmatising wall in the
+PAYLOAD SHAPE** (DTOs structurally lack `studentRank`/`classAverage`/`classRankTotal`/`classSize`, only
+published/revised grades, no medical/guardian-private fields); the violet `student` design-token ramp +
+`/student/login` + `/student/grades` + activation-gate FE; and `docs/adr/ADR-021-student-role-and-self-abac.md`.
+**Blockers reconciled in the green-fix pass:** (1) both checkouts consolidated onto ONE branch
+(worktree-path bug); (2) `prisma generate` cleared the 2 stale-client TS2353 errors; (3) the FE↔contract
+`StudentGradeRow` mismatch fixed by conforming the FE to the canonical FLAT shape + adding two flat,
+RGPD-safe learner-own scalars (`kind`, `status`) so the card stays complete; (4) `ADR-021` landed
+(Winston-ratified); (5) the AppShell branding 403 crash fixed (grant `student` `branding.read` +
+harden `fetchBranding` to degrade on 403); (6) the `/student/dashboard` login 404 fixed with a
+portal-aware landing map. **Operator step (not a code blocker):** activate the `student` realm-role +
+demo user in `infra/keycloak/realm-export.json` and run the additive `db push`. **Next slice → E8-S2**
+("Mes prochaines évaluations" + "Mon assiduité"), building on the now-green S1.
 
 ---
 
