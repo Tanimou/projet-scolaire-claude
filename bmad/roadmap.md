@@ -507,8 +507,9 @@ filler (E9 enrollment self-service / E10 quality bar).**
 
 ## Tier 4 — Foundation, quality & interop (interleave as filler)
 
-- **E9 — Enrollment self-service UI** · `in-progress` · ~S — parent child-claim form + admin approval
-  page (backend 90% ready). Completes the cahier's parent→admin validation workflow.
+- **E9 — Enrollment self-service UI** · `shipped` · ~S — parent child-claim form + admin approval
+  page (backend 90% ready). Completes the cahier's parent→admin validation workflow. **Both slices landed
+  (S1 parent claim+match+pending, S2 admin approval queue + atomic grant/reject + notify + UIs).**
   **Spec-kit:** ✅ landed `docs/spec/features/e9/` (2026-06-10, epic-spec, docs-only): spec/plan/data-model/
   contracts(openapi)/ux/tasks/quickstart/PROGRESS + `stories/S1-…`. Locked decisions: reuse the existing
   `Guardianship.status` (pending/active/revoked) + `approvedBy`/`approvedAt` backbone (verified in
@@ -539,8 +540,32 @@ filler (E9 enrollment self-service / E10 quality bar).**
     in-flight: the 8 stale-Prisma-client TS2551/TS7006 errors cleared by `prisma generate` (the E7-S5/E8-S1
     stale-client pattern — no source edit). **Operator pre-req (gates demoability, not merge):** the additive
     `guardianship_claim` `prisma db push`. *(schema [schema][auth][abac][rgpd] tag)*
-  - [ ] **S2** — admin approval queue + atomic `pending→active` grant + approve/reject notify + UIs.
-  Next slice → **E9-S2** (`epic-slice`, `[auth][abac]`, P2).
+  - [x] **S2** — admin approval queue + atomic `pending→active` grant + approve/reject notify + UIs.
+    **Shipped** (`epic-slice` — P2 `[auth][abac]`, needs human review): the NEW admin-only
+    `admin-child-claims.controller.ts` (`@Controller('admin/child-claims')`, **walled entirely by
+    `guardianships.approve`** — NOT bare `guardianships.read` which parent+teacher hold, closing the
+    pre-mortem FM-1 PII leak; server-derived `me.tenantId`/`me.id`; `ParseUUIDPipe`; `?status` defaults to
+    `submitted`, enum-validated → 400). Three additive `ChildClaimsService` methods: `listQueueForAdmin`
+    (ONE tenant-scoped aggregate `findMany`, oldest-first FIFO, no N+1, derived `matchMethod`),
+    `approveClaim` (404-before-403 → idempotent re-approve no-op 200 → 409 on non-submitted/match-failed →
+    ONE `$transaction`: from-status-guarded link `pending→active` +`approvedBy/At` (`count===0` → ADR-020
+    deterministic 409 loser), claim `submitted→approved` +`decidedBy/At`, append-only
+    `guardianship.claim_approved` audit — **this single transition IS the access grant**), `rejectClaim`
+    (required reason, link `pending→revoked`, claim `submitted→rejected` +`decisionReason`,
+    `guardianship.claim_rejected` audit, grants nothing, re-submit stays open). The `audit()` helper
+    parametrised `actor:'parent'|'admin'` (admin decisions log `actorRole/portal:'admin'`). Best-effort
+    `notifyParentOfDecision` runs AFTER commit, try/catch-swallowed (reuses `enrollment_status` kind —
+    NO `guardianship` kind; `sourceType='guardianship_claim_{approved,rejected}'`; approve→child deep-link,
+    reject→re-submit) — a notify/Redis failure NEVER rolls back the decision (FM-7/FM-8). 4 additive
+    contract schemas (`AdminChildClaimRow`/`…QueueResponse`/`RejectChildClaimRequest`/`ApproveChildClaimResponse`).
+    FE = `/admin/child-claims` (server-component `page.tsx` `force-dynamic` + `safe()` empty-state degrade,
+    `KpiCard`, `ChildClaimsQueue` evidence-card island with optimistic approve + reason-required reject
+    `FormDrawer` over the hardened Drawer focus-trap + `role=status` live region, `actions.ts`, FE-local
+    `types.ts`) + a new "Demandes de rattachement" admin sidebar item (`UserPlus`). The S1 parent strip
+    already renders approved/rejected (verified, no parent FE change). S2 P0 spec suite added.
+    **No schema change, no new permission, no new ADR, no second queue, no new `NotificationKind`** (reuses
+    ADR-020/ADR-022). **`E9` is now `shipped` (both slices landed).** **Operator pre-req (gates demoability,
+    not merge):** the additive `guardianship_claim` `prisma db push` + `packages/contracts/dist` rebuild.
 - **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `proposed` · ongoing — Playwright journeys
   (grade publish → parent alert; parent claims child; messaging) + fix axe-core violations on
   authenticated pages. Maps to R9/R10.

@@ -1,14 +1,26 @@
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
+  AdminChildClaimQueueResponse,
+  AdminChildClaimRow,
+  ApproveChildClaimResponse,
   ChildClaimAlreadyLinkedResponse,
   ChildClaimListResponse,
   ChildClaimStatusRow,
   ChildClaimSubmitResponse,
   GuardianRelationship,
+  GuardianshipClaimStatus,
 } from '@pilotage/contracts';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 import { type CandidateStudent, matchClaim } from './claim-match';
 
@@ -60,7 +72,10 @@ type SubmitResult = ChildClaimSubmitResponse | ChildClaimAlreadyLinkedResponse;
 export class ChildClaimsService {
   private readonly logger = new Logger(ChildClaimsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   private toIsoDate(d: Date | null | undefined): string | null {
     if (!d) return null;
@@ -359,20 +374,359 @@ export class ChildClaimsService {
     return updated;
   }
 
-  /** Append-only audit (the direct prisma.auditLog.create pattern; resourceType='guardianship_claim'). */
+  // ---------------------------------------------------------------------------
+  // E9-S2 — Admin approval queue + atomic approve/reject + best-effort notify.
+  //
+  // The admin half of enrollment self-service. Every read/write is tenant-scoped
+  // and server-derived (me.tenantId/me.id, NEVER client-supplied). The queue is
+  // walled at the controller by `guardianships.approve` (admin-only — NOT bare
+  // `guardianships.read`, which parent+teacher also hold; the pre-mortem FM-1
+  // leak). The approve transition (claim submitted→approved AND link pending→active)
+  // happens in ONE from-status-guarded $transaction (the ADR-020 idiom): the second
+  // of two concurrent approvers deterministically loses with a 409, never a double
+  // grant, never a 500. The single transition IS the access grant —
+  // StudentAccessService reads `status:'active'`, so there is no second wiring step.
+  // The parent notification fan-out runs AFTER the committed transaction, wrapped in
+  // its own try/catch — a Redis/dispatch failure (or a null-login guardian) is
+  // logged and swallowed and can NEVER roll back the decision (FM-7/FM-8).
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The admin approval queue. ONE aggregate `findMany` (no N+1) projected to
+   * AdminChildClaimRow: the parent's typed evidence + a derived matchMethod, the
+   * joined matched Student summary (null on a match_failed row), and the requesting
+   * Guardian identity (name + login email). Oldest-first (FIFO — the longest-waiting
+   * family is actioned first, per tasks.md FR-4). Tenant-scoped; `status` defaults to
+   * 'submitted' at the controller and is validated against the enum there.
+   */
+  async listQueueForAdmin(args: {
+    tenantId: string;
+    status: GuardianshipClaimStatus;
+  }): Promise<AdminChildClaimQueueResponse> {
+    const rows = await this.prisma.guardianshipClaim.findMany({
+      where: { tenantId: args.tenantId, status: args.status },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        student: {
+          select: { id: true, firstName: true, lastName: true, birthDate: true, externalRef: true },
+        },
+        guardian: {
+          select: { id: true, firstName: true, lastName: true, userProfileId: true, email: true },
+        },
+      },
+    });
+
+    const data: AdminChildClaimRow[] = rows.map((r) => ({
+      claimId: r.id,
+      status: r.status,
+      guardianshipId: r.guardianshipId,
+      submittedAt: r.createdAt.toISOString(),
+      relationship: r.relationship,
+      evidence: {
+        firstName: r.claimedFirstName,
+        lastName: r.claimedLastName,
+        birthDate: this.toIsoDate(r.claimedDob),
+        externalRef: r.claimedExternalRef,
+        matchMethod: r.claimedExternalRef ? 'externalRef' : r.claimedDob ? 'name+dob' : null,
+      },
+      matchedStudent: r.student
+        ? {
+            studentId: r.student.id,
+            firstName: r.student.firstName,
+            lastName: r.student.lastName,
+            birthDate: this.toIsoDate(r.student.birthDate),
+            externalRef: r.student.externalRef,
+          }
+        : null,
+      requestingParent: {
+        guardianId: r.guardian.id,
+        firstName: r.guardian.firstName,
+        lastName: r.guardian.lastName,
+        userProfileId: r.guardian.userProfileId,
+        email: r.guardian.email,
+      },
+    }));
+
+    return { data };
+  }
+
+  /**
+   * Approve a pending claim — the atomic access grant. Flow ORDER (404-before-403,
+   * no leak):
+   *  1. load the claim by { id, tenantId } — a missing/cross-tenant id → 404.
+   *  2. idempotent re-approve: claim already `approved` AND its link already `active`
+   *     → no-op 200 (never a duplicate grant, never a 2nd audit/notification).
+   *  3. claim not `submitted` (rejected/withdrawn/match_failed) → 409.
+   *  4. no driven link (a match_failed has guardianshipId=null) → 409 (nothing to grant).
+   *  5. ONE $transaction: from-status-guarded link flip pending→active (count===0 → a
+   *     concurrent winner already flipped it → 409); then claim submitted→approved; then
+   *     append-only `guardianship.claim_approved` audit (actorRole 'admin').
+   *  6. AFTER commit: best-effort parent notification (never rolls back).
+   */
+  async approveClaim(args: {
+    tenantId: string;
+    actorId: string;
+    claimId: string;
+  }): Promise<ApproveChildClaimResponse> {
+    const claim = await this.prisma.guardianshipClaim.findFirst({
+      where: { id: args.claimId, tenantId: args.tenantId },
+    });
+    if (!claim) throw new NotFoundException('Demande introuvable');
+
+    // Idempotent re-approve: already approved + the driven link already active → no-op.
+    if (claim.status === 'approved' && claim.guardianshipId && claim.matchedStudentId) {
+      const link = await this.prisma.guardianship.findFirst({
+        where: { id: claim.guardianshipId, tenantId: args.tenantId, status: 'active' },
+        select: { id: true },
+      });
+      if (link) {
+        return {
+          claimId: claim.id,
+          status: 'approved',
+          guardianshipId: claim.guardianshipId,
+          guardianshipStatus: 'active',
+          studentId: claim.matchedStudentId,
+        };
+      }
+    }
+
+    if (claim.status !== 'submitted') {
+      throw new ConflictException("Cette demande n'est plus en attente");
+    }
+    if (!claim.guardianshipId || !claim.matchedStudentId) {
+      throw new ConflictException("Cette demande n'est plus en attente");
+    }
+
+    const guardianshipId = claim.guardianshipId;
+    const studentId = claim.matchedStudentId;
+
+    await this.prisma.$transaction(async (tx) => {
+      // From-status-guarded link flip pending→active (the access grant). If a
+      // concurrent approver already flipped it, count===0 → the loser 409s (ADR-020).
+      const linkRes = await tx.guardianship.updateMany({
+        where: { id: guardianshipId, tenantId: args.tenantId, status: 'pending' },
+        data: { status: 'active', approvedBy: args.actorId, approvedAt: new Date(), revokedAt: null },
+      });
+      if (linkRes.count === 0) {
+        throw new ConflictException("Cette demande n'est plus en attente");
+      }
+
+      const claimRes = await tx.guardianshipClaim.updateMany({
+        where: { id: claim.id, tenantId: args.tenantId, status: 'submitted' },
+        data: { status: 'approved', decidedBy: args.actorId, decidedAt: new Date() },
+      });
+      if (claimRes.count === 0) {
+        throw new ConflictException("Cette demande n'est plus en attente");
+      }
+
+      await this.audit(
+        tx,
+        { tenantId: args.tenantId, actorId: args.actorId },
+        'guardianship.claim_approved',
+        { status: 'submitted', guardianship: 'pending' },
+        {
+          status: 'approved',
+          guardianship: 'active',
+          decidedBy: args.actorId,
+          decidedAt: new Date().toISOString(),
+        },
+        'admin',
+      );
+    });
+
+    // Best-effort parent notification AFTER commit (never rolls back the grant).
+    await this.notifyParentOfDecision({
+      tenantId: args.tenantId,
+      claimId: claim.id,
+      guardianId: claim.guardianId,
+      decision: 'approved',
+      studentId,
+    });
+
+    return {
+      claimId: claim.id,
+      status: 'approved',
+      guardianshipId,
+      guardianshipStatus: 'active',
+      studentId,
+    };
+  }
+
+  /**
+   * Reject a pending claim — grants nothing. Flow ORDER mirrors approve:
+   *  1. load by { id, tenantId } → 404 if missing/cross-tenant.
+   *  2. claim not `submitted` → 409.
+   *  3. ONE $transaction: if a driven link exists, from-status-guarded pending→revoked;
+   *     claim submitted→rejected (+ decisionReason/decidedBy/decidedAt); count===0 →
+   *     409 (raced); append-only `guardianship.claim_rejected` audit (actorRole 'admin').
+   *     The revoked link + rejected claim are reused back by the S1 submit revoked-reuse
+   *     branch, so a parent re-submit re-opens the queue.
+   *  4. AFTER commit: best-effort parent notification (never rolls back).
+   */
+  async rejectClaim(args: {
+    tenantId: string;
+    actorId: string;
+    claimId: string;
+    reason: string;
+  }): Promise<{ claimId: string; status: 'rejected' }> {
+    const reason = args.reason.trim();
+    const claim = await this.prisma.guardianshipClaim.findFirst({
+      where: { id: args.claimId, tenantId: args.tenantId },
+    });
+    if (!claim) throw new NotFoundException('Demande introuvable');
+    if (claim.status !== 'submitted') {
+      throw new ConflictException("Cette demande n'est plus en attente");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const claimRes = await tx.guardianshipClaim.updateMany({
+        where: { id: claim.id, tenantId: args.tenantId, status: 'submitted' },
+        // DECOUPLE the rejected claim from its (about-to-be-revoked) link by nulling
+        // guardianshipId — same reasoning as the withdraw path: GuardianshipClaim.guardianshipId
+        // is @unique, so a parent re-submit reuses the revoked link and inserts a NEW submitted
+        // claim with guardianshipId=link.id. Leaving the rejected claim holding that FK makes the
+        // re-submit collide on the unique → silently swallowed by the P2002 catch (link stuck
+        // 'pending', nothing in the S2 queue, invisible to admins). Releasing the FK keeps re-claim sound.
+        data: {
+          status: 'rejected',
+          guardianshipId: null,
+          decisionReason: reason,
+          decidedBy: args.actorId,
+          decidedAt: new Date(),
+        },
+      });
+      if (claimRes.count === 0) {
+        throw new ConflictException("Cette demande n'est plus en attente");
+      }
+
+      if (claim.guardianshipId) {
+        await tx.guardianship.updateMany({
+          where: { id: claim.guardianshipId, tenantId: args.tenantId, status: 'pending' },
+          data: { status: 'revoked', revokedAt: new Date() },
+        });
+      }
+
+      await this.audit(
+        tx,
+        { tenantId: args.tenantId, actorId: args.actorId },
+        'guardianship.claim_rejected',
+        { status: 'submitted', guardianship: 'pending' },
+        { status: 'rejected', guardianship: 'revoked', decisionReason: reason },
+        'admin',
+      );
+    });
+
+    // Best-effort parent notification AFTER commit (never rolls back the rejection).
+    await this.notifyParentOfDecision({
+      tenantId: args.tenantId,
+      claimId: claim.id,
+      guardianId: claim.guardianId,
+      decision: 'rejected',
+      studentId: claim.matchedStudentId,
+      reason,
+    });
+
+    return { claimId: claim.id, status: 'rejected' };
+  }
+
+  /**
+   * Best-effort parent notification on a decision. Mirrors the enrollments
+   * `notifyGuardiansOfEnrollment` precedent: resolves the recipient userProfileId
+   * from the claim's Guardian (skip if null — no login, no-op), fans out ONE in-app
+   * `enrollment_status` notification (the REUSED kind — there is no 'guardianship'
+   * NotificationKind), sourceType='guardianship_claim' with the decision verb appended
+   * (so re-decisions on the same claim don't collapse on the createMany dedup key),
+   * sourceId=claimId. Wrapped in try/catch — a notification/Redis/dispatch failure is
+   * LOGGED and swallowed; it runs AFTER the committed transaction and can never roll it
+   * back. Approve deep-links to the now-accessible child; reject deep-links to the
+   * re-submit surface. Copy is kind / non-stigmatising (never 'refusé/échec' as fault).
+   */
+  private async notifyParentOfDecision(args: {
+    tenantId: string;
+    claimId: string;
+    guardianId: string;
+    decision: 'approved' | 'rejected';
+    studentId: string | null;
+    reason?: string;
+  }): Promise<void> {
+    try {
+      const guardian = await this.prisma.guardian.findFirst({
+        where: { id: args.guardianId, tenantId: args.tenantId },
+        select: { userProfileId: true },
+      });
+      const recipient = guardian?.userProfileId;
+      if (!recipient) return; // admin-created guardian, no login yet → no-op.
+
+      // Resolve the child's first name for the (non-stigmatising) copy, best-effort.
+      let childFirstName = 'votre enfant';
+      if (args.studentId) {
+        const student = await this.prisma.student.findFirst({
+          where: { id: args.studentId, tenantId: args.tenantId },
+          select: { firstName: true },
+        });
+        if (student) childFirstName = student.firstName;
+      }
+
+      if (args.decision === 'approved') {
+        await this.notifications.createMany([
+          {
+            tenantId: args.tenantId,
+            userProfileId: recipient,
+            kind: 'enrollment_status',
+            severity: 'success',
+            title: `Rattachement validé — ${childFirstName}`,
+            body: `Votre rattachement à ${childFirstName} a été validé. Vous avez désormais accès à son dossier.`,
+            link: args.studentId ? `/parent/children/${args.studentId}` : '/parent/children',
+            sourceType: 'guardianship_claim_approved',
+            sourceId: args.claimId,
+          },
+        ]);
+      } else {
+        await this.notifications.createMany([
+          {
+            tenantId: args.tenantId,
+            userProfileId: recipient,
+            kind: 'enrollment_status',
+            severity: 'info',
+            title: 'Information à vérifier sur votre demande',
+            body: args.reason
+              ? `Votre demande de rattachement n'a pas pu être validée. Motif : ${args.reason}. Consultez le détail et renvoyez une demande corrigée.`
+              : "Votre demande de rattachement n'a pas pu être validée. Consultez le détail et renvoyez une demande corrigée.",
+            link: '/parent/children',
+            sourceType: 'guardianship_claim_rejected',
+            sourceId: args.claimId,
+          },
+        ]);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[child-claims] decision notification fan-out failed (claim=${args.claimId}, decision=${args.decision}) — swallowed, decision stands.`,
+        err as Error,
+      );
+    }
+  }
+
+  /**
+   * Append-only audit (the direct prisma.auditLog.create pattern; resourceType
+   * ='guardianship_claim'). The actor role/portal is parametrised (defaulting to
+   * 'parent' for the S1 parent paths) so the S2 admin approve/reject decisions log
+   * `actorRole:'admin'`/`portal:'admin'` — the audit row IS the status history,
+   * so the actor must be truthful (Winston CONCERN #4).
+   */
   private async audit(
     tx: Prisma.TransactionClient,
     args: Pick<SubmitClaimArgs, 'tenantId' | 'actorId'>,
     action: string,
     before: Prisma.InputJsonValue | null,
     after: Prisma.InputJsonValue,
+    actor: 'parent' | 'admin' = 'parent',
   ): Promise<void> {
     await tx.auditLog.create({
       data: {
         tenantId: args.tenantId,
         actorId: args.actorId,
-        actorRole: 'parent',
-        portal: 'parent',
+        actorRole: actor,
+        portal: actor,
         action,
         resourceType: 'guardianship_claim',
         before: before ?? undefined,

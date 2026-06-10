@@ -10,7 +10,7 @@
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
 | S1 | `GuardianshipClaim` schema + deny-by-default match + parent self-claim + status/manage → **ADR-022** | `[schema][auth][abac][rgpd]` | P1 | ✅ **shipped** (needs human review; RED gate fixed in-flight via `prisma generate`) | — |
-| S2 | Admin approval queue + approve/reject + notify + UIs | `[auth][abac]` | P2 | ⬜ not started (**next slice**) | — |
+| S2 | Admin approval queue + approve/reject + notify + UIs | `[auth][abac]` | P2 | ✅ **shipped** (needs human review) | — |
 
 ## What landed this run (spec run)
 
@@ -151,11 +151,72 @@
   `@pilotage/contracts` (swap once dist is consumed); and a `ChildClaimDrawer` `aria-describedby` dangling-id
   edge in the empty-name state.
 
+## What landed on the S2 run (epic-slice)
+
+- **Contracts (additive only):** 4 new admin schemas/types in `packages/contracts/src/dto/child-claim.ts`
+  — `AdminChildClaimRow(Schema)` (claimId/status/guardianshipId/submittedAt/relationship + parent-typed
+  `evidence` {firstName/lastName/birthDate/externalRef/derived matchMethod} + joined `matchedStudent` |
+  null + `requestingParent` {guardianId/firstName/lastName/userProfileId/email}),
+  `AdminChildClaimQueueResponse(Schema)`, `RejectChildClaimRequest(Schema)` (`reason` trim min1 max500),
+  `ApproveChildClaimResponse(Schema)`. Re-exported via the existing `dto/index.ts` `export *`. No edit to
+  the S1 exports. The web slice still mirrors the shape FE-local (`apps/web/.../admin/child-claims/types.ts`)
+  — dist not yet consumed by web.
+- **API (`apps/api/src/modules/child-claims/`):** the NEW `admin-child-claims.controller.ts`
+  (`@Controller('admin/child-claims')`, **gated entirely by the admin-only `guardianships.approve`** — NOT
+  bare `guardianships.read` which parent+teacher hold, closing the pre-mortem FM-1 leak; server-derived
+  `me.tenantId`/`me.id` via `UserSyncService.ensureUser`; `ParseUUIDPipe` on `:id`; `?status` defaults to
+  `submitted` and is enum-validated → 400 on a bad param). The `RejectChildClaimDto`
+  (`@IsString @IsNotEmpty @MaxLength(500)` → 400 on blank). Three additive methods on `ChildClaimsService`:
+  `listQueueForAdmin` (ONE tenant-scoped aggregate `findMany`, oldest-first FIFO, no N+1, derived
+  `matchMethod`), `approveClaim` (404-before-403 → idempotent re-approve no-op 200 → 409 on
+  non-submitted/match-failed → ONE `$transaction` with the from-status-guarded link `pending→active`
+  +`approvedBy/At`, claim `submitted→approved` +`decidedBy/At`, append-only `guardianship.claim_approved`
+  audit; `count===0` on the link flip → deterministic 409 ADR-020 loser; **this single transition IS the
+  access grant**), `rejectClaim` (required reason → 404/409 ordering → `$transaction` link `pending→revoked`
+  + claim `submitted→rejected` +`decisionReason` + `guardianship.claim_rejected` audit, grants nothing,
+  re-submit path stays open). The `audit()` helper is parametrised `actor: 'parent' | 'admin'` (defaults
+  `parent`, so S1 call sites stay byte-equivalent) — the admin decisions log `actorRole/portal:'admin'`
+  (Winston CONCERN #4). Best-effort `notifyParentOfDecision` runs **AFTER** the committed `$transaction`,
+  wrapped in try/catch (resolves the parent `userProfileId`, skip if null; reuses the `enrollment_status`
+  kind — there is NO `guardianship` kind; `sourceType='guardianship_claim_{approved,rejected}'` so a later
+  opposite decision isn't collapsed by the createMany dedup; approve deep-links to the child, reject to the
+  re-submit surface) — a notify/Redis failure is logged + swallowed and can NEVER roll back the decision
+  (FM-7/FM-8). Module wires `AdminChildClaimsController` + injects `NotificationsService`
+  (`NotificationsModule` is `@Global`; the import is explicit). The parent `ChildClaimsController`, the
+  matcher, `StudentAccessService` and the admin-initiated `POST /guardians/guardianships` auto-active path
+  are byte-untouched (AC-8).
+- **Tests:** `child-claims.service.spec.ts` extended with the S2 P0 suite — `listQueueForAdmin` (one
+  aggregate, tenant-scoped, oldest-first, evidence/matchMethod/matched-student/parent projection),
+  `approveClaim` (active+approvedBy + claim approved + admin audit + `enrollment_status` notify; 404 on
+  cross-tenant; idempotent re-approve no-op 200; concurrent-loser 409; match_failed 409; notify-failure
+  doesn't roll back; null-userProfileId guardian → 0 notifications no throw), `rejectClaim` (revoked +
+  trimmed decisionReason + admin audit + notify; non-submitted 409; cross-tenant 404). The constructor
+  fake now injects a `NotificationsService` stub.
+- **FE (`apps/web/src/app/admin/child-claims/`):** `page.tsx` (server component, `force-dynamic`,
+  `PortalShell`+`PageHeader`+`KpiCard "En attente"`, `safe()`-wrapped aggregate fetch → calm empty state
+  while the S1 `db push` is pending), `ChildClaimsQueue.tsx` (`'use client'` evidence-card queue:
+  parent-claim vs matched-student side-by-side, `SearchX` "Aucune correspondance" chip for a no-match,
+  matchMethod chip, requesting parent + relationship + received-at, Approuver optimistic-removal action
+  with a calm 409 path, Rejeter opening a reason-required `RejectClaimDrawer` over the hardened
+  `@pilotage/ui` `FormDrawer`/`Drawer` focus-trap with a live char-counter + `aria-describedby` hint +
+  `role=status` polite live region), `actions.ts` (`'use server'` approve/reject calling `api()` POST +
+  `revalidatePath('/admin/child-claims')`), `types.ts` (FE-local byte-mirror). New "Demandes de
+  rattachement" admin sidebar item (`UserPlus`, already-imported; placed in Pédagogie next to
+  enrollments/meeting-requests). The S1 parent `ChildClaimsStatusStrip` already renders the approved
+  (child + deep-link) / rejected (decisionReason + re-submit) branches — **verified, no parent FE change**
+  (FR-10).
+- **R2 (ledger):** `docs/spec/features/e9/contracts/openapi.yaml` already uses `kind=enrollment_status`
+  for the approve/reject notifications (only the corrective prose "there is NO `guardianship` kind" +
+  the intended `sourceType=guardianship_claim` remain) — **verified clean, no edit** (FR-12).
+- **No schema change in S2.** Reads + transitions operate entirely on the S1 `GuardianshipClaim` table +
+  the existing `Guardianship`/`AuditLog`/`Notification` tables. No new permission, no new ADR (reuses the
+  documented ADR-020 from-status-guard + ADR-022 lifecycle), no second queue, no new `NotificationKind`.
+
 ## Next action
 
-Implement **E9-S2** (the next `epic-slice` run): the **admin approval queue** — list `submitted` claims
-(rides the existing `guardianships.read`), atomic `pending→active` grant on approve / `rejected` +
-`decisionReason` on reject (from-status-guarded `updateMany`, ADR-020 idiom), parent notification reusing the
-existing `enrollment_status` `NotificationKind` (`sourceType='guardianship_claim'`), admin UI. **No schema.**
-Fix the `kind=guardianship` typo in `contracts/openapi.yaml` (`tasks.md` ledger R2). **Operator pre-req
-(gates demoability, not merge):** apply the additive `guardianship_claim` `prisma db push`.
+**E9 is now complete — both slices shipped.** Advance to the next epic per `bmad/roadmap.md`.
+
+**Operator pre-req (gates demoability, not merge — carried over from S1):** apply the additive
+`guardianship_claim` `prisma db push` + rebuild `packages/contracts/dist` (the runtime
+`GUARDIANSHIP_CLAIM_STATUS` value import) via the single post-Workflow `pnpm build`. Until then the admin
+queue degrades to a calm empty state and the parent strip shows "indisponible" — never a crash.
