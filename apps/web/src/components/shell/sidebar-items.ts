@@ -122,6 +122,16 @@ export const adminSidebarGroups: SidebarGroupConfig[] = [
       { key: 'alerts', icon: Bell, label: 'Alertes', href: '/admin/alerts' },
       { key: 'meeting-requests', icon: MessageSquarePlus, label: 'Demandes de RDV', href: '/admin/meeting-requests' },
       {
+        key: 'child-claims',
+        icon: UserPlus,
+        label: 'Demandes de rattachement',
+        href: '/admin/child-claims',
+        // E9-S2 enrollment self-service approval queue. Distinct from
+        // /admin/enrollments ("Inscriptions" = class enrollment): this is
+        // family-attachment (rattachement ≠ inscription).
+        matches: /^\/admin\/child-claims(\/|$)/,
+      },
+      {
         key: 'remediation',
         icon: HeartHandshake,
         label: 'Soutien scolaire',

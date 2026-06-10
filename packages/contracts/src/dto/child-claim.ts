@@ -133,3 +133,87 @@ export const ChildClaimListResponseSchema = z.object({
   claims: z.array(ChildClaimStatusRowSchema),
 });
 export type ChildClaimListResponse = z.infer<typeof ChildClaimListResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Admin approval queue — GET /admin/child-claims?status=submitted  (E9-S2)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the admin "Demandes de rattachement" queue (E9-S2). Surfaced ONLY
+ * behind `guardianships.approve` (the admin wall — NOT bare `guardianships.read`,
+ * which parent+teacher also hold). Carries:
+ *  - `evidence` — the parent's OWN typed claim fields (never roster-resolved):
+ *    firstName/lastName + optional birthDate/externalRef + a derived `matchMethod`
+ *    ('externalRef' | 'name+dob' | null).
+ *  - `matchedStudent` — the joined roster Student summary, or `null` for a
+ *    `match_failed` row (no link → "à traiter manuellement"). The resolved child
+ *    name appears here ONLY in this admin-gated surface, NEVER echoed to the parent.
+ *  - `requestingParent` — the claiming Guardian's identity (name + login email).
+ *
+ * The whole queue is tenant-scoped server-side; a cross-tenant claim id is
+ * indistinguishable from a missing one (the decision routes 404, no leak).
+ */
+export const AdminChildClaimRowSchema = z.object({
+  claimId: UuidSchema,
+  status: z.enum(GUARDIANSHIP_CLAIM_STATUS),
+  guardianshipId: UuidSchema.nullable(),
+  submittedAt: z.string(),
+  relationship: z.enum(GUARDIAN_RELATIONSHIP),
+  evidence: z.object({
+    firstName: z.string(),
+    lastName: z.string(),
+    birthDate: z.string().nullable(),
+    externalRef: z.string().nullable(),
+    matchMethod: z.string().nullable(),
+  }),
+  matchedStudent: z
+    .object({
+      studentId: UuidSchema,
+      firstName: z.string(),
+      lastName: z.string(),
+      birthDate: z.string().nullable(),
+      externalRef: z.string().nullable(),
+    })
+    .nullable(),
+  requestingParent: z.object({
+    guardianId: UuidSchema,
+    firstName: z.string(),
+    lastName: z.string(),
+    userProfileId: UuidSchema.nullable(),
+    email: z.string().nullable(),
+  }),
+});
+export type AdminChildClaimRow = z.infer<typeof AdminChildClaimRowSchema>;
+
+export const AdminChildClaimQueueResponseSchema = z.object({
+  data: z.array(AdminChildClaimRowSchema),
+});
+export type AdminChildClaimQueueResponse = z.infer<
+  typeof AdminChildClaimQueueResponseSchema
+>;
+
+/**
+ * Reason-required reject body — `POST /admin/child-claims/:id/reject`. A blank /
+ * whitespace-only reason → 400 (the api DTO mirrors this with class-validator
+ * `@IsNotEmpty @MaxLength(500)`). The reason is stored on `decisionReason` and is
+ * surfaced to the parent (non-stigmatising, factual).
+ */
+export const RejectChildClaimRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(500),
+});
+export type RejectChildClaimRequest = z.infer<typeof RejectChildClaimRequestSchema>;
+
+/**
+ * Approve response — `POST /admin/child-claims/:id/approve`. The single
+ * from-status-guarded `pending → active` Guardianship flip IS the access grant.
+ */
+export const ApproveChildClaimResponseSchema = z.object({
+  claimId: UuidSchema,
+  status: z.enum(GUARDIANSHIP_CLAIM_STATUS),
+  guardianshipId: UuidSchema,
+  guardianshipStatus: z.literal('active'),
+  studentId: UuidSchema,
+});
+export type ApproveChildClaimResponse = z.infer<
+  typeof ApproveChildClaimResponseSchema
+>;

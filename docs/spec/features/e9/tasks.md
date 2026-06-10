@@ -89,7 +89,7 @@ and withdraw the claim. **This is the schema + ADR-022 slice.** Demoable by clai
 
 ---
 
-## [ ] S2 — Admin approval queue + approve/reject + notify + UIs · `[auth][abac]` · P2 · ~S-M
+## [x] S2 — Admin approval queue + approve/reject + notify + UIs · `[auth][abac]` · P2 · ~S-M · ✅ shipped
 
 **Goal:** an admin works the "Demandes de rattachement" queue and approves (→ access granted + parent
 notified) or rejects (kind reason + re-submit open). **No schema change.** Demoable by approving the S1
