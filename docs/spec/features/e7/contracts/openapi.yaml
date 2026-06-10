@@ -206,40 +206,79 @@ paths:
         '409': { description: "Slot full for that session instance (the ADR-020 concurrency guard) — deterministic single-winner." }
         '422': { description: Invalid sessionAt for the slot (not a valid dated instance of the availability). }
 
+  # ===========================================================================
+  # S4 — Teacher capacity management + booking transitions (AS SHIPPED).
+  # The teacher surface lives under /remediation/teacher/* (ownership-walled),
+  # NOT the planning-draft /remediation/bookings GET + /transition — the actual
+  # route family is clearer about the ownership boundary and mirrors S2's
+  # /remediation/bookings/:id/cancel (a verb-specific PATCH, not a generic one).
+  # ===========================================================================
+  /remediation/teacher:
     get:
       tags: [remediation-bookings]
-      summary: "[S4] Teacher remediation inbox — bookings for the caller's tutor record (teacher) — perm: remediation.read + ownership wall"
+      summary: "[S4] Teacher remediation surface — own tutor slots + bookings + teachable subjects (teacher) — perm: remediation.read + ownership wall"
       description: >
-        The teacher's bookings (across their tutor record), for the /teacher/remediation inbox.
-        Server-scoped to bookings whose tutor.userProfileId === caller (the ownership wall).
-        Aggregate read (student name, subject, sessionAt, status) — no N+1.
-      operationId: listTeacherBookings
+        The caller's OWN tutor (resolved by tutor.userProfileId === caller, type=teacher) with its
+        availability slots (live bookedCount), the bookings on that tutor (the ownership wall), and
+        the subjects the caller currently teaches (the publish-form options). ONE aggregate read,
+        no N+1. A teacher with no tutor yet gets a null-tutor shell (no booking query → no leak).
+      operationId: getTeacherRemediationSurface
       security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/BookingStatus' } }
-        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: The caller's tutor bookings., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/BookingWithContext' } } } } }
-        '403': { description: Missing remediation.read / caller has no tutor record. }
+        '200': { description: The teacher remediation surface., content: { application/json: { schema: { $ref: '#/components/schemas/TeacherRemediationSurface' } } } }
+        '403': { description: Missing remediation.read. }
 
-  /remediation/bookings/{bookingId}/transition:
+  /remediation/teacher/availabilities:
+    post:
+      tags: [remediation-bookings]
+      summary: "[S4] Publish an availability slot on the caller's OWN tutor (teacher) — perm: remediation.read + ownership wall"
+      description: >
+        Publishes a slot on the caller's own (lazily-created) teacher tutor. subjectId MUST be a
+        subject the caller CURRENTLY teaches (ownership wall → 403). Slot shape re-validated (422).
+        Append-only `remediation.availability_created` audit. The tutor stays unpublished until an
+        admin publishes it to the parent catalogue (S5).
+      operationId: publishTeacherAvailability
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertAvailabilityRequest' } } } }
+      responses:
+        '201': { description: Availability created., content: { application/json: { schema: { $ref: '#/components/schemas/TutorAvailability' } } } }
+        '403': { description: Caller is not a teacher / does not teach the subject. }
+        '422': { description: Malformed slot (recurring needs weekday+startTime; one_off needs startsAt). }
+
+  /remediation/teacher/availabilities/{availabilityId}:
     patch:
       tags: [remediation-bookings]
-      summary: "[S2/S4] Transition a booking (parent cancel OR teacher confirm/decline/propose) — perm: remediation.read|.book + wall"
+      summary: "[S4] Edit one of the caller's OWN availability slots (teacher) — perm: remediation.read + ownership wall"
+      operationId: editTeacherAvailability
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: availabilityId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertAvailabilityRequest' } } } }
+      responses:
+        '200': { description: Availability updated., content: { application/json: { schema: { $ref: '#/components/schemas/TutorAvailability' } } } }
+        '403': { description: Caller is not a teacher / does not teach the subject. }
+        '404': { description: Availability not on the caller's own tutor. }
+
+  /remediation/teacher/bookings/{bookingId}/transition:
+    patch:
+      tags: [remediation-bookings]
+      summary: "[S4] Transition a booking on the caller's OWN tutor (teacher) — perm: remediation.read + ownership wall"
       description: >
-        A guarded state-machine step. PARENT may `cancelled` (guardianship wall, remediation.book).
-        TEACHER (the booking's tutor owner) may `confirmed` / `declined` / `proposed_alternative`
-        (ownership wall, remediation.read). An ILLEGAL transition (e.g. confirm a cancelled
-        booking) → 409/422. Each transition writes an append-only `remediation.booking_<status>`
-        AuditLog row + notifies the counterparty via createMany. History is NEVER deleted.
-      operationId: transitionBooking
+        A guarded state-machine step for the booking's tutor owner. The teacher may move a booking
+        to `confirmed` / `declined` / `completed` (honoured) / `no_show` (recorded as `declined` +
+        an "Absent" note — no enum value, no schema change) / `proposed_alternative` (requires a
+        note). The ownership wall (booking.tutor.userProfileId === caller) is re-checked BEFORE the
+        write (404-before-403). An ILLEGAL transition for the current status → 409. Each transition
+        writes an append-only `remediation.booking_<status>` AuditLog row + best-effort notifies the
+        parent (createMany, kind remediation, no new queue). History is NEVER deleted. Parent cancel
+        uses the dedicated PATCH /remediation/bookings/:id/cancel (S2), not this verb.
+      operationId: transitionTeacherBooking
       security: [{ bearerAuth: [] }]
       parameters: [{ name: bookingId, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransitionBookingRequest' } } } }
       responses:
         '200': { description: Booking transitioned., content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }
-        '403': { description: Caller fails the relevant wall (guardianship / tutor-ownership) or lacks the role. }
-        '404': { description: Booking not found in tenant. }
+        '403': { description: Caller lacks remediation.read. }
+        '404': { description: Booking not found in tenant / not on the caller's own tutor. }
         '409': { description: Illegal transition for the current status. }
         '422': { description: Missing required note for proposed_alternative. }
 
@@ -426,9 +465,48 @@ components:
     TransitionBookingRequest:
       type: object
       required: [toStatus]
+      description: >
+        The teacher transition verb (S4). `toStatus` is a NARROWED subset — `no_show` is accepted
+        and recorded server-side as `declined` + an "Absent" note (the BookingStatus enum carries no
+        no_show value; S4 ships no schema change).
       properties:
-        toStatus: { $ref: '#/components/schemas/BookingStatus' }
+        toStatus:
+          type: string
+          enum: [confirmed, declined, completed, no_show, proposed_alternative]
         note: { type: [string, 'null'], maxLength: 280, description: Required for proposed_alternative. }
+
+    TeacherRemediationSurface:
+      type: object
+      required: [tutor, bookings, teachableSubjects]
+      description: The S4 teacher remediation surface aggregate (one read, ownership-walled).
+      properties:
+        tutor:
+          type: object
+          description: The caller's own tutor (null tutorId before any slot is published).
+          properties:
+            tutorId: { type: [string, 'null'], format: uuid }
+            displayName: { type: [string, 'null'] }
+            published: { type: boolean }
+            subjectIds: { type: array, items: { type: string, format: uuid } }
+            availabilities:
+              type: array
+              items:
+                allOf:
+                  - $ref: '#/components/schemas/TutorAvailability'
+                  - type: object
+                    properties:
+                      bookedCount: { type: integer, description: Active bookings on the slot's next instance. }
+        bookings:
+          type: array
+          items: { $ref: '#/components/schemas/BookingWithContext' }
+        teachableSubjects:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              code: { type: [string, 'null'] }
+              name: { type: string }
 
     Booking:
       type: object
