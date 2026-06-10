@@ -298,9 +298,35 @@ the S4 chip renders. No schema/endpoint/permission/queue/contract change.
 > `role=status` live region, a "Soutien scolaire" sidebar item), reuse-first on `@pilotage/ui` (no
 > `packages/ui` change). **No schema, no new permission, no new ADR, no second queue.** **Pending (human/infra):**
 > the S1/S2 `prisma db push` for the E7 tables is still unapplied (infra was down) — until then the teacher
-> surface reads an empty null-tutor shell and publishing fails at the DB. Next slice → **E7-S5** (`epic-slice`
-> `[auth]` P2: admin catalogue curation & oversight — `/admin/remediation` on `remediation.manage` to
-> create/approve/retire tutors + publish slots, plus a school-scoped aggregate overview, no schema change).
+> surface reads an empty null-tutor shell and publishing fails at the DB.
+>
+> **E7-S5 is now shipped** (`epic-slice` — P1 `[auth][api][abac][remediation][rgpd]`, needs human review):
+> the **admin catalogue curation & oversight** surface. A new tenant-scoped `AdminRemediationService` (619L)
+> + 6 routes on `RemediationController` (`GET /remediation/admin/tutors[?subjectId=]` + `/admin/overview`,
+> `POST /remediation/tutors`, `PATCH /remediation/tutors/:id`, `POST/PATCH /remediation/tutors/:tutorId/
+> availabilities[/:id]`), **ALL gated by `@RequiresPermission('remediation.manage')`** (the S1-seeded
+> admin-only authority — a parent/teacher with `remediation.read|book` gets 403; no new permission). A school
+> admin creates/approves(`published:true`)/retires(`published:false`, soft + history-preserving) tutors
+> (teacher-linked or external/peer) and publishes/edits their slots for ANY tutor. **Tenant-scoped on every
+> read/write** (server-derived `me.tenantId` → cross-tenant 404). **The FM-1 catalogue-trust wall holds:** a
+> teacher tutor's `subjectIds` are constrained to subjects the linked teacher CURRENTLY teaches (active-year
+> `teachingAssignment`); an all-untaught selection → 422. **FM-8 idempotency:** creating a teacher tutor who
+> already has one REUSES the S4 auto-derived row. The admin slot path reuses the SAME `resolveNextSessionAt`
+> key + capacity-floor guard as the teacher/booking paths (ADR-020 → lower capacity below active bookings →
+> 422). **The `/admin/overview` is RGPD-clean — AGGREGATE COUNTS ONLY** (`groupBy`/`count`, no `studentId`/
+> `studentName`/per-child row). Append-only `remediation.{tutor,availability}_{created,updated}` audit on every
+> curation write (the tutor verb carries `published` before/after). FE = `/admin/remediation` (server-component
+> `page.tsx` over 4 parallel reads + `RemediationCatalogueManager` + `'use server'` actions + `slot-format`),
+> reuse-first on `@pilotage/ui` (no `packages/ui` change), new "Soutien scolaire" admin sidebar item.
+> **No schema change** (reuses the S1/S2/S4 models entirely), no new ADR, no second queue. **In-flight RED-gate
+> fix:** 3 typecheck errors (a contract pre-parse/post-parse DTO-optionality mismatch on `createTutor` + 2
+> `noUncheckedIndexedAccess` spec dereferences) were resolved before land (`pnpm typecheck` → 11/11 GREEN).
+> **Pending (human/infra):** the S1/S2 `prisma db push` for the E7 tables is STILL unapplied (infra was down
+> across S1→S4) — this slice adds zero schema but the whole catalogue is non-functional until an operator
+> applies the pending additive E7 migration to dev/prod. Next slice → **E7-S6** (`epic-slice` `[auth]` P2-P3:
+> loop hardening — notifications + cancellation + completion + uptake sweep, plus the S5-deferred fixes:
+> FM-8 retire audit, slot `createdBy` provenance, overview published-only `tutorCount`, `?subjectId=`
+> `ParseUUIDPipe`). No schema change.
 
 ### E7 — Remediation & Tutoring loop · `in-progress` · ~L
 **Why:** closes alert → diagnosis → **resource** → **measured improvement**: turn a recommendation into a

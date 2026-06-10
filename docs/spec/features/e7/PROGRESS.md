@@ -12,7 +12,7 @@
 | S2 | Availability + Booking (concurrency guard) → **ADR-020** | `[schema][auth][concurrency]` | P1 | ✅ shipped | #132 |
 | S3 | Parent remediation progress strip (measured improvement) | `[web][a11y]` | P2 | ✅ shipped | this PR |
 | S4 | Teacher capacity management + booking transitions | `[auth]` | P2 | ✅ shipped | this PR |
-| S5 | Admin catalogue curation & oversight | `[auth]` | P2 | ⬜ not started | — |
+| S5 | Admin catalogue curation & oversight | `[auth]` | P1 | ✅ shipped | this PR |
 | S6 | Loop hardening: notifications + cancellation + completion + uptake sweep | `[auth]` | P2-P3 | ⬜ not started | — |
 
 ## What landed this run (spec run)
@@ -315,12 +315,89 @@ now internally consistent.
 - **`no_show` is recorded as `declined` + an "Absent·e" note** (no enum value, no schema change). If a
   first-class `no_show` status is later wanted, that is an additive enum value (a future schema slice).
 
+## What landed in S5 (this run — `epic-slice` — admin catalogue curation & oversight, `[auth][api][abac][remediation][rgpd]`, P1)
+
+- **Contracts (`packages/contracts/src/dto/remediation.ts`):** the additive S5 DTOs — `AdminTutorDto`
+  (full roster row + `availabilityCount`/`activeBookingCount`), `AdminTutorAvailabilityDto` (aliases the
+  S4 `TeacherAvailabilityDto` so the admin + teacher slot shapes can't diverge), `CreateAdminTutorDto`
+  (`.default()` on `costKind`/`published`), `UpdateAdminTutorDto` (all optional — approve/retire flip),
+  `AdminUpsertAvailabilityDto`, `AdminRemediationOverviewDto` (per-subject aggregate + tenant totals),
+  `AdminRemediationCatalogueDto`. **`import type` on the API side** (no new runtime value import) except
+  `CreateAdminTutorDtoSchema` (used for the `z.input<>` request-shape alias) — no `contracts/dist`
+  runtime rebuild required for S5 to function.
+- **API — admin curation surface (`apps/api/src/modules/remediation/`):** a new
+  `AdminRemediationService` (619L) + 6 controller routes on `RemediationController`, ALL gated by
+  `@RequiresPermission('remediation.manage')` (admin-only — a parent/teacher holding `remediation.read|book`
+  gets 403). Every read/write is tenant-scoped (server-derived `me.tenantId`); a tutor/availability outside
+  the tenant 404s.
+  - `GET /remediation/admin/tutors[?subjectId=]` — the FULL tenant-scoped roster (every type + published
+    state) + `availabilityCount` + `activeBookingCount` in ONE grouped Booking query (no N+1).
+  - `GET /remediation/admin/overview` — school-scoped per-subject `openPlans`/`activeBookings`/`tutorCount`
+    + tenant totals. **RGPD-clean: AGGREGATE COUNTS ONLY** — `groupBy`/`count`, `select:{plan:{select:{subjectId}}}`,
+    no `studentId`/`studentName`/per-child row anywhere.
+  - `POST /remediation/tutors` — create a tutor (teacher-linked or external/peer). For a teacher tutor:
+    `teacherProfileId` validated in-tenant, `userProfileId` resolved server-side, and **`subjectIds`
+    CONSTRAINED to subjects the teacher currently teaches (FM-1 wall — no catalogue-trust bypass)**;
+    idempotent on `(tenant, userProfileId, type=teacher)` → REUSES the teacher's auto-derived S4 tutor
+    (FM-8). Append-only `remediation.tutor_created`.
+  - `PATCH /remediation/tutors/:id` — update/approve(`published:true`)/retire(`published:false`); soft +
+    history-preserving (row + slots + bookings survive). `type` immutable. Append-only
+    `remediation.tutor_updated` carrying the published before/after.
+  - `POST/PATCH /remediation/tutors/:tutorId/availabilities[/:id]` — publish/edit ANY tutor's slot
+    (manage IS the authority — no subject-ownership wall), reusing the SAME `resolveNextSessionAt` key +
+    capacity-floor guard as the teacher/booking paths (ADR-020 — lower capacity below active bookings → 422).
+    Append-only `remediation.availability_{created,updated}`.
+- **Web (`apps/web/src/app/admin/remediation/`):** `/admin/remediation` — server-component `page.tsx`
+  (4 parallel server reads), `RemediationCatalogueManager.tsx` (the roster table + create/approve/retire +
+  slot drawers), `remediation-actions.ts` (`'use server'` wrappers), `slot-format.ts` (FR/kind labels);
+  reuse-first on `@pilotage/ui`, no `packages/ui` change. New "Soutien scolaire" (`HeartHandshake`) admin
+  sidebar item (paired with the S4 teacher surface).
+- **Tests:** `admin-remediation.service.spec.ts` — tenant-scope, FM-1 subject-constraint wall, FM-8 teacher
+  reuse, capacity-floor 422, RGPD aggregate-only overview.
+- **No schema change** (reuses the S1/S2/S4 `Tutor`/`TutorAvailability`/`Booking`/`RemediationPlan` models +
+  the `remediation` `NotificationKind`), **no new permission** (rides the S1-seeded `remediation.manage`),
+  no new ADR, no second queue.
+
+## Outstanding / pending for S5 (carry into S6 or human)
+
+- **`prisma db push` for the E7 tables remains pending from S1/S2** (infra was down across S1→S4) — this slice
+  adds **zero** schema, but until the additive E7 migration is applied to dev/prod the whole catalogue
+  (tutors/availabilities/bookings/plans) reads empty shells and write paths fail at the DB. **An operator must
+  apply the pending E7 `db push` before `/admin/remediation` is functional.** This is an operational
+  prerequisite that gates the entire epic, not a code defect.
+- **Quinn confirmed-finding (major, FM-8 reuse):** on the create-reuse branch, an admin "creating" a teacher
+  tutor who already has a LIVE self-published one with the create-drawer publish toggle OFF will silently
+  RETIRE it (`published: dto.published ?? false`), and the audit verb emitted is `remediation.tutor_created`
+  (not `tutor_updated` with before/after) → the retire is untraceable. Recommended S6 fix: only lower
+  `published` true→false when explicitly provided, and route the reuse through the `tutor_updated` audit.
+- **Quinn minor findings:** admin-published slots write `createdBy: tutor.id` (a Tutor id) into
+  `TutorAvailability.createdBy` where every other path writes the actor `userProfileId` (provenance corruption,
+  no FK so no crash); `overview.tutorCountBySubject` counts retired tutors so a "gap" with only a retired tutor
+  is not flagged and the "aucun intervenant publié" copy is inaccurate; `?subjectId=` on the admin list is
+  un-`ParseUUIDPipe`d (malformed value → Postgres 500 on the `uuid[] has` query); the CHANGES note's claim of a
+  hand-patched `dist/dto/remediation.js` is inaccurate (dist unmodified — harmless, both apps consume via
+  `import type`). All non-blocking; queued for S6.
+- **Sentinel residual (authz-freshness, carried from S4):** the booking-`transition` ownership wall checks
+  only `tutor.userProfileId === me` and does not re-verify the teacher CURRENTLY teaches the pupil (the E2
+  "lapsed teaching → read-only" discipline). Same-tenant, their own tutor's booking → not a breach, arguably
+  acceptable; confirm intent in S6.
+
 ## Next action
+
+Ship **S6** (`epic-slice` — loop hardening: notifications + cancellation + completion + uptake sweep,
+`[auth]`, P2-P3): close out the remediation loop — parent/tutor notification parity on admin curation
+events, booking cancellation/completion edge polish, an uptake/utilisation sweep, and the S5-deferred
+fixes (FM-8 retire audit, `createdBy` provenance, overview published-only `tutorCount`, the
+`?subjectId=` `ParseUUIDPipe`). No schema change beyond S1/S2. The S5 slice above is now shipped.
+
+<details><summary>S5 original "next action" note (now shipped)</summary>
 
 Ship **S5** (`epic-slice` — admin catalogue curation & oversight, `[auth]`, P2): `/admin/remediation`
 (`remediation.manage`) to create/approve/retire tutors (teacher-linked or external/peer) + publish
 slots via `DataTable` + `FormDrawer` + `StatusBadge`, plus a school-scoped aggregate overview (no
 child-by-name comparison). No schema change beyond S1/S2. The S4 slice above is now shipped.
+
+</details>
 
 <details><summary>S4 original "next action" note (now shipped)</summary>
 

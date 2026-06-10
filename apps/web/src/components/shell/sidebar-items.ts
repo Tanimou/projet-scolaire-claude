@@ -119,6 +119,15 @@ export const adminSidebarGroups: SidebarGroupConfig[] = [
       { key: 'assignments', icon: ClipboardCheck, label: 'Affectations', href: '/admin/assignments' },
       { key: 'alerts', icon: Bell, label: 'Alertes', href: '/admin/alerts' },
       { key: 'meeting-requests', icon: MessageSquarePlus, label: 'Demandes de RDV', href: '/admin/meeting-requests' },
+      {
+        key: 'remediation',
+        icon: HeartHandshake,
+        label: 'Soutien scolaire',
+        href: '/admin/remediation',
+        // E7-S5 catalogue curation & oversight — paired with the teacher
+        // "Soutien scolaire" surface (same HeartHandshake icon).
+        matches: /^\/admin\/remediation(\/|$)/,
+      },
     ],
   },
   {
