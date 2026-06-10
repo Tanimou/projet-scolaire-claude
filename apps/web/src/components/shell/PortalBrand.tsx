@@ -15,12 +15,12 @@ const PORTAL_LABEL: Record<PortalBrandProps['portal'], string> = {
   student: 'Élève',
 };
 
-/** Where the brand pill links (most portals → dashboard; student → "Mes notes"). */
+/** Where the brand pill links (all portals → their dashboard home). */
 const PORTAL_HOME: Record<PortalBrandProps['portal'], string> = {
   admin: '/admin/dashboard',
   teacher: '/teacher/dashboard',
   parent: '/parent/dashboard',
-  student: '/student/grades',
+  student: '/student/dashboard',
 };
 
 /**

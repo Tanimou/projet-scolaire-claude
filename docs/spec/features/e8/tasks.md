@@ -26,7 +26,7 @@
 
 ---
 
-## [ ] S1 — Student role + self-ABAC + auth wiring + "Mes notes" → ADR-021 · `[schema][auth]` · P1 · ~M
+## [x] S1 — Student role + self-ABAC + auth wiring + "Mes notes" → ADR-021 · `[schema][auth]` · P1 · ~M · **shipped**
 
 **Goal:** the security foundation — the `student` role is activated, a login resolves to **exactly one**
 `Student` (the additive link), the **student-self ABAC denies by default** (`[ownId]`/`[]`, never `null`,
@@ -114,7 +114,7 @@ the *same* S1 wall. No new security surface (the wall is proven in S1); pure rea
 
 ---
 
-## [ ] S3 — "Les annonces" + "Mon objectif": the actionable student dashboard (the visionary spine) · `[web][a11y][analytics]` · P2 · ~M
+## [x] S3 — "Les annonces" + "Mon objectif": the actionable student dashboard (the visionary spine) · `[web][a11y][analytics]` · P2 · ~M · **shipped**
 
 **Goal:** the payoff — the announcements that reach the student + a forward-looking, non-stigmatising
 dashboard that makes the information **actionable for the learner**, reusing the E6 trend + the E7

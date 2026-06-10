@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { UuidSchema } from './common';
+import { RemediationProgressDtoSchema } from './remediation';
+import { SnapshotFreshnessSchema } from './snapshot';
 
 /**
  * Student Portal — E8 (the fourth, read-only learner audience).
@@ -175,3 +177,95 @@ export const StudentAttendanceResponseSchema = z.object({
   records: z.array(StudentAttendanceRecordSchema),
 });
 export type StudentAttendanceResponse = z.infer<typeof StudentAttendanceResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// E8-S3 — "Les annonces" (receipt-scoped + self-scoped mark-read)
+// ---------------------------------------------------------------------------
+
+/**
+ * One announcement addressed to the learner in "Les annonces" (S3). A NARROWED,
+ * peer-free projection of the parent receipt read: title/body/priority/scope +
+ * the learner's OWN receipt `readAt`. It deliberately carries NO recipient
+ * roster, NO read-statistics, NO author email, NO other-class disclosure — only
+ * what the caller is addressed with. `scope` labels the audience kind; the
+ * optional `audienceLabel` is a friendly class/level name (never another child).
+ */
+export const StudentAnnouncementRowSchema = z.object({
+  id: UuidSchema,
+  title: z.string(),
+  body: z.string(),
+  /** Audience kind: school_wide | cycle_scope | grade_level_scope | class_section_scope | individual_student. */
+  scope: z.string(),
+  priority: z.enum(['normal', 'high', 'urgent']),
+  pinned: z.boolean(),
+  publishedAt: z.string().nullable(),
+  /** A friendly audience label (e.g. "Classe 4ᵉ B", "Cycle 4"), or null. Never a peer name. */
+  audienceLabel: z.string().nullable(),
+  /** Author role hint for a calm attribution line — never a staff email/PII. */
+  authorRoleHint: z.enum(['admin', 'teacher']).nullable(),
+  /** The caller's OWN receipt read timestamp; null = unread (drives the "Nouveau" marker). */
+  readAt: z.string().nullable(),
+});
+export type StudentAnnouncementRow = z.infer<typeof StudentAnnouncementRowSchema>;
+
+/**
+ * `GET /student/announcements` — "Les annonces" (S3). The caller's own addressed
+ * announcements, newest + pinned-first (server-ordered). An unlinked / no-receipt
+ * caller yields `{ data: [] }` — never a leak.
+ */
+export const StudentAnnouncementsResponseSchema = z.object({
+  data: z.array(StudentAnnouncementRowSchema),
+});
+export type StudentAnnouncementsResponse = z.infer<typeof StudentAnnouncementsResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// E8-S3 — "Mon objectif" actionable student dashboard (peer-free aggregate)
+// ---------------------------------------------------------------------------
+
+/**
+ * One per-subject trend row on the "Mon objectif" dashboard (S3) — a HAND-NARROWED
+ * projection of the parent `subjectPerf` keeping ONLY the learner's OWN figures.
+ * It STRUCTURALLY LACKS every peer-relative field: no `classAverage`, no
+ * `studentRank`, no `classSize`, no `classOverall`. The peer-comparison wall lives
+ * in the payload shape (the E4 `ParentExportJobDto` narrowing precedent), so no
+ * peer figure can leak even if the UI is wrong.
+ *
+ * `trend` is the direction word the UI renders with an icon + kind copy (`down`
+ * reads "à consolider", never "en échec"). `studentAverage` is the learner's own
+ * subject average (/20), null when not yet computable ("pas encore de tendance").
+ */
+export const StudentDashboardSubjectSchema = z.object({
+  subjectId: UuidSchema,
+  subjectName: z.string(),
+  subjectColor: z.string().nullable(),
+  /** The learner's OWN subject average (/20), null = "pas encore assez de notes". */
+  studentAverage: z.number().nullable(),
+  /** Direction of the learner's own trend — drives icon + kind, non-stigmatising copy. */
+  trend: z.enum(['up', 'flat', 'down', 'unknown']),
+});
+export type StudentDashboardSubject = z.infer<typeof StudentDashboardSubjectSchema>;
+
+/**
+ * `GET /student/dashboard` — "Mon objectif" (S3). ONE aggregate composing, behind
+ * the proven S1 student-self wall and best-effort (any block throws → that block
+ * degrades to empty, never a 500):
+ *   - `subjects`   : the E6 per-subject trend (peer-free, own figures only);
+ *   - `upcoming`   : the next assessments to prepare (the S2 producer, reused
+ *                    VERBATIM via `StudentUpcomingRowSchema`);
+ *   - `remediation`: the E7 progress line re-framed second-person (the
+ *                    `RemediationProgressDto` reused VERBATIM — already peer-free);
+ *   - `freshness`  : the additive E6 freshness envelope (optional; drives the chip).
+ *
+ * The whole response STRUCTURALLY LACKS `studentRank`/`classAverage`/
+ * `classRankTotal`/`classSize` — type-level, not just UI. `firstName` is the
+ * learner's own identity header (the warm greeting), never another child.
+ */
+export const StudentDashboardResponseSchema = z.object({
+  firstName: z.string(),
+  classSectionName: z.string().nullable(),
+  subjects: z.array(StudentDashboardSubjectSchema),
+  upcoming: z.array(StudentUpcomingRowSchema),
+  remediation: z.array(RemediationProgressDtoSchema),
+  freshness: SnapshotFreshnessSchema.optional(),
+});
+export type StudentDashboardResponse = z.infer<typeof StudentDashboardResponseSchema>;

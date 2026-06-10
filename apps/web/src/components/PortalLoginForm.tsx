@@ -18,16 +18,15 @@ const KEYCLOAK_URL = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? 'http://localhost:8
 const KEYCLOAK_REALM = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? 'pilotage-scolaire';
 
 /**
- * The default post-login landing per portal. Most portals open on their
- * dashboard; the student portal (E8-S1) ships no dashboard yet — its landing is
- * "Mes notes" (`/student/grades`). Used only when no explicit `?callbackUrl=` is
- * present, so a fresh student login never 404s on `/student/dashboard`.
+ * The default post-login landing per portal. All portals open on their dashboard
+ * home; the student portal lands on "Mon objectif" (`/student/dashboard`, the
+ * E8-S3 hero). Used only when no explicit `?callbackUrl=` is present.
  */
 const DEFAULT_LANDING: Record<PortalAccent, string> = {
   admin: '/admin/dashboard',
   teacher: '/teacher/dashboard',
   parent: '/parent/dashboard',
-  student: '/student/grades',
+  student: '/student/dashboard',
 };
 
 function buildKeycloakResetUrl(portal: PortalAccent): string {

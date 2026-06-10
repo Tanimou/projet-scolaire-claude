@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | S1 | Student role + self-ABAC + auth wiring + "Mes notes" → **ADR-021** | `[schema][auth]` | P1 | 🟢 shipped — green (all blockers reconciled; build 7/7; auto-merged) | this run |
 | S2 | "À venir" + "Mon assiduité" | `[auth][rgpd][abac]` | P1 | 🟢 shipped — green (build 7/7, typecheck 11/11, spec 6/6) | this run |
-| S3 | Announcements + "Mon objectif" actionable student dashboard (E6 trend + E7 progress) | `[web][a11y][analytics]` | P2 | ⬜ not started | — |
+| S3 | Announcements + "Mon objectif" actionable student dashboard (E6 trend + E7 progress) | `[web][a11y][analytics]` | P2 | 🟢 shipped — green | this run |
 
 ## What landed this run (spec run)
 
@@ -172,9 +172,64 @@ permission / no new ADR**:
 > intake + the S2 story spec landed before the cap); the lock-holding session implemented the slice directly
 > from the story spec and ran the single build + typecheck + targeted spec.
 
+## What landed (E8-S3, this run — the final E8 slice)
+
+Two read-only student surfaces behind the proven S1/S2 student-self wall + the additive student-receipt
+rule. **No schema, no new permission (the S1-seeded `announcements.read.self` + `analytics.read.self`
+already cover it), no new ADR, no second queue, no new metric.**
+
+- **`GET /student/announcements`** (`announcements.read.self`) — the caller's OWN `AnnouncementReceipt`
+  rows for published, non-expired, tenant-scoped announcements, newest + pinned-first. Mirrors the parent
+  receipt projection but NARROWED to the peer-free `StudentAnnouncementRow` (NO recipient roster, NO
+  read-stats, NO author email — only title/body/scope/priority/`audienceLabel`/`authorRoleHint`/`readAt`).
+  Unlinked / no-receipt → `{ data: [] }`.
+- **`POST /student/announcements/:id/read`** (`announcements.read.self`) — the ONE student mutation:
+  flips the caller's OWN receipt `readAt` (idempotent), keyed on `(announcementId, me.id)` so it can only
+  ever touch the caller's own receipt (`:id` is an announcement id, not a student id → no IDOR); 404 when
+  no receipt (never reveals existence).
+- **`GET /student/dashboard`** (`analytics.read.self`) — "Mon objectif", ONE aggregate composing
+  best-effort (each block in its own try/catch → `[]`, the endpoint always 200s): **(a)** a SELF-ONLY
+  per-subject trend read DIRECTLY from `StudentSubjectSnapshot` (year-row, `termId=null`) with a single
+  grade-based live fall-through — **NOT** `parentDashboard` (the architect P0-2 binding constraint: the
+  parent producer computes `classAverage`/`studentRank`/`classSize` via an O(class) scan; the student
+  path runs none of it); **(b)** the next-3 upcoming from `parentUpcoming` re-scoped to self; **(c)** the
+  E7 `RemediationService.remediationProgress` line reused verbatim (already peer-free), re-framed
+  second-person in the UI. The `StudentDashboardResponse` DTO **structurally lacks** every peer-relative
+  field — a contract/type-level wall, proven by a no-peer-key assertion in the spec.
+- **The §5 design gap (FR-S3-7) closed:** `AnnouncementRecipientsService.computeRecipients` now additively
+  unions each enrolled+linked student's OWN `UserProfile` into `class_section_scope`/`grade_level_scope`/
+  `cycle_scope`/`individual_student` (via a new `studentsOwnProfiles` helper, guarded by
+  `userProfileId != null`) so a student actually receives receipts. Strictly additive — guardians/teachers
+  receive exactly what they did before; an unlinked or non-class student materialises nothing new. **No
+  back-fill** — only announcements published AFTER this change materialise student receipts (documented
+  MVP limitation). Pinned by a new `announcements.service.spec.ts` (3 regression cases).
+- **FE:** `/student/dashboard` ("Mon objectif" hero — `SubjectTrendCard` Block A with icon+text trend
+  directions, the next-3 "À préparer" preview Block B, the second-person `StudentSupportStrip` Block C
+  reusing the E3 emerald IMPROVEMENT lane, the optional `FreshnessChip`) + `/student/announcements`
+  (`StudentAnnouncementCard` with the violet unread accent + the self-scoped mark-read `'use server'`
+  action + a `role=status` live region only on the read transition). Two new `studentSidebarItems`
+  ("Mon objectif" first / "Annonces" last); `PORTAL_LANDING.student` re-pointed to `/student/dashboard`
+  (the hero) — `/student/grades` stays valid. Reuse-first on `@pilotage/ui` — **no `packages/ui` change**.
+- **Wall on every read:** `resolveSelf` (server-derived `userProfileId === me.id`, no `:studentId` path
+  param) → `canAccessStudent(ownId)` defence-in-depth → `ForbiddenException`. Tenant-scoped. Extended
+  `student-portal.service.spec.ts` (announcements narrowing/self-scope, mark-read idempotency+404,
+  dashboard composition + best-effort degrade + the peer-field-absence assertion + snapshot live
+  fall-through + unlinked).
+
+> **Note on inputs:** this run reconciled a divergence between the story spec (§6 said reuse
+> `parentDashboard` + project peer fields out) and the architect ruling + pre-mortem (P0-2 binding: NEVER
+> call `parentDashboard` — it ships the peer fields + the O(class) scan). The architect ruling won: the
+> dashboard trend is a purpose-built self-only snapshot reader; `RemediationService` is injected directly
+> (DI-safe — `RemediationModule` exports it, no edge back to student-portal). The contracts use the more
+> constraining `trend: 'up'|'flat'|'down'|'unknown'` direction enum rather than a raw delta.
+
+## Epic status
+
+**E8 — Student Portal is now COMPLETE — all 3 slices shipped.** Operator pre-req unchanged: activate the
+`student` Keycloak realm-role + a demo user in `infra/keycloak/realm-export.json` and run the additive S1
+`prisma db push` (`Student.userProfileId`) before the portal is reachable end-to-end at runtime.
+
 ## Next action
 
-Ship **E8-S3** (`epic-slice`, `[web][a11y][analytics]`, P2): "Les annonces" + the visionary **"Mon
-objectif"** student dashboard (E6 trend + E7 progress, re-framed second-person), building on the now-green
-S1/S2. Operator pre-req unchanged: activate the `student` realm-role + demo user and run the additive S1
-`prisma db push`.
+Advance to the next epic per `bmad/roadmap.md` (E8 done → the next `in-progress`/`next` epic; E7
+remediation loop or a Tier-4 filler).
