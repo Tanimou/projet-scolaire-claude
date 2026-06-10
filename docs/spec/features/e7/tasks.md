@@ -131,7 +131,7 @@ reading the **trend delta vs the plan baseline** from the E6 snapshot.
 
 ---
 
-## [ ] S4 — Teacher capacity management + booking transitions · `[auth]` · P2 · ~S-M
+## [x] S4 — Teacher capacity management + booking transitions · `[auth]` · P2 · ~S-M · ✅ shipped
 
 **Goal:** the teacher side — a teacher publishes/edits their own availability and marks booking outcomes.
 

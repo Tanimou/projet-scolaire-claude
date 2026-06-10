@@ -32,6 +32,9 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PromoteRemediationPlanDto } from './dto/promote-remediation-plan.dto';
 import { RemediationService } from './remediation.service';
+import { TeacherRemediationService } from './teacher-remediation.service';
+import { TransitionBookingDto } from './dto/transition-booking.dto';
+import { UpsertTeacherAvailabilityDto } from './dto/upsert-teacher-availability.dto';
 
 /**
  * E7-S1 — parent-facing remediation surface.
@@ -59,6 +62,7 @@ export class RemediationController {
   constructor(
     private readonly remediation: RemediationService,
     private readonly bookings: BookingService,
+    private readonly teacher: TeacherRemediationService,
     private readonly notifications: NotificationsService,
     private readonly users: UserSyncService,
     private readonly ctx: SchoolContextService,
@@ -340,19 +344,202 @@ export class RemediationController {
     return result.booking;
   }
 
+  // ===========================================================================
+  // E7-S4 — Teacher capacity management + booking transitions.
+  //
+  // A teacher publishes/edits the availability of their OWN auto-derived `Tutor`
+  // and moves their pupils' bookings through confirm/decline/honoured/no-show.
+  // EVERY route is ownership-walled (the caller's own tutor only, their pupils
+  // only — the E2 teacher-reply idiom) and rides `remediation.read` (no new
+  // permission). Each write appends a `remediation.booking_<status>` /
+  // `remediation.availability_<created|updated>` audit row. No schema change.
+  // ===========================================================================
+
+  /**
+   * The teacher "Mes créneaux de soutien" surface payload — the caller's own
+   * tutor (or a null shell before any slot is published), its availabilities
+   * with live booked counts, and the bookings on their slots (ownership-walled).
+   */
+  @Get('teacher')
+  @RequiresPermission('remediation.read')
+  @ApiOperation({ summary: "Teacher remediation surface — own tutor slots + bookings (ownership-walled)" })
+  async teacherSurface(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    const me = await this.users.ensureUser(jwt);
+    return this.teacher.getSurface({ tenantId: me.tenantId, userProfileId: me.id });
+  }
+
+  /**
+   * Publish one of the caller's OWN availability slots. The teacher's `Tutor`
+   * record is resolved/created server-side from the caller; `subjectId` must be a
+   * subject the caller CURRENTLY teaches (ownership wall → 403). Slot shape is
+   * re-validated (422). Append-only `remediation.availability_created` audit.
+   */
+  @Post('teacher/availabilities')
+  @RequiresPermission('remediation.read')
+  @ApiOperation({ summary: 'Publish a remediation availability slot (own tutor, subject-owned)' })
+  async publishAvailability(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Body() dto: UpsertTeacherAvailabilityDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    const result = await this.teacher.upsertAvailability({
+      tenantId: me.tenantId,
+      schoolId,
+      userProfileId: me.id,
+      dto,
+    });
+    await this.writeAvailabilityAudit(jwt, me, 'remediation.availability_created', {
+      id: result.availability.id,
+      tutorId: result.tutorId,
+    });
+    return result.availability;
+  }
+
+  /**
+   * Edit one of the caller's OWN availability slots (capacity / time / active).
+   * Re-scoped to the caller's own tutor (404 otherwise — ownership wall). The
+   * `subjectId` must still be a subject the caller teaches. Append-only
+   * `remediation.availability_updated` audit.
+   */
+  @Patch('teacher/availabilities/:id')
+  @RequiresPermission('remediation.read')
+  @ApiOperation({ summary: 'Edit a remediation availability slot (own tutor only)' })
+  async editAvailability(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpsertTeacherAvailabilityDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    const result = await this.teacher.upsertAvailability({
+      tenantId: me.tenantId,
+      schoolId,
+      userProfileId: me.id,
+      availabilityId: id,
+      dto,
+    });
+    await this.writeAvailabilityAudit(jwt, me, 'remediation.availability_updated', {
+      id: result.availability.id,
+      tutorId: result.tutorId,
+    });
+    return result.availability;
+  }
+
+  /**
+   * Move a booking on the caller's OWN tutor through the teacher lifecycle
+   * (confirm / decline / honoured / no-show / propose-alternative). Ownership
+   * wall re-checked server-side BEFORE the write (404-before-403); an illegal
+   * transition → 409; a missing note for `proposed_alternative` → 422. Each
+   * transition writes an append-only `remediation.booking_<status>` audit row +
+   * best-effort notifies the parent (the freed/confirmed seat). History is never
+   * deleted — the status flip IS the lifecycle.
+   */
+  @Patch('teacher/bookings/:id/transition')
+  @RequiresPermission('remediation.read')
+  @ApiOperation({ summary: 'Transition a booking (own tutor only, ownership-walled, audited)' })
+  async transitionBooking(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Body() dto: TransitionBookingDto,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { booking, effectiveStatus, bookedBy } = await this.teacher.transition({
+      tenantId: me.tenantId,
+      userProfileId: me.id,
+      bookingId: id,
+      toStatus: dto.toStatus,
+      note: dto.note,
+    });
+
+    // The audit action carries the teacher's VERB (`no_show` is distinguished
+    // from `declined` here — the append-only audit row IS the history, per the
+    // E1-S1 ruling; the persisted enum status stays `declined` for a no-show).
+    await this.writeBookingAudit(
+      jwt,
+      me,
+      `remediation.booking_${dto.toStatus}` as `remediation.booking_${string}`,
+      {
+        id: booking.id,
+        planId: booking.planId,
+        availabilityId: booking.availabilityId,
+        sessionAt: booking.sessionAt,
+        studentId: booking.studentId,
+        status: booking.status,
+      },
+    );
+
+    // Best-effort notify the parent of the decision (never blocks the write).
+    try {
+      const verb =
+        dto.toStatus === 'confirmed'
+          ? 'confirmée'
+          : dto.toStatus === 'completed'
+            ? 'honorée'
+            : dto.toStatus === 'proposed_alternative'
+              ? 'mise à jour — un autre créneau est proposé'
+              : 'mise à jour';
+      await this.notifications.createMany([
+        {
+          tenantId: me.tenantId,
+          userProfileId: bookedBy,
+          kind: 'remediation',
+          title: 'Votre réservation de soutien',
+          body: `Votre réservation de soutien a été ${verb}.`,
+          link: `/parent/remediation/${booking.planId}`,
+          sourceType: 'booking',
+          sourceId: `${booking.id}:${effectiveStatus}`,
+        },
+      ]);
+    } catch (err) {
+      this.logger.error(
+        `Best-effort transition notify failed for booking ${booking.id} (booking unaffected): ${(err as Error).message}`,
+      );
+    }
+
+    return booking;
+  }
+
   // ----- best-effort side-effects (never fail/roll back the booking) ----------
+
+  private async writeAvailabilityAudit(
+    jwt: KeycloakJwtPayload,
+    me: { id: string; tenantId: string },
+    action: 'remediation.availability_created' | 'remediation.availability_updated',
+    availability: { id: string; tutorId: string },
+  ): Promise<void> {
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          tenantId: me.tenantId,
+          actorId: me.id,
+          actorRole,
+          portal,
+          action,
+          resourceType: 'tutor_availability',
+          resourceId: availability.id,
+          after: { tutorId: availability.tutorId } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write ${action} audit row for availability ${availability.id} (slot unaffected): ${(err as Error).message}`,
+      );
+    }
+  }
 
   private async writeBookingAudit(
     jwt: KeycloakJwtPayload,
     me: { id: string; tenantId: string },
-    action: 'remediation.booking_created' | 'remediation.booking_cancelled',
+    action: `remediation.booking_${string}`,
     booking: {
       id: string;
       planId: string;
       availabilityId: string;
       sessionAt: string;
       studentId: string;
-      tutorId: string;
+      tutorId?: string;
       status: string;
     },
   ): Promise<void> {
@@ -372,7 +559,7 @@ export class RemediationController {
             availabilityId: booking.availabilityId,
             sessionAt: booking.sessionAt,
             studentId: booking.studentId,
-            tutorId: booking.tutorId,
+            ...(booking.tutorId ? { tutorId: booking.tutorId } : {}),
             status: booking.status,
           } as Prisma.InputJsonValue,
         },

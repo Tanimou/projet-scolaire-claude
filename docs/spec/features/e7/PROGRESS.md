@@ -11,7 +11,7 @@
 | S1 | Schema + alert → RemediationPlan promotion + read-only catalogue | `[schema][auth]` | P1 | ✅ shipped | #131 |
 | S2 | Availability + Booking (concurrency guard) → **ADR-020** | `[schema][auth][concurrency]` | P1 | ✅ shipped | #132 |
 | S3 | Parent remediation progress strip (measured improvement) | `[web][a11y]` | P2 | ✅ shipped | this PR |
-| S4 | Teacher capacity management + booking transitions | `[auth]` | P2 | ⬜ not started | — |
+| S4 | Teacher capacity management + booking transitions | `[auth]` | P2 | ✅ shipped | this PR |
 | S5 | Admin catalogue curation & oversight | `[auth]` | P2 | ⬜ not started | — |
 | S6 | Loop hardening: notifications + cancellation + completion + uptake sweep | `[auth]` | P2-P3 | ⬜ not started | — |
 
@@ -240,12 +240,96 @@ now internally consistent.
   improved-lane `role=status` live region + the anchor-level `aria-label` overriding inner payoff text on
   the deep-link) — non-blocking, queued for the S6 hardening / a11y pass.
 
+## What landed in S4 (this run — `epic-slice` — teacher capacity management + booking transitions, `[auth]`)
+
+- **Contracts (`packages/contracts/src/dto/remediation.ts` + the hand-patched CJS
+  `dist/dto/remediation.js`):** the additive S4 DTOs — `TeacherAvailabilityDto` (slot + live
+  `bookedCount`), `TeacherTutorDto` (the caller's own tutor or a null shell), `TeacherBookingDto`
+  (booking + pupil/subject context), `TeachableSubjectDto`, `TeacherRemediationDto` (the aggregate),
+  `UpsertTeacherAvailabilityDto`, `TransitionBookingDto`, and the `TEACHER_BOOKING_TRANSITION` tuple.
+  **Types-only on the API side** (`import type`) — no new runtime *value* import in the API, so no
+  `contracts/dist` rebuild is required for S4 to function (the dist was still patched for consistency).
+- **API — ownership-walled teacher surface (`apps/api/src/modules/remediation/`):** a new
+  `TeacherRemediationService` + 4 controller routes on `RemediationController`, ALL gated by
+  `remediation.read` (NO new permission) + the **ownership wall** (the E2 teacher-reply idiom):
+  - `GET /remediation/teacher` — the caller's OWN tutor (resolved by `userProfileId === me`, type
+    `teacher`) + its availabilities with live `bookedCount` (ONE grouped Booking query over the
+    resolved next instances, no N+1) + the bookings on the caller's tutor (`tutorId === my tutor`)
+    + the caller's teachable subjects (the publish-form dropdown — distinct subjects from the active-
+    year teaching assignments). A teacher with no tutor yet gets a null-tutor shell (never queries
+    bookings → no leak surface).
+  - `POST /remediation/teacher/availabilities` — publish a slot. The teacher's `Tutor` row is
+    resolved/lazily-created server-side from the caller (idempotent on `(tenant, userProfileId,
+    type=teacher)`, `published:false` until an admin publishes it in S5); `subjectId` MUST be a
+    subject the caller CURRENTLY teaches (ownership wall → 403); slot shape re-validated (422 on a
+    malformed recurring/one-off). Append-only `remediation.availability_created` audit.
+  - `PATCH /remediation/teacher/availabilities/:id` — edit own slot (capacity/time/active),
+    re-scoped to the caller's own tutor (404 otherwise). Append-only `remediation.availability_updated`.
+  - `PATCH /remediation/teacher/bookings/:id/transition` — move a booking through the teacher
+    lifecycle, **ownership wall re-checked BEFORE the write (404-before-403)**. State machine:
+    `requested → confirmed | declined | proposed_alternative | no_show`; `confirmed → completed |
+    no_show | declined | proposed_alternative`; any other source status is terminal → deterministic
+    **409** (illegal source). `proposed_alternative` requires a note → **422**. **`no_show` is mapped
+    onto `declined` + an "Absent·e" note** (the `BookingStatus` enum carries no `no_show` value and
+    **S4 ships NO schema change**) — the seat frees because `declined` is not an active status; the
+    no-show distinction is preserved in the audit verb `remediation.booking_no_show`. The status flip
+    itself is **concurrency-safe** — a **from-status-guarded `updateMany`** (`where: { id, tenantId,
+    status: existing.status }`, the ADR-020 idiom) so two concurrent transitions can't both win: the
+    first flips the row, the second matches zero rows → deterministic **409**, then a tenant-scoped
+    re-read builds the DTO. Append-only `remediation.booking_<status>` audit + best-effort parent
+    notify (`createMany`, kind `remediation`, no new queue) targeting the booking's `bookedBy`.
+
+> **In-flight gate fix (this run):** the test-architect/security panel confirmed the transition write
+> was originally an unguarded `prisma.booking.update({ where: { id } })` — a TOCTOU last-writer-wins on
+> the load-bearing concurrency invariant (FR5(d)/AC8). It was replaced with the from-status-guarded
+> `updateMany` above (deterministic 409 on a concurrent double-transition) before land. Typecheck PASS.
+- **Web (`apps/web/src/app/teacher/remediation/`):** the **"Mes créneaux de soutien"** surface —
+  a server-component `page.tsx` (thin client over the ONE aggregate, KpiCards + published-slots grid
+  with `bookedCount/capacity` + the booking inbox), `remediation-actions.ts` (`'use server'` wrappers
+  → publish/edit/transition, revalidating ONLY `/teacher/remediation`), `PublishSlotDrawer.tsx`
+  (`FormDrawer` recurring/one-off slot publish, subject dropdown from `teachableSubjects`, capacity,
+  keyboard + focus-trap + `aria-live`), `BookingsTable.tsx` (the inbox with confirm/honoured/absent/
+  decline/propose `useTransition` actions, a `role=status` live region, a focus-trapped propose-note
+  drawer), and pure `slot-format.ts` (FR labels + kind non-stigmatising status meta). New
+  **"Soutien scolaire"** (`HeartHandshake`) teacher sidebar item. The S2 booking notification deep-link
+  `/teacher/remediation` now resolves to this surface.
+- **Tests:** `teacher-remediation.service.spec.ts` — the ownership wall (null-tutor shell never queries
+  bookings; surface scoped to `userProfileId === me`), the publish wall (403 no-profile / 403
+  subject-not-taught / 422 malformed slot / lazy tutor+slot create unpublished / 404 editing another
+  tutor's slot), and the transition machine (404 wrong-owner wall / 409 illegal / 422 propose-without-
+  note / confirm happy path returning the parent booker / `no_show`→`declined`+Absent / honoured).
+- **No schema change** (reuses the S1/S2 `Tutor`/`TutorAvailability`/`Booking` models + the
+  `remediation` `NotificationKind`), **no new permission** (rides `remediation.read` + the ownership
+  wall), **no new endpoint family beyond `/remediation/teacher/*`**, no new ADR (no new architectural
+  decision), no second queue.
+
+## Outstanding / pending for S4 (carry into S5 or human)
+
+- **`prisma db push` for the E7 tables remains pending from S1/S2** (infra was down) — until applied
+  the teacher surface reads empty (`GET /remediation/teacher` returns a null-tutor shell, never errors;
+  publishing a slot will fail at the DB until the tables exist).
+- **No controller-level integration test** on the teacher routes (the wall/audit/notify wiring is
+  proven at the service layer; `apps/web` has no unit-test runner — consistent with S1/S3). A teacher
+  tutor becomes parent-discoverable only once an admin **publishes** it (S5) — a teacher-published slot
+  is visible to the teacher immediately but unpublished by default (admin curation is the trust gate).
+- **`no_show` is recorded as `declined` + an "Absent·e" note** (no enum value, no schema change). If a
+  first-class `no_show` status is later wanted, that is an additive enum value (a future schema slice).
+
 ## Next action
+
+Ship **S5** (`epic-slice` — admin catalogue curation & oversight, `[auth]`, P2): `/admin/remediation`
+(`remediation.manage`) to create/approve/retire tutors (teacher-linked or external/peer) + publish
+slots via `DataTable` + `FormDrawer` + `StatusBadge`, plus a school-scoped aggregate overview (no
+child-by-name comparison). No schema change beyond S1/S2. The S4 slice above is now shipped.
+
+<details><summary>S4 original "next action" note (now shipped)</summary>
 
 Ship **S4** (`epic-slice` — teacher capacity management + booking transitions, `[auth]`, P2): the
 teacher surface to publish/adjust `TutorAvailability` capacity and move bookings through their
 lifecycle, riding `remediation.read` + the ownership wall (the E2 teacher-reply idiom). The S3 slice
 above is now shipped.
+
+</details>
 
 <details><summary>S3 original "next action" note (now shipped)</summary>
 

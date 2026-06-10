@@ -9,6 +9,7 @@ import { BookingIndexBootstrap } from './booking-index.bootstrap';
 import { BookingService } from './booking.service';
 import { RemediationController } from './remediation.controller';
 import { RemediationService } from './remediation.service';
+import { TeacherRemediationService } from './teacher-remediation.service';
 
 /**
  * E7-S1 — Remediation & Tutoring loop (parent surface).
@@ -27,7 +28,12 @@ import { RemediationService } from './remediation.service';
 @Module({
   imports: [AuthModule, SchoolStructureModule, StudentsModule, NotificationsModule],
   controllers: [RemediationController],
-  providers: [RemediationService, BookingService, BookingIndexBootstrap],
+  providers: [
+    RemediationService,
+    BookingService,
+    TeacherRemediationService,
+    BookingIndexBootstrap,
+  ],
   exports: [RemediationService, BookingService],
 })
 export class RemediationModule {}

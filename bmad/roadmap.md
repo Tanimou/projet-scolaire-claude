@@ -278,6 +278,30 @@ counts (PM-1/2/3/4, architect C-2); FR1/FR2/FR3 explicitly authorise falling thr
 can't hold. The trigger-driven `freshness` (open-trigger probe over every class scope) is the visible win
 the S4 chip renders. No schema/endpoint/permission/queue/contract change.
 
+> **E7 update (this run): E7-S4 is now shipped** (`epic-slice` — P2 `[auth][api][web][remediation][abac]`,
+> needs human review): the **teacher capacity-management + booking-transition** surface. A new
+> ownership-walled `TeacherRemediationService` (590L) + 4 routes on `RemediationController`
+> (`GET /remediation/teacher`, `POST` + `PATCH /remediation/teacher/availabilities[/:id]`,
+> `PATCH /remediation/teacher/bookings/:id/transition`) let a teacher publish/edit the availability of
+> their OWN auto-derived `Tutor` and move their pupils' bookings through `confirm | decline | completed |
+> no_show | proposed_alternative`. **Every route rides `remediation.read` + the E2 ownership wall** (no new
+> permission): publish resolves `teacherProfile.findFirst(userProfileId === me)` (no profile → 403) then
+> re-walls the `subjectId` against a *current* active-year teaching assignment; slot-edit + transition
+> re-scope to the caller's own tutor (404-before-403). The **booking-transition flip is concurrency-safe**:
+> a from-status-guarded `updateMany` (the ADR-020 idiom) makes a concurrent double-transition a deterministic
+> **409**, never a silent last-writer-wins double-flip. `no_show` maps onto `declined` + an "Absent·e" note
+> (the `BookingStatus` enum carries no `no_show` value) so the seat frees with **no schema change**; the
+> distinction is preserved in the append-only `remediation.booking_no_show` audit row. Append-only audit +
+> best-effort parent `NotificationsService.createMany` (kind `remediation`, no new queue) on every write; one
+> grouped Booking query for live seat counts (no N+1). FE = the **"Mes créneaux de soutien"** teacher surface
+> (server-component `page.tsx` over the ONE aggregate, `PublishSlotDrawer`, `BookingsTable` inbox with a
+> `role=status` live region, a "Soutien scolaire" sidebar item), reuse-first on `@pilotage/ui` (no
+> `packages/ui` change). **No schema, no new permission, no new ADR, no second queue.** **Pending (human/infra):**
+> the S1/S2 `prisma db push` for the E7 tables is still unapplied (infra was down) — until then the teacher
+> surface reads an empty null-tutor shell and publishing fails at the DB. Next slice → **E7-S5** (`epic-slice`
+> `[auth]` P2: admin catalogue curation & oversight — `/admin/remediation` on `remediation.manage` to
+> create/approve/retire tutors + publish slots, plus a school-scoped aggregate overview, no schema change).
+
 ### E7 — Remediation & Tutoring loop · `in-progress` · ~L
 **Why:** closes alert → diagnosis → **resource** → **measured improvement**: turn a recommendation into a
 real, bookable tutoring resource, then watch the child improve on the parent dashboard.
@@ -364,8 +388,9 @@ ADR** (additive optional field, reuse-first, no new architectural decision). Tes
 `packages/contracts/dist` (the runtime `IMPROVEMENT_DELTA_THRESHOLD` value import) via the single
 post-Workflow `pnpm build`; the S1/S2 `prisma db push` still pending (until applied the producer returns
 `[]` → no strip, never errors); and the missing consumer-seam test on the Analytics→Remediation best-effort
-wiring (recommended for S4/hardening). **Next slice → S4** (`epic-slice` `[auth]`: teacher capacity
-management + booking transitions, riding `remediation.read` + the E2 ownership wall).
+wiring (recommended for S4/hardening). **S4 shipped (this run); next slice → S5** (`epic-slice` `[auth]`:
+admin catalogue curation & oversight — `/admin/remediation` on `remediation.manage`, no schema change). See
+the **E7 update** note above for the S4 detail.
 
 ### E8 — Student Portal · `proposed` · ~M
 **Why:** the cahier's future "Portail élève." New Keycloak `student` role + read-only student views

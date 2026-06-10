@@ -227,3 +227,138 @@ export type RemediationProgressDto = z.infer<typeof RemediationProgressDtoSchema
 /** The additive `remediation` block on the parent-dashboard aggregate envelope. */
 export const RemediationProgressListDtoSchema = z.array(RemediationProgressDtoSchema);
 export type RemediationProgressListDto = z.infer<typeof RemediationProgressListDtoSchema>;
+
+// ---------------------------------------------------------------------------
+// E7-S4 — Teacher capacity management + booking transitions
+// ---------------------------------------------------------------------------
+
+/**
+ * The teacher's OWN auto-derived `Tutor` record + their published availability
+ * slots, surfaced on the "Mes créneaux de soutien" page. A teacher tutor is the
+ * one whose `userProfileId === caller` (the ownership wall) — a teacher never
+ * sees another tutor's slots. `tutorId` is null until the teacher publishes
+ * their first slot (the surface lazily creates the tutor row server-side).
+ */
+export const TeacherAvailabilityDtoSchema = z.object({
+  id: UuidSchema,
+  kind: z.enum(AVAILABILITY_KIND),
+  weekday: z.number().int().min(0).max(6).nullable(),
+  startTime: z.string().nullable(),
+  endTime: z.string().nullable(),
+  startsAt: z.string().nullable(),
+  endsAt: z.string().nullable(),
+  capacity: z.number().int().positive(),
+  active: z.boolean(),
+  /** Active bookings (requested+confirmed) on this slot's next instance. */
+  bookedCount: z.number().int().nonnegative(),
+});
+export type TeacherAvailabilityDto = z.infer<typeof TeacherAvailabilityDtoSchema>;
+
+/**
+ * The teacher remediation surface payload (S4) — the caller's own tutor record
+ * (or null before any slot is published), its subjects, published flag, and its
+ * availability slots with live booked counts. Assembled in ONE aggregate read.
+ */
+export const TeacherTutorDtoSchema = z.object({
+  /** Null until the teacher publishes their first slot (lazy tutor creation). */
+  tutorId: UuidSchema.nullable(),
+  displayName: z.string().nullable(),
+  /** Whether the admin has published the tutor to the parent catalogue. */
+  published: z.boolean(),
+  subjectIds: z.array(UuidSchema),
+  availabilities: z.array(TeacherAvailabilityDtoSchema),
+});
+export type TeacherTutorDto = z.infer<typeof TeacherTutorDtoSchema>;
+
+/**
+ * A booking enriched with the context a teacher needs in their inbox: the pupil's
+ * name, the subject, the plan target, and the resolved session datetime. The
+ * teacher only ever sees bookings whose `tutor.userProfileId === caller`
+ * (the ownership wall, applied server-side) — never another tutor's bookings.
+ */
+export const TeacherBookingDtoSchema = z.object({
+  id: UuidSchema,
+  planId: UuidSchema,
+  availabilityId: UuidSchema,
+  studentId: UuidSchema,
+  studentName: z.string(),
+  subjectId: UuidSchema.nullable(),
+  subjectName: z.string().nullable(),
+  sessionAt: z.string(),
+  status: z.enum(BOOKING_STATUS),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type TeacherBookingDto = z.infer<typeof TeacherBookingDtoSchema>;
+
+/** A subject the teacher currently teaches — the publish-form dropdown options. */
+export const TeachableSubjectDtoSchema = z.object({
+  id: UuidSchema,
+  code: z.string().nullable(),
+  name: z.string(),
+});
+export type TeachableSubjectDto = z.infer<typeof TeachableSubjectDtoSchema>;
+
+/** Aggregate response for `GET /remediation/teacher` (the teacher surface). */
+export const TeacherRemediationDtoSchema = z.object({
+  tutor: TeacherTutorDtoSchema,
+  bookings: z.array(TeacherBookingDtoSchema),
+  /** Subjects the teacher currently teaches — the publish-slot subject options. */
+  teachableSubjects: z.array(TeachableSubjectDtoSchema),
+});
+export type TeacherRemediationDto = z.infer<typeof TeacherRemediationDtoSchema>;
+
+/**
+ * Request body for `POST /remediation/teacher/availabilities` (publish a slot,
+ * S4). The teacher's own tutor record is resolved/created SERVER-side from the
+ * caller (never client-supplied), exactly the "parent passes only the alert id"
+ * discipline. A `recurring_weekly` slot needs `weekday`+`startTime`(+`endTime`);
+ * a `one_off` needs `startsAt`(+`endsAt`). `subjectId` scopes which subject the
+ * teacher offers support in (the catalogue filter); it must be a subject the
+ * teacher currently teaches (ownership wall, re-checked server-side).
+ */
+export const UpsertTeacherAvailabilityDtoSchema = z
+  .object({
+    kind: z.enum(AVAILABILITY_KIND),
+    subjectId: UuidSchema,
+    weekday: z.number().int().min(0).max(6).nullable().optional(),
+    startTime: z.string().nullable().optional(),
+    endTime: z.string().nullable().optional(),
+    startsAt: z.string().nullable().optional(),
+    endsAt: z.string().nullable().optional(),
+    capacity: z.number().int().min(1).max(50).default(1),
+    active: z.boolean().default(true),
+  })
+  .refine(
+    (v) =>
+      v.kind === 'recurring_weekly'
+        ? v.weekday != null && !!v.startTime
+        : !!v.startsAt,
+    { message: 'recurring_weekly needs weekday+startTime; one_off needs startsAt' },
+  );
+export type UpsertTeacherAvailabilityDto = z.infer<typeof UpsertTeacherAvailabilityDtoSchema>;
+
+/**
+ * The teacher booking transitions (S4) — a NARROWED subset of `BookingStatus`
+ * the tutor-owner may move a booking to. A teacher confirms a request, declines
+ * it, marks the session honoured (`completed`), records a no-show
+ * (`no_show` — mapped onto `declined` with a "Absent" note server-side, since
+ * the enum carries no `no_show` value and S4 ships NO schema change), or proposes
+ * another slot (`proposed_alternative`, which requires a `note`). Parent cancel
+ * uses the dedicated `PATCH /remediation/bookings/:id/cancel` (S2), not this verb.
+ */
+export const TEACHER_BOOKING_TRANSITION = [
+  'confirmed',
+  'declined',
+  'completed',
+  'no_show',
+  'proposed_alternative',
+] as const;
+export type TeacherBookingTransition = (typeof TEACHER_BOOKING_TRANSITION)[number];
+
+/** Request body for `PATCH /remediation/teacher/bookings/:id/transition` (S4). */
+export const TransitionBookingDtoSchema = z.object({
+  toStatus: z.enum(TEACHER_BOOKING_TRANSITION),
+  note: z.string().trim().max(280).optional(),
+});
+export type TransitionBookingDto = z.infer<typeof TransitionBookingDtoSchema>;

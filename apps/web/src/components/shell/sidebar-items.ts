@@ -184,6 +184,14 @@ export const teacherSidebarItems: SidebarItemConfig[] = [
     // view subroutes.
     matches: /^\/teacher\/conversations(\/|$)/,
   },
+  {
+    key: 'remediation',
+    icon: HeartHandshake,
+    label: 'Soutien scolaire',
+    href: '/teacher/remediation',
+    // E7-S4 "Mes créneaux de soutien" — publish availability + manage bookings.
+    matches: /^\/teacher\/remediation(\/|$)/,
+  },
   { key: 'reports', icon: BarChart3, label: 'Rapports', href: '/teacher/reports' },
   { key: 'notifications', icon: Bell, label: 'Notifications', href: '/teacher/notifications' },
   { key: 'settings', icon: Settings, label: 'Paramètres', href: '/teacher/settings' },
