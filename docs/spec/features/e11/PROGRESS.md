@@ -7,6 +7,34 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening #8 (2026-06-11, `polish` run — P2 `[imports][oneroster][data-integrity][enrollments][reconciliation]`, needs human review).**
+> **Closes the Post-ship hardening #5 recorded follow-on (iii)** — a real data-integrity defect: the enrollments
+> class resolution keyed on `<academicYearId>:<name>` only, **dropping `gradeLevelId`**. A class name is unique
+> only PER `(academicYearId, gradeLevelId)` (`@@unique([academicYearId, gradeLevelId, name])`, the same uniqueness
+> `classesHandler` enforces via `classNamesPerYearLevel`), so two same-named sections in different grade levels (a
+> "6eA" in 6ème and a stray "6eA" in 5ème) shared the `classSectionsByName` Map key → last-`set()`-wins, silently
+> overwriting the earlier entry. An enrollments row carries ONLY `className` (no grade level by contract), so it
+> would resolve to the **arbitrary last-created** class and **silently enroll the student into the wrong grade
+> level's class**. **Fix (additive, byte-parity for the unambiguous common case):** `buildImportCaches`
+> (`packages/imports-core/src/caches.ts`) now records every `<year>:<name>` key seen in >1 grade level into a new
+> additive `ImportCaches.classSectionsByNameAmbiguous: Set<string>`; the `enrollmentsHandler`'s three class lookups
+> (`validateRow`/`applyRow`/`resolveConflict`, `packages/imports-core/src/handlers/enrollments.handler.ts`) consult
+> it first and, for an ambiguous name, **refuse to guess** — `validateRow` pushes a clear French `className` error;
+> `applyRow`/`resolveConflict` throw a clear French `…ambiguë…` 4xx (the engine wraps `applyRow`'s as `Ligne N : …`),
+> **never** the prior silent wrong-grade enrollment, **never a 500**. When a name maps to exactly one class the
+> ambiguity set is empty → **byte-identical** behaviour. **Not a new architectural decision** (reuses the
+> documented "ambiguity ⇒ clear reject" convention `classesHandler` already embodies). ADR-024 carries
+> `## Enrollments class resolution is grade-level-disambiguating (polish — amendment)`. **Pinned by 5
+> `imports-engine.spec.ts` cases:** `buildImportCaches` flags a two-grade-level name ambiguous (unique name clean +
+> still-resolvable); `validateRow` → French `ambiguë` error + no `normalized`; `applyRow` → throws + ZERO
+> `enrollment.create`; `resolveConflict` → throws + ZERO write; an unambiguous name still enrolls (byte-parity).
+> The 6 existing worker-spec cache literals + the 2 `oneroster.adapter.spec.ts` `ImportContext` literals gained the
+> additive `classSectionsByNameAmbiguous: new Set()` field. **No schema / contract / permission / endpoint / queue
+> / worker / UI change** (only the in-memory cache shape gains one additive `Set`, never persisted). **Operator
+> pre-req (gates runtime effect, not merge):** the worker/API run the compiled `@pilotage/imports-core/dist`, so the
+> cache + handler edits are inert until the single post-Workflow `pnpm build` rebuilds `dist`; plus the standing
+> S1–S4 `prisma db push` + `prisma generate`. **Gate:** `typecheck` pass; P2 / `needsHumanReview:false`.
+>
 > **Post-ship hardening #7 (2026-06-11, `polish` run — P2 `[imports][oneroster][reconciliation][conflict-arbitration][enrollments][api][web][a11y]`, needs human review).**
 > **Closes the Post-ship hardening #6 recorded follow-on** — the `classSectionId` enrollments `conflict` now HAS
 > a per-row arbitration verb. The S4 conflict-resolution machinery (`POST /imports/:id/conflicts/:rowId/resolve
@@ -113,8 +141,11 @@
 > literal AC-2 completeness gap); (ii) **[CLOSED by Post-ship hardening #6 above]** a combined-pull RE-RUN threw on the
 > active-enrollment guard which the engine re-threw → the whole re-sync enrollments batch aborted rather than
 > skipping already-enrolled rows — now converges to `unchanged` (same class) / `conflict` (different class), the
-> batch finalises `applied`, with the mixed-batch test added; (iii) class re-resolution keys on `year:name` only (no `gradeLevelId`) → two same-named classes in
-> different grade levels collide last-created-wins; (iv) no UI gate enforces the apply order. **Gate:**
+> batch finalises `applied`, with the mixed-batch test added; (iii) **[CLOSED by Post-ship hardening #8 above]** class
+> re-resolution keyed on `year:name` only (no `gradeLevelId`) → two same-named classes in different grade levels
+> collided last-created-wins (silent wrong-grade enrollment); now `buildImportCaches` flags ambiguous
+> `<year>:<name>` keys and the enrollments handler surfaces a clear French 4xx instead of guessing; (iv) no UI gate
+> enforces the apply order. **Gate:**
 > `typecheck` pass; P2 / `needsHumanReview:true`.
 >
 > **Post-ship hardening #4 (2026-06-11, `polish` run — P3 `[api][integration][audit]`, audit-string-only).**
