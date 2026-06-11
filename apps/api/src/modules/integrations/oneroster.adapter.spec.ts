@@ -82,6 +82,54 @@ describe('mapOneRosterBundle', () => {
     expect(mapped.map((m) => m.type)).toEqual(['classes', 'students', 'enrollments']);
   });
 
+  it('carries the DURABLE cross-row anchors (studentExternalRef + className) through parse → validate', () => {
+    // E11-S3 follow-up (d): the enrollment row carries the durable natural keys
+    // (the OneRoster sourcedId → studentExternalRef + the class name). These are
+    // exactly the anchors `enrollmentsHandler.applyRow` RE-RESOLVES against the
+    // apply-time DB caches (studentExternalRef → student.id via the same key the
+    // studentsHandler creates the student under; className → classSection.id via
+    // the same `${activeYearId}:${name}` key the classesHandler creates the class
+    // under) — so the cross-row linkage anchors on real entities at apply, not on
+    // the validation-only placeholder ids. This test pins that those anchors
+    // survive parse → validate (and are persisted by IntegrationsService, which
+    // strips the `_`-prefixed placeholder ids); the apply-time re-resolution is
+    // covered in the worker imports-engine spec.
+    const { mapped } = mapOneRosterBundle({
+      users: USERS_CSV,
+      classes: CLASSES_CSV,
+      enrollments: ENROLLMENTS_CSV,
+    });
+    const handler = getHandler('enrollments')!;
+    const ctx: ImportContext = {
+      tenantId: 't1',
+      schoolId: 's1',
+      caches: {
+        gradeLevelsByCode: new Map(),
+        gradeLevelsByName: new Map(),
+        classNamesPerYearLevel: new Set(),
+        // The class the enrollment references is "present" (as the integrations
+        // layer primes it for cross-type validation in the same pull).
+        classSectionsByName: new Map([
+          ['ay1:6ea', { id: 'placeholder-class', gradeLevelId: 'gl', academicYearId: 'ay1', maxStudents: 30, currentSize: 0 }],
+        ]),
+        subjectsByCode: new Map(),
+        studentExternalRefs: new Map([['stu-001', 'placeholder-student'], ['stu-002', 'placeholder-student-2']]),
+        studentsByExternalRef: new Map(),
+        guardiansByEmail: new Map(),
+        activeAcademicYearId: 'ay1',
+      },
+    };
+
+    const raw = mapped.find((m) => m.type === 'enrollments')!.rows[0]!;
+    const parsed = handler.parseRow(raw);
+    const result = handler.validateRow(parsed, ctx);
+    expect(result.ok).toBe(true);
+    const payload = result.normalized as { studentExternalRef?: string; className?: string };
+    // The anchors the apply-time re-resolution keys on are persisted, not lost.
+    expect(payload.studentExternalRef).toBe('stu-001');
+    expect(payload.className).toBe('6eA');
+  });
+
   it('produces a warning (and zero mapped types) on an empty bundle', () => {
     const { mapped, warnings } = mapOneRosterBundle({});
     expect(mapped).toHaveLength(0);

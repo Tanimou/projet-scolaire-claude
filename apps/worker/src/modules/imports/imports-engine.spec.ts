@@ -1,6 +1,7 @@
 import { ImportRowStatus, ReconciliationClass, type ImportMode } from '@prisma/client';
 import {
   applyBatchRows,
+  enrollmentsHandler,
   resolveRowConflict,
   rollbackBatchRows,
   studentsHandler,
@@ -552,5 +553,162 @@ describe('imports-core students handler — re-run convergence (E11-S4 AC-4)', (
     expect(res.conflictFields).toEqual([{ field: 'lastName', current: 'Martin', source: 'Bernard' }]);
     expect(tx.student.update).not.toHaveBeenCalled(); // no silent overwrite (AC-6)
     expect(tx.student.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('imports-core enrollments handler — apply-time re-resolution (E11-S3 follow-up d)', () => {
+  const AY = 'ay-1';
+
+  /** Build caches whose anchor maps point at the given real student/class ids. */
+  function caches(opts: {
+    studentRef?: [ref: string, id: string];
+    className?: [name: string, id: string, maxStudents?: number, currentSize?: number];
+    activeYear?: string | null;
+  }) {
+    const studentExternalRefs = new Map<string, string>();
+    if (opts.studentRef) studentExternalRefs.set(opts.studentRef[0], opts.studentRef[1]);
+    const classSectionsByName = new Map<
+      string,
+      { id: string; gradeLevelId: string; academicYearId: string; maxStudents: number; currentSize: number }
+    >();
+    const ay = opts.activeYear === undefined ? AY : opts.activeYear;
+    if (opts.className && ay) {
+      classSectionsByName.set(`${ay}:${opts.className[0].toLowerCase()}`, {
+        id: opts.className[1],
+        gradeLevelId: 'gl-1',
+        academicYearId: ay,
+        maxStudents: opts.className[2] ?? 30,
+        currentSize: opts.className[3] ?? 0,
+      });
+    }
+    return {
+      gradeLevelsByCode: new Map(),
+      gradeLevelsByName: new Map(),
+      classNamesPerYearLevel: new Set<string>(),
+      classSectionsByName,
+      subjectsByCode: new Map(),
+      studentExternalRefs,
+      studentsByExternalRef: new Map(),
+      guardiansByEmail: new Map(),
+      activeAcademicYearId: ay,
+    };
+  }
+
+  /** A tx that captures enrollment.create + answers the active-enrollment conflict probe. */
+  function makeEnrollmentTx(existingActive = false) {
+    const creates: Array<Record<string, unknown>> = [];
+    const tx = {
+      enrollment: {
+        findFirst: jest.fn(async () => (existingActive ? { id: 'enr-x', classSectionId: 'cls-old' } : null)),
+        create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          creates.push(data);
+          return { id: `enr-${creates.length}` };
+        }),
+        deleteMany: jest.fn(),
+      },
+    };
+    return { tx, creates };
+  }
+
+  it('AC-3 — resolves studentId/classSectionId from the apply-time caches (NOT a payload-baked id)', async () => {
+    // The persisted payload carries ONLY the durable natural keys (the OneRoster
+    // path strips the `_`-ids). The apply-time caches point the anchors at REAL
+    // ids that differ from any value the payload could have baked — the created
+    // Enrollment MUST use the cache-resolved ids.
+    const { tx, creates } = makeEnrollmentTx();
+    const res = await enrollmentsHandler.applyRow(
+      { studentExternalRef: 'EL-1', className: '6eA' } as never,
+      {
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        caches: caches({ studentRef: ['EL-1', 'stu-real-1'], className: ['6eA', 'cls-real-1'] }) as never,
+        tx: tx as never,
+      },
+    );
+
+    expect(creates).toHaveLength(1);
+    expect(creates[0]!.studentId).toBe('stu-real-1');
+    expect(creates[0]!.classSectionId).toBe('cls-real-1');
+    expect(creates[0]!.academicYearId).toBe(AY);
+    expect(res.type).toBe('enrollment');
+  });
+
+  it('AC-4 — a CSV-shaped row with a stored real `_studentId`/`_classSectionId` and NO anchor falls back byte-identically', async () => {
+    // CSV path: the anchor refs are absent from the apply-time caches (e.g. a
+    // mid-batch cache built before this student/class), but the stored ids are the
+    // real DB ids captured at validate → the apply must fall back to them.
+    const { tx, creates } = makeEnrollmentTx();
+    await enrollmentsHandler.applyRow(
+      {
+        studentExternalRef: 'EL-NOPE',
+        className: 'INCONNUE',
+        _studentId: 'stu-stored',
+        _classSectionId: 'cls-stored',
+        _academicYearId: 'ay-stored',
+      } as never,
+      {
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        caches: caches({}) as never, // anchors resolve to nothing
+        tx: tx as never,
+      },
+    );
+
+    expect(creates).toHaveLength(1);
+    expect(creates[0]!.studentId).toBe('stu-stored');
+    expect(creates[0]!.classSectionId).toBe('cls-stored');
+    expect(creates[0]!.academicYearId).toBe('ay-stored');
+  });
+
+  it('AC-3 — the cache-resolved id WINS over any stored `_studentId` (re-resolution is authoritative)', async () => {
+    const { tx, creates } = makeEnrollmentTx();
+    await enrollmentsHandler.applyRow(
+      {
+        studentExternalRef: 'EL-1',
+        className: '6eA',
+        _studentId: 'stu-STALE-placeholder',
+        _classSectionId: 'cls-STALE-placeholder',
+      } as never,
+      {
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        caches: caches({ studentRef: ['EL-1', 'stu-real-1'], className: ['6eA', 'cls-real-1'] }) as never,
+        tx: tx as never,
+      },
+    );
+    expect(creates[0]!.studentId).toBe('stu-real-1'); // cache wins, not the stale baked id
+    expect(creates[0]!.classSectionId).toBe('cls-real-1');
+  });
+
+  it('AC-5 — an unresolvable anchor (no cache hit, no usable stored id) throws a clear French error, never a phantom FK', async () => {
+    const { tx, creates } = makeEnrollmentTx();
+    await expect(
+      enrollmentsHandler.applyRow(
+        { studentExternalRef: 'EL-GHOST', className: 'FANTÔME' } as never,
+        {
+          tenantId: 'tenant-1',
+          schoolId: 'school-1',
+          caches: caches({}) as never, // nothing resolves, nothing stored
+          tx: tx as never,
+        },
+      ),
+    ).rejects.toThrow(/introuvable/i);
+    expect(creates).toHaveLength(0); // never created against a non-existent id
+  });
+
+  it('FR5 — the active-enrollment conflict guard is preserved (a re-enroll of an already-active pair throws, no duplicate)', async () => {
+    const { tx, creates } = makeEnrollmentTx(true); // student already actively enrolled this year
+    await expect(
+      enrollmentsHandler.applyRow(
+        { studentExternalRef: 'EL-1', className: '6eA' } as never,
+        {
+          tenantId: 'tenant-1',
+          schoolId: 'school-1',
+          caches: caches({ studentRef: ['EL-1', 'stu-real-1'], className: ['6eA', 'cls-real-1'] }) as never,
+          tx: tx as never,
+        },
+      ),
+    ).rejects.toThrow(/déjà inscrit/i);
+    expect(creates).toHaveLength(0);
   });
 });

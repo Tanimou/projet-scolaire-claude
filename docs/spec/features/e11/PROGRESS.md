@@ -7,6 +7,43 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening #5 (2026-06-11, `polish` run — P2 `[imports][integration][oneroster][import-apply][data-integrity][worker]`, needs human review).**
+> Closes the most consequential **S3 verify-panel follow-up (d)** (recorded in `bmad/roadmap.md` §E11-S3) — a
+> real data-integrity defect, not new scope. On a FIRST combined OneRoster pull the enrollments handler's
+> `validateRow` baked `primeCaches` placeholder UUIDs (`_studentId`/`_classSectionId`, minted for
+> same-pull-but-not-yet-created students/classes) into the persisted `ImportRow`; the worker's `applyRow` used
+> them verbatim → `enrollment.create` against a **phantom FK**, failing the whole batch. **Two-part fix
+> (Approach A — re-resolve at apply, the architect's authoritative ruling; the enrollment lands on the FIRST
+> pull, AC-1, never deferred to a 2nd sync):** (1) `enrollmentsHandler.applyRow`
+> (`packages/imports-core/src/handlers/enrollments.handler.ts`) RE-RESOLVES the durable natural keys
+> (`studentExternalRef`/`className`) against the caches the engine rebuilds **from the DB** at apply time
+> (`buildImportCaches`) — because batches apply in dependency order (classes → students → enrollments) the real
+> student/class exist by then; it falls back to the stored `_studentId`/`_classSectionId` only on the CSV path
+> (byte-parity) and throws a clear French `Élève/Classe introuvable` error (never a phantom-FK 500) when an
+> anchor cannot re-resolve. (2) `IntegrationsService.createValidatedBatch` strips the `_`-prefixed placeholder
+> ids from the persisted **valid** enrollments payload (FR1), gated `m.type === 'enrollments'` (no-op every
+> other type). **Tenant/school-safe** (apply-time caches built from `batch.schoolId`, every `buildImportCaches`
+> query `schoolId`-scoped, `externalRef` `@@unique([schoolId, externalRef])`, `enrollment.create` stamps
+> `ctx.tenantId`); the Sentinel/Winston/Murat escalation panel passed with no blocker. Pinned by 3 specs
+> (`apps/worker/.../imports-engine.spec.ts` — combined-pull re-resolution + CSV byte-parity fallback +
+> throw-no-create; `integrations.service.spec.ts` — strip-on-persist; `oneroster.adapter.spec.ts`). **5 files,
+> +457/-13, no schema / contract / permission / endpoint / UI change.** **Operator-enforced (not code-enforced)
+> precondition surfaced for human review:** the apply ORDER (classes → students → enrollments) is operator-driven —
+> each batch applies via a separate admin-triggered `POST /imports/:id/apply`; nothing serializes them.
+> Out-of-order apply makes every enrollment row throw the clean French error (fail-safe, no corruption — the
+> placeholder fallback is now gone) and the batch finalizes `failed`; the operator re-applies after the
+> prerequisites. **Operator pre-reqs (gate runtime effect, not merge):** the worker runs the compiled
+> `@pilotage/imports-core/dist/index.js` (`main`), so the handler edit is inert until the single post-Workflow
+> `pnpm build` rebuilds `dist`; plus the standing S1–S4 `prisma db push`/`prisma generate` + a worker draining
+> the `imports` queue. **Recorded follow-on hardening (non-blocking):** (i) the **invalid**-branch enrollment
+> payload is NOT stripped (an invalid row can still carry a placeholder UUID — harmless, never applies; a
+> literal AC-2 completeness gap); (ii) a combined-pull RE-RUN throws on the active-enrollment guard which the
+> engine re-throws → the whole re-sync enrollments batch aborts rather than skipping already-enrolled rows
+> (FR5 "0 created convergence" describes a throwing guard as a skip — decide skip-vs-abort + add a mixed-batch
+> test); (iii) class re-resolution keys on `year:name` only (no `gradeLevelId`) → two same-named classes in
+> different grade levels collide last-created-wins; (iv) no UI gate enforces the apply order. **Gate:**
+> `typecheck` pass; P2 / `needsHumanReview:true`.
+>
 > **Post-ship hardening #4 (2026-06-11, `polish` run — P3 `[api][integration][audit]`, audit-string-only).**
 > Closes **S3 verify-panel follow-up (e)** (recorded in `bmad/roadmap.md` §E11-S3): the OneRoster source-connect
 > append-only audit action was implemented as the ad-hoc `import.sync.connect` rather than the ADR-024 §E /

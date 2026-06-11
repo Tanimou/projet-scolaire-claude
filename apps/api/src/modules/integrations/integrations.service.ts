@@ -56,6 +56,22 @@ export interface SyncResult {
   absentFromSource: { externalRef: string; name: string }[];
 }
 
+/**
+ * E11-S3 follow-up (d) / FR1 — drop the handler's internal `_`-prefixed
+ * resolution fields (`_studentId`/`_classSectionId`/`_academicYearId`) from a
+ * normalized enrollment payload before persisting the `valid` ImportRow, so the
+ * row carries ONLY the durable natural keys (`studentExternalRef`/`className`)
+ * and never a same-pull `primeCaches` placeholder id. `enrollmentsHandler.applyRow`
+ * re-resolves those anchors against the apply-time DB caches.
+ */
+function stripResolvedIds(parsed: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (!k.startsWith('_')) clean[k] = v;
+  }
+  return clean;
+}
+
 @Injectable()
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
@@ -200,12 +216,33 @@ export class IntegrationsService {
       // reference students/classes that are in the SAME pull (not yet applied).
       // We map in dependency order (classes → students → enrollments) and PRIME
       // the shared caches with each type's about-to-be-created identities after
-      // validating it, so an enrollment to a brand-new student/class validates
-      // `valid` (not `invalid`) — i.e. the whole roster lands `validated` and is
-      // demoable. The placeholder ids are validation-only (the real entities are
-      // created at apply time by the handlers); they never reach the DB. The
-      // batches must be APPLIED in the produced order (classes → students →
-      // enrollments) — the same dependency a human CSV sequence has.
+      // validating it, so an enrollment to a brand-new student/class still
+      // validates `valid` DURING validation. The placeholder ids are
+      // VALIDATION-ONLY — they never reach the DB (stripped from the persisted
+      // enrollment payload below) and they are NOT what the apply uses.
+      //
+      // E11-S3 follow-up (d) — the placeholder-UUID cross-row linkage fix
+      // (Approach A — re-resolve at apply, the architect's authoritative ruling).
+      // `enrollmentsHandler.validateRow` resolves `studentExternalRef`/`className`
+      // into a `_studentId`/`_classSectionId` (a `primeCaches` placeholder for a
+      // brand-new same-pull student/class). The previous design BAKED those ids
+      // into the persisted payload and `applyRow` used them verbatim — so the
+      // worker's enrollment apply would `enrollment.create` against a phantom FK.
+      // The fix lives in TWO places, neither of which defers the work to a later
+      // sync (AC-1 — the enrollment is created on the FIRST combined pull):
+      //   (1) `enrollmentsHandler.applyRow` (in `@pilotage/imports-core`) now
+      //       RE-RESOLVES the durable natural keys (`studentExternalRef`,
+      //       `className`) against the caches the engine rebuilds FROM THE DB at
+      //       apply time. Because batches apply in dependency order
+      //       (classes → students → enrollments), the real student/class exist by
+      //       the time the enrollments batch applies, so the re-resolution finds
+      //       their REAL ids. It falls back to the stored `_studentId`/
+      //       `_classSectionId` only on the CSV path (byte-parity), and throws a
+      //       clear French error when neither resolves (never a phantom FK).
+      //   (2) HERE — `createValidatedBatch` strips the validation-only
+      //       `_`-prefixed placeholder ids from the persisted enrollments payload
+      //       (FR1), so a placeholder UUID can never reach the DB; only the
+      //       durable `studentExternalRef`/`className` anchors are stored.
       const caches = await buildImportCaches(this.prisma, schoolId);
       const importCtx: ImportContext = { tenantId: actor.tenantId, schoolId, caches };
 
@@ -223,6 +260,10 @@ export class IntegrationsService {
           handler,
           m.rows,
           importCtx,
+          // FR1 — strip the validation-only placeholder anchors from the persisted
+          // enrollments payload so a `primeCaches` randomUUID never reaches the DB;
+          // only the durable natural keys remain, which `applyRow` re-resolves.
+          m.type === 'enrollments',
         );
         // Prime the caches with this type's identities so later types in the
         // SAME pull can reference them during validation.
@@ -305,6 +346,16 @@ export class IntegrationsService {
     handler: ImportHandler,
     rawRows: Record<string, string>[],
     importCtx: ImportContext,
+    /**
+     * E11-S3 follow-up (d) / FR1 — when true (the enrollments type), strip the
+     * handler's internal `_`-prefixed resolution ids (`_studentId`/
+     * `_classSectionId`/`_academicYearId`) from the persisted `valid` row payload.
+     * On a combined pull those ids may be `primeCaches` placeholders; the apply
+     * re-resolves the durable natural keys (`studentExternalRef`/`className`)
+     * against the apply-time DB caches, so the placeholders must never reach the
+     * DB. No-op for every other type (whose payload carries no cross-row anchor).
+     */
+    stripPlaceholders = false,
   ): Promise<{ summary: SyncResult['batches'][number] }> {
     const fileName = `oneroster-${type}-${new Date().toISOString().slice(0, 10)}.csv`;
     const rawCsv = rowsToCsv(handler.template.headers, rawRows);
@@ -334,11 +385,19 @@ export class IntegrationsService {
         const result = handler.validateRow(parsed, importCtx);
         if (result.ok) {
           validCount++;
+          // FR1 — for enrollments, persist only the durable cross-row anchors
+          // (`studentExternalRef`/`className`); strip the validation-only
+          // `_`-prefixed resolution ids (which may be `primeCaches` placeholders).
+          // `applyRow` re-resolves them against the apply-time DB caches. For every
+          // other type the normalized payload carries no `_`-anchor → no-op.
+          const payload = stripPlaceholders
+            ? stripResolvedIds(result.normalized ?? {})
+            : (result.normalized ?? {});
           rowsToCreate.push({
             batchId: batch.id,
             rowIndex: i + 1,
             status: ImportRowStatus.valid,
-            payload: result.normalized as Prisma.InputJsonValue,
+            payload: payload as Prisma.InputJsonValue,
           });
         } else {
           invalidCount++;

@@ -50,9 +50,22 @@ function makeService(
     managedStudents?: unknown[];
     /** Override the school `ctx.forTenant` resolves (to prove the batch follows the SOURCE, not the actor). */
     ctxSchoolId?: string;
+    /** Active academic year `buildImportCaches` resolves (enrollments need one). */
+    activeYear?: { id: string } | null;
+    /** Pre-existing class sections (real DB entities) `buildImportCaches` returns. */
+    classSections?: Array<{
+      id: string;
+      name: string;
+      academicYearId: string;
+      gradeLevelId: string;
+      maxStudents: number;
+      _count: { enrollments: number };
+    }>;
   } = {},
 ) {
   const createdRows: Record<string, unknown>[] = [];
+  /** Every ImportRow row persisted (across all produced batches), in order. */
+  const importRowsCreatedData: Array<Record<string, unknown>> = [];
   let importRowCount = 0;
   // The row the DB holds for this id (defaults to a TENANT-owned source).
   const foundRow = opts.found === undefined ? sourceRow() : opts.found;
@@ -87,8 +100,9 @@ function makeService(
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     importRow: {
-      createMany: jest.fn().mockImplementation(({ data }: { data: unknown[] }) => {
+      createMany: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown>[] }) => {
         importRowCount += data.length;
+        for (const r of data) importRowsCreatedData.push(r);
         return Promise.resolve({ count: data.length });
       }),
     },
@@ -96,9 +110,9 @@ function makeService(
     // The divergence compute additionally reads the externalRef-carrying students.
     gradeLevel: { findMany: jest.fn().mockResolvedValue([]) },
     subject: { findMany: jest.fn().mockResolvedValue([]) },
-    classSection: { findMany: jest.fn().mockResolvedValue([]) },
+    classSection: { findMany: jest.fn().mockResolvedValue(opts.classSections ?? []) },
     guardian: { findMany: jest.fn().mockResolvedValue([]) },
-    academicYear: { findFirst: jest.fn().mockResolvedValue(null) },
+    academicYear: { findFirst: jest.fn().mockResolvedValue(opts.activeYear === undefined ? null : opts.activeYear) },
     // E11-S4 (FR3/AC-3) — the SIS-delete divergence reads the school's
     // externalRef-carrying students. `buildImportCaches` also reads students
     // (no externalRef filter); we return the managed set for both — the
@@ -129,6 +143,10 @@ function makeService(
     },
     get importRowsCreated() {
       return importRowCount;
+    },
+    /** Every persisted ImportRow (across all produced batches), in creation order. */
+    get importRows() {
+      return importRowsCreatedData;
     },
   };
 }
@@ -376,6 +394,131 @@ describe('IntegrationsService — SIS-side delete divergence (E11-S4 FR3/AC-3, t
     const res = await service.sync('src-1', ACTOR, { users: PULL_USERS });
     expect(res.absentFromSource).toEqual([]);
     expect(res.primaryBatchId).toBeTruthy();
+  });
+});
+
+describe('IntegrationsService — combined-pull enrollment linkage (E11-S3 follow-up d, Approach A)', () => {
+  // A combined OneRoster bundle: one class, one student, one enrollment binding
+  // the student to the class. On a FIRST pull the class + student are brand-new
+  // (created in this same pull). The fix (Approach A — re-resolve at apply) keeps
+  // the enrollment `valid` but persists ONLY the durable natural keys
+  // (studentExternalRef/className), stripping the validation-only `primeCaches`
+  // placeholder ids so they can never reach the DB. `enrollmentsHandler.applyRow`
+  // re-resolves those anchors against the apply-time DB caches (classes →
+  // students → enrollments order), so the enrollment is CREATED against the REAL
+  // ids on the FIRST combined pull (AC-1) — not deferred to a later sync.
+  const CLASSES_CSV = ['sourcedId,status,title,grades', 'cls-6a,active,6eA,6ème'].join('\n');
+  const USERS_CSV = ['sourcedId,status,role,givenName,familyName', 'stu-1,active,student,Léa,Martin'].join('\n');
+  const ENROLLMENTS_CSV = [
+    'sourcedId,status,classSourcedId,userSourcedId,role',
+    'enr-1,active,cls-6a,stu-1,student',
+  ].join('\n');
+
+  function enrollmentRows(rows: Array<Record<string, unknown>>) {
+    // The enrollments batch is produced LAST (classes → students → enrollments);
+    // its rows are the trailing slice carrying (studentExternalRef, className).
+    return rows.filter(
+      (r) =>
+        (r.payload as Record<string, unknown> | undefined)?.studentExternalRef !== undefined ||
+        (r.payload as Record<string, unknown> | undefined)?.className !== undefined,
+    );
+  }
+
+  it('FR1/AC-2 — a first-pull enrollment to a brand-new student+class stays `valid` but persists NO placeholder id', async () => {
+    // DB is empty (no pre-existing students/classes); the active year exists, so
+    // `primeCaches` lets the enrollment validate `valid` against same-pull
+    // placeholders. The persisted payload must carry ONLY the durable anchors.
+    const { service, prisma, importRows } = makeService({ activeYear: { id: 'ay-1' } });
+
+    const res = await service.sync('src-1', ACTOR, {
+      classes: CLASSES_CSV,
+      users: USERS_CSV,
+      enrollments: ENROLLMENTS_CSV,
+    });
+    expect(res.primaryBatchId).toBeTruthy();
+
+    const enrRows = enrollmentRows(importRows);
+    expect(enrRows).toHaveLength(1);
+    const row = enrRows[0]!;
+    // The row is VALID (created on the first pull via apply-time re-resolution),
+    // not demoted — AC-1.
+    expect(row.status).toBe('valid');
+    // AC-2 — the persisted payload carries the durable natural keys and NO
+    // `_studentId`/`_classSectionId` placeholder (a `primeCaches` randomUUID).
+    const payload = row.payload as Record<string, unknown>;
+    expect(payload.studentExternalRef).toBe('stu-1');
+    expect(payload.className).toBe('6eA');
+    expect(payload).not.toHaveProperty('_studentId');
+    expect(payload).not.toHaveProperty('_classSectionId');
+    expect(payload).not.toHaveProperty('_academicYearId');
+
+    // The enrollments batch reports the row as valid (0 invalid here).
+    const enrBatch = res.batches.find((b) => b.type === 'enrollments');
+    expect(enrBatch).toBeDefined();
+    expect(enrBatch!.validCount).toBe(1);
+    expect(enrBatch!.invalidCount).toBe(0);
+
+    // No delete path, and the sync did not fail.
+    expect((prisma.rosterSource.updateMany as jest.Mock).mock.calls.some(
+      (c) => c[0].data?.status === RosterSyncStatus.failed,
+    )).toBe(false);
+  });
+
+  it('FR4 — an enrollment to a PRE-EXISTING student+class is `valid` with NO `_`-prefixed id in the persisted payload (byte-parity: apply re-resolves the same id)', async () => {
+    // The student (stu-1) and class (6eA) already exist in the DB. The enrollment
+    // is valid; the persisted payload still carries ONLY the durable anchors (the
+    // `_`-ids are stripped) — at apply, `studentExternalRefs.get('stu-1')` and
+    // `classSectionsByName.get('ay-1:6ea')` re-resolve to the SAME real ids, so the
+    // created Enrollment is byte-identical to the validate-time resolution.
+    const { service, importRows } = makeService({
+      activeYear: { id: 'ay-1' },
+      managedStudents: [{ id: 'stu-real-1', externalRef: 'stu-1', firstName: 'Léa', lastName: 'Martin' }],
+      classSections: [
+        {
+          id: 'cls-real-1',
+          name: '6eA',
+          academicYearId: 'ay-1',
+          gradeLevelId: 'gl-1',
+          maxStudents: 30,
+          _count: { enrollments: 0 },
+        },
+      ],
+    });
+
+    const res = await service.sync('src-1', ACTOR, {
+      classes: CLASSES_CSV,
+      users: USERS_CSV,
+      enrollments: ENROLLMENTS_CSV,
+    });
+
+    const enrRows = enrollmentRows(importRows);
+    expect(enrRows).toHaveLength(1);
+    const row = enrRows[0]!;
+    expect(row.status).toBe('valid');
+    const payload = row.payload as Record<string, unknown>;
+    expect(payload.studentExternalRef).toBe('stu-1');
+    expect(payload.className).toBe('6eA');
+    // Even for a pre-existing match the persisted payload omits the resolved ids —
+    // the apply-time re-resolution is the single source of truth (AC-2 parity).
+    expect(payload).not.toHaveProperty('_studentId');
+    expect(payload).not.toHaveProperty('_classSectionId');
+    const enrBatch = res.batches.find((b) => b.type === 'enrollments');
+    expect(enrBatch!.validCount).toBe(1);
+    expect(enrBatch!.invalidCount).toBe(0);
+  });
+
+  it('FR3 — the produced batches keep classes → students → enrollments dependency order', async () => {
+    // Apply ordering is what guarantees the apply-time re-resolution finds real
+    // ids: classes + students must be produced (and applied) before enrollments.
+    const { service } = makeService({ activeYear: { id: 'ay-1' } });
+    const res = await service.sync('src-1', ACTOR, {
+      classes: CLASSES_CSV,
+      users: USERS_CSV,
+      enrollments: ENROLLMENTS_CSV,
+    });
+    const order = res.batches.map((b) => b.type);
+    expect(order.indexOf('classes')).toBeLessThan(order.indexOf('students'));
+    expect(order.indexOf('students')).toBeLessThan(order.indexOf('enrollments'));
   });
 });
 

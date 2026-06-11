@@ -99,9 +99,45 @@ export const enrollmentsHandler: ImportHandler = {
 
   async applyRow(normalized, ctx: ApplyContext): Promise<AppliedEntity> {
     const p = normalized as unknown as EnrollmentInput;
-    const studentId = p._studentId!;
-    const classSectionId = p._classSectionId!;
-    const academicYearId = p._academicYearId!;
+
+    // E11-S3 follow-up (d) — APPLY-TIME RE-RESOLUTION of the cross-row linkage.
+    //
+    // `validateRow` resolves `studentExternalRef`/`className` into `_studentId`/
+    // `_classSectionId` from the caches AT VALIDATE TIME. On a CSV upload those
+    // caches are the real DB, so the baked ids are durable and correct. But on a
+    // first COMBINED OneRoster pull the student/class are created LATER in the same
+    // pull (separate batches), so the validate-time ids are `primeCaches`
+    // placeholders (random UUIDs) that are NEVER inserted — applying them verbatim
+    // would `enrollment.create` against a phantom FK and fail the whole batch.
+    //
+    // The fix: re-resolve the DURABLE natural keys (`studentExternalRef`,
+    // `className`) against the caches the engine rebuilds FROM THE DB at apply time
+    // (`buildImportCaches`). Because the apply runs in dependency order
+    // (classes → students → enrollments), by the time this batch applies the real
+    // student/class exist and carry their real ids in the apply-time caches. We
+    // prefer the re-resolved id; only when the anchor cannot re-resolve do we fall
+    // back to the stored `_studentId`/`_classSectionId` (the CSV-upload path, where
+    // it equals the real DB id captured at validate → byte-identical behaviour).
+    const studentId =
+      (p.studentExternalRef ? ctx.caches.studentExternalRefs.get(p.studentExternalRef) : undefined) ??
+      p._studentId;
+    if (!studentId) {
+      throw new Error(
+        `Élève introuvable (matricule « ${p.studentExternalRef ?? ''} ») : impossible d'inscrire.`,
+      );
+    }
+
+    const activeYearId = ctx.caches.activeAcademicYearId;
+    const classKey =
+      activeYearId && p.className ? `${activeYearId}:${p.className.toLowerCase()}` : undefined;
+    const resolvedClass = classKey ? ctx.caches.classSectionsByName.get(classKey) : undefined;
+    const classSectionId = resolvedClass?.id ?? p._classSectionId;
+    const academicYearId = resolvedClass?.academicYearId ?? p._academicYearId;
+    if (!classSectionId || !academicYearId) {
+      throw new Error(
+        `Classe « ${p.className ?? ''} » introuvable pour l'année active : impossible d'inscrire.`,
+      );
+    }
 
     // Double check student isn't already actively enrolled this year (race-safe inside tx).
     const conflict = await ctx.tx.enrollment.findFirst({
