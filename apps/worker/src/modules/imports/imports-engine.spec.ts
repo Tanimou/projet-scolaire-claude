@@ -594,12 +594,16 @@ describe('imports-core enrollments handler — apply-time re-resolution (E11-S3 
     };
   }
 
-  /** A tx that captures enrollment.create + answers the active-enrollment conflict probe. */
-  function makeEnrollmentTx(existingActive = false) {
+  /**
+   * A tx that captures enrollment.create + answers the active-enrollment probe.
+   * `existingActive` controls whether the student is already actively enrolled,
+   * and in which class (`activeClassId`, default `cls-old`).
+   */
+  function makeEnrollmentTx(existingActive = false, activeClassId = 'cls-old') {
     const creates: Array<Record<string, unknown>> = [];
     const tx = {
       enrollment: {
-        findFirst: jest.fn(async () => (existingActive ? { id: 'enr-x', classSectionId: 'cls-old' } : null)),
+        findFirst: jest.fn(async () => (existingActive ? { id: 'enr-x', classSectionId: activeClassId } : null)),
         create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
           creates.push(data);
           return { id: `enr-${creates.length}` };
@@ -696,19 +700,148 @@ describe('imports-core enrollments handler — apply-time re-resolution (E11-S3 
     expect(creates).toHaveLength(0); // never created against a non-existent id
   });
 
-  it('FR5 — the active-enrollment conflict guard is preserved (a re-enroll of an already-active pair throws, no duplicate)', async () => {
-    const { tx, creates } = makeEnrollmentTx(true); // student already actively enrolled this year
-    await expect(
-      enrollmentsHandler.applyRow(
-        { studentExternalRef: 'EL-1', className: '6eA' } as never,
-        {
-          tenantId: 'tenant-1',
-          schoolId: 'school-1',
-          caches: caches({ studentRef: ['EL-1', 'stu-real-1'], className: ['6eA', 'cls-real-1'] }) as never,
-          tx: tx as never,
-        },
-      ),
-    ).rejects.toThrow(/déjà inscrit/i);
-    expect(creates).toHaveLength(0);
+  it('FR5 — a re-sync of an already-active SAME-class enrollment converges to `unchanged` (0 created, no throw, no duplicate)', async () => {
+    // The student is already actively enrolled in the SAME class the row targets
+    // (cls-real-1). A 2nd pull must SKIP it cleanly (unchanged), never throw — so
+    // the batch finalizes `applied` not `failed`, and no duplicate enrollment is
+    // created. This is the FR5/AC-4 "0 created convergence" the throwing guard
+    // previously broke (the engine re-throws → whole-batch abort).
+    const { tx, creates } = makeEnrollmentTx(true, 'cls-real-1');
+    const res = await enrollmentsHandler.applyRow(
+      { studentExternalRef: 'EL-1', className: '6eA' } as never,
+      {
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        caches: caches({ studentRef: ['EL-1', 'stu-real-1'], className: ['6eA', 'cls-real-1'] }) as never,
+        tx: tx as never,
+      },
+    );
+
+    expect(res.reconciliation).toBe(ReconciliationClass.unchanged);
+    expect(res.id).toBe('enr-x'); // points at the PRE-EXISTING enrollment (rollback-safe)
+    expect(res.type).toBe('enrollment');
+    expect(creates).toHaveLength(0); // 0 created on the re-run — no duplicate enrollment
+  });
+
+  it('FR5 — an already-active student presented for a DIFFERENT class this year → `conflict` (recorded, never written, no silent class move)', async () => {
+    // The student is actively enrolled in `cls-old` but the row targets `6eA`
+    // (cls-real-1). This is NOT an idempotent re-run — it is a real divergence
+    // (the SIS moved the child, or a bad mapping). It must be recorded as a
+    // `conflict` for admin arbitration, NEVER a silent re-enrollment/move.
+    const { tx, creates } = makeEnrollmentTx(true, 'cls-old');
+    const res = await enrollmentsHandler.applyRow(
+      { studentExternalRef: 'EL-1', className: '6eA' } as never,
+      {
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        caches: caches({ studentRef: ['EL-1', 'stu-real-1'], className: ['6eA', 'cls-real-1'] }) as never,
+        tx: tx as never,
+      },
+    );
+
+    expect(res.reconciliation).toBe(ReconciliationClass.conflict);
+    expect(res.conflictFields).toEqual([
+      { field: 'classSectionId', current: 'cls-old', source: 'cls-real-1' },
+    ]);
+    expect(creates).toHaveLength(0); // no silent re-enrollment / no class move
+  });
+});
+
+describe('imports-core enrollments handler — mixed re-run batch (E11-S4 FR5/AC-4)', () => {
+  const AY = 'ay-1';
+
+  function makeEnrollmentCaches() {
+    const classSectionsByName = new Map<
+      string,
+      { id: string; gradeLevelId: string; academicYearId: string; maxStudents: number; currentSize: number }
+    >();
+    classSectionsByName.set(`${AY}:6ea`, {
+      id: 'cls-6ea',
+      gradeLevelId: 'gl-1',
+      academicYearId: AY,
+      maxStudents: 30,
+      currentSize: 1,
+    });
+    return {
+      gradeLevelsByCode: new Map(),
+      gradeLevelsByName: new Map(),
+      classNamesPerYearLevel: new Set<string>(),
+      classSectionsByName,
+      subjectsByCode: new Map(),
+      studentExternalRefs: new Map<string, string>([
+        ['EL-already', 'stu-already'],
+        ['EL-new', 'stu-new'],
+      ]),
+      studentsByExternalRef: new Map(),
+      guardiansByEmail: new Map(),
+      activeAcademicYearId: AY,
+    };
+  }
+
+  it('a re-run batch with an already-enrolled row + a genuinely new row finalizes APPLIED (not failed) with 0 created for the unchanged row', async () => {
+    // The fake tx: the already-enrolled student returns an active enrollment in
+    // the SAME class; the new student returns none. The whole batch must NOT abort.
+    const rowUpdates: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const audits: Array<{ data: Record<string, unknown> }> = [];
+    const creates: Array<Record<string, unknown>> = [];
+    const tx = {
+      enrollment: {
+        findFirst: jest.fn(async ({ where }: { where: { studentId: string } }) =>
+          where.studentId === 'stu-already'
+            ? { id: 'enr-already', classSectionId: 'cls-6ea' }
+            : null,
+        ),
+        create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          creates.push(data);
+          return { id: `enr-new-${creates.length}` };
+        }),
+        deleteMany: jest.fn(),
+      },
+      importRow: {
+        update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+          rowUpdates.push({ id: where.id, data });
+          return { id: where.id, ...data };
+        }),
+      },
+      auditLog: {
+        create: jest.fn(async (args: { data: Record<string, unknown> }) => {
+          audits.push(args);
+          return args.data;
+        }),
+      },
+    };
+
+    const rows: EngineRow[] = [
+      // already actively enrolled in the SAME class → must skip cleanly (unchanged)
+      { id: 'r1', rowIndex: 1, status: ImportRowStatus.valid, payload: { studentExternalRef: 'EL-already', className: '6eA' }, createdEntityId: null },
+      // a genuinely new enrollment → created
+      { id: 'r2', rowIndex: 2, status: ImportRowStatus.valid, payload: { studentExternalRef: 'EL-new', className: '6eA' }, createdEntityId: null },
+    ];
+
+    const result = await applyBatchRows({
+      tx: tx as never,
+      handler: enrollmentsHandler,
+      rows,
+      caches: makeEnrollmentCaches() as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+      mode: MODE,
+      batch: { id: 'batch-enr', type: 'enrollments' },
+    });
+
+    // The batch did NOT abort: the already-enrolled row is `unchanged` (0 created),
+    // the new row is `created`, exactly one audit row written.
+    expect(result.applied).toBe(2); // unchanged + created both count as applied
+    expect(result.skipped).toBe(0);
+    expect(result.byClass).toEqual({ created: 1, updated: 0, unchanged: 1, conflict: 0, skipped: 0 });
+    expect(creates).toHaveLength(1); // ONLY the new student — 0 created for the unchanged row (AC-4)
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.data.action).toBe('import.apply');
+
+    // The unchanged row carries createdEntityId = the PRE-EXISTING enrollment (rollback-safe).
+    const r1Update = rowUpdates.find((u) => u.id === 'r1')!;
+    expect(r1Update.data.status).toBe(ImportRowStatus.applied);
+    expect(r1Update.data.reconciliation).toBe(ReconciliationClass.unchanged);
+    expect(r1Update.data.createdEntityId).toBe('enr-already');
   });
 });

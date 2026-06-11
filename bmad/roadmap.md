@@ -892,7 +892,34 @@ filler (E9 enrollment self-service / E10 quality bar).**
   already-enrolled rows (FR5 "0 created convergence" mischaracterises a throwing guard as a skip — decide
   skip-vs-abort and add a mixed-batch test); (iii) class re-resolution keys on `year:name` only (no
   `gradeLevelId`), so two same-named classes in different grade levels collide last-created-wins; (iv) no UI
-  gate / dependency check enforces the apply order.
+  gate / dependency check enforces the apply order. **[(ii) closed by Post-ship hardening #6 below.]**
+  **Post-ship hardening #6 (2026-06-11, `polish` run — P2 `[imports][async][reconciliation][worker][data-integrity][idempotency][rgpd]`, needs human review):**
+  closes hardening-#5 follow-on **(ii)** — the enrollments re-sync was the one handler where re-running a sync
+  was **not idempotent**. The S1 `enrollmentsHandler.applyRow` active-enrollment guard **threw** `Élève déjà
+  inscrit` on a 2nd pull; the engine re-throws (`Ligne N : …`) and **aborts the whole batch**, so a re-sync of
+  an *unchanged* roster finalised `failed` instead of converging to the advertised "0 created, 0 error"
+  (FR5/AC-4). The handler now mirrors the students-handler idempotent-match precedent against the **same
+  already-loaded active-enrollment probe** — within the existing `ReconciliationClass` taxonomy, **no new enum
+  value / no upsert / no schema / no contract / no permission change**: same student x **SAME** class this year
+  → **`unchanged`** (no write, no duplicate; `id` = the pre-existing enrollment, so the §E rollback-safety
+  invariant keeps it out of the delete set); same student in a **DIFFERENT** class → **`conflict`** (recorded
+  with `conflictFields:[{field:'classSectionId',current,source}]`, **written nothing** — a class move is a real
+  arbitration decision, never a silent re-enrollment); no active enrollment → `created` (byte-identical). This
+  makes the §F `all_or_nothing` shift hold for enrollments too (a conflicting enrollment row no longer aborts
+  the batch). ADR-024 carries `## Enrollments handler emits unchanged/conflict — idempotent re-sync convergence
+  (polish — amendment)`. Pinned by 3 new/adapted `imports-engine.spec.ts` cases: same-class re-sync →
+  `unchanged` (0 created, no throw); different-class → `conflict` (no write); and a **mixed re-run batch over
+  the REAL `enrollmentsHandler`** (one already-enrolled row + one new row) finalising `applied` not `failed`
+  with `byClass={created:1,unchanged:1}`, exactly 1 `created`, one `import.apply` audit, the unchanged row's
+  `createdEntityId` = the pre-existing enrollment. **3 files (handler + engine spec + ADR), +224/-22.**
+  **Operator pre-reqs (gate runtime effect, not merge):** the worker runs the compiled
+  `@pilotage/imports-core/dist` (`main`), so the handler edit is inert until the single post-Workflow
+  `pnpm build` rebuilds `dist`; plus the standing S1–S4 `prisma db push` + `prisma generate` + a worker draining
+  the `imports` queue. **Recorded follow-on (non-blocking, carried forward):** the `classSectionId` conflict has
+  **no per-row arbitration verb** on the enrollments handler yet (the S4 `resolveConflict` exists for
+  `studentsHandler` only) — the conflict is visible + reversible + never auto-overwritten, but an admin cannot
+  yet one-click "take the source class"; this is the recorded S-follow-on. **Gate:** `typecheck` pass; P2 /
+  `needsHumanReview:false`.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
   card data, PSP later. Out of MVP; do not start without explicit go.
 
