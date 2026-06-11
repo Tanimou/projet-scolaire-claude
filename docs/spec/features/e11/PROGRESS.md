@@ -7,6 +7,18 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening #4 (2026-06-11, `polish` run — P3 `[api][integration][audit]`, audit-string-only).**
+> Closes **S3 verify-panel follow-up (e)** (recorded in `bmad/roadmap.md` §E11-S3): the OneRoster source-connect
+> append-only audit action was implemented as the ad-hoc `import.sync.connect` rather than the ADR-024 §E /
+> spec-mandated **`integration.roster_source.created`**. Renamed in
+> `apps/api/src/modules/integrations/integrations.service.ts` (the single `connect()` audit call site) and pinned
+> by a new assertion in `integrations.service.spec.ts` (`expect(auditData.action).toBe('integration.roster_source.created')`).
+> Docs realigned: ADR-024 §E + this file's S3 slice note now read `integration.roster_source.created`/`import.sync.pull`.
+> **No schema / contract / permission / endpoint / UI change; append-only audit semantics preserved** (still one
+> `auditLog.create` row per connect, `resourceType='roster_source'`, presence-only `after`, never the secret). The
+> `import.sync.pull` action on the sync path is unchanged (only the connect verb was misnamed). **Gate:** P3 /
+> audit-string-only / `needsHumanReview:false`.
+>
 > **Post-ship hardening #3 (2026-06-11, `polish` run — P3 `[web][a11y][ui][imports]`, presentational-only).**
 > Closes the **S2 carry-over item (4)** a11y polish (recorded at the foot of the S2 slice note below) on the
 > applied-batch detail surface `apps/web/src/app/admin/imports/[id]/page.tsx`. Two corrections, both
@@ -179,7 +191,7 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
   (S4 convergence). `MAX_ROWS` (5000) enforced per type; a too-large/empty pull is a `failed` pull, never a
   corrupt apply. **Credential handling (Sentinel):** `RosterSource.credentialRef` stores an **opaque
   server-side ref only** — never plaintext, **never returned** (the DTO exposes `hasCredential: boolean`).
-  Append-only `import.sync.connect`/`import.sync.pull` audit, tenant-scoped on every read/write. FE = a new
+  Append-only `integration.roster_source.created`/`import.sync.pull` audit, tenant-scoped on every read/write. FE = a new
   `/admin/integrations` surface (server page + `IntegrationsManager` client island: connect FormDrawer, source
   cards with status badges, a sync FormDrawer that file-loads the bundle and **navigates to the produced
   batch's health/detail surface** on success), a "OneRoster" origin badge on the batch detail header, and a new

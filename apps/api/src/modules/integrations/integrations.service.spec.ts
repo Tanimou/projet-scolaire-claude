@@ -157,9 +157,15 @@ describe('IntegrationsService — credential handling (Sentinel)', () => {
     expect(stored).not.toBe(RAW_CREDENTIAL);
 
     // The audit `after` records presence only — never the secret.
-    const auditAfter = (prisma.auditLog.create as jest.Mock).mock.calls[0]![0].data.after;
+    const auditData = (prisma.auditLog.create as jest.Mock).mock.calls[0]![0].data;
+    const auditAfter = auditData.after;
     expect(JSON.stringify(auditAfter)).not.toContain(RAW_CREDENTIAL);
     expect(auditAfter.hasCredential).toBe(true);
+
+    // The connect audit action is the ADR-024/spec-mandated name (not the old
+    // implemented `import.sync.connect`) — append-only audit semantics preserved.
+    expect(auditData.action).toBe('integration.roster_source.created');
+    expect(auditData.resourceType).toBe('roster_source');
   });
 
   it('CSV-bundle source stores no credential (hasCredential=false)', async () => {

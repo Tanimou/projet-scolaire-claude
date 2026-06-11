@@ -101,7 +101,7 @@ export class IntegrationsService {
       },
     });
 
-    await this.audit(actor, 'import.sync.connect', source.id, {
+    await this.audit(actor, 'integration.roster_source.created', source.id, {
       kind: source.kind,
       label: source.label,
       hasCredential: !!credentialRef,
