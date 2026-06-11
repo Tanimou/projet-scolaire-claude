@@ -1,6 +1,6 @@
 import { ReconciliationClass } from '@prisma/client';
 
-import { type AppliedEntity, type ApplyContext, type ConflictField, type ImportContext, type ImportHandler, type RollbackContext, type ValidationResult } from '../handler.types';
+import { type AppliedEntity, type ApplyContext, type ConflictDecision, type ConflictField, type ConflictResolution, type ImportContext, type ImportHandler, type RollbackContext, type ValidationResult } from '../handler.types';
 
 interface StudentInput {
   firstName: string;
@@ -207,5 +207,66 @@ export const studentsHandler: ImportHandler = {
 
   async rollbackRow(entityId, ctx: RollbackContext): Promise<void> {
     await ctx.tx.student.deleteMany({ where: { id: entityId, tenantId: ctx.tenantId } });
+  },
+
+  /**
+   * E11-S4 — resolve a protected-field `conflict` on a matched student.
+   *
+   * Re-resolves the existing student by its externalRef anchor (tenant-scoped,
+   * inside the tx — never trusting a stale cache), then:
+   *  - `keep_current` writes NOTHING (the child's identity is preserved) → `unchanged`;
+   *  - `take_source` writes the source identity (firstName/lastName/birthDate) +
+   *    any non-protected diff (email/notes) onto the EXISTING student → `updated`.
+   *
+   * Returns the pre-existing entity id so the caller flips the row to `applied`
+   * with `createdEntityId = existing.id` — a MATCHED row, which the S2 rollback
+   * invariant deliberately excludes from the delete set (we never created it).
+   * The only write path here is an explicit admin `take_source`; the audit row
+   * is written by the service (`import.conflict.resolve`).
+   */
+  async resolveConflict(
+    normalized: Record<string, unknown>,
+    decision: ConflictDecision,
+    ctx: ApplyContext,
+  ): Promise<ConflictResolution> {
+    const p = normalized as unknown as StudentInput;
+    if (!p.externalRef) {
+      throw new Error('Ligne sans référence externe — arbitrage impossible.');
+    }
+    const existing = await ctx.tx.student.findFirst({
+      where: { tenantId: ctx.tenantId, schoolId: ctx.schoolId, externalRef: p.externalRef },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new Error('Élève introuvable pour cet arbitrage (référence externe absente).');
+    }
+
+    if (decision === 'keep_current') {
+      // No write — the existing identity is kept verbatim.
+      return {
+        entityId: existing.id,
+        type: 'student',
+        reconciliation: ReconciliationClass.unchanged,
+      };
+    }
+
+    // take_source — write the source identity (and any non-protected diff) onto
+    // the matched student. This is the ONLY path that overwrites a protected field,
+    // and only on an explicit, audited admin decision.
+    await ctx.tx.student.update({
+      where: { id: existing.id },
+      data: {
+        firstName: p.firstName,
+        lastName: p.lastName,
+        birthDate: p.birthDate ? new Date(p.birthDate) : null,
+        ...(p.email !== undefined ? { email: p.email ?? null } : {}),
+        ...(p.notes !== undefined ? { notes: p.notes ?? null } : {}),
+      },
+    });
+    return {
+      entityId: existing.id,
+      type: 'student',
+      reconciliation: ReconciliationClass.updated,
+    };
   },
 };

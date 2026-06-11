@@ -126,11 +126,17 @@ function ModeOption({
   );
 }
 
-export function RollbackButtonClient({ batchId }: { batchId: string }) {
+export function RollbackButtonClient({ batchId, isSync }: { batchId: string; isSync?: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const noun = isSync ? 'cette synchronisation' : 'cet import';
   const onRollback = async () => {
-    if (!confirm("Annuler cet import ? Toutes les entités créées seront supprimées.")) return;
+    if (
+      !confirm(
+        `Annuler ${noun} ? Toutes les entités créées seront supprimées (les entités existantes restent intactes).`,
+      )
+    )
+      return;
     setBusy(true);
     const res = await rollbackImport(batchId);
     setBusy(false);
@@ -142,10 +148,10 @@ export function RollbackButtonClient({ batchId }: { batchId: string }) {
       type="button"
       onClick={onRollback}
       disabled={busy}
-      className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-amber-700 disabled:opacity-70"
+      className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-amber-700 disabled:opacity-70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700"
     >
       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-      {busy ? 'Annulation…' : 'Annuler cet import'}
+      {busy ? 'Annulation…' : isSync ? 'Annuler cette synchro' : 'Annuler cet import'}
     </button>
   );
 }

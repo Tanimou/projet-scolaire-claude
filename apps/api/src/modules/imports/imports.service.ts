@@ -1,8 +1,17 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ImportMode, ImportRowStatus, ImportStatus, ImportType, Prisma } from '@prisma/client';
+import {
+  ImportMode,
+  ImportRowStatus,
+  ImportStatus,
+  ImportType,
+  Prisma,
+  ReconciliationClass,
+} from '@prisma/client';
 import {
   buildImportCaches,
+  resolveRowConflict,
+  type ConflictDecision,
   type ImportCaches,
   type ImportContext,
   type ImportHandler,
@@ -320,6 +329,136 @@ export class ImportsService {
       throw new BadRequestException(`Échec de la mise en file de l'annulation : ${(err as Error).message}`);
     }
 
+    return this.getBatch(batch.id, actor.tenantId);
+  }
+
+  /**
+   * Resolve ONE arbitrated `conflict` row (E11-S4 — admin choice, audited).
+   *
+   * A `conflict` row was recorded by the apply (a protected-field disagreement
+   * on a matched student) and left UNWRITTEN — the panel surfaces it and the
+   * admin picks **keep current** (`keep_current`) or **take source**
+   * (`take_source`). This runs in-request (a single targeted write, never the
+   * queue) inside one transaction:
+   *   1. re-validate the row is genuinely a `conflict` on an `applied` batch
+   *      (idempotent: a re-tap on an already-resolved row is a 400, not a double
+   *      write);
+   *   2. the handler re-resolves the matched entity + applies the choice
+   *      (`take_source` is the ONLY path that overwrites a protected field —
+   *      never silent);
+   *   3. the row flips to `applied` with `createdEntityId = the PRE-EXISTING
+   *      entity` (a matched row → the S2 rollback-safety invariant keeps it out
+   *      of the delete set), `reconciliation` = unchanged|updated, and
+   *      `conflictFields` cleared;
+   *   4. the batch `summary.byClass` roll-up is adjusted (conflict-1, the chosen
+   *      class +1) so the health panel stays truthful;
+   *   5. an append-only `import.conflict.resolve` audit row records the decision +
+   *      the fields (no silent overwrite of a child's data — AC-6/AC-7).
+   *
+   * Tenant-scoped on every read/write; `integrations.write`/`imports.execute`
+   * gating is at the controller (admin-only).
+   */
+  async resolveConflict(
+    batchId: string,
+    rowId: string,
+    decision: ConflictDecision,
+    actor: { id: string; tenantId: string },
+  ) {
+    const batch = await this.getBatch(batchId, actor.tenantId);
+    if (batch.status !== ImportStatus.applied) {
+      throw new BadRequestException(
+        `Les arbitrages ne sont possibles que sur un import appliqué (statut actuel : « ${batch.status} »).`,
+      );
+    }
+    const handler = this.requireHandler(batch.type);
+
+    const row = batch.rows.find((r) => r.id === rowId);
+    if (!row) throw new NotFoundException('Ligne introuvable dans cet import.');
+    if (row.reconciliation !== ReconciliationClass.conflict) {
+      throw new BadRequestException(
+        `Cette ligne n'est pas en conflit (déjà arbitrée ou sans désaccord).`,
+      );
+    }
+
+    const conflictFields = (row.conflictFields ?? []) as unknown as Prisma.JsonArray;
+    const caches = await this.buildCaches(batch.schoolId);
+
+    const resolution = await this.prisma.$transaction(async (tx) => {
+      const res = await resolveRowConflict({
+        tx,
+        handler,
+        payload: row.payload as Record<string, unknown>,
+        decision,
+        caches,
+        schoolId: batch.schoolId,
+        actor,
+      });
+
+      // From-status-guarded row flip: only update a row STILL in `conflict`, so a
+      // concurrent double-resolve writes exactly once (the loser's count===0 →
+      // we throw a clear 409-style conflict, never a second overwrite).
+      const flipped = await tx.importRow.updateMany({
+        where: { id: row.id, batchId: batch.id, reconciliation: ReconciliationClass.conflict },
+        data: {
+          status: ImportRowStatus.applied,
+          createdEntityId: res.entityId,
+          createdEntityType: res.type,
+          reconciliation: res.reconciliation,
+          conflictFields: Prisma.DbNull,
+        },
+      });
+      if (flipped.count === 0) {
+        throw new BadRequestException('Cette ligne vient d’être arbitrée par ailleurs.');
+      }
+
+      // Adjust the batch byClass roll-up (conflict -1, chosen class +1) so the
+      // health panel + KPI cards stay truthful without re-deriving from rows.
+      const summary = (batch.summary as Record<string, unknown> | null) ?? {};
+      const byClass = {
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        conflict: 0,
+        skipped: 0,
+        ...((summary.byClass as Record<string, number> | undefined) ?? {}),
+      };
+      byClass.conflict = Math.max(0, byClass.conflict - 1);
+      if (res.reconciliation === ReconciliationClass.updated) byClass.updated += 1;
+      else byClass.unchanged += 1;
+
+      await tx.importBatch.update({
+        where: { id: batch.id },
+        data: { summary: { ...summary, byClass } as Prisma.InputJsonValue },
+      });
+
+      // Append-only audit — the decision + the arbitrated fields, never a silent
+      // overwrite (AC-6/AC-7).
+      await tx.auditLog.create({
+        data: {
+          tenantId: actor.tenantId,
+          actorId: actor.id,
+          actorRole: 'school_admin',
+          portal: 'admin',
+          action: 'import.conflict.resolve',
+          resourceType: 'import_row',
+          resourceId: row.id,
+          after: {
+            batchId: batch.id,
+            type: batch.type,
+            decision,
+            entityId: res.entityId,
+            reconciliation: res.reconciliation,
+            fields: conflictFields,
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      return res;
+    });
+
+    this.logger.log(
+      `[imports.conflict.resolve] batch ${batch.id} row ${row.id} → ${decision} (${resolution.reconciliation})`,
+    );
     return this.getBatch(batch.id, actor.tenantId);
   }
 

@@ -27,3 +27,14 @@ export function getHandler(type: ImportType): ImportHandler | null {
 export function listHandlers(): ImportHandler[] {
   return Object.values(handlers).filter((h): h is ImportHandler => !!h);
 }
+
+// Named handler re-exports — so callers/tests can target a specific handler
+// (e.g. the E11-S4 students conflict-resolution path) without going through the
+// `getHandler` registry.
+export {
+  classesHandler,
+  enrollmentsHandler,
+  guardiansHandler,
+  studentsHandler,
+  subjectsHandler,
+};

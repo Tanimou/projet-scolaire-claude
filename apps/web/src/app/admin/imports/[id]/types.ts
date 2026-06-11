@@ -77,6 +77,14 @@ export interface BatchSummary {
    * client-side count over `rows[].reconciliation`, then degrades to no panel.
    */
   byClass?: Partial<Record<ReconciliationClass, number>>;
+  /**
+   * SIS-side delete divergence (E11-S4 / FR3, R6 wall) — best-effort, read-only.
+   * Students carrying a `sourcedId`/`externalRef` from this `rosterSourceId`
+   * that were ABSENT from the latest OneRoster pull. NEVER an auto-delete: this
+   * is a kindly-framed "à vérifier" signal only. Additive + optional — absent
+   * for CSV imports and pre-S4 sync batches → the FE renders nothing.
+   */
+  absentFromSource?: Array<{ externalRef: string; name?: string }>;
 }
 
 export interface BatchDetail {

@@ -14,8 +14,9 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ImportMode, ImportType } from '@prisma/client';
+import type { ConflictDecision } from '@pilotage/imports-core';
 import type { Response } from 'express';
-import { IsEnum, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEnum, IsIn, IsString, MaxLength, MinLength } from 'class-validator';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -33,6 +34,10 @@ class UploadDto {
 
 class ApplyDto {
   @IsEnum(ImportMode) mode!: ImportMode;
+}
+
+class ResolveConflictDto {
+  @IsString() @IsIn(['keep_current', 'take_source']) decision!: ConflictDecision;
 }
 
 @ApiTags('imports')
@@ -110,5 +115,28 @@ export class ImportsController {
   async rollback(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
     return this.imports.rollback(id, { id: me.id, tenantId: me.tenantId });
+  }
+
+  /**
+   * E11-S4 — resolve one arbitrated `conflict` row (keep-current / take-source).
+   * Admin-only (`imports.execute`); tenant scope is enforced in the service. The
+   * choice is recorded `import.conflict.resolve` (append-only). Never a silent
+   * overwrite — `take_source` is the only write path and it is audited.
+   */
+  @Post(':id/conflicts/:rowId/resolve')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequiresPermission('imports.execute')
+  async resolveConflict(
+    @Param('id') id: string,
+    @Param('rowId') rowId: string,
+    @Body() body: ResolveConflictDto,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    return this.imports.resolveConflict(id, rowId, body.decision, {
+      id: me.id,
+      tenantId: me.tenantId,
+    });
   }
 }
