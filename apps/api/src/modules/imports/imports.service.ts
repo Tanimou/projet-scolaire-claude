@@ -1,11 +1,20 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ImportMode, ImportRowStatus, ImportStatus, ImportType, Prisma } from '@prisma/client';
+import {
+  buildImportCaches,
+  type ImportCaches,
+  type ImportContext,
+  type ImportHandler,
+  type ImportJobPayload,
+} from '@pilotage/imports-core';
+import { Queue } from 'bullmq';
 import { parse, type ParseResult } from 'papaparse';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
-import { type ImportCaches, type ImportContext, type ImportHandler } from './handler.types';
 import { getHandler, listHandlers } from './handlers';
 
 const MAX_RAW_CSV_BYTES = 5_000_000; // 5 MB
@@ -19,6 +28,7 @@ export class ImportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ctx: SchoolContextService,
+    @InjectQueue(QUEUE_IMPORTS) private readonly queue: Queue<ImportJobPayload>,
   ) {}
 
   listTypes() {
@@ -187,8 +197,18 @@ export class ImportsService {
   }
 
   /**
-   * Apply the previously-validated batch. Runs inside a single transaction so
-   * partial failures don't leave the DB inconsistent.
+   * Apply the previously-validated batch (E11-S1 — async).
+   *
+   * The write transaction no longer runs in-request: this method keeps the
+   * existing `validated` + all_or_nothing guards UNCHANGED, then flips the batch
+   * `validated → queued` via a **from-status-guarded** `updateMany`
+   * (`WHERE status='validated'`) and enqueues the `apply` job on the third
+   * `imports` BullMQ queue. The worker `ImportsProcessor` drains it, claiming
+   * `queued → applying` and running the SAME relocated apply engine
+   * (`@pilotage/imports-core`) — one implementation, byte-for-byte (ADR-024).
+   *
+   * Idempotent: if `count === 0` the batch was already claimed (concurrent call
+   * or re-tap) → return the current DTO, never a second enqueue.
    */
   async apply(batchId: string, mode: ImportMode, actor: { id: string; tenantId: string }) {
     const batch = await this.getBatch(batchId, actor.tenantId);
@@ -203,93 +223,57 @@ export class ImportsService {
         `Mode all-or-nothing impossible : ${invalid} ligne(s) invalide(s). Corrigez ou passez en skip-invalid.`,
       );
     }
+    // Validate the type has a handler BEFORE claiming (fail fast, same as before).
+    this.requireHandler(batch.type);
 
-    const handler = this.requireHandler(batch.type);
-    await this.prisma.importBatch.update({
-      where: { id: batch.id },
-      data: { status: ImportStatus.applying, mode },
+    // From-status-guarded claim: exactly one caller flips validated → queued.
+    const claimed = await this.prisma.importBatch.updateMany({
+      where: { id: batch.id, tenantId: actor.tenantId, status: ImportStatus.validated },
+      data: { status: ImportStatus.queued, mode },
     });
+    if (claimed.count === 0) {
+      // Lost the race / already queued — idempotent no-op, never a second enqueue.
+      return this.getBatch(batch.id, actor.tenantId);
+    }
 
-    const caches = await this.buildCaches(batch.schoolId);
-    let applied = 0;
-    let skipped = 0;
+    const payload: ImportJobPayload = {
+      batchId: batch.id,
+      kind: 'apply',
+      mode,
+      tenantId: actor.tenantId,
+      schoolId: batch.schoolId,
+      actorId: actor.id,
+    };
 
     try {
-      await this.prisma.$transaction(
-        async (tx) => {
-          const apCtx = {
-            tenantId: actor.tenantId,
-            schoolId: batch.schoolId,
-            caches,
-            tx,
-          };
-          for (const row of batch.rows) {
-            if (row.status === ImportRowStatus.invalid) {
-              await tx.importRow.update({ where: { id: row.id }, data: { status: ImportRowStatus.skipped } });
-              skipped++;
-              continue;
-            }
-            if (row.status !== ImportRowStatus.valid) continue;
-            try {
-              const result = await handler.applyRow(row.payload as Record<string, unknown>, apCtx);
-              await tx.importRow.update({
-                where: { id: row.id },
-                data: {
-                  status: ImportRowStatus.applied,
-                  createdEntityId: result.id,
-                  createdEntityType: result.type,
-                },
-              });
-              applied++;
-            } catch (err) {
-              throw new Error(`Ligne ${row.rowIndex} : ${(err as Error).message}`);
-            }
-          }
-          await tx.auditLog.create({
-            data: {
-              tenantId: actor.tenantId,
-              actorId: actor.id,
-              actorRole: 'school_admin',
-              portal: 'admin',
-              action: 'import.apply',
-              resourceType: 'import_batch',
-              resourceId: batch.id,
-              after: { type: batch.type, applied, skipped, mode },
-            },
-          });
-        },
-        { timeout: 60_000 },
-      );
-
-      await this.prisma.importBatch.update({
-        where: { id: batch.id },
-        data: {
-          status: ImportStatus.applied,
-          appliedAt: new Date(),
-          summary: {
-            ...(batch.summary as Record<string, unknown>),
-            applied,
-            skipped,
-            mode,
-          },
-        },
+      await this.queue.add('apply', payload, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2_000 },
+        removeOnComplete: { count: 100, age: 86_400 },
+        removeOnFail: { count: 50, age: 604_800 },
       });
     } catch (err) {
-      const message = (err as Error).message;
-      this.logger.error(`Import ${batch.id} failed: ${message}`);
-      await this.prisma.importBatch.update({
-        where: { id: batch.id },
-        data: { status: ImportStatus.failed, errorMessage: message },
+      // Enqueue failed after the claim — revert so the admin can retry (never a
+      // stuck `queued` with no job).
+      this.logger.error(`Failed to enqueue import apply ${batch.id}: ${(err as Error).message}`);
+      await this.prisma.importBatch.updateMany({
+        where: { id: batch.id, tenantId: actor.tenantId, status: ImportStatus.queued },
+        data: { status: ImportStatus.validated },
       });
-      throw new BadRequestException(`Échec de l'import : ${message}`);
+      throw new BadRequestException(`Échec de la mise en file de l'import : ${(err as Error).message}`);
     }
 
     return this.getBatch(batch.id, actor.tenantId);
   }
 
   /**
-   * Rolls back an applied batch within the 24h window. Calls handler.rollbackRow for each
-   * applied row, in reverse insertion order. Idempotent.
+   * Rolls back an applied batch within the 24h window (E11-S1 — async).
+   *
+   * The 24h window is checked **at enqueue** so a past-window request is rejected
+   * with a 400 BEFORE any job is queued (never a queued no-op rollback). On a
+   * within-window request, flips `applied → queued` (from-status-guarded) and
+   * enqueues the `rollback` job; the worker runs the SAME reverse-order
+   * `rollbackRow` compensation via the relocated engine.
    */
   async rollback(batchId: string, actor: { id: string; tenantId: string }) {
     const batch = await this.getBatch(batchId, actor.tenantId);
@@ -301,43 +285,39 @@ export class ImportsService {
         `Annulation impossible : l'import a plus de ${ROLLBACK_WINDOW_HOURS}h.`,
       );
     }
+    this.requireHandler(batch.type);
 
-    const handler = this.requireHandler(batch.type);
-    const appliedRows = batch.rows
-      .filter((r) => r.status === ImportRowStatus.applied && r.createdEntityId)
-      .sort((a, b) => b.rowIndex - a.rowIndex);
+    const claimed = await this.prisma.importBatch.updateMany({
+      where: { id: batch.id, tenantId: actor.tenantId, status: ImportStatus.applied },
+      data: { status: ImportStatus.queued },
+    });
+    if (claimed.count === 0) {
+      return this.getBatch(batch.id, actor.tenantId);
+    }
 
-    let undone = 0;
+    const payload: ImportJobPayload = {
+      batchId: batch.id,
+      kind: 'rollback',
+      mode: batch.mode ?? ImportMode.skip_invalid,
+      tenantId: actor.tenantId,
+      schoolId: batch.schoolId,
+      actorId: actor.id,
+    };
+
     try {
-      await this.prisma.$transaction(async (tx) => {
-        for (const row of appliedRows) {
-          await handler.rollbackRow(row.createdEntityId!, { tx, tenantId: actor.tenantId });
-          await tx.importRow.update({
-            where: { id: row.id },
-            data: { status: ImportRowStatus.rolled_back },
-          });
-          undone++;
-        }
-        await tx.auditLog.create({
-          data: {
-            tenantId: actor.tenantId,
-            actorId: actor.id,
-            actorRole: 'school_admin',
-            portal: 'admin',
-            action: 'import.rollback',
-            resourceType: 'import_batch',
-            resourceId: batch.id,
-            after: { type: batch.type, undone },
-          },
-        });
-      }, { timeout: 60_000 });
-
-      await this.prisma.importBatch.update({
-        where: { id: batch.id },
-        data: { status: ImportStatus.rolled_back, rolledBackAt: new Date() },
+      await this.queue.add('rollback', payload, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2_000 },
+        removeOnComplete: { count: 100, age: 86_400 },
+        removeOnFail: { count: 50, age: 604_800 },
       });
     } catch (err) {
-      throw new BadRequestException(`Échec du rollback : ${(err as Error).message}`);
+      this.logger.error(`Failed to enqueue import rollback ${batch.id}: ${(err as Error).message}`);
+      await this.prisma.importBatch.updateMany({
+        where: { id: batch.id, tenantId: actor.tenantId, status: ImportStatus.queued },
+        data: { status: ImportStatus.applied },
+      });
+      throw new BadRequestException(`Échec de la mise en file de l'annulation : ${(err as Error).message}`);
     }
 
     return this.getBatch(batch.id, actor.tenantId);
@@ -360,73 +340,13 @@ export class ImportsService {
     });
   }
 
-  private async buildCaches(schoolId: string): Promise<ImportCaches> {
-    const [levels, subjects, classes, students, guardians, ay] = await Promise.all([
-      this.prisma.gradeLevel.findMany({ where: { schoolId } }),
-      this.prisma.subject.findMany({ where: { schoolId } }),
-      this.prisma.classSection.findMany({
-        where: { gradeLevel: { schoolId } },
-        select: {
-          id: true,
-          name: true,
-          academicYearId: true,
-          gradeLevelId: true,
-          maxStudents: true,
-          _count: { select: { enrollments: { where: { status: 'active' } } } },
-        },
-      }),
-      this.prisma.student.findMany({
-        where: { schoolId, externalRef: { not: null } },
-        select: { id: true, externalRef: true },
-      }),
-      this.prisma.guardian.findMany({
-        where: { schoolId, email: { not: null } },
-        select: { id: true, firstName: true, lastName: true, email: true },
-      }),
-      this.prisma.academicYear.findFirst({ where: { schoolId, status: 'active' } }),
-    ]);
-
-    const gradeLevelsByCode = new Map<string, { id: string; name: string }>();
-    const gradeLevelsByName = new Map<string, { id: string; name: string; code: string }>();
-    for (const l of levels) {
-      gradeLevelsByCode.set(l.code.toLowerCase(), { id: l.id, name: l.name });
-      gradeLevelsByName.set(l.name.toLowerCase(), { id: l.id, name: l.name, code: l.code });
-    }
-    const subjectsByCode = new Map<string, { id: string; name: string }>();
-    for (const s of subjects) subjectsByCode.set(s.code.toUpperCase(), { id: s.id, name: s.name });
-
-    const classNamesPerYearLevel = new Set<string>();
-    const classSectionsByName = new Map<string, { id: string; gradeLevelId: string; academicYearId: string; maxStudents: number; currentSize: number }>();
-    for (const c of classes) {
-      classNamesPerYearLevel.add(`${c.academicYearId}:${c.gradeLevelId}:${c.name.toLowerCase()}`);
-      classSectionsByName.set(`${c.academicYearId}:${c.name.toLowerCase()}`, {
-        id: c.id,
-        gradeLevelId: c.gradeLevelId,
-        academicYearId: c.academicYearId,
-        maxStudents: c.maxStudents,
-        currentSize: c._count.enrollments,
-      });
-    }
-    const studentExternalRefs = new Map<string, string>();
-    for (const s of students) if (s.externalRef) studentExternalRefs.set(s.externalRef, s.id);
-
-    const guardiansByEmail = new Map<string, { id: string; firstName: string; lastName: string }>();
-    for (const g of guardians) {
-      if (g.email) {
-        guardiansByEmail.set(g.email.toLowerCase(), { id: g.id, firstName: g.firstName, lastName: g.lastName });
-      }
-    }
-
-    return {
-      gradeLevelsByCode,
-      gradeLevelsByName,
-      classNamesPerYearLevel,
-      classSectionsByName,
-      subjectsByCode,
-      studentExternalRefs,
-      guardiansByEmail,
-      activeAcademicYearId: ay?.id ?? null,
-    };
+  /**
+   * Build the per-batch O(1) lookup caches via the shared `@pilotage/imports-core`
+   * builder (E11-S1) so the validate path (here) and the worker apply path use
+   * ONE implementation. Thin delegation kept so existing call sites are unchanged.
+   */
+  private buildCaches(schoolId: string): Promise<ImportCaches> {
+    return buildImportCaches(this.prisma, schoolId);
   }
 }
 

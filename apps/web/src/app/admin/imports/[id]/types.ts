@@ -2,6 +2,7 @@ export type BatchStatus =
   | 'uploaded'
   | 'validating'
   | 'validated'
+  | 'queued'
   | 'applying'
   | 'applied'
   | 'failed'
@@ -42,6 +43,9 @@ export interface BatchSummary {
   skipped?: number;
   missingHeaders?: string[];
   mode?: string;
+  /** Async apply progress (worker-written, incremental) — E11-S1. */
+  processedRows?: number;
+  totalToApply?: number;
 }
 
 export interface BatchDetail {

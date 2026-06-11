@@ -10,6 +10,8 @@ import { Module } from '@nestjs/common';
 export const QUEUE_EXPORTS = 'exports' as const;
 /** Notification email delivery (R8.2). Consumed by apps/worker. */
 export const QUEUE_NOTIFICATIONS_EMAIL = 'notifications-email' as const;
+/** Async bulk-import apply/rollback (E11-S1). Consumed by apps/worker `ImportsProcessor`. */
+export const QUEUE_IMPORTS = 'imports' as const;
 
 @Module({
   imports: [
@@ -20,6 +22,7 @@ export const QUEUE_NOTIFICATIONS_EMAIL = 'notifications-email' as const;
     }),
     BullModule.registerQueue({ name: QUEUE_EXPORTS }),
     BullModule.registerQueue({ name: QUEUE_NOTIFICATIONS_EMAIL }),
+    BullModule.registerQueue({ name: QUEUE_IMPORTS }),
   ],
   exports: [BullModule],
 })

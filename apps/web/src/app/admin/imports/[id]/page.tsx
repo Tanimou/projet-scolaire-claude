@@ -4,7 +4,9 @@ import {
   ArrowLeft,
   CheckCircle2,
   FileText,
+  Hourglass,
   ListChecks,
+  Loader2,
   RotateCcw,
   Sparkles,
   Tag,
@@ -29,11 +31,13 @@ import {
 } from '@pilotage/ui';
 
 import { ApplyControls, RollbackButtonClient } from './ApplyControls';
+import { ImportStatusPoller } from './ImportStatusPoller';
 import { RowsFilters } from './RowsFilters';
 import type {
   BatchDetail,
   BatchRow,
   BatchStatus,
+  BatchSummary,
   ErrorFieldFacet,
   RowError,
   RowStatus,
@@ -60,6 +64,7 @@ const STATUS_LABEL: Record<BatchStatus, string> = {
   uploaded: 'Uploadé',
   validating: 'Validation…',
   validated: 'Validé · à confirmer',
+  queued: 'En file d’attente',
   applying: 'Application…',
   applied: 'Appliqué',
   failed: 'Échec',
@@ -70,6 +75,7 @@ const STATUS_TONE: Record<BatchStatus, StatusTone> = {
   uploaded: 'neutral',
   validating: 'info',
   validated: 'warning',
+  queued: 'neutral',
   applying: 'info',
   applied: 'success',
   failed: 'danger',
@@ -223,15 +229,29 @@ function buildTimeline(batch: BatchDetail): TimelineEntry[] {
     });
   }
 
+  if (batch.status === 'queued') {
+    entries.push({
+      id: 'queued',
+      title: 'En file d’attente',
+      sub: "L'application va démarrer dans un instant",
+      timestamp: '…',
+      tone: 'slate',
+    });
+  }
+
   if (batch.appliedAt || batch.status === 'applying' || batch.status === 'applied') {
     const applied = s.applied ?? 0;
     const skipped = s.skipped ?? 0;
     const applyingNow = batch.status === 'applying' && !batch.appliedAt;
+    const processed = s.processedRows ?? applied + skipped;
+    const totalToApply = s.totalToApply ?? s.validCount ?? 0;
     entries.push({
       id: 'applied',
       title: applyingNow ? 'Application en cours' : 'Import appliqué',
       sub: applyingNow
-        ? 'Écriture transactionnelle…'
+        ? totalToApply > 0
+          ? `Application en cours — ${processed}/${totalToApply} lignes`
+          : 'Application en cours…'
         : `${applied} appliquée${applied > 1 ? 's' : ''}` +
           (skipped > 0 ? ` · ${skipped} ignorée${skipped > 1 ? 's' : ''}` : ''),
       timestamp: applyingNow ? '…' : fmtDateTime(batch.appliedAt),
@@ -253,7 +273,9 @@ function buildTimeline(batch: BatchDetail): TimelineEntry[] {
     entries.push({
       id: 'failed',
       title: "Échec d'application",
-      sub: batch.errorMessage ?? 'Erreur inattendue',
+      sub:
+        batch.errorMessage ??
+        'Aucune donnée partielle conservée — vous pouvez relancer.',
       timestamp: fmtDateTime(batch.appliedAt ?? batch.validatedAt ?? batch.startedAt),
       tone: 'rose',
     });
@@ -385,7 +407,11 @@ export default async function ImportDetailPage({
             ? `${appliedRate} % du fichier${skippedCount > 0 ? ` · ${skippedCount} ignorée${skippedCount > 1 ? 's' : ''}` : ''}`
             : batch.status === 'validated'
               ? 'En attente de confirmation'
-              : '—'}
+              : batch.status === 'queued'
+                ? 'En file d’attente…'
+                : batch.status === 'applying'
+                  ? 'Application en cours…'
+                  : '—'}
         </KpiCard>
       </div>
 
@@ -420,6 +446,17 @@ export default async function ImportDetailPage({
           </div>
         </section>
       )}
+
+      {(batch.status === 'queued' || batch.status === 'applying') && (
+        <LiveProgressStrip
+          status={batch.status}
+          summary={summary}
+          totalRows={totalRows}
+          validCount={validCount}
+        />
+      )}
+
+      <ImportStatusPoller status={batch.status} />
 
       <div className="mt-6 grid gap-5 lg:grid-cols-5">
         <section className="lg:col-span-3 space-y-5">
@@ -725,6 +762,82 @@ function RowItem({ row }: { row: BatchRow }) {
         )}
       </td>
     </tr>
+  );
+}
+
+function LiveProgressStrip({
+  status,
+  summary,
+  totalRows,
+  validCount,
+}: {
+  status: 'queued' | 'applying';
+  summary: BatchSummary;
+  totalRows: number;
+  validCount: number;
+}) {
+  const isQueued = status === 'queued';
+  const applied = summary.applied ?? 0;
+  const skipped = summary.skipped ?? 0;
+  const processed = summary.processedRows ?? applied + skipped;
+  const totalToApply = summary.totalToApply ?? validCount ?? totalRows ?? 0;
+  const pct = totalToApply > 0 ? Math.min(100, Math.round((processed / totalToApply) * 100)) : 0;
+
+  // Phase-only accessible name → the polite region announces the milestone, not
+  // every poll tick (the numeric caption below is aria-hidden).
+  const phaseLabel = isQueued ? 'En file d’attente' : 'Application en cours';
+
+  return (
+    <section
+      role="status"
+      aria-live="polite"
+      aria-label={phaseLabel}
+      className="mt-4 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {isQueued ? (
+            <Hourglass aria-hidden className="h-4 w-4 text-slate-500" />
+          ) : (
+            <Loader2
+              aria-hidden
+              className="h-4 w-4 animate-spin text-sky-600 motion-reduce:animate-none"
+            />
+          )}
+          <StatusBadge
+            tone={isQueued ? 'neutral' : 'info'}
+            label={isQueued ? 'En file d’attente' : 'Application en cours…'}
+            withDot
+          />
+        </div>
+        {!isQueued && totalToApply > 0 && (
+          <span
+            aria-hidden
+            className="font-mono text-xs font-semibold tabular-nums text-slate-600"
+          >
+            {processed.toLocaleString('fr-FR')} / {totalToApply.toLocaleString('fr-FR')} lignes
+            appliquées…
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3">
+        {isQueued ? (
+          // Indeterminate / skeleton track — not 0 %, which reads as "stuck".
+          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-slate-300 motion-reduce:animate-none" />
+          </div>
+        ) : (
+          <ProgressBar value={pct} tone="info" height={8} ariaLabel="Avancement de l'application" />
+        )}
+      </div>
+
+      <p className="mt-2 text-xs text-slate-600">
+        {isQueued
+          ? "En file d'attente — l'application va démarrer dans un instant."
+          : 'Vous pouvez quitter cette page, le traitement continue.'}
+      </p>
+    </section>
   );
 }
 
