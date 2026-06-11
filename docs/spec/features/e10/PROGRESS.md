@@ -11,7 +11,7 @@
 |---|---|---|---|---|---|
 | S1 | Auth-session fixture + grade→alert journey + authenticated a11y smoke → **ADR-023** | `[test][a11y][e2e]` | P2 | `[x]` shipped | (this run) |
 | S2 | Journey #2: parent child-claim → admin approval (E9) | `[test][e2e]` | P2 | `[x]` shipped | (this run) |
-| S3 | Journey #3: parent ↔ teacher messaging (E2) | `[test][e2e]` | P2 | `[ ]` not started | — |
+| S3 | Journey #3: parent ↔ teacher messaging (E2) | `[test][e2e]` | P2 | `[x]` shipped | (this run) |
 | S4 | Cross-portal WCAG 2.2 AA sweep + remediation (R9 payoff) | `[a11y][test][ui]` | P2 | `[ ]` not started | — |
 
 ## What landed this run (spec run)
@@ -155,11 +155,52 @@
   surfaced critical/serious would be remediated). `.auth/` stays git-ignored; `webServer` stays `next dev`;
   no build in any path (AC-8).
 
+## What landed this run (S3 — implementation)
+
+- **Journey #3 (FR-5 / AC-5):** `apps/web/tests/e2e/journeys/parent-teacher-messaging.spec.ts` (`@journey`) —
+  the cross-portal parent↔teacher journey in ONE spec driving BOTH the S1 `parentPage` **and** `teacherPage`
+  fixtures side by side (the cross-portal shape the S2 journey established). The arc: (1) PARENT opens
+  `/parent/messages/new`, the eligible-teacher list (`ComposeForm` server-filtered
+  `/messaging/eligible-teachers`) RESOLVES a teacher — the very act of having a selectable teacher IS the
+  guardianship ∩ teaching POSITIVE-wall resolution — and sends a **run-stamped** opening message, landing
+  inside the created/reused thread where the sent message is visible; (2) TEACHER opens
+  `/teacher/conversations`, finds the row carrying the run-stamp, **replies** with its own run-stamped text
+  (the `TeacherThreadReply` composer, which fires mark-read on mount), and the reply appears in the
+  server-revalidated stream; (3) PARENT reloads the thread → the teacher reply is visible — the round-trip
+  closes both directions through the real wall.
+- **Dual-wall asserted, not just exercised:** the **POSITIVE** wall is the happy path (a legitimate pair
+  exchanges both directions). The **NEGATIVE** wall (FR-5 "where cheap") is asserted **structurally without a
+  new seed**: the compose surface offers NO free-text teacher entry — the teacher control is a bounded picker
+  fed exclusively by the server-filtered eligible list, and a child with no current teacher renders the calm
+  "Aucun enseignant à contacter" empty-state with NO picker. The journey asserts that affordance-level denial
+  (an illegitimate pair has no selectable teacher) rather than seeding a separate non-teaching teacher.
+- **Re-runnability (FR-8 / AC-5):** every assertion keys on **presence of run-stamped text** (a base36
+  `RUN_ID` in both the parent message and the teacher reply), never absence of prior state. The E2 create is
+  product-idempotent (create-or-reuse), so a second run reuses the thread and appends — "my run-stamped
+  message is present" holds whether the thread is fresh or reused. Green on consecutive runs, no reseed.
+- **Pairing guard (PM non-vacuous):** the teacher fixture default switched to the rich
+  `teacher.demo@voltaire.fr` (`seed-demo-teacher.ts` — the most-assigned teacher in the SAME `voltaire-demo`
+  tenant as the demo parent, the most likely legitimate pair), env-overridable via `E2E_TEACHER_*`. If on a
+  given seed the parent's chosen eligible teacher is NOT the logged-in teacher session, the teacher-side leg
+  `test.skip`s gracefully AFTER proving the parent-side send + both walls — a seed mismatch is not a false
+  red. Likewise a no-child / no-teacher / not-migrated stack skips rather than asserting a disabled surface
+  (the S1/S2 non-vacuous posture).
+- **Fixture extension (no new fixture):** `tests/e2e/fixtures/users.ts` `ACTIVE_PORTALS` now
+  `['parent','admin','teacher']`; the `teacher` default flipped from the simple `teacher@pilotage.local` to
+  the rich `teacher.demo@voltaire.fr` (mirrors the S1 parent-default reasoning). `auth.setup.ts` authenticates
+  it via the SAME gate-asserted real-login path; a not-yet-provisioned teacher still fails loudly, a down
+  stack still skips cleanly.
+- **No schema / endpoint / permission / fixture / new ADR.** Reuses the S1 fixture spine + ADR-023 entirely;
+  the E2 `parent`-side `ComposeForm`/`ThreadReply` + `teacher`-side `TeacherThreadList`/`TeacherThreadReply`
+  surfaces are **asserted**, not modified. No WCAG remediation needed in these read/compose paths (the S4
+  cross-portal sweep is where a surfaced critical/serious would be remediated). `.auth/` stays git-ignored;
+  `webServer` stays `next dev`; no build in any path (AC-8).
+
 ## Next action
 
-**Implement E10-S3** (`epic-slice`): the parent ↔ teacher messaging cross-portal journey
-(`tests/e2e/journeys/parent-teacher-messaging.spec.ts`), reusing the S1 fixture (`parentPage` + `teacherPage`
-in one spec) and extending `ACTIVE_PORTALS` to add `teacher`. Unique run-stamped message text for
-re-runnability (FR-8); assert the dual-wall ABAC (guardianship ∩ teaching-assignment) round-trip both
-directions, and (where cheap) that an illegitimate pair is walled. No schema, no new fixture, no endpoint.
-Run against the already-running `:3100` stack — never build.
+**Implement E10-S4** (`epic-slice` `[a11y][test][ui]`): the cross-portal WCAG 2.2 AA sweep + remediation
+(`tests/e2e/a11y/cross-portal.a11y.spec.ts`, `@a11y`) — a data-driven axe-core WCAG-2.2-AA scan over a
+representative authenticated page per portal (parent dashboard + recommendations, teacher gradebook +
+conversations, admin analytics + one queue, student dashboard), each under its role session, asserting zero
+critical/serious; remediate the surfaced violations reuse-first in `apps/web`/`packages/ui`. **On land →
+`E10` is `shipped`.** Run against the already-running `:3100` stack — never build.

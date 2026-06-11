@@ -622,11 +622,30 @@ filler (E9 enrollment self-service / E10 quality bar).**
   `match_failed` and never enters the `submitted`-only admin queue, so on a clean seed the approve branch is a
   calm no-op and the headline assertion leans on the seed-linked guardianship; a negative-wall assertion (an
   ILLEGITIMATE parent↔child pair is DENIED the access link) is the recommended complement.
-  **Next slice → E10-S3** (`epic-slice`: the parent ↔ teacher messaging cross-portal journey
-  `tests/e2e/journeys/parent-teacher-messaging.spec.ts`, reusing the S1 fixture (`parentPage` + `teacherPage`
-  in one spec) + extending `ACTIVE_PORTALS` to add `teacher`; run-stamped message text for re-runnability;
-  assert the dual-wall ABAC (guardianship ∩ teaching-assignment) round-trip both directions, and where cheap
-  that an illegitimate pair is walled; no schema, no new fixture, no endpoint; run against `:3100`, never build).
+  **E10-S3 is now shipped** (`epic-slice` — P2 `[test][e2e][a11y][web][messaging][abac]`): the cross-portal
+  parent↔teacher journey `tests/e2e/journeys/parent-teacher-messaging.spec.ts` (`@journey`) driving BOTH the
+  S1 `parentPage` **and** `teacherPage` fixtures in one spec — parent opens `/parent/messages/new`, the
+  server-filtered eligible-teacher list (`ComposeForm` → `/messaging/eligible-teachers`) RESOLVING a selectable
+  teacher IS the guardianship ∩ teaching POSITIVE-wall, sends a **run-stamped** message and lands in the
+  created/reused thread → teacher opens `/teacher/conversations`, finds the row by run-stamp, **replies** with its
+  own run-stamped text (the `TeacherThreadReply` composer, mark-read on mount) → parent reloads and sees the reply,
+  closing the round-trip both directions through the real wall. The **NEGATIVE wall** is asserted structurally with
+  no new seed: the compose surface offers NO free-text teacher entry (a bounded picker fed only by the eligible
+  list) and renders the calm "Aucun enseignant à contacter" empty-state with no picker when no current teacher
+  exists — an illegitimate pair is denied at the affordance. Re-runnable on the stable `voltaire-demo` seed
+  (presence-only assertions on base36 run-stamps; E2 create-or-reuse appends). `ACTIVE_PORTALS` extended to
+  `['parent','admin','teacher']` (the setup now also authenticates the rich `voltaire-demo` teacher
+  `teacher.demo@voltaire.fr`, env-overridable via `E2E_TEACHER_*`). PM pairing guard: if the chosen eligible
+  teacher ≠ the logged-in teacher session on a given seed, the teacher-side leg `test.skip`s AFTER proving the
+  parent-side send + both walls (seed mismatch is not a false red); no-child / no-teacher / not-migrated stacks
+  skip gracefully too. **No schema/endpoint/permission/fixture/ADR; reuses the S1 fixture spine + ADR-023 entirely;
+  the E2 surfaces are asserted, not modified; `.auth/` stays git-ignored; `webServer` stays `next dev`; no build in
+  any path.**
+  **Next slice → E10-S4** (`epic-slice` `[a11y][test][ui]`: the cross-portal WCAG 2.2 AA sweep + remediation
+  `tests/e2e/a11y/cross-portal.a11y.spec.ts` — a data-driven axe-core WCAG-2.2-AA scan over a representative
+  authenticated page per portal, each under its role session, asserting zero critical/serious; remediate the
+  surfaced violations reuse-first in `apps/web`/`packages/ui`. On land → E10 `shipped`. Run against `:3100`,
+  never build).
 - **E11 — Standards interop (OneRoster/LTI) + async imports** · `proposed` · ~M — move bulk import
   to the worker (today blocking in-request) + OneRoster roster sync. Interoperability per the cahier.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store

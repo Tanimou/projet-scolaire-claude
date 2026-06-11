@@ -100,7 +100,7 @@ parent's child dashboard resolves. **No schema, no new fixture (reuse S1's), no 
 
 ---
 
-## [ ] S3 — Journey #3: parent ↔ teacher messaging (E2) · `[test][e2e]` · P2 · ~S-M
+## [x] S3 — Journey #3: parent ↔ teacher messaging (E2) · `[test][e2e]` · P2 · ~S-M · **SHIPPED**
 
 **Goal:** the cross-portal parent↔teacher journey proving E2's **dual-wall ABAC** (guardianship ∩
 teaching-assignment) end-to-end. Demoable by running the journey: parent messages a teacher who teaches
