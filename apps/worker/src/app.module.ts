@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { AlertsCronModule } from './modules/alerts-cron/alerts-cron.module';
 import { AnalyticsSnapshotsModule } from './modules/analytics-snapshots/analytics-snapshots.module';
 import { ExportsModule } from './modules/exports/exports.module';
+import { ImportsModule } from './modules/imports/imports.module';
 import { NotificationsDigestModule } from './modules/notifications-digest/notifications-digest.module';
 import { NotificationsEmailModule } from './modules/notifications-email/notifications-email.module';
 import { ParentDigestModule } from './modules/parent-digest/parent-digest.module';
@@ -29,6 +30,7 @@ import { StorageModule } from './shared/storage/storage.module';
     StorageModule,
     QueueModule,
     ExportsModule,
+    ImportsModule,
     AlertsCronModule,
     AnalyticsSnapshotsModule,
     NotificationsEmailModule,

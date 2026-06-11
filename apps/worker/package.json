@@ -21,6 +21,7 @@
     "@nestjs/config": "^3.3.0",
     "@nestjs/core": "^10.4.13",
     "@pilotage/contracts": "workspace:*",
+    "@pilotage/imports-core": "workspace:*",
     "@prisma/client": "^5.22.0",
     "@react-pdf/renderer": "^4.5.1",
     "bullmq": "^5.28.1",

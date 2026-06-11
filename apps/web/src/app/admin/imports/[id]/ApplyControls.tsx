@@ -18,6 +18,9 @@ export function ApplyControls({ batchId, invalidCount }: { batchId: string; inva
     if (!confirm(`Appliquer cet import (${mode}) ? Cette action peut être annulée dans les 24h.`)) return;
     setBusy(true);
     setError(null);
+    // Async (E11-S1): the apply is now enqueued onto the `imports` queue and returns
+    // immediately with the batch in `queued`. `router.refresh()` flips the page into
+    // the live progress strip, which then auto-polls to terminal.
     const res = await applyImport(batchId, mode);
     setBusy(false);
     if (!res.ok) setError(res.error);
@@ -28,8 +31,10 @@ export function ApplyControls({ batchId, invalidCount }: { batchId: string; inva
     <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-5">
       <h3 className="text-sm font-bold text-slate-900">Prêt à appliquer ?</h3>
       <p className="mt-1 text-xs text-slate-700">
-        Choisissez comment traiter les éventuelles lignes invalides. Toutes les écritures sont
-        transactionnelles ; en cas d&apos;échec d&apos;une ligne valide, l&apos;import est annulé.
+        Choisissez comment traiter les éventuelles lignes invalides. L&apos;application est mise en
+        file d&apos;attente puis exécutée en arrière-plan — vous pourrez suivre l&apos;avancement en
+        direct sans rester sur cette page. En cas d&apos;échec d&apos;une ligne valide en mode
+        all-or-nothing, aucune donnée n&apos;est conservée.
       </p>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -63,7 +68,7 @@ export function ApplyControls({ batchId, invalidCount }: { batchId: string; inva
           className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-500/30 disabled:opacity-70"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-          {busy ? 'Application…' : 'Appliquer l\'import'}
+          {busy ? 'Mise en file…' : 'Appliquer l\'import'}
         </button>
       </div>
     </div>

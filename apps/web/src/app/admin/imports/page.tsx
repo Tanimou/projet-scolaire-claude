@@ -76,6 +76,7 @@ const STATUS_STYLE: Record<
   uploaded: { label: 'Uploadé', class: 'bg-slate-100 text-slate-700', Icon: Hourglass },
   validating: { label: 'Validation…', class: 'bg-blue-50 text-blue-700', Icon: Loader2 },
   validated: { label: 'Validé · à confirmer', class: 'bg-amber-100 text-amber-800', Icon: FileText },
+  queued: { label: 'En file d’attente', class: 'bg-slate-100 text-slate-700', Icon: Hourglass },
   applying: { label: 'Application…', class: 'bg-blue-50 text-blue-700', Icon: Loader2 },
   applied: { label: 'Appliqué', class: 'bg-emerald-100 text-emerald-700', Icon: CheckCircle2 },
   failed: { label: 'Échec', class: 'bg-rose-100 text-rose-700', Icon: XCircle },
@@ -115,7 +116,12 @@ const PERIOD_MS: Record<Exclude<PeriodFilter, ''>, number> = {
 function inStatusBucket(status: ImportStatus, bucket: Exclude<StatusFilter, ''>): boolean {
   switch (bucket) {
     case 'inflight':
-      return status === 'uploaded' || status === 'validating' || status === 'applying';
+      return (
+        status === 'uploaded' ||
+        status === 'validating' ||
+        status === 'queued' ||
+        status === 'applying'
+      );
     case 'pending':
       return status === 'validated';
     case 'applied':
@@ -379,7 +385,10 @@ export default async function ImportsListPage({
             {groupEntries.map(([key, items]) => {
               const inflightInGroup = items.filter(
                 (b) =>
-                  b.status === 'uploaded' || b.status === 'validating' || b.status === 'applying',
+                  b.status === 'uploaded' ||
+                  b.status === 'validating' ||
+                  b.status === 'queued' ||
+                  b.status === 'applying',
               ).length;
               const pendingInGroup = items.filter((b) => b.status === 'validated').length;
               const failedInGroup = items.filter(
@@ -423,6 +432,7 @@ export default async function ImportsListPage({
                       const isInflight =
                         b.status === 'uploaded' ||
                         b.status === 'validating' ||
+                        b.status === 'queued' ||
                         b.status === 'applying';
                       return (
                         <li

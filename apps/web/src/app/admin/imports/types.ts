@@ -12,6 +12,7 @@ export type ImportStatus =
   | 'uploaded'
   | 'validating'
   | 'validated'
+  | 'queued'
   | 'applying'
   | 'applied'
   | 'failed'

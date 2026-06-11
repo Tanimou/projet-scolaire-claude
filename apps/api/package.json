@@ -36,6 +36,7 @@
     "@nestjs/swagger": "^8.0.7",
     "@nestjs/terminus": "^10.2.3",
     "@pilotage/contracts": "workspace:*",
+    "@pilotage/imports-core": "workspace:*",
     "@prisma/client": "^5.22.0",
     "@types/papaparse": "^5.5.2",
     "bullmq": "^5.28.1",

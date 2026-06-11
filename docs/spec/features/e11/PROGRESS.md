@@ -5,7 +5,7 @@
 > [`bmad/roadmap.md`](../../../../bmad/roadmap.md) on land. **Status legend:** `[ ]` not started ·
 > `[~]` in progress · `[x]` shipped.
 
-## Epic status: `in-progress` (spec-kit landed; slices unstarted)
+## Epic status: `in-progress` (spec-kit landed; **S1 shipped**; next slice → S2)
 
 **Mode of this run:** `epic-spec` — authored the kit, **no code / no schema / no build**. The bulk-import
 pipeline exists but runs **in-request** (`imports.service.ts apply()`/`rollback()` are sync API methods,
@@ -26,10 +26,24 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
 
 ## Slices
 
-- [ ] **S1** — Async import execution: 3rd BullMQ queue (`imports`) + worker `ImportsProcessor` +
+- [x] **S1** — Async import execution: 3rd BullMQ queue (`imports`) + worker `ImportsProcessor` +
   enqueue-on-apply (reuse the existing `applyRow`/`rollbackRow` contract — no forked engine) + crash-safe
   idempotent (from-status-guarded claim + per-row resume) + **ADR-024**. `[schema][worker][async]` · P1.
-  *Additive `db push`: `ImportStatus += queued`.*
+  *Additive `db push`: `ImportStatus += queued`.* **Shipped (needs human review — RED gate: needs
+  `pnpm install`+`pnpm build` for the new `@pilotage/imports-core` workspace package; not auto-merged).**
+  The apply engine + 5 handlers + `applyRow`/`rollbackRow` + caches are **relocated** into a new
+  `packages/imports-core` workspace package (`main → dist`, the `@pilotage/contracts` precedent), so the
+  API (validate) and worker (apply) share ONE byte-for-byte implementation — the API's `handlers/index.ts`
+  + `handler.types.ts` become thin re-exports. `ImportsService.apply()`/`rollback()` flip the batch
+  `validated → queued` / `applied → queued` via a from-status-guarded `updateMany` then enqueue on the
+  third `imports` queue (enqueue-failure compensation reverts the claim; the 24h rollback window is
+  checked *at enqueue*). The worker `ImportsProcessor` claims `queued|applying → applying`, runs the
+  relocated engine in one atomic `$transaction`, and the per-row RESUME skips already-`applied` rows
+  (no double-apply). A new `ImportStatusPoller` (`router.refresh()` on a 2.5 s interval, stops on
+  terminal status — the E6-S4 discipline) keeps the detail page live across the async transition.
+  `ImportStatus += queued` (additive). **Operator pre-req (gates demoability, not merge):** `pnpm install`
+  + `pnpm build` (produce `packages/imports-core/dist`), `prisma db push` for the `queued` enum value,
+  and a worker running with the `imports` queue registered.
 - [ ] **S2** — Reconciliation classification (`created/updated/unchanged/conflict/skipped`) + the
   "Import & sync health" panel (counts + per-row drill-down + 24h rollback), non-stigmatising.
   `[schema][api][web][a11y]` · P2. *Additive `db push`: `ReconciliationClass` + `ImportRow.reconciliation`/`conflictFields`.*
@@ -55,14 +69,18 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
 - **All schema changes additive** (new enum values / nullable columns / new model) — no destructive
   migration; each slice's `db push` is an operator pre-req (gates demoability, not merge).
 
-## Open questions for the S1 implement run
+## Open questions — S1 resolutions + carry-overs
 
-- Where the relocated apply logic lives so API + worker share **one** implementation (a shared apply module
-  vs the worker importing the moved service path) — Winston/Amelia(BE) to settle without forking the logic.
-- The exact lease window + reclaim cadence for a stale `applying` batch (mirror the analytics-snapshots /
-  E7-S5 `processedAt`-keyed reclaim).
-- Whether the sync `syncing` state reuses `applying` semantics or earns its own additive status value
-  (data-model leans on reuse; confirm on S3/S4).
+- **[resolved S1]** The relocated apply logic lives in a **new `packages/imports-core` workspace package**
+  (`main → dist`, the `@pilotage/contracts` precedent); the API `handlers/index.ts`+`handler.types.ts` are
+  thin re-exports, so API (validate) + worker (apply) share ONE implementation, no fork.
+- **[carry-over → S-hardening]** The stale-`applying` reclaim is currently an **unconditional** re-admit
+  (`status IN (queued, applying)`), NOT the `claimedAt < now - IMPORTS_APPLY_STALE_MIN` lease the ADR/FR6
+  cite (the analytics-snapshots `processedAt`-keyed reclaim). The dead-worker case is safe (Postgres rolls
+  back the dropped tx); the **blocked-but-recovering** worker case is the gap — gate the `applying` re-admit
+  on the stamped `claimedAt` instant before S4.
+- **[carry-over → S2/S4]** Whether the sync `syncing` state reuses `applying` semantics or earns its own
+  additive status value (data-model leans on reuse; confirm on S3/S4).
 
 ## Operator note
 

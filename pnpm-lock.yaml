@@ -62,6 +62,9 @@ importers:
       '@pilotage/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@pilotage/imports-core':
+        specifier: workspace:*
+        version: link:../../packages/imports-core
       '@prisma/client':
         specifier: ^5.22.0
         version: 5.22.0(prisma@5.22.0)
@@ -286,6 +289,9 @@ importers:
       '@pilotage/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@pilotage/imports-core':
+        specifier: workspace:*
+        version: link:../../packages/imports-core
       '@prisma/client':
         specifier: ^5.22.0
         version: 5.22.0(prisma@5.22.0)
@@ -404,6 +410,22 @@ importers:
         version: 5.2.0(eslint@9.39.4(jiti@2.7.0))
 
   packages/i18n:
+    devDependencies:
+      '@pilotage/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@pilotage/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/imports-core:
+    dependencies:
+      '@prisma/client':
+        specifier: ^5.22.0
+        version: 5.22.0(prisma@5.22.0)
     devDependencies:
       '@pilotage/eslint-config':
         specifier: workspace:*
