@@ -94,6 +94,22 @@ enum ImportRowStatus {
   rolled_back
 }
 
+/// E11-S2 — reconciliation classification (ADR-024 §reconciliation).
+/// Orthogonal to ImportRowStatus (which answers "did the pipeline process the
+/// row"); this answers "what did the upsert actually do" so the import becomes
+/// auditable/reversible. created = new entity; updated = matched + a
+/// non-protected field changed; unchanged = matched, nothing to apply (the
+/// idempotency anchor — a re-run converges here, never a duplicate created);
+/// conflict = a matched protected field disagrees → blocked, recorded in
+/// ImportRow.conflictFields, NO write; skipped = invalid/filtered, no entity.
+enum ReconciliationClass {
+  created
+  updated
+  unchanged
+  conflict
+  skipped
+}
+
 enum CalendarEventType {
   vacation_break
   public_holiday
@@ -701,12 +717,20 @@ model ImportRow {
   errors            Json?
   createdEntityId   String?         @map("created_entity_id") @db.Uuid
   createdEntityType String?         @map("created_entity_type")
+  // E11-S2 — reconciliation classification (additive, nullable ⇒ existing rows
+  // read null and the health panel degrades to neutral zeros, never a crash).
+  // conflictFields holds [{ field, current, source }] for a `conflict` row only —
+  // an allow-list of identity fields (never notes/free-text/medical), capped per
+  // row, inheriting the batch tenant check (no row endpoint bypasses it).
+  reconciliation    ReconciliationClass? @map("reconciliation")
+  conflictFields    Json?                @map("conflict_fields")
   createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
 
   batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@unique([batchId, rowIndex])
   @@index([batchId, status])
+  @@index([batchId, reconciliation])
   @@map("import_row")
 }
 

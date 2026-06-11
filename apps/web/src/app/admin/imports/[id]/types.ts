@@ -20,6 +20,27 @@ export type RowStatus =
 
 export type RowStatusFilter = '' | RowStatus;
 
+/**
+ * Reconciliation class — what the apply actually *did* to the entity
+ * (orthogonal to `RowStatus`, which answers *did the pipeline process it*).
+ * E11-S2. Additive: rows read `null` until the additive `db push` is applied.
+ */
+export type ReconciliationClass =
+  | 'created'
+  | 'updated'
+  | 'unchanged'
+  | 'conflict'
+  | 'skipped';
+
+export type ReconciliationFilter = '' | ReconciliationClass;
+
+/** One protected-field disagreement on a `conflict` row — source-vs-current. */
+export interface ConflictField {
+  field: string;
+  current: unknown;
+  source: unknown;
+}
+
 export interface RowError {
   field?: string;
   message?: string;
@@ -33,6 +54,10 @@ export interface BatchRow {
   payload: Record<string, unknown>;
   errors: RowError[] | null;
   createdEntityId: string | null;
+  /** What the apply did to this row — E11-S2. `null` pre-migration. */
+  reconciliation?: ReconciliationClass | null;
+  /** Source-vs-current diff for `conflict` (and `updated`) rows — E11-S2. */
+  conflictFields?: ConflictField[] | null;
 }
 
 export interface BatchSummary {
@@ -46,6 +71,12 @@ export interface BatchSummary {
   /** Async apply progress (worker-written, incremental) — E11-S1. */
   processedRows?: number;
   totalToApply?: number;
+  /**
+   * Per-class reconciliation roll-up, written by the worker on the terminal
+   * `applied` write — E11-S2. Absent pre-migration → panel falls back to a
+   * client-side count over `rows[].reconciliation`, then degrades to no panel.
+   */
+  byClass?: Partial<Record<ReconciliationClass, number>>;
 }
 
 export interface BatchDetail {

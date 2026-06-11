@@ -2,16 +2,21 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
+  Check,
   CheckCircle2,
   FileText,
   Hourglass,
   ListChecks,
   Loader2,
+  MinusCircle,
+  Plus,
+  RefreshCw,
   RotateCcw,
   Sparkles,
   Tag,
   XCircle,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
@@ -38,7 +43,10 @@ import type {
   BatchRow,
   BatchStatus,
   BatchSummary,
+  ConflictField,
   ErrorFieldFacet,
+  ReconciliationClass,
+  ReconciliationFilter,
   RowError,
   RowStatus,
   RowStatusFilter,
@@ -109,6 +117,106 @@ const VALID_ROW_STATUSES: RowStatusFilter[] = [
   'skipped',
   'rolled_back',
 ];
+
+// ── Reconciliation (E11-S2) ────────────────────────────────────────────────
+// Non-stigmatising tone law: created/updated = success, unchanged = neutral,
+// conflict/skipped = amber WARNING — destructive red is reserved for genuine
+// `failed` only. Every class carries text + icon (never colour alone).
+const RECON_CLASSES: ReconciliationClass[] = [
+  'created',
+  'updated',
+  'unchanged',
+  'conflict',
+  'skipped',
+];
+
+const RECON_LABEL: Record<ReconciliationClass, string> = {
+  created: 'Créées',
+  updated: 'Mises à jour',
+  unchanged: 'Inchangées',
+  conflict: 'À examiner',
+  skipped: 'Ignorées',
+};
+
+const RECON_TONE: Record<ReconciliationClass, StatusTone> = {
+  created: 'success',
+  updated: 'info',
+  unchanged: 'neutral',
+  conflict: 'warning',
+  skipped: 'warning',
+};
+
+const RECON_KPI_TONE: Record<ReconciliationClass, 'green' | 'blue' | 'slate' | 'amber'> = {
+  created: 'green',
+  updated: 'blue',
+  unchanged: 'slate',
+  conflict: 'amber',
+  skipped: 'amber',
+};
+
+const RECON_ICON: Record<ReconciliationClass, LucideIcon> = {
+  created: Plus,
+  updated: RefreshCw,
+  unchanged: Check,
+  conflict: AlertTriangle,
+  skipped: MinusCircle,
+};
+
+const RECON_CAPTION: Record<ReconciliationClass, (n: number) => string> = {
+  created: (n) => `${n} nouvelle${n > 1 ? 's' : ''} entité${n > 1 ? 's' : ''}`,
+  updated: (n) => `${n} entité${n > 1 ? 's' : ''} modifiée${n > 1 ? 's' : ''}`,
+  unchanged: (n) => `${n} déjà à jour`,
+  conflict: (n) => `${n} à arbitrer`,
+  skipped: (n) => `${n} ignorée${n > 1 ? 's' : ''}`,
+};
+
+const VALID_RECON_FILTERS: ReconciliationFilter[] = ['', ...RECON_CLASSES];
+
+function parseReconFilter(raw: string | undefined): ReconciliationFilter {
+  if (!raw) return '';
+  return (VALID_RECON_FILTERS as readonly string[]).includes(raw)
+    ? (raw as ReconciliationFilter)
+    : '';
+}
+
+/**
+ * Per-class counts: prefer the worker roll-up (`summary.byClass`), fall back to
+ * a client-side count over `rows[].reconciliation`. Returns `null` when no row
+ * carries a class AND the roll-up is absent (pre-migration) → the panel hides,
+ * never crashes.
+ */
+function deriveByClass(
+  rows: BatchRow[],
+  byClass: Partial<Record<ReconciliationClass, number>> | undefined,
+): Record<ReconciliationClass, number> | null {
+  const hasRoll =
+    !!byClass && RECON_CLASSES.some((c) => typeof byClass[c] === 'number');
+  const counts: Record<ReconciliationClass, number> = {
+    created: 0,
+    updated: 0,
+    unchanged: 0,
+    conflict: 0,
+    skipped: 0,
+  };
+  if (hasRoll) {
+    for (const c of RECON_CLASSES) counts[c] = byClass![c] ?? 0;
+    return counts;
+  }
+  let sawClass = false;
+  for (const r of rows) {
+    const c = r.reconciliation;
+    if (c && c in counts) {
+      counts[c] += 1;
+      sawClass = true;
+    }
+  }
+  return sawClass ? counts : null;
+}
+
+function fmtConflictValue(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '∅';
+  return String(v);
+}
 
 function fmtDateTime(iso: string | null | undefined) {
   if (!iso) return '—';
@@ -304,6 +412,9 @@ export default async function ImportDetailPage({
 
   const status = parseStatusFilter(typeof sp.status === 'string' ? sp.status : undefined);
   const errorField = typeof sp.errorField === 'string' ? sp.errorField : '';
+  const reconciliation = parseReconFilter(
+    typeof sp.reconciliation === 'string' ? sp.reconciliation : undefined,
+  );
   const q = (typeof sp.q === 'string' ? sp.q : '').trim();
   const page = Math.max(1, Number(typeof sp.page === 'string' ? sp.page : '1') || 1);
 
@@ -312,10 +423,15 @@ export default async function ImportDetailPage({
   const errorFacets = buildErrorFacets(allRows);
   const timeline = buildTimeline(batch);
 
-  // Filter pipeline: status → errorField → search
+  // Reconciliation roll-up (E11-S2) — null when no class present (pre-migration).
+  const byClass = deriveByClass(allRows, summary.byClass);
+  const showRecon = batch.status === 'applied' && byClass !== null;
+
+  // Filter pipeline: status → errorField → reconciliation → search
   const filtered = allRows.filter((r) => {
     if (status && r.status !== status) return false;
     if (!rowHitsField(r, errorField)) return false;
+    if (reconciliation && r.reconciliation !== reconciliation) return false;
     if (!rowMatchesSearch(r, q)) return false;
     return true;
   });
@@ -337,7 +453,7 @@ export default async function ImportDetailPage({
   const typeLabel = TYPE_LABEL[batch.type] ?? batch.type;
   const relative = fmtRelative(batch.startedAt);
 
-  const hasActiveFilters = !!q || !!status || !!errorField;
+  const hasActiveFilters = !!q || !!status || !!errorField || !!reconciliation;
 
   return (
     <PortalShell portal="admin">
@@ -458,6 +574,8 @@ export default async function ImportDetailPage({
 
       <ImportStatusPoller status={batch.status} />
 
+      {showRecon && byClass && <ReconciliationPanel byClass={byClass} />}
+
       <div className="mt-6 grid gap-5 lg:grid-cols-5">
         <section className="lg:col-span-3 space-y-5">
           {batch.errorMessage && (
@@ -485,6 +603,17 @@ export default async function ImportDetailPage({
 
           {batch.status === 'validated' && (
             <ApplyControls batchId={batch.id} invalidCount={invalidCount} />
+          )}
+
+          {showRecon && byClass && byClass.conflict > 0 && (
+            <ActionStrip
+              tone="amber"
+              icon={AlertTriangle}
+              title={`${byClass.conflict} ligne${byClass.conflict > 1 ? 's' : ''} à arbitrer`}
+              body="La source et vos données diffèrent sur un champ protégé — aucune n'a été écrasée."
+              actionLabel="Voir les arbitrages"
+              actionHref="?reconciliation=conflict"
+            />
           )}
 
           {batch.status === 'applied' && (
@@ -555,13 +684,22 @@ export default async function ImportDetailPage({
                 : `${allRows.length.toLocaleString('fr-FR')} ligne${allRows.length > 1 ? 's' : ''} au total`}
             </p>
           </div>
-          {hasActiveFilters && <ActiveFiltersChips status={status} errorField={errorField} q={q} />}
+          {hasActiveFilters && (
+            <ActiveFiltersChips
+              status={status}
+              errorField={errorField}
+              reconciliation={reconciliation}
+              q={q}
+            />
+          )}
         </div>
 
         <div className="border-b border-slate-100 px-5 py-3">
           <RowsFilters
             status={status}
             errorField={errorField}
+            reconciliation={reconciliation}
+            showReconciliation={showRecon}
             q={q}
             errorFields={errorFacets}
           />
@@ -665,14 +803,21 @@ function ActionStrip({
 function ActiveFiltersChips({
   status,
   errorField,
+  reconciliation,
   q,
 }: {
   status: RowStatusFilter;
   errorField: string;
+  reconciliation: ReconciliationFilter;
   q: string;
 }) {
   const chips: Array<{ key: string; label: string }> = [];
   if (status) chips.push({ key: 'status', label: `Statut : ${ROW_STATUS_LABEL[status as RowStatus]}` });
+  if (reconciliation)
+    chips.push({
+      key: 'reconciliation',
+      label: `Bilan : ${RECON_LABEL[reconciliation as ReconciliationClass]}`,
+    });
   if (errorField)
     chips.push({
       key: 'errorField',
@@ -698,6 +843,13 @@ function RowItem({ row }: { row: BatchRow }) {
   const pairs = summarisePayload(row.payload ?? {});
   const totalKeys = Object.keys(row.payload ?? {}).filter((k) => !k.startsWith('_')).length;
   const errored = row.status === 'invalid';
+  const recon = row.reconciliation ?? null;
+  const ReconIcon = recon ? RECON_ICON[recon] : null;
+  const conflictFields = row.conflictFields ?? [];
+  // Render the source-vs-current diff for conflict/updated rows only, directly
+  // from the row payload (no extra round-trip). Empty/absent → just the chip.
+  const showDiff =
+    (recon === 'conflict' || recon === 'updated') && conflictFields.length > 0;
   return (
     <tr className={errored ? 'bg-rose-50/40' : undefined}>
       <td className="px-4 py-3 align-top">
@@ -711,6 +863,16 @@ function RowItem({ row }: { row: BatchRow }) {
           tone={ROW_STATUS_TONE[row.status]}
           label={ROW_STATUS_LABEL[row.status]}
         />
+        {recon && ReconIcon && (
+          <div className="mt-1">
+            <StatusBadge
+              size="sm"
+              tone={RECON_TONE[recon]}
+              label={RECON_LABEL[recon]}
+              icon={<ReconIcon className="h-3 w-3" aria-hidden />}
+            />
+          </div>
+        )}
         {row.createdEntityId && (
           <div className="mt-1 font-mono text-[10px] text-slate-400">
             #{row.createdEntityId.slice(0, 8)}
@@ -738,6 +900,7 @@ function RowItem({ row }: { row: BatchRow }) {
             )}
           </dl>
         )}
+        {showDiff && <ConflictDiff fields={conflictFields} recon={recon!} />}
       </td>
       <td className="px-4 py-3 align-top">
         {errored && row.errors && row.errors.length > 0 ? (
@@ -838,6 +1001,129 @@ function LiveProgressStrip({
           : 'Vous pouvez quitter cette page, le traitement continue.'}
       </p>
     </section>
+  );
+}
+
+/**
+ * "Bilan d'import & synchronisation" (E11-S2) — the non-stigmatising sync-health
+ * panel. Renders post-apply from the one batch payload (no client N+1). Five
+ * re-bucketed KPI cards (À examiner only when conflict>0), each deep-linking the
+ * rows table to `?reconciliation=<class>`. When the only non-zero class is
+ * `unchanged`, a warm "tout est déjà à jour" hero replaces the grid. The whole
+ * region is a plain section with a real heading — the live `role=status` already
+ * lives in the S1 LiveProgressStrip, so we never double up a live region.
+ */
+function ReconciliationPanel({
+  byClass,
+}: {
+  byClass: Record<ReconciliationClass, number>;
+}) {
+  const total = RECON_CLASSES.reduce((acc, c) => acc + byClass[c], 0);
+  const allUnchanged =
+    byClass.unchanged > 0 &&
+    byClass.created === 0 &&
+    byClass.updated === 0 &&
+    byClass.conflict === 0 &&
+    byClass.skipped === 0;
+
+  return (
+    <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60">
+      <SectionHeader
+        title="Bilan d'import & synchronisation"
+        subtitle="Ce qui a réellement changé dans votre établissement"
+      />
+      {allUnchanged ? (
+        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 ring-1 ring-inset ring-black/5">
+            <Sparkles className="h-5 w-5" aria-hidden />
+          </span>
+          <div>
+            <div className="text-sm font-bold text-emerald-900">
+              Tout est déjà à jour 🎉
+            </div>
+            <p className="mt-1 text-xs text-emerald-800">
+              Votre roster est synchronisé — rien à appliquer. {byClass.unchanged}{' '}
+              entité{byClass.unchanged > 1 ? 's' : ''} vérifiée
+              {byClass.unchanged > 1 ? 's' : ''}, toutes inchangées.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5">
+          {RECON_CLASSES.filter(
+            (c) => c !== 'conflict' || byClass.conflict > 0,
+          ).map((c) => (
+            <KpiCard
+              key={c}
+              icon={RECON_ICON[c]}
+              tone={RECON_KPI_TONE[c]}
+              label={RECON_LABEL[c]}
+              value={byClass[c]}
+              href={`?reconciliation=${c}`}
+              hrefLabel="Voir les lignes →"
+            >
+              {RECON_CAPTION[c](byClass[c])}
+            </KpiCard>
+          ))}
+        </div>
+      )}
+      <p className="mt-3 text-[11px] text-slate-400">
+        {total.toLocaleString('fr-FR')} ligne{total > 1 ? 's' : ''} appliquée
+        {total > 1 ? 's' : ''} classée{total > 1 ? 's' : ''} · le rouge est réservé
+        aux échecs réels.
+      </p>
+    </section>
+  );
+}
+
+/** Compact source-vs-current `<dl>` diff for a conflict/updated row. */
+function ConflictDiff({
+  fields,
+  recon,
+}: {
+  fields: ConflictField[];
+  recon: ReconciliationClass;
+}) {
+  const isConflict = recon === 'conflict';
+  const cellTone = isConflict ? 'bg-amber-50' : 'bg-blue-50';
+  const tagTone = isConflict
+    ? 'bg-amber-100 text-amber-800'
+    : 'bg-blue-100 text-blue-800';
+  return (
+    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/60 p-2">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        {isConflict ? (
+          <AlertTriangle className="h-3 w-3 text-amber-600" aria-hidden />
+        ) : (
+          <RefreshCw className="h-3 w-3 text-blue-600" aria-hidden />
+        )}
+        {isConflict ? 'Champs en désaccord' : 'Champs modifiés'}
+      </div>
+      <dl className="grid gap-x-2 gap-y-1 text-[11px] sm:grid-cols-[auto_1fr_auto_1fr]">
+        {fields.map((f, idx) => (
+          <div key={`${f.field}-${idx}`} className="contents">
+            <dt className="font-mono font-bold text-slate-500">{f.field}</dt>
+            <dd className="truncate font-mono text-slate-700" title={fmtConflictValue(f.current)}>
+              {fmtConflictValue(f.current)}
+            </dd>
+            <dd aria-hidden className="text-slate-400">
+              →
+            </dd>
+            <dd
+              className={`flex items-center gap-1 truncate rounded px-1 font-mono text-slate-900 ${cellTone}`}
+              title={fmtConflictValue(f.source)}
+            >
+              <span className="truncate">{fmtConflictValue(f.source)}</span>
+              <span
+                className={`shrink-0 rounded px-1 text-[9px] font-bold uppercase ${tagTone}`}
+              >
+                modifié
+              </span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 

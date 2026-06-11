@@ -1,9 +1,12 @@
 # ADR-024 — Async import/sync execution on a third BullMQ queue + crash-safe, idempotent apply (status-guarded claim + per-row resume)
 
 - **Status:** Accepted
-- **Date:** 2026-06-11
+- **Date:** 2026-06-11 · **Amended:** 2026-06-11 (E11-S2 — the reconciliation half, see
+  [§ Reconciliation classification](#reconciliation-classification-e11-s2--amendment) below)
 - **Epic / Slice:** E11 — Standards interop (OneRoster/LTI) + async imports · S1 (third `imports` queue +
-  worker `ImportsProcessor` + enqueue-on-apply + crash-safe idempotent status machine + this ADR)
+  worker `ImportsProcessor` + enqueue-on-apply + crash-safe idempotent status machine + this ADR) · **S2**
+  (the reconciliation classification taxonomy + the protected-field no-silent-overwrite wall + the
+  rollback "delete-only-what-we-created" safety invariant — the amendment section below)
 - **Deciders:** Winston (Architect), Amelia (BE), Murat (Test-Architect), Sentinel (Security)
 - **Supersedes / relates:** ADR-017 (bulk import pipeline — this relocates its **apply/rollback** execution
   off the HTTP request onto the worker while reusing its per-row `applyRow`/`rollbackRow` handler contract
@@ -114,3 +117,83 @@ guard is load-bearing — its byte-parity + no-double-apply tests are P0.
 - **Duplicate the handlers under the worker tree (the `alerts-rules` precedent).** Rejected for *this* case
   (see Decision §3): the alerts rules are read-only detectors; import handlers mutate. A shared package is the
   safer home.
+
+## Reconciliation classification (E11-S2 — amendment)
+
+S1 made apply async + crash-safe. **S2 makes it _reconciled_** — every applied row reports *what the upsert
+actually did*, so a re-import is a calm, auditable, reversible event rather than an opaque mutation. This
+section is the authority the S2 schema/engine/handlers cite as "ADR-024 §reconciliation". It is an
+**amendment, not a new ADR** (ADR-025): the title literally promises "idempotent reconciliation"; S2 spells
+out the half S1 deferred. No new queue, permission, endpoint, or audit action is introduced.
+
+### A. The `ReconciliationClass` taxonomy — orthogonal to `ImportRowStatus`
+A new additive enum `ReconciliationClass { created · updated · unchanged · conflict · skipped }`, stored on
+`ImportRow.reconciliation ReconciliationClass?` (nullable ⇒ legacy rows read `null`) + `ImportRow.conflictFields
+Json?` + `@@index([batchId, reconciliation])`. The batch roll-up rides the existing `summary` Json
+(`summary.byClass`) — **no batch column**.
+
+The two axes are deliberately **orthogonal** (PM ruling R7): `ImportRowStatus` answers *did the pipeline
+process this row* (`valid|invalid|applied|skipped|rolled_back`); `ReconciliationClass` answers *what did the
+upsert do*. We do **not** overload the existing status enum the wizard/rollback depend on.
+
+### B. externalRef-first idempotency (the AC-4 anchor)
+The match key is **`externalRef` first, then the handler's deterministic natural key** (the cache the handlers
+already build in `buildImportCaches`). Pre-S2, the students handler treated a matching `externalRef` as a hard
+`invalid` **validation reject**; S2 reclassifies a match into:
+- **`unchanged`** — every comparable field equals the stored value ⇒ **no write** (a re-run converges here, so
+  re-importing the same CSV never produces a duplicate `created`);
+- **`updated`** — only a **non-protected** field (`email`/`notes`) differs ⇒ update exactly those fields;
+- **`conflict`** — a **protected** identity field disagrees (see C) ⇒ **no write**.
+A no-match / no-`externalRef` row stays **`created`** (byte-parity insert).
+
+### C. The protected-field allow-list — `conflict` blocks the write (no silent overwrite of a child's identity)
+The protected allow-list is **`{ firstName, lastName, birthDate }`**. If a matched row disagrees on any of
+these, the row is classified **`conflict`**, its `ImportRowStatus` stays **`valid`** (NOT `applied`), **no
+entity is written or overwritten**, and the side-by-side diff is recorded in `conflictFields` as
+`[{ field, current, source }]`. `conflictFields` is an **identity-field allow-list only** — it never serialises
+`notes`/free-text/medical/guardian-private data, and it carries only the row's own payload-vs-current values
+(it inherits the batch's tenant check; there is no row-level endpoint that bypasses it). **S2 surfaces the
+conflict (amber "À examiner"); resolution (keep-current / take-source) is deferred to S4.** No silent overwrite
+of children's data, ever.
+
+### D. The additive `applyRow` contract (backward-compatible, byte-parity)
+`AppliedEntity` gains **optional** `reconciliation?` + `conflictFields?`. A handler that returns the legacy
+`{ id, type }` shape defaults to **`created`** — so the four always-create handlers (classes/subjects/
+enrollments) and guardians compile and behave byte-identically (FR10/FM-3). Only the students handler emits the
+rich classes in S2. The engine writes `reconciliation` **in the same `importRow.update` inside the apply
+`$transaction`** as `status` (atomic — a crash never leaves an `applied` row with a `null` class, FM-2), and on
+a RESUME re-tallies the stored class so `byClass` survives redelivery (FM-10). `applyBatchRows` returns an
+additive `byClass` tally rolled into `summary.byClass` (one authoritative terminal write, FM-9) and the
+existing `import.apply` audit row's `after` JSON — **no new audit action**.
+
+### E. The rollback safety invariant (the load-bearing S2 fix — RGPD-significant)
+S1's rollback deleted **every** `applied` row with a `createdEntityId`. That was safe *only because* a match
+was a hard reject, so every applied+created row was one **this import created**. S2 breaks that premise: an
+`updated`/`unchanged` row is now `applied` with `createdEntityId = existing.id`, a **pre-existing** matched
+student. Deleting it on the advertised "safe" 24h rollback would cascade-wipe a real child's
+enrollments/grades/guardianships/attendance/alerts (all `onDelete: Cascade` on `Student`).
+
+**Invariant (enforced in `rollbackBatchRows`): rollback compensates ONLY rows this import actually CREATED** —
+`reconciliation === created` **or** legacy `null` (pre-S2 rows + the always-create handlers). `updated`/
+`unchanged` rows are flipped to `rolled_back` for status bookkeeping **without touching the pre-existing
+entity** (S2 does not capture the prior `email`/`notes` to revert — leaving the matched entity intact is the
+safe behaviour, a recorded non-goal). `conflict` rows never enter the set (no `createdEntityId`). This
+invariant is the single most safety-critical line in the slice and is pinned by a dedicated engine test
+(`imports-engine.spec.ts` — "rollback compensates ONLY rows this import CREATED").
+
+### F. `all_or_nothing` semantics shift (recorded)
+A `conflict` is discovered only **inside the worker** (after the enqueue-time `invalid`-row gate), leaves its
+row unapplied, yet the batch still finalises **`applied`**. So once matching exists, `all_or_nothing` no longer
+guarantees true all-or-nothing — a conflicting row is surfaced as "à arbitrer" rather than failing the whole
+batch. This is deliberate (conflict resolution is an S4 admin decision, not an apply-time abort) and is the one
+behavioural contract change S2 makes; it is recorded here for the reviewer rather than hidden.
+
+### Rejected (reconciliation alternatives)
+- **Overload `ImportRowStatus` with reconciliation values.** Rejected (R7) — the wizard/rollback depend on the
+  existing status semantics; a second orthogonal axis is clearer and non-breaking.
+- **Auto-resolve a `conflict` by taking the source ("source wins").** Rejected — silently overwriting a
+  child's protected identity is exactly the failure this slice exists to prevent; resolution is an explicit,
+  audited admin choice (S4).
+- **Convert the four create-only handlers to upsert in S2.** Rejected (architect Option A) — that is a
+  behaviour change to the ADR-017 validate contract across five mutating handlers; S2 ships the rich classes
+  for `students` only and defers the rest to a later slice, keeping the blast radius honest.

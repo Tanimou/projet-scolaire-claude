@@ -1,4 +1,4 @@
-import { ImportRowStatus, type ImportMode } from '@prisma/client';
+import { ImportRowStatus, ReconciliationClass, type ImportMode } from '@prisma/client';
 import {
   applyBatchRows,
   rollbackBatchRows,
@@ -94,7 +94,9 @@ describe('imports-core engine — applyBatchRows', () => {
       batch: BATCH,
     });
 
-    expect(result).toEqual({ applied: 2, skipped: 1 });
+    // E11-S2 — additive `byClass`; applied/skipped stay byte-identical (FR10/FM-3).
+    expect(result).toMatchObject({ applied: 2, skipped: 1 });
+    expect(result.byClass).toEqual({ created: 2, updated: 0, unchanged: 0, conflict: 0, skipped: 1 });
     expect(getApplyCalls()).toBe(2);
     expect(audits).toHaveLength(1);
     expect(audits[0]!.data.action).toBe('import.apply');
@@ -103,6 +105,7 @@ describe('imports-core engine — applyBatchRows', () => {
       applied: 2,
       skipped: 1,
       mode: MODE,
+      byClass: { created: 2, updated: 0, unchanged: 0, conflict: 0, skipped: 1 },
     });
   });
 
@@ -128,7 +131,9 @@ describe('imports-core engine — applyBatchRows', () => {
 
     // r1 is counted as already-applied but applyRow is NOT called again → no dup.
     expect(getApplyCalls()).toBe(1);
-    expect(result).toEqual({ applied: 2, skipped: 0 });
+    expect(result).toMatchObject({ applied: 2, skipped: 0 });
+    // RESUME re-tally: r1 had no stored class → legacy `created`; r2 fresh `created`.
+    expect(result.byClass.created).toBe(2);
   });
 
   it('reports incremental progress via onRowProcessed', async () => {
@@ -158,6 +163,128 @@ describe('imports-core engine — applyBatchRows', () => {
   });
 });
 
+describe('imports-core engine — reconciliation classification (E11-S2)', () => {
+  /** A handler that echoes a reconciliation class keyed off the row payload. */
+  function makeClassifyingHandler(): ImportHandler {
+    return {
+      type: 'students',
+      label: 'x',
+      description: 'x',
+      icon: 'x',
+      requiredPermission: 'students.write',
+      template: { headers: [], sample: [] },
+      parseRow: (r) => r,
+      validateRow: () => ({ ok: true, errors: [] }),
+      applyRow: async (normalized) => {
+        const p = normalized as { class: string; id?: string };
+        if (p.class === 'conflict') {
+          return {
+            id: p.id ?? 'existing-1',
+            type: 'student',
+            reconciliation: ReconciliationClass.conflict,
+            conflictFields: [{ field: 'lastName', current: 'Martin', source: 'Bernard' }],
+          };
+        }
+        return {
+          id: p.id ?? 'entity-x',
+          type: 'student',
+          reconciliation: p.class as ReconciliationClass,
+        };
+      },
+      rollbackRow: async () => {},
+    };
+  }
+
+  it('classifies created/updated/unchanged, rolls them into byClass + applied', async () => {
+    const { tx, rowUpdates } = makeFakeTx();
+    const handler = makeClassifyingHandler();
+    const rows: EngineRow[] = [
+      { id: 'r1', rowIndex: 1, status: ImportRowStatus.valid, payload: { class: 'created' }, createdEntityId: null },
+      { id: 'r2', rowIndex: 2, status: ImportRowStatus.valid, payload: { class: 'updated' }, createdEntityId: null },
+      { id: 'r3', rowIndex: 3, status: ImportRowStatus.valid, payload: { class: 'unchanged' }, createdEntityId: null },
+    ];
+
+    const result = await applyBatchRows({
+      tx: tx as never,
+      handler,
+      rows,
+      caches: {} as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+      mode: MODE,
+      batch: BATCH,
+    });
+
+    expect(result.applied).toBe(3); // created + updated + unchanged all count as applied
+    expect(result.skipped).toBe(0);
+    expect(result.byClass).toEqual({ created: 1, updated: 1, unchanged: 1, conflict: 0, skipped: 0 });
+    // each applied row gets its reconciliation written in the SAME importRow.update
+    expect(rowUpdates.map((u) => u.data.reconciliation)).toEqual([
+      ReconciliationClass.created,
+      ReconciliationClass.updated,
+      ReconciliationClass.unchanged,
+    ]);
+    expect(rowUpdates.every((u) => u.data.status === ImportRowStatus.applied)).toBe(true);
+  });
+
+  it('a conflict row is recorded (reconciliation+conflictFields) but NOT applied — no silent overwrite (AC FR4)', async () => {
+    const { tx, rowUpdates } = makeFakeTx();
+    const handler = makeClassifyingHandler();
+    const rows: EngineRow[] = [
+      { id: 'r1', rowIndex: 1, status: ImportRowStatus.valid, payload: { class: 'created' }, createdEntityId: null },
+      { id: 'r2', rowIndex: 2, status: ImportRowStatus.valid, payload: { class: 'conflict' }, createdEntityId: null },
+    ];
+
+    const result = await applyBatchRows({
+      tx: tx as never,
+      handler,
+      rows,
+      caches: {} as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+      mode: MODE,
+      batch: BATCH,
+    });
+
+    // conflict is NOT counted as applied nor skipped — it stays `valid` for S4 resolution.
+    expect(result.applied).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.byClass.conflict).toBe(1);
+
+    const conflictUpdate = rowUpdates.find((u) => u.id === 'r2')!;
+    expect(conflictUpdate.data.reconciliation).toBe(ReconciliationClass.conflict);
+    expect(conflictUpdate.data.status).toBeUndefined(); // NOT flipped to applied
+    expect(conflictUpdate.data.createdEntityId).toBeUndefined(); // NO entity written
+    expect(conflictUpdate.data.conflictFields).toEqual([
+      { field: 'lastName', current: 'Martin', source: 'Bernard' },
+    ]);
+  });
+
+  it('an invalid row is skipped with reconciliation=skipped', async () => {
+    const { tx, rowUpdates } = makeFakeTx();
+    const handler = makeClassifyingHandler();
+    const rows: EngineRow[] = [
+      { id: 'r1', rowIndex: 1, status: ImportRowStatus.invalid, payload: {}, createdEntityId: null },
+    ];
+
+    const result = await applyBatchRows({
+      tx: tx as never,
+      handler,
+      rows,
+      caches: {} as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+      mode: MODE,
+      batch: BATCH,
+    });
+
+    expect(result.skipped).toBe(1);
+    expect(result.byClass.skipped).toBe(1);
+    expect(rowUpdates[0]!.data.status).toBe(ImportRowStatus.skipped);
+    expect(rowUpdates[0]!.data.reconciliation).toBe(ReconciliationClass.skipped);
+  });
+});
+
 describe('imports-core engine — rollbackBatchRows', () => {
   it('compensates applied rows in reverse order, flips them rolled_back, writes one audit row', async () => {
     const { tx, rowUpdates, audits } = makeFakeTx();
@@ -184,5 +311,46 @@ describe('imports-core engine — rollbackBatchRows', () => {
     expect(audits).toHaveLength(1);
     expect(audits[0]!.data.action).toBe('import.rollback');
     expect((audits[0]!.data.after as Record<string, unknown>).undone).toBe(2);
+  });
+
+  it('SAFETY (RGPD, the load-bearing E11-S2 invariant): rollback compensates ONLY rows this import CREATED — matched updated/unchanged rows are flipped rolled_back WITHOUT deleting the pre-existing entity', async () => {
+    const { tx, rowUpdates } = makeFakeTx();
+    const base = makeCountingHandler().handler;
+    const deleted: string[] = [];
+    const handler: ImportHandler = {
+      ...base,
+      rollbackRow: async (entityId: string) => {
+        deleted.push(entityId);
+      },
+    };
+    // A re-import after externalRef matching produced a MIX of classes, all `applied`:
+    //  r1 created a NEW student            → reconciliation=created  → MUST be deleted
+    //  r2 matched & updated email/notes    → createdEntityId=existing → MUST NOT be deleted
+    //  r3 matched & identical (unchanged)  → createdEntityId=existing → MUST NOT be deleted
+    //  r4 legacy/byte-parity (null class)  → pre-S2 / always-create   → MUST be deleted
+    const rows: EngineRow[] = [
+      { id: 'r1', rowIndex: 1, status: ImportRowStatus.applied, payload: {}, createdEntityId: 'new-1', reconciliation: ReconciliationClass.created },
+      { id: 'r2', rowIndex: 2, status: ImportRowStatus.applied, payload: {}, createdEntityId: 'existing-2', reconciliation: ReconciliationClass.updated },
+      { id: 'r3', rowIndex: 3, status: ImportRowStatus.applied, payload: {}, createdEntityId: 'existing-3', reconciliation: ReconciliationClass.unchanged },
+      { id: 'r4', rowIndex: 4, status: ImportRowStatus.applied, payload: {}, createdEntityId: 'legacy-4', reconciliation: null },
+    ];
+
+    const result = await rollbackBatchRows({
+      tx: tx as never,
+      handler,
+      rows,
+      actor: ACTOR,
+      batch: BATCH,
+    });
+
+    // Only the two CREATED rows (r1 + legacy-null r4) are physically compensated.
+    expect(result).toEqual({ undone: 2 });
+    // Reverse order, and CRUCIALLY the pre-existing matched entities are NEVER passed to rollbackRow.
+    expect(deleted).toEqual(['legacy-4', 'new-1']);
+    expect(deleted).not.toContain('existing-2');
+    expect(deleted).not.toContain('existing-3');
+    // ALL four applied rows are flipped rolled_back for status bookkeeping (reverse order).
+    expect(rowUpdates.map((u) => u.id)).toEqual(['r4', 'r3', 'r2', 'r1']);
+    expect(rowUpdates.every((u) => u.data.status === ImportRowStatus.rolled_back)).toBe(true);
   });
 });

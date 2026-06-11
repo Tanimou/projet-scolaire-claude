@@ -1,4 +1,6 @@
-import { type AppliedEntity, type ApplyContext, type ImportContext, type ImportHandler, type RollbackContext, type ValidationResult } from '../handler.types';
+import { ReconciliationClass } from '@prisma/client';
+
+import { type AppliedEntity, type ApplyContext, type ConflictField, type ImportContext, type ImportHandler, type RollbackContext, type ValidationResult } from '../handler.types';
 
 interface StudentInput {
   firstName: string;
@@ -7,6 +9,24 @@ interface StudentInput {
   externalRef?: string;
   email?: string;
   notes?: string;
+  /**
+   * E11-S2 (FR3) — set in validateRow when externalRef matches an EXISTING
+   * student. Its presence flips applyRow from "always create" into the
+   * idempotent match path (unchanged / updated / conflict), so a re-run of the
+   * same CSV converges to `unchanged`, never a duplicate `created`.
+   */
+  _matchedStudentId?: string;
+}
+
+/** Identity fields whose disagreement on a matched student BLOCKS the apply (conflict). */
+const PROTECTED_FIELDS = ['firstName', 'lastName', 'birthDate'] as const;
+
+/** Normalise a date-ish value to a YYYY-MM-DD string for stable comparison. */
+function dateKey(d: Date | string | null | undefined): string | null {
+  if (!d) return null;
+  const date = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
 }
 
 function normalizeDate(raw: string | undefined): string | undefined {
@@ -81,11 +101,14 @@ export const studentsHandler: ImportHandler = {
     if (p.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email))
       errors.push({ field: 'email', message: 'Email invalide.' });
 
-    if (p.externalRef && ctx.caches.studentExternalRefs.has(p.externalRef))
-      errors.push({
-        field: 'externalRef',
-        message: `Matricule « ${p.externalRef} » déjà utilisé (DB ou dans ce fichier).`,
-      });
+    // E11-S2 (FR3) — externalRef-first idempotency. A matched externalRef is NO
+    // LONGER a hard `invalid` reject: it is carried as a MATCH so apply can
+    // classify it unchanged/updated/conflict (a re-run converges, never a
+    // duplicate `created`). A no-match / no-externalRef row stays `created`.
+    if (p.externalRef) {
+      const matched = ctx.caches.studentsByExternalRef.get(p.externalRef);
+      if (matched) p._matchedStudentId = matched.id;
+    }
 
     if (errors.length) return { ok: false, errors };
     return { ok: true, errors: [], normalized: p as unknown as Record<string, unknown> };
@@ -93,6 +116,67 @@ export const studentsHandler: ImportHandler = {
 
   async applyRow(normalized, ctx: ApplyContext): Promise<AppliedEntity> {
     const p = normalized as unknown as StudentInput;
+
+    // E11-S2 (FR3/FR4) — externalRef MATCH path: classify instead of create.
+    if (p._matchedStudentId) {
+      const existing = p.externalRef ? ctx.caches.studentsByExternalRef.get(p.externalRef) : undefined;
+      // Defensive: the matched snapshot vanished (a concurrent batch removed it) →
+      // fall through to create rather than throw a 500.
+      if (existing) {
+        // Protected-field disagreement → conflict: record the side-by-side diff and
+        // write NOTHING (no silent overwrite of a child's identity). FR4.
+        const conflicts: ConflictField[] = [];
+        const incoming: Record<(typeof PROTECTED_FIELDS)[number], string | null> = {
+          firstName: p.firstName ?? null,
+          lastName: p.lastName ?? null,
+          birthDate: dateKey(p.birthDate),
+        };
+        const current: Record<(typeof PROTECTED_FIELDS)[number], string | null> = {
+          firstName: existing.firstName ?? null,
+          lastName: existing.lastName ?? null,
+          birthDate: dateKey(existing.birthDate),
+        };
+        for (const field of PROTECTED_FIELDS) {
+          if (incoming[field] !== current[field]) {
+            conflicts.push({ field, current: current[field], source: incoming[field] });
+          }
+        }
+        if (conflicts.length > 0) {
+          return {
+            id: existing.id,
+            type: 'student',
+            reconciliation: ReconciliationClass.conflict,
+            conflictFields: conflicts,
+          };
+        }
+
+        // Non-protected fields (email/notes) may differ → updated; else unchanged.
+        const incomingEmail = p.email ?? null;
+        const incomingNotes = p.notes ?? null;
+        const emailChanged = incomingEmail !== (existing.email ?? null);
+        const notesChanged = incomingNotes !== (existing.notes ?? null);
+
+        if (emailChanged || notesChanged) {
+          await ctx.tx.student.update({
+            where: { id: existing.id },
+            data: {
+              ...(emailChanged ? { email: incomingEmail } : {}),
+              ...(notesChanged ? { notes: incomingNotes } : {}),
+            },
+          });
+          // Refresh the cached snapshot so a later identical row in the same batch
+          // converges to `unchanged`.
+          existing.email = incomingEmail;
+          existing.notes = incomingNotes;
+          return { id: existing.id, type: 'student', reconciliation: ReconciliationClass.updated };
+        }
+
+        return { id: existing.id, type: 'student', reconciliation: ReconciliationClass.unchanged };
+      }
+    }
+
+    // No match → create (byte-identical to the pre-S2 path; reconciliation defaults
+    // to `created` in the engine when omitted, but we set it explicitly for clarity).
     const student = await ctx.tx.student.create({
       data: {
         tenantId: ctx.tenantId,
@@ -105,8 +189,20 @@ export const studentsHandler: ImportHandler = {
         notes: p.notes ?? null,
       },
     });
-    if (p.externalRef) ctx.caches.studentExternalRefs.set(p.externalRef, student.id);
-    return { id: student.id, type: 'student' };
+    if (p.externalRef) {
+      ctx.caches.studentExternalRefs.set(p.externalRef, student.id);
+      // Make a subsequent identical row in the SAME batch converge to `unchanged`
+      // (within-batch idempotency), not a second `created`.
+      ctx.caches.studentsByExternalRef.set(p.externalRef, {
+        id: student.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        birthDate: p.birthDate ? new Date(p.birthDate) : null,
+        email: p.email ?? null,
+        notes: p.notes ?? null,
+      });
+    }
+    return { id: student.id, type: 'student', reconciliation: ReconciliationClass.created };
   },
 
   async rollbackRow(entityId, ctx: RollbackContext): Promise<void> {

@@ -6,7 +6,11 @@ import { useTransition } from 'react';
 
 import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 
-import type { ErrorFieldFacet, RowStatusFilter } from './types';
+import type {
+  ErrorFieldFacet,
+  ReconciliationFilter,
+  RowStatusFilter,
+} from './types';
 
 const STATUS_OPTIONS: SelectOption[] = [
   { value: 'invalid', label: 'Invalides' },
@@ -15,6 +19,14 @@ const STATUS_OPTIONS: SelectOption[] = [
   { value: 'skipped', label: 'Ignorées' },
   { value: 'rolled_back', label: 'Annulées' },
   { value: 'pending', label: 'En attente' },
+];
+
+const RECON_OPTIONS: SelectOption[] = [
+  { value: 'created', label: 'Créées' },
+  { value: 'updated', label: 'Mises à jour' },
+  { value: 'unchanged', label: 'Inchangées' },
+  { value: 'conflict', label: 'À examiner' },
+  { value: 'skipped', label: 'Ignorées' },
 ];
 
 /**
@@ -30,11 +42,16 @@ const STATUS_OPTIONS: SelectOption[] = [
 export function RowsFilters({
   status,
   errorField,
+  reconciliation,
+  showReconciliation,
   q,
   errorFields,
 }: {
   status: RowStatusFilter;
   errorField: string;
+  reconciliation: ReconciliationFilter;
+  /** Only surface the reconciliation facet once the batch carries classes. */
+  showReconciliation: boolean;
   q: string;
   errorFields: ErrorFieldFacet[];
 }) {
@@ -61,7 +78,7 @@ export function RowsFilters({
     });
   }
 
-  const hasActiveFilters = !!q || !!status || !!errorField;
+  const hasActiveFilters = !!q || !!status || !!errorField || !!reconciliation;
 
   const errorFieldOptions: SelectOption[] = errorFields.map((f) => ({
     value: f.key,
@@ -90,6 +107,20 @@ export function RowsFilters({
             placeholder="Tous statuts"
             fullWidth={false}
           />
+          {showReconciliation && (
+            <SelectFilter
+              size="sm"
+              value={reconciliation}
+              onChange={(value) =>
+                update({ reconciliation: value || undefined })
+              }
+              options={RECON_OPTIONS}
+              clearable
+              clearLabel="Toutes classes"
+              placeholder="Bilan de synchro"
+              fullWidth={false}
+            />
+          )}
           {errorFields.length > 0 && (
             <SelectFilter
               size="sm"
