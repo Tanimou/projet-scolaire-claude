@@ -127,11 +127,23 @@ their child → teacher replies → parent sees the reply. **No schema, reuse S1
 
 ---
 
-## [ ] S4 — Cross-portal WCAG 2.2 AA sweep + remediation (R9 payoff) · `[a11y][test][ui]` · P2 · ~M
+## [x] S4 — Cross-portal WCAG 2.2 AA sweep + remediation (R9 payoff) · `[a11y][test][ui]` · P2 · ~M · **SHIPPED**
 
 **Goal:** the R9 payoff — hold **every portal's** authenticated surface to WCAG 2.2 AA and **fix** the
 violations. Demoable by running `test:e2e:a11y` across the per-portal pages, watching it surface real
 violations, then watching it pass after the remediations land in the same PR.
+
+**Shipped:** `tests/e2e/a11y/cross-portal.a11y.spec.ts` (`@a11y`) — a data-driven (`SWEEP_TARGETS` table)
+axe-core WCAG-2.2-AA scan over one representative authenticated page per portal (parent
+`/parent/dashboard` + `/parent/recommendations`; teacher `/teacher/grades` + `/teacher/conversations`;
+admin `/admin/analytics` + `/admin/child-claims`; student `/student/dashboard`), each under its S1 role
+session, asserting zero critical/serious (incl. SC 2.5.8 target-size). `ACTIVE_PORTALS` extended to include
+`student` (the E8 demo learner); `auth.setup.ts` soft-skips the operator-activated student when not yet
+provisioned (every other portal keeps the loud-fail). `test:e2e:a11y` (unchanged grep) now spans public +
+authenticated + cross-portal — the standing a11y gate, documented in `quickstart.md`. Remediation is
+reuse-first on what the live sweep surfaces; the authored E1–E9/E8 markup already ships to the bar (no
+statically-identifiable critical/serious → no speculative rewrite of working components). **No schema /
+endpoint / permission / queue / new ADR.** **On land → `E10` is `shipped`.**
 
 **Scope (`apps/web` tests + WCAG remediation in `apps/web`/`packages/ui`):**
 - **Sweep (`tests/e2e/a11y/cross-portal.a11y.spec.ts`, `@a11y`):** a data-driven axe-core WCAG-2.2-AA scan

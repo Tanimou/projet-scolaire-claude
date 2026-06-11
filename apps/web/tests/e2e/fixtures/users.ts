@@ -116,11 +116,16 @@ export const PORTALS: ReadonlyArray<Portal> = ['admin', 'teacher', 'parent', 'st
  * parent↔teacher journey, so the setup now ALSO authenticates `teacher` — the rich
  * `voltaire-demo` teacher (`teacher.demo@voltaire.fr`, the most-assigned teacher in
  * the same tenant) that forms a legitimate E2 dual-wall pair with the demo parent.
- * A real parent/admin/teacher-auth break still fails loudly (gate-asserted in
- * `auth.setup.ts`); a not-yet-booted stack still skips cleanly. The `student` portal
- * is fixture-ready (journeys land in a later epic).
+ * S4 (cross-portal WCAG 2.2 AA sweep) scans a representative authenticated page on
+ * EVERY portal — incl. the read-only `/student/dashboard` (E8) — so the setup now
+ * ALSO authenticates `student` (the E8 demo learner, operator-activated). A real
+ * parent/admin/teacher/student-auth break still fails loudly (gate-asserted in
+ * `auth.setup.ts`); a not-yet-booted stack — or a student account the operator has
+ * not yet activated (E8 needs a `db push` + realm role) — still skips cleanly, so
+ * the student sweep `test.skip`s rather than going red on a stack that hasn't
+ * provisioned the learner.
  */
-export const ACTIVE_PORTALS: ReadonlyArray<Portal> = ['parent', 'admin', 'teacher'];
+export const ACTIVE_PORTALS: ReadonlyArray<Portal> = ['parent', 'admin', 'teacher', 'student'];
 
 /** Path to a role's cached storage-state file (git-ignored, regenerated per run). */
 export function storageStatePath(portal: Portal): string {
