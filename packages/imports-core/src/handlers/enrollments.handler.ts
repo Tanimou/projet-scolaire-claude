@@ -1,6 +1,9 @@
+import { ReconciliationClass } from '@prisma/client';
+
 import {
   type AppliedEntity,
   type ApplyContext,
+  type ConflictField,
   type ImportContext,
   type ImportHandler,
   type RollbackContext,
@@ -35,7 +38,7 @@ export const enrollmentsHandler: ImportHandler = {
     notes: [
       'studentExternalRef = matricule de l\'élève (doit déjà exister).',
       'className = nom exact de la classe pour l\'année active (ex: « 6eA »).',
-      'Refuse l\'inscription si capacité dépassée ou si l\'élève est déjà inscrit dans une autre classe cette année.',
+      'Refuse l\'inscription si la capacité est dépassée. Un élève déjà inscrit dans la même classe est ignoré (inchangé, sans doublon) ; une classe différente cette année est signalée comme conflit à arbitrer.',
     ],
   },
 
@@ -139,12 +142,42 @@ export const enrollmentsHandler: ImportHandler = {
       );
     }
 
-    // Double check student isn't already actively enrolled this year (race-safe inside tx).
-    const conflict = await ctx.tx.enrollment.findFirst({
+    // E11-S4 (d) — IDEMPOTENT re-sync convergence (FR5, ADR-024 §reconciliation).
+    //
+    // A 2nd OneRoster pull (or a re-applied CSV) re-presents the SAME enrollment
+    // rows. The student is already actively enrolled this year, so the
+    // active-enrollment probe finds an existing row. Before this fix the handler
+    // THREW `Élève déjà inscrit`, which the engine re-throws (engine.ts) and
+    // aborts the WHOLE batch — so a 2nd pull of an unchanged roster failed instead
+    // of converging to "0 created, 0 error" as FR5/AC-4 advertise.
+    //
+    // Mirror the students-handler idempotent-match precedent (no silent
+    // re-enrollment, no auto-move of a child between classes):
+    //   - SAME student × SAME class this year → `unchanged` (no write, no
+    //     duplicate enrollment); the row's `createdEntityId` is the PRE-EXISTING
+    //     enrollment, so the S2 rollback-safety invariant keeps it OUT of the
+    //     delete set (we never created it).
+    //   - SAME student in a DIFFERENT class this year → `conflict` (recorded with
+    //     the side-by-side class diff, written NOTHING) — a real reconciliation
+    //     decision the admin arbitrates, never a silent re-enrollment.
+    const active = await ctx.tx.enrollment.findFirst({
       where: { studentId, academicYearId, status: 'active', tenantId: ctx.tenantId },
     });
-    if (conflict) {
-      throw new Error(`Élève déjà inscrit cette année (classe ${conflict.classSectionId.slice(0, 8)}…).`);
+    if (active) {
+      if (active.classSectionId === classSectionId) {
+        // Already enrolled in this exact class → idempotent no-op (unchanged).
+        return { id: active.id, type: 'enrollment', reconciliation: ReconciliationClass.unchanged };
+      }
+      // Enrolled in a DIFFERENT class this year → record a conflict, write nothing.
+      const conflictFields: ConflictField[] = [
+        { field: 'classSectionId', current: active.classSectionId, source: classSectionId },
+      ];
+      return {
+        id: active.id,
+        type: 'enrollment',
+        reconciliation: ReconciliationClass.conflict,
+        conflictFields,
+      };
     }
 
     const enrollment = await ctx.tx.enrollment.create({

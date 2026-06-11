@@ -362,3 +362,39 @@ worker — pinned by `import-claim.spec.ts` (the pure decision) **and** `imports
 two concurrent stale re-deliveries ⇒ `applyBatchRows`/`rollbackBatchRows` invoked **exactly once**, the loser
 `skipped`). **Schema:** one additive nullable column (`claimed_at`), `db push` — existing rows read `null`
 (reclaimed defensively, zero behaviour change). No permission / contract change.
+
+## Enrollments handler emits `unchanged`/`conflict` — idempotent re-sync convergence (polish — amendment)
+
+§D originally read "Only the students handler emits the rich classes in S2 … the four always-create handlers
+(classes/subjects/**enrollments**) and guardians … default to `created`", and the §reconciliation rejected list
+declined to "convert the four create-only handlers to upsert". This amendment narrows that for **enrollments
+only**, **within the existing `ReconciliationClass` taxonomy (§A) — no new enum value, no new ADR, no new
+column, no upsert**: it reuses the same already-loaded active-enrollment probe the handler ran before.
+
+The driver is FR5/AC-4. A 2nd OneRoster pull (or a re-applied CSV) re-presents the SAME enrollment rows; the
+student is already actively enrolled this year, so the probe finds an existing row. The S1 handler **threw**
+`Élève déjà inscrit`, which the engine re-throws (`Ligne N : …`) and **aborts the whole batch** — so a re-sync
+of an unchanged roster *failed* rather than converging to the advertised "0 created, 0 error". That made the
+enrollments path the one handler where re-running a sync was not idempotent.
+
+`enrollmentsHandler.applyRow` now mirrors the students-handler match precedent against the probe result:
+
+- **same student × SAME class this year** → `unchanged` — **no write, no duplicate enrollment**, `id = the
+  pre-existing enrollment`. Like every matched class, `createdEntityId` is a pre-existing entity, so the §E
+  rollback-safety invariant keeps it OUT of the delete set (a 24h rollback never deletes an enrollment this
+  re-sync did not create).
+- **same student in a DIFFERENT class this year** → `conflict` — recorded with
+  `conflictFields: [{ field: 'classSectionId', current, source }]`, **written nothing**. A class move is a real
+  reconciliation decision (the SIS moved the child, or a bad mapping), **never a silent re-enrollment/move**. It
+  surfaces "à arbitrer" and rides the existing S4 panel (the FE renders the diff generically; a `classSectionId`
+  arbitration verb on the enrollments handler is a recorded S-follow-on — for now the conflict is visible +
+  reversible, never an auto-overwrite, the same guardrail as the students protected-field conflict).
+- **no active enrollment** → `created` (byte-identical to the prior insert path).
+
+This is `[imports][async][reconciliation]` polish: it makes the **`all_or_nothing` shift already recorded in §F
+hold for enrollments too** (a conflicting enrollment row no longer aborts the batch — the batch finalises
+`applied`, the conflict is a separate human decision). The §A taxonomy and §E rollback invariant are unchanged
+and now apply uniformly to enrollments. Pinned by `imports-engine.spec.ts` (same-class re-sync → `unchanged`,
+0 created, no throw; different-class → `conflict`, no write; a **mixed re-run batch** with one already-enrolled
+row + one new row finalises `applied` not `failed`, exactly 1 `created`). **No schema / contract / permission /
+endpoint / UI change.**

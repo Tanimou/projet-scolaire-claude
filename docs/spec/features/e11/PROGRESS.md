@@ -7,6 +7,40 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening #6 (2026-06-11, `polish` run — P2 `[imports][async][reconciliation][worker][data-integrity][idempotency][rgpd]`, needs human review).**
+> Closes Post-ship hardening **#5 follow-on (ii)** (recorded below + in `bmad/roadmap.md` §E11-S3) — the
+> enrollments re-sync was the **one handler where re-running a sync was not idempotent**. The S1
+> `enrollmentsHandler.applyRow` active-enrollment guard **threw** `Élève déjà inscrit` on a 2nd pull; the
+> engine re-throws (`Ligne N : …`) and **aborts the whole batch**, so a re-sync of an *unchanged* roster
+> finalised `failed` instead of converging to the advertised "0 created, 0 error" (FR5/AC-4). **Fix
+> (`packages/imports-core/src/handlers/enrollments.handler.ts`, the apply path only):** the handler now mirrors
+> the **students-handler idempotent-match precedent** against the **same already-loaded active-enrollment
+> probe** it ran before — within the existing `ReconciliationClass` taxonomy, **no new enum value / no upsert /
+> no schema / no contract / no permission / no endpoint / no UI change**: (a) same student × **SAME** class this
+> year → **`unchanged`** (no write, no duplicate enrollment; the row's `id`/`createdEntityId` is the
+> PRE-EXISTING enrollment, so the §E rollback-safety invariant keeps it OUT of the delete set — a 24h rollback
+> never deletes an enrollment this re-sync did not create); (b) same student in a **DIFFERENT** class this year
+> → **`conflict`** recorded with `conflictFields:[{field:'classSectionId',current,source}]`, **written nothing**
+> (a class move is a real reconciliation decision the admin arbitrates, never a silent re-enrollment/move); (c)
+> no active enrollment → **`created`** (byte-identical to the prior insert path). This makes the §F
+> `all_or_nothing` shift **hold for enrollments too** — a conflicting enrollment row no longer aborts the batch,
+> the batch finalises `applied`, the conflict is a separate human decision. ADR-024 carries
+> `## Enrollments handler emits unchanged/conflict — idempotent re-sync convergence (polish — amendment)`.
+> **Pinned by 3 `imports-engine.spec.ts` cases:** same-class re-sync → `unchanged` (0 created, no throw,
+> `id`=pre-existing); different-class → `conflict` (no write, the `classSectionId` diff); and a **mixed re-run
+> batch over the REAL `enrollmentsHandler`** through `applyBatchRows` with a `studentId`-discriminating fake tx
+> (one already-active SAME-class row + one genuinely new row) finalising `applied` not `failed` with
+> `byClass={created:1,updated:0,unchanged:1,conflict:0,skipped:0}`, `applied:2`, exactly 1 `enrollment.create`,
+> exactly one `import.apply` audit, the unchanged row's `createdEntityId` = the pre-existing enrollment. **3
+> files (handler + engine spec + ADR), +224/-22; no schema / contract / permission / endpoint / UI change.**
+> **Operator pre-reqs (gate runtime effect, not merge):** the worker runs the compiled
+> `@pilotage/imports-core/dist/index.js` (`main`), so the handler edit is inert until the single post-Workflow
+> `pnpm build` rebuilds `dist`; plus the standing S1–S4 `prisma db push` + `prisma generate` + a worker draining
+> the `imports` queue. **Recorded follow-on (non-blocking):** the `classSectionId` enrollments `conflict` has
+> **no per-row arbitration verb** yet (S4 `resolveConflict` covers `studentsHandler` only) — the conflict is
+> visible + reversible + never auto-overwritten, but an admin cannot yet one-click "take the source class"
+> (recorded S-follow-on). **Gate:** `typecheck` pass; P2 / `needsHumanReview:false`.
+>
 > **Post-ship hardening #5 (2026-06-11, `polish` run — P2 `[imports][integration][oneroster][import-apply][data-integrity][worker]`, needs human review).**
 > Closes the most consequential **S3 verify-panel follow-up (d)** (recorded in `bmad/roadmap.md` §E11-S3) — a
 > real data-integrity defect, not new scope. On a FIRST combined OneRoster pull the enrollments handler's
@@ -37,10 +71,10 @@
 > `pnpm build` rebuilds `dist`; plus the standing S1–S4 `prisma db push`/`prisma generate` + a worker draining
 > the `imports` queue. **Recorded follow-on hardening (non-blocking):** (i) the **invalid**-branch enrollment
 > payload is NOT stripped (an invalid row can still carry a placeholder UUID — harmless, never applies; a
-> literal AC-2 completeness gap); (ii) a combined-pull RE-RUN throws on the active-enrollment guard which the
-> engine re-throws → the whole re-sync enrollments batch aborts rather than skipping already-enrolled rows
-> (FR5 "0 created convergence" describes a throwing guard as a skip — decide skip-vs-abort + add a mixed-batch
-> test); (iii) class re-resolution keys on `year:name` only (no `gradeLevelId`) → two same-named classes in
+> literal AC-2 completeness gap); (ii) **[CLOSED by Post-ship hardening #6 above]** a combined-pull RE-RUN threw on the
+> active-enrollment guard which the engine re-threw → the whole re-sync enrollments batch aborted rather than
+> skipping already-enrolled rows — now converges to `unchanged` (same class) / `conflict` (different class), the
+> batch finalises `applied`, with the mixed-batch test added; (iii) class re-resolution keys on `year:name` only (no `gradeLevelId`) → two same-named classes in
 > different grade levels collide last-created-wins; (iv) no UI gate enforces the apply order. **Gate:**
 > `typecheck` pass; P2 / `needsHumanReview:true`.
 >
