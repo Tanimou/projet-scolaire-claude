@@ -72,7 +72,7 @@ authenticated a11y scan + ADR + never-build + no-regression).
 
 ---
 
-## [ ] S2 — Journey #2: parent child-claim → admin approval (E9) · `[test][e2e]` · P2 · ~S-M
+## [x] S2 — Journey #2: parent child-claim → admin approval (E9) · `[test][e2e]` · P2 · ~S-M · **SHIPPED**
 
 **Goal:** the cross-portal parent↔admin journey proving E9's **atomic approve = access** end-to-end.
 Demoable by running the journey: parent claims a demo child → pending → admin approves in the queue →

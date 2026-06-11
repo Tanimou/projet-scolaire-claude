@@ -605,10 +605,28 @@ filler (E9 enrollment self-service / E10 quality bar).**
   remediation needed in this slice's authored markup.** **Merge evidence required (Murat gate):** one
   non-vacuous authenticated run against the booted `:3100` stack — `test:e2e:journey` PASSES (not skipped)
   + `test:e2e:a11y` PASSES incl. the sanity-injection — since the typecheck gate can't exercise a
-  browser suite. **Next slice → E10-S2** (`epic-slice`: the parent child-claim → admin approval
-  cross-portal journey `tests/e2e/journeys/child-claim-approval.spec.ts`, reusing the S1 fixture
-  (`parentPage` + `adminPage` in one spec); no schema, no new fixture, no endpoint; run against `:3100`,
-  never build).
+  browser suite.
+  **E10-S2 is now shipped** (`epic-slice` — P2 `[test][e2e]`): the cross-portal parent↔admin journey
+  `tests/e2e/journeys/child-claim-approval.spec.ts` (`@journey`) driving BOTH the S1 `parentPage` **and**
+  `adminPage` fixtures in one spec — parent submits an E9-S1 `ChildClaimDrawer` claim on `/parent/children`
+  (calm "Demande envoyée"/"déjà rattaché·e" ack, never `role=alert`) → admin opportunistically + idempotently
+  approves a pending row on `/admin/child-claims` → parent reloads and the **atomic approve = access**
+  invariant is asserted **structurally** through the real ABAC wall (approved ⇒ ≥1 accessible child dossier
+  whose `Voir le profil`/`Voir le dossier` route is navigated and resolves, not a bounce-to-login; a pending
+  row stays the neutral "En cours de validation"). Re-runnable on a stable seed (run-stamped surname,
+  assert-the-invariant-not-a-virgin-pre-state); `test.skip`s calmly when the E9 backend is not migrated.
+  `ACTIVE_PORTALS` extended to `['parent','admin']` (the setup now also authenticates the rich `voltaire-demo`
+  admin `mme.dupont@voltaire.fr` / `guardianships.approve`). **No schema/endpoint/permission/fixture/ADR;
+  reuses the S1 fixture spine + ADR-023 entirely; `.auth/` stays git-ignored; `webServer` stays `next dev`;
+  no build in any path.** Known limit (recorded follow-on for S3/S4): a run-stamped no-match claim persists as
+  `match_failed` and never enters the `submitted`-only admin queue, so on a clean seed the approve branch is a
+  calm no-op and the headline assertion leans on the seed-linked guardianship; a negative-wall assertion (an
+  ILLEGITIMATE parent↔child pair is DENIED the access link) is the recommended complement.
+  **Next slice → E10-S3** (`epic-slice`: the parent ↔ teacher messaging cross-portal journey
+  `tests/e2e/journeys/parent-teacher-messaging.spec.ts`, reusing the S1 fixture (`parentPage` + `teacherPage`
+  in one spec) + extending `ACTIVE_PORTALS` to add `teacher`; run-stamped message text for re-runnability;
+  assert the dual-wall ABAC (guardianship ∩ teaching-assignment) round-trip both directions, and where cheap
+  that an illegitimate pair is walled; no schema, no new fixture, no endpoint; run against `:3100`, never build).
 - **E11 — Standards interop (OneRoster/LTI) + async imports** · `proposed` · ~M — move bulk import
   to the worker (today blocking in-request) + OneRoster roster sync. Interoperability per the cahier.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
