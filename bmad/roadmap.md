@@ -702,6 +702,22 @@ filler (E9 enrollment self-service / E10 quality bar).**
   **Gate:** `pnpm typecheck` 13/13 + worker+api build exit 0 + `import*` specs 32/32 green. **Operator pre-req (gates
   demoability, not merge):** `prisma db push` for the additive `claimed_at` column (existing rows read `null`, zero behaviour
   change). No permission / contract / second-queue change.
+  **Post-ship hardening #3 (2026-06-11, `polish` run — P2 `[imports][oneroster][reconciliation][conflict-arbitration][enrollments][web][a11y]`):**
+  closes the recorded **S4 follow-on** (and PROGRESS Post-ship hardening #6 note) — the `classSectionId` enrollments `conflict`
+  now HAS a per-row arbitration verb. `enrollmentsHandler` implements the SAME optional `ImportHandler.resolveConflict`
+  signature `studentsHandler` already had, so the existing `POST /imports/:id/conflicts/:rowId/resolve` (no new
+  permission/endpoint), the shared `resolveRowConflict` wrapper, the from-status-guard + `import.conflict.resolve` audit +
+  `byClass` adjust — all handler-agnostic — now arbitrate a class move with ZERO service/controller/engine change. **The move
+  is an IN-PLACE `enrollment.update` of the existing active row's `classSectionId`** (`take_source` → `updated`; `keep_current`
+  → `unchanged`, no write), `entityId = the PRE-EXISTING active.id` in both branches → no `@@unique`/partial-index collision and
+  the §E 24h-rollback invariant excludes the matched row from the delete set (the child's enrollment survives a rollback).
+  Re-resolved tenant/school-scoped from `ctx.caches` inside the tx (never a stale baked id); vanished entity → `…introuvable…`
+  (4xx, never 500). FE = `ConflictResolver.tsx` labels the enrollment row by matricule→class, shows a "Changement de classe"
+  strip + class-name-resolved diff + class-move-aware copy (no structural/radiogroup change, `keep_current` stays the safe
+  default). Murat P0 cases in `imports-engine.spec.ts` (a/b/c/d). ADR-024 carries the
+  `## Enrollments conflict arbitration — classSectionId class-move verb (polish — amendment)` section. **No schema / contract /
+  permission / endpoint / queue / worker change.** **Operator pre-req (gates runtime effect, not merge):** the single
+  post-Workflow `pnpm build` rebuilds `@pilotage/imports-core/dist`.
   **Spec-kit:** ✅ landed `docs/spec/features/e11/` (this run, epic-spec, docs-only): spec/plan/data-model/
   contracts(openapi)/ux/tasks/quickstart/PROGRESS. Grounded in the verified codebase: bulk import (ADR-017)
   already works but runs **synchronously in the HTTP request** — `ImportsService.apply()` is a single

@@ -443,6 +443,249 @@ describe('imports-core engine — conflict resolution (E11-S4)', () => {
       }),
     ).rejects.toThrow(/introuvable/);
   });
+
+  // -------------------------------------------------------------------------
+  // Enrollments class-move arbitration — the FULL composite @@unique
+  // ([studentId, classSectionId, academicYearId]) spans NON-active rows, so a
+  // student with a HISTORICAL (e.g. transferred_out) row for the SOURCE class
+  // this year must NOT crash take_source with a raw Prisma P2002 → HTTP 500.
+  // -------------------------------------------------------------------------
+  const EN_AY = 'ay-1';
+  function enrollmentCaches(): never {
+    return {
+      gradeLevelsByCode: new Map(),
+      gradeLevelsByName: new Map(),
+      classNamesPerYearLevel: new Set<string>(),
+      classSectionsByName: new Map([
+        [`${EN_AY}:6eb`, { id: 'cls-6eB', gradeLevelId: 'gl-1', academicYearId: EN_AY, maxStudents: 30, currentSize: 0 }],
+      ]),
+      subjectsByCode: new Map(),
+      studentExternalRefs: new Map([['EL-1', 'stu-1']]),
+      studentsByExternalRef: new Map(),
+      guardiansByEmail: new Map(),
+      activeAcademicYearId: EN_AY,
+    } as never;
+  }
+
+  it('take_source → clean French 4xx (never a 500) when a HISTORICAL row already holds the source class this year', async () => {
+    // The child is active in 6eA but has a prior transferred_out row in 6eB this
+    // same year; the source proposes 6eB. The pre-existing-row probe must trip
+    // BEFORE the update and surface a kind 4xx instead of letting the composite
+    // @@unique fire a P2002 → 500.
+    const update = jest.fn();
+    const tx = {
+      enrollment: {
+        findFirst: jest
+          .fn()
+          // 1st call = active-enrollment probe (active in 6eA)
+          .mockResolvedValueOnce({ id: 'enr-active', classSectionId: 'cls-6eA' })
+          // 2nd call = composite-collision probe (the historical 6eB row)
+          .mockResolvedValueOnce({ id: 'enr-hist-6eB', classSectionId: 'cls-6eB' }),
+        update,
+      },
+    };
+
+    await expect(
+      resolveRowConflict({
+        tx: tx as never,
+        handler: enrollmentsHandler,
+        payload: { studentExternalRef: 'EL-1', className: '6eB' },
+        decision: 'take_source',
+        caches: enrollmentCaches(),
+        schoolId: 'school-1',
+        actor: ACTOR,
+      }),
+    ).rejects.toThrow(/déjà une inscription.*déplacement impossible/);
+    expect(update).not.toHaveBeenCalled(); // never reached the colliding write
+  });
+
+  it('take_source → updated when NO historical row collides (the AC-3 happy path still moves the child)', async () => {
+    const update = jest.fn(async () => ({ id: 'enr-active' }));
+    const tx = {
+      enrollment: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ id: 'enr-active', classSectionId: 'cls-6eA' }) // active probe
+          .mockResolvedValueOnce(null), // collision probe → clear
+        update,
+      },
+    };
+
+    const res = await resolveRowConflict({
+      tx: tx as never,
+      handler: enrollmentsHandler,
+      payload: { studentExternalRef: 'EL-1', className: '6eB' },
+      decision: 'take_source',
+      caches: enrollmentCaches(),
+      schoolId: 'school-1',
+      actor: ACTOR,
+    });
+
+    expect(res).toEqual({ entityId: 'enr-active', type: 'enrollment', reconciliation: ReconciliationClass.updated });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('imports-core engine — enrollments conflict arbitration (E11 polish, hardening #6)', () => {
+  const AY = 'ay-1';
+
+  /** Caches whose anchors re-resolve the durable natural keys to REAL ids (mirrors applyRow). */
+  function arbitrationCaches(opts: {
+    studentRef?: [ref: string, id: string];
+    className?: [name: string, id: string];
+  }) {
+    const studentExternalRefs = new Map<string, string>();
+    if (opts.studentRef) studentExternalRefs.set(opts.studentRef[0], opts.studentRef[1]);
+    const classSectionsByName = new Map<
+      string,
+      { id: string; gradeLevelId: string; academicYearId: string; maxStudents: number; currentSize: number }
+    >();
+    if (opts.className) {
+      classSectionsByName.set(`${AY}:${opts.className[0].toLowerCase()}`, {
+        id: opts.className[1],
+        gradeLevelId: 'gl-1',
+        academicYearId: AY,
+        maxStudents: 30,
+        currentSize: 0,
+      });
+    }
+    return {
+      gradeLevelsByCode: new Map(),
+      gradeLevelsByName: new Map(),
+      classNamesPerYearLevel: new Set<string>(),
+      classSectionsByName,
+      subjectsByCode: new Map(),
+      studentExternalRefs,
+      studentsByExternalRef: new Map(),
+      guardiansByEmail: new Map(),
+      activeAcademicYearId: AY,
+    };
+  }
+
+  /**
+   * A tx answering BOTH enrollment.findFirst probes the handler issues:
+   *  - the active-enrollment probe (`where.status === 'active'`, no `id`) → returns `active`;
+   *  - the composite-unique collision probe (`where.id.not`, the historical-row guard) →
+   *    returns `collision` (default `null` = no pre-existing row in the source class).
+   * It also captures enrollment.update calls.
+   */
+  function makeTx(
+    active: { id: string; classSectionId: string } | null,
+    collision: { id: string } | null = null,
+  ) {
+    const updates: Array<{ where: { id: string }; data: Record<string, unknown> }> = [];
+    const tx = {
+      enrollment: {
+        findFirst: jest.fn(async (args?: { where?: { id?: unknown } }) =>
+          args?.where?.id !== undefined ? collision : active,
+        ),
+        update: jest.fn(async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+          updates.push(args);
+          return { id: args.where.id, ...args.data };
+        }),
+        create: jest.fn(),
+        deleteMany: jest.fn(),
+      },
+    };
+    return { tx, updates };
+  }
+
+  it('(d) — resolveRowConflict dispatches to enrollmentsHandler (no longer "ne supporte pas")', async () => {
+    const { tx } = makeTx({ id: 'enr-x', classSectionId: 'cls-old' });
+    const res = await resolveRowConflict({
+      tx: tx as never,
+      handler: enrollmentsHandler,
+      payload: { studentExternalRef: 'EL-1', className: '6eA' },
+      decision: 'keep_current',
+      caches: arbitrationCaches({ studentRef: ['EL-1', 'stu-1'], className: ['6eA', 'cls-new'] }) as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+    });
+    expect(res.type).toBe('enrollment');
+  });
+
+  it('(a) — keep_current → unchanged, NO enrollment.update, entityId = pre-existing active.id', async () => {
+    const { tx, updates } = makeTx({ id: 'enr-x', classSectionId: 'cls-old' });
+    const res = await resolveRowConflict({
+      tx: tx as never,
+      handler: enrollmentsHandler,
+      payload: { studentExternalRef: 'EL-1', className: '6eA' },
+      decision: 'keep_current',
+      caches: arbitrationCaches({ studentRef: ['EL-1', 'stu-1'], className: ['6eA', 'cls-new'] }) as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+    });
+
+    expect(res).toEqual({ entityId: 'enr-x', type: 'enrollment', reconciliation: ReconciliationClass.unchanged });
+    expect(tx.enrollment.update).not.toHaveBeenCalled(); // child stays put — no write
+    expect(updates).toHaveLength(0);
+  });
+
+  it('(b) — take_source → updated, EXACTLY one enrollment.update sets the re-resolved class, ZERO create, entityId = active.id', async () => {
+    const { tx, updates } = makeTx({ id: 'enr-x', classSectionId: 'cls-old' });
+    const res = await resolveRowConflict({
+      tx: tx as never,
+      handler: enrollmentsHandler,
+      payload: { studentExternalRef: 'EL-1', className: '6eA' },
+      decision: 'take_source',
+      // The cache re-resolves the SOURCE class to 'cls-new' (NOT a stale baked id).
+      caches: arbitrationCaches({ studentRef: ['EL-1', 'stu-1'], className: ['6eA', 'cls-new'] }) as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+    });
+
+    expect(res).toEqual({ entityId: 'enr-x', type: 'enrollment', reconciliation: ReconciliationClass.updated });
+    expect(tx.enrollment.update).toHaveBeenCalledTimes(1);
+    expect(tx.enrollment.create).not.toHaveBeenCalled(); // in-place move, no duplicate seat
+    expect(updates[0]!.where).toEqual({ id: 'enr-x' }); // the PRE-EXISTING active row
+    expect(updates[0]!.data).toEqual({ classSectionId: 'cls-new' }); // moved to the re-resolved source class
+  });
+
+  it('(c) — a vanished active enrollment at arbitration time throws /introuvable/ (a 4xx, never a 500), no write', async () => {
+    const { tx } = makeTx(null); // active enrollment gone between conflict record and arbitration
+    await expect(
+      resolveRowConflict({
+        tx: tx as never,
+        handler: enrollmentsHandler,
+        payload: { studentExternalRef: 'EL-1', className: '6eA' },
+        decision: 'take_source',
+        caches: arbitrationCaches({ studentRef: ['EL-1', 'stu-1'], className: ['6eA', 'cls-new'] }) as never,
+        schoolId: 'school-1',
+        actor: ACTOR,
+      }),
+    ).rejects.toThrow(/introuvable/i);
+    expect(tx.enrollment.update).not.toHaveBeenCalled();
+    expect(tx.enrollment.create).not.toHaveBeenCalled();
+  });
+
+  it('re-resolution is authoritative — a stale baked `_classSectionId` never wins over the cache-resolved source class', async () => {
+    const { tx, updates } = makeTx({ id: 'enr-x', classSectionId: 'cls-old' });
+    await resolveRowConflict({
+      tx: tx as never,
+      handler: enrollmentsHandler,
+      payload: { studentExternalRef: 'EL-1', className: '6eA', _classSectionId: 'cls-STALE', _studentId: 'stu-STALE' },
+      decision: 'take_source',
+      caches: arbitrationCaches({ studentRef: ['EL-1', 'stu-1'], className: ['6eA', 'cls-new'] }) as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+    });
+    expect(updates[0]!.data).toEqual({ classSectionId: 'cls-new' }); // cache wins, not 'cls-STALE'
+  });
+
+  it('a vanished student/class anchor at arbitration throws /introuvable/, never a 500', async () => {
+    const { tx } = makeTx({ id: 'enr-x', classSectionId: 'cls-old' });
+    await expect(
+      resolveRowConflict({
+        tx: tx as never,
+        handler: enrollmentsHandler,
+        payload: { studentExternalRef: 'EL-GONE', className: 'FANTÔME' },
+        decision: 'take_source',
+        caches: arbitrationCaches({}) as never, // nothing re-resolves, nothing stored
+        schoolId: 'school-1',
+        actor: ACTOR,
+      }),
+    ).rejects.toThrow(/introuvable/i);
+  });
 });
 
 describe('imports-core students handler — re-run convergence (E11-S4 AC-4)', () => {

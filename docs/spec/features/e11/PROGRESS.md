@@ -7,6 +7,44 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening #7 (2026-06-11, `polish` run — P2 `[imports][oneroster][reconciliation][conflict-arbitration][enrollments][api][web][a11y]`, needs human review).**
+> **Closes the Post-ship hardening #6 recorded follow-on** — the `classSectionId` enrollments `conflict` now HAS
+> a per-row arbitration verb. The S4 conflict-resolution machinery (`POST /imports/:id/conflicts/:rowId/resolve
+> {decision}`, the shared `resolveRowConflict` engine wrapper, the from-status-guarded `updateMany`, the
+> append-only `import.conflict.resolve` audit, the `summary.byClass` adjust, the `ConflictResolver.tsx` panel)
+> was **students-only** because only `studentsHandler` implemented the optional `ImportHandler.resolveConflict`.
+> **`enrollmentsHandler` now implements the SAME signature** (`packages/imports-core/src/handlers/
+> enrollments.handler.ts`), so an admin one-click resolves the class-move conflict. **The service, controller and
+> engine wrapper are UNTOUCHED** (all handler-agnostic). The write shape is materially different from the students
+> protected-field overwrite and is the load-bearing point: **`take_source` updates the EXISTING active
+> enrollment's `classSectionId` IN PLACE** (`enrollment.update`, frees the old seat / enrolls the new class) →
+> `updated`; **NOT** `delete+create` — a create would cross the `@@unique([studentId,classSectionId,
+> academicYearId])` + the `(studentId,academicYearId) WHERE status='active'` partial-unique index AND would put a
+> freshly-created id on the row, which the §E rollback invariant would orphan/wrong-delete. Because `entityId` is
+> the PRE-EXISTING `active.id` in BOTH branches (`keep_current` writes nothing → `unchanged`), a 24h rollback
+> flips the row `rolled_back` for bookkeeping WITHOUT deleting the enrollment the import did not create (§E holds
+> verbatim). The handler re-resolves `studentId`/`classSectionId` tenant/school-scoped **from `ctx.caches` inside
+> the tx** (mirroring `applyRow`), never the stale `_studentId`/`_classSectionId`; a vanished
+> student/class/enrollment throws `…introuvable…` (a 4xx, never a 500). **Pinned by `imports-engine.spec.ts`
+> (Murat P0):** (a) `keep_current` → `unchanged`, NO `enrollment.update`, `entityId = active.id`; (b)
+> `take_source` → `updated`, EXACTLY one `enrollment.update` to the re-resolved source class, ZERO
+> `enrollment.create`, `entityId = active.id`; (c) vanished active enrollment → throws `/introuvable/` (no 500),
+> no write; (d) `resolveRowConflict` dispatches to `enrollmentsHandler` (no longer "ne supporte pas"); plus
+> re-resolution-authority + vanished-anchor cases. **FE (`ConflictResolver.tsx` + the import-detail page):** an
+> enrollment conflict row now reads "`{matricule} → {className}`" (not a bare "Ligne N"), the strip sub-line shows
+> "Changement de classe" with an `ArrowLeftRight` icon, the drawer renders the `classSectionId` diff as resolved
+> class names (the page threads an id→name `classLabels` map, fetched best-effort from `/api/v1/classes` only when
+> the batch actually has enrollment conflicts, raw UUID kept as an auditable sub-line) with class-move-aware copy
+> ("Garder la classe actuelle" / "Déplacer vers {classe}"); the keep-current/take-source radiogroup + audit
+> notice + `keep_current` safe default are unchanged. ADR-024 carries
+> `## Enrollments conflict arbitration — classSectionId class-move verb (polish — amendment)`. **Accepted
+> carry-over (non-blocking):** the validate-time capacity guard does NOT re-run on arbitration, so a `take_source`
+> can move a child into a full class — the established posture (the conflict was already recorded against that
+> target; capacity is a soft cap). **No new permission/endpoint/schema/queue/worker change.** **Operator pre-reqs
+> (gate runtime effect, not merge):** the worker/API run the compiled `@pilotage/imports-core/dist`, so the
+> handler edit is inert until the single post-Workflow `pnpm build` rebuilds `dist`; plus the standing S1–S4
+> `prisma db push` + `prisma generate`. **Gate:** `typecheck` pass; P2 / `needsHumanReview:false`.
+>
 > **Post-ship hardening #6 (2026-06-11, `polish` run — P2 `[imports][async][reconciliation][worker][data-integrity][idempotency][rgpd]`, needs human review).**
 > Closes Post-ship hardening **#5 follow-on (ii)** (recorded below + in `bmad/roadmap.md` §E11-S3) — the
 > enrollments re-sync was the **one handler where re-running a sync was not idempotent**. The S1
@@ -36,10 +74,11 @@
 > **Operator pre-reqs (gate runtime effect, not merge):** the worker runs the compiled
 > `@pilotage/imports-core/dist/index.js` (`main`), so the handler edit is inert until the single post-Workflow
 > `pnpm build` rebuilds `dist`; plus the standing S1–S4 `prisma db push` + `prisma generate` + a worker draining
-> the `imports` queue. **Recorded follow-on (non-blocking):** the `classSectionId` enrollments `conflict` has
-> **no per-row arbitration verb** yet (S4 `resolveConflict` covers `studentsHandler` only) — the conflict is
-> visible + reversible + never auto-overwritten, but an admin cannot yet one-click "take the source class"
-> (recorded S-follow-on). **Gate:** `typecheck` pass; P2 / `needsHumanReview:false`.
+> the `imports` queue. **Recorded follow-on (non-blocking) — [CLOSED by Post-ship hardening #7 above]:** the
+> `classSectionId` enrollments `conflict` had **no per-row arbitration verb** (S4 `resolveConflict` covered
+> `studentsHandler` only); the conflict was visible + reversible + never auto-overwritten, but an admin could not
+> yet one-click "take the source class". #7 adds `enrollmentsHandler.resolveConflict` (in-place active-enrollment
+> class-move). **Gate:** `typecheck` pass; P2 / `needsHumanReview:false`.
 >
 > **Post-ship hardening #5 (2026-06-11, `polish` run — P2 `[imports][integration][oneroster][import-apply][data-integrity][worker]`, needs human review).**
 > Closes the most consequential **S3 verify-panel follow-up (d)** (recorded in `bmad/roadmap.md` §E11-S3) — a

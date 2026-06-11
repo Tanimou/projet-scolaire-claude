@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, ArrowRight, Check, Loader2, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, ArrowRight, Check, Loader2, ShieldCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useId, useRef, useState, useTransition } from 'react';
 
@@ -11,6 +11,36 @@ import type { BatchRow, ConflictField } from './types';
 
 type Decision = 'keep_current' | 'take_source';
 
+/** id → human class label (e.g. "6eB") for class-move conflicts. Built server-side. */
+export type ClassLabels = Record<string, string>;
+
+/**
+ * Humanise a raw payload/conflict field key for display. Used by both the strip
+ * sub-line and the drawer diff table. Falls back to the raw key (kept as a
+ * tooltip for audit traceability) when unknown.
+ */
+const FIELD_LABELS: Record<string, string> = {
+  firstName: 'Prénom',
+  lastName: 'Nom',
+  birthDate: 'Date de naissance',
+  email: 'E-mail',
+  notes: 'Notes',
+  classSectionId: 'Classe',
+};
+
+function fieldLabel(field: string): string {
+  return FIELD_LABELS[field] ?? field;
+}
+
+/**
+ * A class-move conflict is the enrollments shape: exactly one `classSectionId`
+ * field whose `current`/`source` are class-section UUIDs (a child moving class),
+ * structurally different from the students identity conflict.
+ */
+function isClassMove(fields: ConflictField[]): boolean {
+  return fields.length === 1 && fields[0]?.field === 'classSectionId';
+}
+
 /** Human label for the entity being arbitrated — best-effort from the payload. */
 function entityLabel(row: BatchRow): string {
   const p = row.payload ?? {};
@@ -18,6 +48,10 @@ function entityLabel(row: BatchRow): string {
   const last = typeof p.lastName === 'string' ? p.lastName : '';
   const name = `${first} ${last}`.trim();
   if (name) return name;
+  // Enrollment payload: student matricule + (optionally) the target class name.
+  const matricule = typeof p.studentExternalRef === 'string' ? p.studentExternalRef : '';
+  const className = typeof p.className === 'string' ? p.className : '';
+  if (matricule) return className ? `${matricule} → ${className}` : `Réf. ${matricule}`;
   const ref = typeof p.externalRef === 'string' ? p.externalRef : '';
   return ref ? `Réf. ${ref}` : `Ligne ${row.rowIndex}`;
 }
@@ -25,6 +59,12 @@ function entityLabel(row: BatchRow): string {
 function fmtVal(v: unknown): string {
   if (v === null || v === undefined || v === '') return '∅';
   return String(v);
+}
+
+/** Resolve a class-section UUID to its human label, falling back to the raw id. */
+function classLabelOf(value: unknown, classLabels: ClassLabels): string {
+  if (typeof value !== 'string' || !value) return fmtVal(value);
+  return classLabels[value] ?? value;
 }
 
 /**
@@ -40,9 +80,12 @@ function fmtVal(v: unknown): string {
 export function ConflictResolver({
   batchId,
   conflictRows,
+  classLabels = {},
 }: {
   batchId: string;
   conflictRows: BatchRow[];
+  /** id → class name, for rendering class-move (enrollments) conflicts legibly. */
+  classLabels?: ClassLabels;
 }) {
   const router = useRouter();
   const [openRow, setOpenRow] = useState<BatchRow | null>(null);
@@ -66,12 +109,14 @@ export function ConflictResolver({
               {conflictRows.length} ligne{conflictRows.length > 1 ? 's' : ''} à arbitrer
             </h3>
             <p className="mt-0.5 text-xs text-amber-800">
-              La source et vos données diffèrent sur un champ protégé (identité de l&apos;élève).
-              Aucune valeur n&apos;a été écrasée — choisissez celle à conserver. Chaque choix est
-              enregistré dans le journal d&apos;audit.
+              La source et vos données diffèrent. Aucune valeur n&apos;a été écrasée — choisissez
+              celle à conserver. Chaque choix est enregistré dans le journal d&apos;audit.
             </p>
             <ul className="mt-3 space-y-2" role="list">
-              {conflictRows.map((row) => (
+              {conflictRows.map((row) => {
+                const rowFields = row.conflictFields ?? [];
+                const classMove = isClassMove(rowFields);
+                return (
                 <li
                   key={row.id}
                   className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white px-3 py-2.5 ring-1 ring-amber-200/70"
@@ -81,8 +126,15 @@ export function ConflictResolver({
                     <span className="ml-2 font-mono text-[11px] text-slate-400">
                       ligne {row.rowIndex}
                     </span>
-                    <div className="mt-0.5 text-[11px] text-amber-700">
-                      {(row.conflictFields ?? []).map((f) => f.field).join(' · ')} en désaccord
+                    <div className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-700">
+                      {classMove ? (
+                        <>
+                          <ArrowLeftRight className="h-3.5 w-3.5 shrink-0 text-amber-700" aria-hidden />
+                          Changement de classe
+                        </>
+                      ) : (
+                        <>{rowFields.map((f) => fieldLabel(f.field)).join(' · ')} en désaccord</>
+                      )}
                     </div>
                   </div>
                   <button
@@ -93,7 +145,8 @@ export function ConflictResolver({
                     Arbitrer
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </div>
         </div>
@@ -112,6 +165,7 @@ export function ConflictResolver({
         <ConflictDrawer
           batchId={batchId}
           row={openRow}
+          classLabels={classLabels}
           onClose={() => setOpenRow(null)}
           onResolved={onResolved}
         />
@@ -123,11 +177,13 @@ export function ConflictResolver({
 function ConflictDrawer({
   batchId,
   row,
+  classLabels,
   onClose,
   onResolved,
 }: {
   batchId: string;
   row: BatchRow;
+  classLabels: ClassLabels;
   onClose: () => void;
   onResolved: (msg: string) => void;
 }) {
@@ -136,79 +192,125 @@ function ConflictDrawer({
   const [pending, startTransition] = useTransition();
   const groupName = useId();
   const fields: ConflictField[] = row.conflictFields ?? [];
+  const classMove = isClassMove(fields);
+
+  // Class-move resolved names for the choice-card prose (UUID never shown inline).
+  const moveField = classMove ? fields[0] : undefined;
+  const currentClassName = moveField
+    ? classLabelOf(moveField.current, classLabels)
+    : 'sa classe actuelle';
+  const sourceClassName = moveField
+    ? classLabelOf(moveField.source, classLabels)
+    : 'la nouvelle classe';
 
   const submit = () => {
     setError(null);
     startTransition(async () => {
       const res = await resolveImportConflict(batchId, row.id, decision);
       if (res.ok) {
-        onResolved('Arbitrage enregistré.');
+        // Shape-aware success copy.
+        const msg = classMove
+          ? decision === 'take_source'
+            ? 'Élève déplacé.'
+            : 'Classe conservée.'
+          : 'Arbitrage enregistré.';
+        onResolved(msg);
       } else {
         setError(res.error);
       }
     });
   };
 
+  const title = classMove
+    ? `Changer de classe — ${entityLabel(row)}`
+    : `Arbitrer — ${entityLabel(row)}`;
+  const description = classMove
+    ? "La source place cet élève dans une autre classe que celle où il est inscrit. Choisissez de le laisser dans sa classe actuelle ou de le déplacer. Ce choix est enregistré et reste annulable via le rollback de l'import."
+    : "La source et vos données diffèrent. Choisissez la valeur à conserver — ce choix est enregistré dans le journal d'audit et reste annulable via le rollback de l'import.";
+  const submitLabel = classMove
+    ? decision === 'take_source'
+      ? 'Déplacer l’élève'
+      : 'Garder la classe actuelle'
+    : decision === 'take_source'
+      ? 'Prendre la source'
+      : 'Garder l’actuel';
+
   return (
     <FormDrawer
       open
       onClose={onClose}
-      title={`Arbitrer — ${entityLabel(row)}`}
-      description="La source et vos données diffèrent. Choisissez la valeur à conserver — ce choix est enregistré dans le journal d'audit et reste annulable via le rollback de l'import."
-      submitLabel={decision === 'take_source' ? 'Prendre la source' : 'Garder l’actuel'}
+      title={title}
+      description={description}
+      submitLabel={submitLabel}
       onSubmit={submit}
       busy={pending}
       size="lg"
     >
       <div className="space-y-5">
         <div className="overflow-hidden rounded-xl border border-slate-200">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-              <tr>
-                <th scope="col" className="px-3 py-2 text-left font-semibold">
-                  Champ
-                </th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold">
-                  Valeur actuelle
-                </th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold">
-                  Valeur de la source
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {fields.map((f, idx) => (
-                <tr key={`${f.field}-${idx}`}>
-                  <td className="px-3 py-2 align-top font-mono text-[11px] font-bold text-slate-500">
-                    {f.field}
-                  </td>
-                  <td
-                    className={`px-3 py-2 align-top font-mono text-slate-800 ${
-                      decision === 'keep_current' ? 'bg-emerald-50' : ''
-                    }`}
-                  >
-                    {fmtVal(f.current)}
-                  </td>
-                  <td
-                    className={`px-3 py-2 align-top font-mono text-slate-800 ${
-                      decision === 'take_source' ? 'bg-blue-50' : ''
-                    }`}
-                  >
-                    {fmtVal(f.source)}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold">
+                    Champ
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold">
+                    Valeur actuelle
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold">
+                    Valeur de la source
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {fields.map((f, idx) => {
+                  const isClassField = f.field === 'classSectionId';
+                  return (
+                    <tr key={`${f.field}-${idx}`}>
+                      <td
+                        className="px-3 py-2 align-top text-[11px] font-bold text-slate-500"
+                        title={f.field}
+                      >
+                        {fieldLabel(f.field)}
+                      </td>
+                      <td
+                        className={`px-3 py-2 align-top text-slate-800 ${
+                          decision === 'keep_current' ? 'bg-emerald-50' : ''
+                        }`}
+                      >
+                        {isClassField ? (
+                          <DiffClassValue value={f.current} classLabels={classLabels} />
+                        ) : (
+                          <span className="font-mono">{fmtVal(f.current)}</span>
+                        )}
+                      </td>
+                      <td
+                        className={`px-3 py-2 align-top text-slate-800 ${
+                          decision === 'take_source' ? 'bg-blue-50' : ''
+                        }`}
+                      >
+                        {isClassField ? (
+                          <DiffClassValue value={f.source} classLabels={classLabels} />
+                        ) : (
+                          <span className="font-mono">{fmtVal(f.source)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <fieldset>
           <legend className="mb-2 text-sm font-semibold text-slate-700">
-            Quelle valeur conserver ?
+            {classMove ? 'Que faire de cet élève ?' : 'Quelle valeur conserver ?'}
           </legend>
           <div
             role="radiogroup"
-            aria-label="Choix d'arbitrage"
+            aria-label={classMove ? 'Choix de classe' : "Choix d'arbitrage"}
             className="grid grid-cols-1 gap-2 sm:grid-cols-2"
             onKeyDown={(e) => {
               // Arrow keys move to the SIBLING radio (WCAG 2.1.1). For this
@@ -229,17 +331,25 @@ function ConflictDrawer({
               checked={decision === 'keep_current'}
               onSelect={() => setDecision('keep_current')}
               icon={ShieldCheck}
-              title="Garder l’actuel"
-              body="Vos données ne changent pas. Le plus sûr — aucune écriture."
+              title={classMove ? 'Garder la classe actuelle' : 'Garder l’actuel'}
+              body={
+                classMove
+                  ? `L’élève reste dans ${currentClassName}. Aucun changement — le plus sûr.`
+                  : 'Vos données ne changent pas. Le plus sûr — aucune écriture.'
+              }
               tone="emerald"
             />
             <ChoiceCard
               name={groupName}
               checked={decision === 'take_source'}
               onSelect={() => setDecision('take_source')}
-              icon={ArrowRight}
-              title="Prendre la source"
-              body="Remplace par la valeur de la source. Annulable via le rollback."
+              icon={classMove ? ArrowLeftRight : ArrowRight}
+              title={classMove ? `Déplacer vers ${sourceClassName}` : 'Prendre la source'}
+              body={
+                classMove
+                  ? `Libère la place actuelle et inscrit l’élève dans ${sourceClassName}. Annulable via le rollback.`
+                  : 'Remplace par la valeur de la source. Annulable via le rollback.'
+              }
               tone="blue"
             />
           </div>
@@ -268,6 +378,33 @@ function ConflictDrawer({
         )}
       </div>
     </FormDrawer>
+  );
+}
+
+/**
+ * A class-section value in the diff table: the resolved human label as the
+ * headline, the raw UUID kept as a small auditable sub-line (never the headline,
+ * so the admin isn't arbitrating between two opaque ids).
+ */
+function DiffClassValue({
+  value,
+  classLabels,
+}: {
+  value: unknown;
+  classLabels: ClassLabels;
+}) {
+  const id = typeof value === 'string' ? value : '';
+  const label = classLabelOf(value, classLabels);
+  const showRaw = id && id !== label;
+  return (
+    <span className="block">
+      <span className="font-medium text-slate-900">{label}</span>
+      {showRaw && (
+        <span className="mt-0.5 block font-mono text-[10px] text-slate-500" title={id}>
+          {id}
+        </span>
+      )}
+    </span>
   );
 }
 
