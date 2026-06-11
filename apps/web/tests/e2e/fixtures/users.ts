@@ -59,10 +59,18 @@ const PORTAL_DEFAULTS: Record<Portal, PortalDefaults> = {
     expectedRole: 'school_admin',
     landing: '/admin/dashboard',
   },
-  // The simple per-portal teacher (project-context §6). No rich graph needed for S1.
+  // The rich-data demo teacher (`seed-demo-teacher.ts`) — the `voltaire-demo`
+  // teacher with the MOST teaching assignments, in the SAME tenant as the demo
+  // parent. S3 (parent ↔ teacher messaging) needs a teacher who can plausibly be
+  // on the demo parent's eligible-teacher list (the E2 dual-wall = guardianship ∩
+  // teaching), so the default is the rich demo teacher, NOT the simple
+  // `teacher@pilotage.local` (a different/simple account with no shared graph).
+  // Mirrors the S1 parent-default reasoning. Still env-overridable via
+  // `E2E_TEACHER_EMAIL`/`E2E_TEACHER_PASSWORD`; the journey skips gracefully when
+  // no legitimate pair exists on the operator's seed (non-vacuous, never a false red).
   teacher: {
-    email: 'teacher@pilotage.local',
-    password: SIMPLE_PASSWORD,
+    email: 'teacher.demo@voltaire.fr',
+    password: DEMO_PASSWORD,
     expectedRole: 'teacher',
     landing: '/teacher/dashboard',
   },
@@ -102,14 +110,17 @@ export const PORTALS: ReadonlyArray<Portal> = ['admin', 'teacher', 'parent', 'st
  *
  * S1 shipped only the parent grade→alert journey + the parent a11y smoke, so it
  * authenticated ONLY `parent`. S2 (child-claim → admin approval) is a cross-portal
- * parent↔admin journey, so the setup now ALSO authenticates `admin` — the rich
+ * parent↔admin journey, so the setup ALSO authenticates `admin` — the rich
  * `voltaire-demo` admin (`mme.dupont@voltaire.fr`, `guardianships.approve`) that
- * works the approval queue. A real parent/admin-auth break still fails loudly
- * (gate-asserted in `auth.setup.ts`); a not-yet-booted stack still skips cleanly.
- * S3 will add `teacher` (messaging); they extend this list (the `portalUser`/
- * fixture machinery is already all-four-ready).
+ * works the approval queue. S3 (parent ↔ teacher messaging) is a cross-portal
+ * parent↔teacher journey, so the setup now ALSO authenticates `teacher` — the rich
+ * `voltaire-demo` teacher (`teacher.demo@voltaire.fr`, the most-assigned teacher in
+ * the same tenant) that forms a legitimate E2 dual-wall pair with the demo parent.
+ * A real parent/admin/teacher-auth break still fails loudly (gate-asserted in
+ * `auth.setup.ts`); a not-yet-booted stack still skips cleanly. The `student` portal
+ * is fixture-ready (journeys land in a later epic).
  */
-export const ACTIVE_PORTALS: ReadonlyArray<Portal> = ['parent', 'admin'];
+export const ACTIVE_PORTALS: ReadonlyArray<Portal> = ['parent', 'admin', 'teacher'];
 
 /** Path to a role's cached storage-state file (git-ignored, regenerated per run). */
 export function storageStatePath(portal: Portal): string {
