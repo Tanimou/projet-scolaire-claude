@@ -9,7 +9,7 @@
 
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
-| S1 | Auth-session fixture + grade→alert journey + authenticated a11y smoke → **ADR-023** | `[test][a11y][e2e]` | P2 | `[ ]` not started | — |
+| S1 | Auth-session fixture + grade→alert journey + authenticated a11y smoke → **ADR-023** | `[test][a11y][e2e]` | P2 | `[x]` shipped | (this run) |
 | S2 | Journey #2: parent child-claim → admin approval (E9) | `[test][e2e]` | P2 | `[ ]` not started | — |
 | S3 | Journey #3: parent ↔ teacher messaging (E2) | `[test][e2e]` | P2 | `[ ]` not started | — |
 | S4 | Cross-portal WCAG 2.2 AA sweep + remediation (R9 payoff) | `[a11y][test][ui]` | P2 | `[ ]` not started | — |
@@ -92,8 +92,39 @@
 - **No wall widening:** journeys use legitimately-entitled demo accounts and **assert** the walls; a test
   that needs access must never relax ABAC to pass (hard non-goal / AC-9).
 
+## What landed this run (S1 — implementation)
+
+- **Fixture spine (FR-1 / AC-1):** `apps/web/tests/e2e/fixtures/users.ts` (env-overridable, demo-seed-backed
+  `PortalUser` table), `apps/web/tests/e2e/auth.setup.ts` (the **setup project** — logs in once per role via
+  the real `/{portal}/login` form; **asserts** landing + `expectedRole`; transport-only skip-when-down),
+  `apps/web/tests/e2e/fixtures/portal-fixtures.ts` (the one-line `adminPage`/`teacherPage`/`parentPage`/
+  `studentPage` fixtures, each opening its role's cached `.auth/{role}.json` context, skip-if-missing).
+- **Journey #1 (FR-2 / AC-2):** `apps/web/tests/e2e/journeys/grade-to-alert.spec.ts` (`@journey`) — signed
+  in as the demo parent on `/parent/recommendations`, FAILS unless the first alert carries rule (CODE_LABEL
+  pill) + subject/title + **non-empty body** (threshold/trend, structural not copy-coupled — PM-4) + the E1
+  "Que puis-je faire ?" next-step CTA. Read-only against the seed; `test.skip`s gracefully on an empty seed
+  (PM-5 non-vacuous).
+- **Authenticated a11y smoke (FR-3 / AC-3):** `apps/web/tests/e2e/a11y/authenticated.a11y.spec.ts` (`@a11y`)
+  — WCAG-2.2-AA scan (`wcag2a wcag2aa wcag21a wcag21aa wcag22aa`, incl. SC 2.5.8) of `/parent/dashboard`,
+  zero critical/serious, **plus a sanity-injection** test proving the gate bites (no false green).
+- **Config + scripts (FR-7 / FR-9):** `playwright.config.ts` adds the `setup` project + a `setup`-dependent
+  authenticated project running ONLY `journeys/**` + `a11y/**`, while the unauthenticated `chromium` project
+  IGNORES those dirs (keeps `smoke.spec.ts` only — PM-7 isolation, no session leak). `package.json` adds
+  `test:e2e:a11y` + `test:e2e:journey`; `test:e2e:smoke` unchanged.
+- **Security + never-build (AC-8):** `.gitignore` now ignores `apps/web/tests/e2e/.auth/` (live session
+  token, never committed). `webServer` stays `pnpm dev` (next dev); no `next build`/`docker`/`infra` in any
+  new script or config.
+- **ADR (AC-9):** `docs/adr/ADR-023-authenticated-e2e-and-a11y-layer.md` (Accepted) — re-verified 023 is
+  next-free after ADR-022. `quickstart.md` updated with the run + one-line-journey recipe + the
+  env-overridable parent-credential note.
+- **No schema / endpoint / permission / NotificationKind / queue. No WCAG remediation was needed in this
+  slice's authored markup** (the parent dashboard was already built to the bar; if the live scan surfaces a
+  critical/serious on the operator's stack, the remediation lands reuse-first per FR-6 — recorded for the
+  S1 run against a booted stack).
+
 ## Next action
 
-**Implement E10-S1** (`epic-slice`): the auth-session fixture + the grade→alert journey + the authenticated
-a11y smoke scan + **ADR-023**. `apps/web` tests/config + small WCAG remediation only; no schema, no
-endpoint, no permission. Run against the already-running `:3100` stack — **never build**.
+**Implement E10-S2** (`epic-slice`): the parent child-claim → admin approval cross-portal journey
+(`tests/e2e/journeys/child-claim-approval.spec.ts`), reusing the S1 fixture (`parentPage` + `adminPage` in
+one spec). No schema, no new fixture, no endpoint. Run against the already-running `:3100` stack — never
+build.

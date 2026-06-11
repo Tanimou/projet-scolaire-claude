@@ -15,6 +15,10 @@ coverage/
 playwright-report/
 test-results/
 .nyc_output/
+# E10-S1 (ADR-023): cached Playwright auth storage-state — a LIVE session token,
+# regenerated every run. NEVER commit (AC-8 / Sentinel security gate).
+apps/web/tests/e2e/.auth/
+**/tests/e2e/.auth/
 
 # env
 .env

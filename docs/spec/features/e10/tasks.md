@@ -25,7 +25,7 @@
 
 ---
 
-## [ ] S1 — Auth-session fixture + grade→alert journey + a11y smoke + ADR-023 · `[test][a11y][e2e]` · P2 · ~M
+## [x] S1 — Auth-session fixture + grade→alert journey + a11y smoke + ADR-023 · `[test][a11y][e2e]` · P2 · ~M · **SHIPPED**
 
 **Goal:** the spine. A reusable portal-aware authenticated-session fixture seeded from `voltaire-demo`,
 the first critical end-to-end journey (grade publish → parent **explainable** alert → next step), the
