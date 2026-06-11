@@ -91,6 +91,12 @@ export interface BatchDetail {
   appliedAt: string | null;
   rolledBackAt: string | null;
   errorMessage: string | null;
+  /**
+   * E11-S3 — provenance. `oneroster` when this batch was produced by a roster
+   * sync; `csv_upload`/null for a human CSV upload (legacy rows read null).
+   */
+  origin?: 'csv_upload' | 'oneroster' | null;
+  rosterSourceId?: string | null;
   rows: BatchRow[];
 }
 

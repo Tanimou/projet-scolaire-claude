@@ -16,6 +16,7 @@ import { GuardiansModule } from './modules/guardians/guardians.module';
 import { HealthController } from './modules/health/health.controller';
 import { IdentityModule } from './modules/identity/identity.module';
 import { ImportsModule } from './modules/imports/imports.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { LessonsModule } from './modules/lessons/lessons.module';
 import { MessagingModule } from './modules/messaging/messaging.module';
 import { ParentExportsModule } from './modules/parent-exports/parent-exports.module';
@@ -39,6 +40,7 @@ import { PrismaModule } from './shared/prisma/prisma.module';
     SchoolStructureModule,
     SchoolsModule,
     ImportsModule,
+    IntegrationsModule,
     CalendarModule,
     StudentsModule,
     GuardiansModule,

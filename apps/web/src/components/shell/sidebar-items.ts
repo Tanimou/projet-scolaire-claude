@@ -26,6 +26,7 @@ import {
   MessageSquarePlus,
   MessagesSquare,
   PenTool,
+  Plug,
   School,
   Send,
   Settings,
@@ -161,6 +162,15 @@ export const adminSidebarGroups: SidebarGroupConfig[] = [
     label: 'Documents & suivi',
     items: [
       { key: 'imports', icon: Upload, label: 'Imports', href: '/admin/imports' },
+      {
+        key: 'integrations',
+        icon: Plug,
+        label: 'Intégrations',
+        href: '/admin/integrations',
+        // E11-S3 — OneRoster roster-sync. A sync lands on a normal ImportBatch,
+        // so stay active on the integrations surface only.
+        matches: /^\/admin\/integrations(\/|$)/,
+      },
       { key: 'exports', icon: FileSpreadsheet, label: 'Exports', href: '/admin/exports' },
       { key: 'reports', icon: BarChart3, label: 'Rapports', href: '/admin/reports' },
       { key: 'audit', icon: History, label: 'Audit', href: '/admin/audit' },
@@ -346,6 +356,7 @@ export {
   MessageSquarePlus,
   MessagesSquare,
   PenTool,
+  Plug,
   School,
   Send,
   Settings,

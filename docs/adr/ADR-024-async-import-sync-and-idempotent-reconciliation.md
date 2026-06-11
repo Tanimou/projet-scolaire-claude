@@ -197,3 +197,54 @@ behavioural contract change S2 makes; it is recorded here for the reviewer rathe
 - **Convert the four create-only handlers to upsert in S2.** Rejected (architect Option A) — that is a
   behaviour change to the ADR-017 validate contract across five mutating handlers; S2 ships the rich classes
   for `students` only and defers the rest to a later slice, keeping the blast radius honest.
+
+## OneRoster source connect + pull + map (E11-S3 — amendment)
+
+S1 made apply async; S2 made it reconciled. **S3 adds the first non-CSV-upload _origin_** — a connected
+OneRoster source whose pull is **mapped onto the existing import substrate**, so a sync inherits the async
+apply (S1) and the reconciliation panel (S2) **for free**. This is an **amendment, not a new ADR** (the title
+promises "import/**sync**"): no new queue, no new permission, no new apply/reconciliation engine.
+
+### A. A sync is just an `ImportBatch` — no parallel pipeline
+The one architectural rule of S3: **a OneRoster pull PRODUCES a normal `validated` `ImportBatch`** (one per
+applicable `ImportType`), never a second mutation path. The `RosterSource` model is **config + provenance
+only**; the adapter maps the bundle onto the *existing* `ImportRow` raw-row shape and runs the *existing* type
+handlers' `parseRow`/`validateRow` (no forked validation — the Murat P0 "same `validateRow`" test pins this).
+The produced batch is indistinguishable from a CSV upload to the worker apply engine, which reads neither
+`origin` nor `rosterSourceId`. So S4's "sync apply + 24h rollback + re-run convergence" is **zero new
+execution/reconciliation code** — it is the same `applyBatchRows`/`rollbackBatchRows` + S2 classification.
+
+### B. Additive schema (no rename/removal)
+`enum ImportOrigin { csv_upload · oneroster }` + `ImportBatch.origin ImportOrigin? @default(csv_upload)` +
+`ImportBatch.rosterSourceId String?` (nullable+defaulted ⇒ every existing batch reads `csv_upload`, zero
+behaviour change); `enum RosterSourceKind { oneroster_csv · oneroster_rest }`, `enum RosterSyncStatus { idle ·
+pulling · mapped · failed }`, and the tenant+school-scoped `RosterSource` model. Additive `db push` only.
+
+### C. RGPD minimal-data + the idempotency anchor
+The adapter maps **roster identity + enrollment ONLY** — `users.csv` (role=student → `students`),
+`classes.csv` (→ `classes`), `enrollments.csv` (role=student → `enrollments`). It intentionally does **not**
+read grades/attendance/medical, nor `birthDate` (which lives in the RGPD-sensitive OneRoster
+`demographics.csv`). The OneRoster **`sourcedId` is carried verbatim into `externalRef`** — so it becomes the
+S2 externalRef-first idempotency anchor, and a re-sync converges (`unchanged`/`updated`) instead of creating
+duplicates (the AC-4 contract, proven in S4). `MAX_ROWS` (5 000) is enforced per produced type; a too-large or
+empty pull is a **`failed` pull**, never a corrupt apply.
+
+### D. Credentials — opaque ref, never returned (Sentinel gate)
+`RosterSource.credentialRef` holds an **opaque server-side ref only** — the raw secret is never persisted in
+plaintext and **never returned to the client** (the DTO exposes `hasCredential: boolean`, not the value). For
+the CSV-bundle v1 the credential is unused (the bundle rides the sync request body); the field exists so the
+recorded REST stretch (R3) needs no schema rewrite.
+
+### E. Permission — reuse `integrations.write` (no new permission)
+The connect/list/sync endpoints ride the **existing admin-held `integrations.write`** permission (R1) — no
+parent/teacher/student ever holds it; CSV import keeps `imports.execute`. Every read/write is tenant-scoped
+server-side; connect/pull write append-only `import.sync.connect`/`import.sync.pull` audit rows.
+
+### Rejected (S3 alternatives)
+- **A live OneRoster REST/OAuth client in v1.** Deferred (R3) — CSV bundle maps cleanly onto the existing
+  substrate; the `RosterSource` model admits REST without a rewrite (the stretch is recorded, not built).
+- **One multi-type `ImportBatch` for the whole bundle.** Rejected — `ImportBatch` is single-`type` by design
+  (the handler/wizard/rollback all key on it); a sync produces one batch per applicable type, linked to the
+  source, the admin landing on the students batch.
+- **Auto-delete a student absent from the new pull.** Rejected (R6) — a SIS-side removal surfaces as a soft
+  conflict / "à vérifier" in S4, never an automatic destructive delete of a child's record.
