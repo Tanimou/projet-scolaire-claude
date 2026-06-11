@@ -7,6 +7,27 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening (2026-06-11, `polish` run — needs human review, NOT auto-merged).** A small
+> `[security][auth][multi-tenant][abac]` follow-up on the S3 `IntegrationsService` (one file + its spec;
+> **no schema / no contract / no permission change**). (1) **Tenant wall moved into the query** —
+> `requireSource` now does `findFirst({ where: { id, tenantId } })` → 404, replacing the old
+> `findUnique({ id })` + post-fetch `if (tenantId !== …) → 403` (ADR-002 "scope is the query, not a branch";
+> closes the 403-vs-404 cross-tenant existence oracle; a foreign id now takes ZERO lifecycle side-effect —
+> the `pulling` `updateMany` never fires). (2) **FR10 multi-school** — `sync` files the batch + validation
+> caches + active-year resolution + SIS-delete divergence read under `source.schoolId` (re-validated by
+> `forTenant`'s explicit-school arg, which can't widen access), NOT the actor's active/default school, so a
+> multi-school admin who switched their active school can no longer mis-file a school-A roster (and its
+> `externalRef` divergence read) under school-B. Plus a combined-total `ONEROSTER_MAX_ROWS` pre-commit guard
+> (per-type caps could previously sum past the cap). `ForbiddenException` fully removed from both files.
+> Tests updated to match (mock honours the `tenantId` predicate as Postgres would; cross-tenant `sync`/`getOne`
+> now assert `NotFoundException` + the query-level wall + no `pulling` side-effect; combined over-cap; batch-
+> follows-source). **This diff is uncommitted and has NOT been through the routine's typecheck/build gate or
+> the Sentinel/Quinn/Murat lenses** — a human should commit it on a fresh `ci/*` branch, run `pnpm typecheck`
+> once (the `ForbiddenException` import removal goes RED if any reference lingers), and confirm the still-
+> pending S1–S4 operator pre-req (`prisma db push` + `prisma generate` + `pnpm build` of
+> `@pilotage/imports-core/dist` + a worker draining the `imports` queue) is applied — until then this fix is
+> correct-but-dormant.
+
 **Mode of this run:** `epic-spec` — authored the kit, **no code / no schema / no build**. The bulk-import
 pipeline exists but runs **in-request** (`imports.service.ts apply()`/`rollback()` are sync API methods,
 verified); **zero** OneRoster/LTI code exists; the worker runs **2** BullMQ queues (`exports`,
