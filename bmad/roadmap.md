@@ -901,9 +901,9 @@ filler (E9 enrollment self-service / E10 quality bar).**
   the handler edit is inert until the single post-Workflow `pnpm build` rebuilds `dist`; plus the standing
   S1–S4 `prisma db push` + `prisma generate` + a worker draining the `imports` queue. **Gate:** `typecheck`
   pass; P2 / `needsHumanReview:true`. **Recorded follow-on hardening (non-blocking, from the verify panel):**
-  (i) the invalid-branch enrollment payload is NOT stripped — an INVALID enrollments `ImportRow` can still
-  carry a `primeCaches` placeholder UUID (functionally harmless, invalid rows never apply; a literal AC-2
-  completeness gap); (ii) a combined-pull RE-RUN throws `Élève déjà inscrit` on the active-enrollment guard,
+  (i) **[closed by Post-ship hardening #8 below]** the invalid-branch enrollment payload was NOT stripped — an
+  INVALID enrollments `ImportRow` could still carry a `primeCaches` placeholder UUID (functionally harmless,
+  invalid rows never apply; a literal AC-2 completeness gap); (ii) a combined-pull RE-RUN throws `Élève déjà inscrit` on the active-enrollment guard,
   which the engine re-throws → the WHOLE re-sync enrollments batch aborts rather than skipping the
   already-enrolled rows (FR5 "0 created convergence" mischaracterises a throwing guard as a skip — decide
   skip-vs-abort and add a mixed-batch test); (iii) class re-resolution keys on `year:name` only (no
@@ -936,6 +936,21 @@ filler (E9 enrollment self-service / E10 quality bar).**
   `studentsHandler` only) — the conflict is visible + reversible + never auto-overwritten, but an admin cannot
   yet one-click "take the source class"; this is the recorded S-follow-on. **Gate:** `typecheck` pass; P2 /
   `needsHumanReview:false`.
+  **Post-ship hardening #8 (2026-06-11, `polish` run — P3 `[imports][integration][oneroster][import-apply][data-integrity]`, PROGRESS Post-ship hardening #8):**
+  closes hardening-#5 follow-on **(i)** — the **invalid**-branch enrollment payload was NOT stripped of
+  `_`-prefixed `primeCaches` placeholder ids. `enrollmentsHandler.validateRow` mutates `parsed` in place
+  (assigning `_studentId`/`_classSectionId`/`_academicYearId` as each anchor resolves), so a partially-resolved
+  invalid row — student found (stamps a `randomUUID` `_studentId`) then `className` fails (e.g. no active year) —
+  persisted that placeholder UUID into the invalid `ImportRow.payload`. Harmless (invalid rows never apply, so
+  the placeholder never reaches `enrollment.create`) but a literal AC-2 completeness gap, since #5 stripped only
+  the **valid** payload. **Fix (`IntegrationsService.createValidatedBatch`):** the same `stripResolvedIds`
+  scrub now also runs on the invalid persisted payload under the same `m.type === 'enrollments'` gate (no-op
+  every other type). **Pinned by a new `integrations.service.spec.ts` case** (`activeYear:null` → student
+  resolves, `className` can't key → row `invalid`, payload keeps only `studentExternalRef`/`className`, asserts
+  NO `_`-prefixed id; reverting the strip reproduces the leaked `randomUUID`). **2 files (service + spec), no
+  schema / contract / permission / endpoint / queue / worker / UI change — a pure API-layer persist-time scrub
+  (no `dist` rebuild pre-req; the change lives in the API package).** **Gate:** `typecheck` pass;
+  `integrations.service.spec` 18/18 green; P3 / `needsHumanReview:false`.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
   card data, PSP later. Out of MVP; do not start without explicit go.
 

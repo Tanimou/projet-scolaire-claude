@@ -448,3 +448,26 @@ student/class anchor throw. **FE:** `ConflictResolver.tsx` now labels an enrollm
 (keep-current = "Garder la classe actuelle", take-source = "Déplacer vers {classe}") — the radiogroup/audit-notice
 structure and the `keep_current` safe default are unchanged. **No schema / contract / permission / endpoint /
 queue / worker change.**
+
+## OneRoster combined-pull placeholder-id strip — invalid-branch parity (polish — amendment)
+
+The §S3 hardening that introduced **Approach A** has two halves: the load-bearing one is the apply-time
+re-resolution (the handler re-finds the durable natural keys from the apply-time DB caches, documented above and
+in §S4); the defensive one is `IntegrationsService.createValidatedBatch` **stripping the handler's internal
+`_`-prefixed resolution ids** (`_studentId`/`_classSectionId`/`_academicYearId`) — which on a first combined pull
+are `primeCaches` placeholder `randomUUID`s — from the **persisted** enrollments `ImportRow.payload`, so a
+placeholder can never reach the DB. That strip originally covered only the **valid** payload.
+
+This amendment extends the strip to the **invalid** payload too (closing the recorded follow-on (i), a literal
+AC-2 completeness gap). The subtlety is that `enrollmentsHandler.validateRow` **mutates its `parsed` argument in
+place** — it assigns `_studentId` as soon as the student resolves, *before* it knows whether a later field
+(`className` / active-year) will fail. So a **partially-resolved invalid** row (student found → `_studentId`
+stamped, then `className` fails because there is no active academic year) carried a `primeCaches` `randomUUID`
+into the invalid `ImportRow.payload`. This is **functionally harmless** — an invalid row is never applied, so the
+placeholder never reaches `enrollment.create` — but it is a literal completeness gap (a placeholder UUID is
+persisted at all). The fix runs the **same `stripResolvedIds` scrub on the invalid persisted payload**, under the
+same `stripPlaceholders` (`m.type === 'enrollments'`) gate, a no-op for every other type (whose payload carries
+no `_`-anchor). Pinned by `integrations.service.spec.ts` (`activeYear:null` → the enrollment row finalises
+`invalid`, its persisted payload keeps only the durable `studentExternalRef`/`className` and asserts NO
+`_studentId`/`_classSectionId`/`_academicYearId`). **No schema / contract / permission / endpoint / queue /
+worker / UI change** — a pure API-layer persist-time scrub.

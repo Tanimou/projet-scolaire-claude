@@ -7,6 +7,26 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening #8 (2026-06-11, `polish` run — P3 `[imports][integration][oneroster][import-apply][data-integrity]`, needs human review).**
+> **Closes the Post-ship hardening #5 recorded follow-on (i)** (below + `bmad/roadmap.md` §E11-S3) — the literal
+> AC-2 completeness gap where the **invalid**-branch enrollment payload was NOT stripped of `_`-prefixed
+> `primeCaches` placeholder ids. `enrollmentsHandler.validateRow` **mutates `parsed` in place** (it assigns
+> `_studentId`/`_classSectionId`/`_academicYearId` onto the parsed object as it resolves each anchor), so a
+> **partially-resolved** invalid row — e.g. student found (stamps a `primeCaches` `randomUUID` `_studentId`) then
+> `className` fails because there is no active academic year — persisted that placeholder UUID into the invalid
+> `ImportRow.payload`. Functionally harmless (an invalid row is never applied, so the placeholder never reaches a
+> `enrollment.create`), but #5 only stripped the **valid** payload, leaving the invalid branch a literal gap.
+> **Fix (`IntegrationsService.createValidatedBatch`, `apps/api/.../integrations.service.ts`):** the existing
+> `stripResolvedIds` (drop every `_`-prefixed key) now also runs on the **invalid** persisted payload under the
+> same `stripPlaceholders` (`m.type === 'enrollments'`) gate — symmetric with the valid branch, no-op for every
+> other type (whose payload carries no `_`-anchor). **Pinned by a new `integrations.service.spec.ts` case**
+> (`activeYear:null` → student resolves + `className` can't key → the row is `invalid`, yet the persisted payload
+> keeps only `studentExternalRef`/`className` and asserts NO `_studentId`/`_classSectionId`/`_academicYearId`);
+> reverting the strip makes it fail with the leaked `randomUUID`, confirming it is load-bearing. **2 files
+> (service + spec), no schema / contract / permission / endpoint / queue / worker / UI change** — a pure
+> API-layer persist-time scrub, no operator pre-req (no `dist` rebuild; the change is in the API package itself).
+> **Gate:** `typecheck` pass; full `integrations.service.spec` (18/18) green; P3 / `needsHumanReview:false`.
+>
 > **Post-ship hardening #7 (2026-06-11, `polish` run — P2 `[imports][oneroster][reconciliation][conflict-arbitration][enrollments][api][web][a11y]`, needs human review).**
 > **Closes the Post-ship hardening #6 recorded follow-on** — the `classSectionId` enrollments `conflict` now HAS
 > a per-row arbitration verb. The S4 conflict-resolution machinery (`POST /imports/:id/conflicts/:rowId/resolve
@@ -108,9 +128,10 @@
 > prerequisites. **Operator pre-reqs (gate runtime effect, not merge):** the worker runs the compiled
 > `@pilotage/imports-core/dist/index.js` (`main`), so the handler edit is inert until the single post-Workflow
 > `pnpm build` rebuilds `dist`; plus the standing S1–S4 `prisma db push`/`prisma generate` + a worker draining
-> the `imports` queue. **Recorded follow-on hardening (non-blocking):** (i) the **invalid**-branch enrollment
-> payload is NOT stripped (an invalid row can still carry a placeholder UUID — harmless, never applies; a
-> literal AC-2 completeness gap); (ii) **[CLOSED by Post-ship hardening #6 above]** a combined-pull RE-RUN threw on the
+> the `imports` queue. **Recorded follow-on hardening (non-blocking):** (i) **[CLOSED by Post-ship hardening #8
+> above]** the **invalid**-branch enrollment payload was NOT stripped (an invalid row could still carry a
+> placeholder UUID — harmless, never applies; a literal AC-2 completeness gap) — #8 runs `stripResolvedIds` on
+> the invalid payload too; (ii) **[CLOSED by Post-ship hardening #6 above]** a combined-pull RE-RUN threw on the
 > active-enrollment guard which the engine re-threw → the whole re-sync enrollments batch aborted rather than
 > skipping already-enrolled rows — now converges to `unchanged` (same class) / `conflict` (different class), the
 > batch finalises `applied`, with the mixed-batch test added; (iii) class re-resolution keys on `year:name` only (no `gradeLevelId`) → two same-named classes in

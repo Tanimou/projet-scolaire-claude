@@ -58,11 +58,14 @@ export interface SyncResult {
 
 /**
  * E11-S3 follow-up (d) / FR1 — drop the handler's internal `_`-prefixed
- * resolution fields (`_studentId`/`_classSectionId`/`_academicYearId`) from a
- * normalized enrollment payload before persisting the `valid` ImportRow, so the
- * row carries ONLY the durable natural keys (`studentExternalRef`/`className`)
- * and never a same-pull `primeCaches` placeholder id. `enrollmentsHandler.applyRow`
- * re-resolves those anchors against the apply-time DB caches.
+ * resolution fields (`_studentId`/`_classSectionId`/`_academicYearId`) from an
+ * enrollment payload before persisting the ImportRow, so the row carries ONLY
+ * the durable natural keys (`studentExternalRef`/`className`) and never a
+ * same-pull `primeCaches` placeholder id. `enrollmentsHandler.applyRow`
+ * re-resolves those anchors against the apply-time DB caches. Applied to BOTH
+ * the `valid` payload and the `invalid` payload (E11 hardening #5 follow-on (i)):
+ * `validateRow` mutates `parsed` in place, so a partially-resolved invalid row
+ * can also carry a placeholder — strip it there too for AC-2 completeness.
  */
 function stripResolvedIds(parsed: Record<string, unknown>): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
@@ -349,11 +352,14 @@ export class IntegrationsService {
     /**
      * E11-S3 follow-up (d) / FR1 — when true (the enrollments type), strip the
      * handler's internal `_`-prefixed resolution ids (`_studentId`/
-     * `_classSectionId`/`_academicYearId`) from the persisted `valid` row payload.
-     * On a combined pull those ids may be `primeCaches` placeholders; the apply
-     * re-resolves the durable natural keys (`studentExternalRef`/`className`)
-     * against the apply-time DB caches, so the placeholders must never reach the
-     * DB. No-op for every other type (whose payload carries no cross-row anchor).
+     * `_classSectionId`/`_academicYearId`) from the persisted row payload — both
+     * the `valid` payload AND the `invalid` payload (E11 hardening #5 follow-on
+     * (i)): `validateRow` mutates `parsed` in place, so a partially-resolved
+     * invalid row can carry a placeholder too. On a combined pull those ids may be
+     * `primeCaches` placeholders; the apply re-resolves the durable natural keys
+     * (`studentExternalRef`/`className`) against the apply-time DB caches, so the
+     * placeholders must never reach the DB. No-op for every other type (whose
+     * payload carries no cross-row anchor).
      */
     stripPlaceholders = false,
   ): Promise<{ summary: SyncResult['batches'][number] }> {
@@ -401,11 +407,22 @@ export class IntegrationsService {
           });
         } else {
           invalidCount++;
+          // E11 hardening #5 follow-on (i) — `validateRow` MUTATES `parsed` in
+          // place, so a partially-resolved enrollment (e.g. student found, then
+          // className fails on a missing active year) leaves a `primeCaches`
+          // placeholder `_studentId`/`_classSectionId` on the parsed object even
+          // though the row is INVALID. Invalid rows never apply, so this is
+          // harmless — but for AC-2 completeness a placeholder UUID must never be
+          // persisted at all. Strip the `_`-prefixed ids from the invalid payload
+          // too (no-op for every other type, whose payload carries no `_`-anchor).
+          const payload = stripPlaceholders
+            ? stripResolvedIds(parsed as Record<string, unknown>)
+            : parsed;
           rowsToCreate.push({
             batchId: batch.id,
             rowIndex: i + 1,
             status: ImportRowStatus.invalid,
-            payload: parsed as Prisma.InputJsonValue,
+            payload: payload as Prisma.InputJsonValue,
             errors: result.errors as unknown as Prisma.InputJsonValue,
           });
         }
