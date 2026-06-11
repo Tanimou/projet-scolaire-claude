@@ -43,7 +43,9 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeService(opts: { created?: Record<string, unknown>; found?: unknown } = {}) {
+function makeService(
+  opts: { created?: Record<string, unknown>; found?: unknown; managedStudents?: unknown[] } = {},
+) {
   const createdRows: Record<string, unknown>[] = [];
   let importRowCount = 0;
   const prisma = {
@@ -63,12 +65,29 @@ function makeService(opts: { created?: Record<string, unknown>; found?: unknown 
         return Promise.resolve(row);
       }),
       update: jest.fn().mockResolvedValue({}),
+      // E11-S4 — the divergence compute re-reads the students batch summary.
+      findFirst: jest.fn().mockResolvedValue({ summary: { totalRows: 0 } }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     importRow: {
       createMany: jest.fn().mockImplementation(({ data }: { data: unknown[] }) => {
         importRowCount += data.length;
         return Promise.resolve({ count: data.length });
       }),
+    },
+    // `buildImportCaches` reads (a successful sync builds the lookup caches ONCE).
+    // The divergence compute additionally reads the externalRef-carrying students.
+    gradeLevel: { findMany: jest.fn().mockResolvedValue([]) },
+    subject: { findMany: jest.fn().mockResolvedValue([]) },
+    classSection: { findMany: jest.fn().mockResolvedValue([]) },
+    guardian: { findMany: jest.fn().mockResolvedValue([]) },
+    academicYear: { findFirst: jest.fn().mockResolvedValue(null) },
+    // E11-S4 (FR3/AC-3) — the SIS-delete divergence reads the school's
+    // externalRef-carrying students. `buildImportCaches` also reads students
+    // (no externalRef filter); we return the managed set for both — the
+    // divergence query is the one that filters on externalRef.
+    student: {
+      findMany: jest.fn().mockResolvedValue(opts.managedStudents ?? []),
     },
     auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
   };
@@ -190,6 +209,69 @@ describe('IntegrationsService — MAX_ROWS over-cap (pre-commit rejection)', () 
       (c) => c[0].data?.status === RosterSyncStatus.failed,
     );
     expect(failingUpdate).toBeDefined();
+  });
+});
+
+describe('IntegrationsService — SIS-side delete divergence (E11-S4 FR3/AC-3, the R6 wall)', () => {
+  // One student in the pull (EL-1), one managed student absent from it (EL-GONE).
+  const PULL_USERS = [
+    'sourcedId,role,givenName,familyName',
+    'EL-1,student,Léa,Martin',
+  ].join('\n');
+
+  it('surfaces a managed student absent from the pull as `absentFromSource` — and NEVER deletes it', async () => {
+    const { service, prisma } = makeService({
+      managedStudents: [
+        { externalRef: 'EL-1', firstName: 'Léa', lastName: 'Martin' }, // still in source
+        { externalRef: 'EL-GONE', firstName: 'Tom', lastName: 'Bernard' }, // absent → advisory
+      ],
+    });
+
+    const res = await service.sync('src-1', ACTOR, { users: PULL_USERS });
+
+    // The absent student is surfaced (read-only, reviewable), the present one is not.
+    expect(res.absentFromSource).toEqual([{ externalRef: 'EL-GONE', name: 'Tom Bernard' }]);
+
+    // R6 — there is NO delete path: the student is only READ, never removed.
+    expect((prisma.student as Record<string, jest.Mock>).deleteMany).toBeUndefined();
+    expect((prisma.student as Record<string, jest.Mock>).delete).toBeUndefined();
+
+    // The advisory is stamped onto the produced students batch summary for the panel.
+    const stamped = (prisma.importBatch.updateMany as jest.Mock).mock.calls.find(
+      (c) => Array.isArray(c[0].data?.summary?.absentFromSource),
+    );
+    expect(stamped).toBeDefined();
+    expect(stamped![0].data.summary.absentFromSource).toEqual([
+      { externalRef: 'EL-GONE', name: 'Tom Bernard' },
+    ]);
+  });
+
+  it('no managed student absent → empty advisory, no batch summary stamp', async () => {
+    const { service, prisma } = makeService({
+      managedStudents: [{ externalRef: 'EL-1', firstName: 'Léa', lastName: 'Martin' }],
+    });
+
+    const res = await service.sync('src-1', ACTOR, { users: PULL_USERS });
+
+    expect(res.absentFromSource).toEqual([]);
+    const stamped = (prisma.importBatch.updateMany as jest.Mock).mock.calls.find(
+      (c) => Array.isArray(c[0].data?.summary?.absentFromSource),
+    );
+    expect(stamped).toBeUndefined();
+  });
+
+  it('a divergence-compute failure never fails the sync (best-effort, non-destructive)', async () => {
+    const { service, prisma } = makeService({
+      // An ABSENT student → the helper proceeds to stamp the batch summary, where
+      // we inject the failure (importBatch.findFirst is ONLY called by the helper).
+      managedStudents: [{ externalRef: 'EL-GONE', firstName: 'Tom', lastName: 'Bernard' }],
+    });
+    (prisma.importBatch.findFirst as jest.Mock).mockRejectedValueOnce(new Error('db blip'));
+
+    // The sync still succeeds; the advisory degrades to [] rather than throwing.
+    const res = await service.sync('src-1', ACTOR, { users: PULL_USERS });
+    expect(res.absentFromSource).toEqual([]);
+    expect(res.primaryBatchId).toBeTruthy();
   });
 });
 

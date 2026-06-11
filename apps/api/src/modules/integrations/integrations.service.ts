@@ -46,6 +46,14 @@ export interface SyncResult {
   /** The batch the admin should land on (the students batch when present). */
   primaryBatchId: string | null;
   warnings: string[];
+  /**
+   * E11-S4 (FR3/AC-3 — the R6 non-destructive SIS-delete wall). Pilotage students
+   * carrying a `sourcedId`/externalRef from THIS source's last sync that were
+   * ABSENT from the latest pull — surfaced for the panel to render kindly as
+   * "à vérifier" (amber/neutral, never red, never a one-click delete). E11 NEVER
+   * auto-deletes a child on a sync diff; this is a read-only, reviewable signal.
+   */
+  absentFromSource: { externalRef: string; name: string }[];
 }
 
 @Injectable()
@@ -208,6 +216,21 @@ export class IntegrationsService {
       // Land on students if produced, else the first batch.
       if (!primaryBatchId) primaryBatchId = produced[0]?.id ?? null;
 
+      // E11-S4 (FR3/AC-3 — the R6 wall): compute the SIS-side-delete divergence
+      // and stamp it onto the produced students batch summary so the health panel
+      // can render an "à vérifier" advisory. Best-effort + non-destructive: a
+      // failure here never fails the sync, and NO delete path is ever taken.
+      const studentsPull = mappedBundle.mapped.find((m) => m.type === 'students');
+      let absentFromSource: SyncResult['absentFromSource'] = [];
+      if (studentsPull && primaryBatchId) {
+        absentFromSource = await this.computeAbsentFromSource(
+          actor.tenantId,
+          schoolId,
+          studentsPull.rows,
+          primaryBatchId,
+        );
+      }
+
       await this.prisma.rosterSource.updateMany({
         where: { id: source.id, tenantId: actor.tenantId },
         data: {
@@ -222,6 +245,8 @@ export class IntegrationsService {
         kind: source.kind,
         sourceRowCount: mappedBundle.sourceRowCount,
         batches: produced.map((b) => ({ id: b.id, type: b.type, valid: b.validCount, invalid: b.invalidCount })),
+        // FR3/AC-3 — record the non-destructive divergence count (never an action).
+        absentFromSourceCount: absentFromSource.length,
       });
 
       return {
@@ -229,6 +254,7 @@ export class IntegrationsService {
         batches: produced,
         primaryBatchId,
         warnings: mappedBundle.warnings,
+        absentFromSource,
       };
     } catch (err) {
       const message = (err as Error).message ?? 'Échec de la synchronisation.';
@@ -331,6 +357,75 @@ export class IntegrationsService {
     return {
       summary: { id: batch.id, type, validCount, invalidCount, totalRows: rawRows.length },
     };
+  }
+
+  /**
+   * E11-S4 (FR3/AC-3 — the R6 non-destructive SIS-delete wall).
+   *
+   * Compute the set of Pilotage students for this school that carry an
+   * `externalRef` (the OneRoster `sourcedId` anchor) but were NOT present in this
+   * pull's `students` rows — i.e. the SIS appears to have removed them. Because an
+   * absent source row simply produces NO ImportRow, this deletion would otherwise
+   * be INVISIBLE; here we surface it as a read-only, reviewable advisory stamped
+   * onto the produced students batch summary (`absentFromSource`).
+   *
+   * STRICTLY non-destructive: this method only READS + writes the advisory list
+   * into the batch summary. It NEVER deletes a student (R6). Best-effort: any
+   * failure is swallowed (the sync already succeeded) and returns `[]`.
+   */
+  private async computeAbsentFromSource(
+    tenantId: string,
+    schoolId: string,
+    studentsRows: Record<string, string>[],
+    studentsBatchId: string,
+  ): Promise<SyncResult['absentFromSource']> {
+    try {
+      // The externalRefs present in THIS pull (the sourcedId anchors that are
+      // still in the SIS). A student locally carrying a ref outside this set is
+      // "present locally, absent from source".
+      const pulledRefs = new Set<string>();
+      for (const r of studentsRows) {
+        const ref = (r.externalref ?? '').trim();
+        if (ref) pulledRefs.add(ref);
+      }
+
+      // Only consider students that carry an externalRef (a roster-managed pupil);
+      // a manually-created student with no ref is never "absent from source".
+      const managed = await this.prisma.student.findMany({
+        where: { tenantId, schoolId, externalRef: { not: null } },
+        select: { externalRef: true, firstName: true, lastName: true },
+        take: ONEROSTER_MAX_ROWS,
+      });
+
+      const absent = managed
+        .filter((s) => s.externalRef && !pulledRefs.has(s.externalRef))
+        .map((s) => ({
+          externalRef: s.externalRef as string,
+          name: `${s.firstName} ${s.lastName}`.trim(),
+        }));
+
+      if (absent.length > 0) {
+        // Stamp the advisory onto the students batch summary (additive, optional)
+        // so the panel can render "à vérifier" without a second query. Re-read the
+        // current summary to merge non-destructively with the validate roll-up.
+        const batch = await this.prisma.importBatch.findFirst({
+          where: { id: studentsBatchId, tenantId },
+          select: { summary: true },
+        });
+        const summary = (batch?.summary as Record<string, unknown> | null) ?? {};
+        await this.prisma.importBatch.updateMany({
+          where: { id: studentsBatchId, tenantId },
+          data: { summary: { ...summary, absentFromSource: absent } as Prisma.InputJsonValue },
+        });
+      }
+
+      return absent;
+    } catch (err) {
+      // Non-destructive + best-effort: a divergence-compute failure never fails the
+      // sync (the batches are already produced) and never deletes anything.
+      this.logger.warn(`[oneroster.sync] absent-from-source compute failed: ${(err as Error).message}`);
+      return [];
+    }
   }
 
   private requireHandler(type: ImportType): ImportHandler {

@@ -5,7 +5,7 @@
 > [`bmad/roadmap.md`](../../../../bmad/roadmap.md) on land. **Status legend:** `[ ]` not started ·
 > `[~]` in progress · `[x]` shipped.
 
-## Epic status: `in-progress` (spec-kit landed; **S1 + S2 + S3 shipped**; next slice → S4)
+## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
 **Mode of this run:** `epic-spec` — authored the kit, **no code / no schema / no build**. The bulk-import
 pipeline exists but runs **in-request** (`imports.service.ts apply()`/`rollback()` are sync API methods,
@@ -110,8 +110,44 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
   RGPD-min fields; non-student/soft-deleted rows skipped).* **Operator pre-req (gates demoability, not merge):**
   the additive `prisma db push` (3 enums + `RosterSource` + 2 `ImportBatch` columns) + `prisma generate`, then
   `pnpm build` (`@pilotage/imports-core` already built from S1).
-- [ ] **S4** — Idempotent sync apply + conflict resolution + 24h rollback + re-run convergence. No schema.
-  `[api][worker][web]` · P2. **On land → `E11` is `shipped`.**
+- [x] **S4** — Idempotent sync apply + conflict resolution + 24h rollback + re-run convergence. No schema.
+  `[api][worker][web]` · P2. **Shipped — `E11` is now `shipped` (all 4 slices landed).**
+  Closes the interop loop with **zero new execution/reconciliation code**: an `origin=oneroster` batch applies
+  through the **S1 async worker** (`applyBatchRows`) and is classified by the **S2 reconciliation taxonomy**
+  exactly like a CSV import. Net-new is **admin conflict arbitration** + the proven **re-run convergence** + the
+  **non-destructive SIS-delete** posture.
+  - **Conflict resolution (admin choice, audited, in-request — not the queue):** a `conflict` row (protected-
+    field disagreement on a matched student, recorded by S2 with `conflictFields` and **no write**) blocks
+    auto-apply. The admin arbitrates in the panel's focus-trapped `Drawer` (E3-S3 hardened):
+    **`POST /api/v1/imports/:id/conflicts/:rowId/resolve`** `{decision: keep_current | take_source}` on the
+    existing **`imports.execute`** (no new permission). One in-request `$transaction`: the handler's new optional
+    **`resolveConflict`** (only `studentsHandler` in v1; shared **`resolveRowConflict`** engine wrapper, no fork)
+    re-resolves the matched student by `externalRef` (tenant-scoped) and applies the choice — `keep_current`
+    writes **nothing** → `unchanged`; `take_source` is the **only** path that overwrites a protected field →
+    `updated`. The row flips `conflict → applied` with `createdEntityId = the PRE-EXISTING entity` (so the S2
+    rollback-safety invariant keeps it OUT of the delete set). A **from-status-guarded `updateMany`**
+    (`WHERE reconciliation='conflict'`) makes a concurrent double-resolve a clean 400 (never a second overwrite);
+    append-only **`import.conflict.resolve`** audit `{decision, entityId, reconciliation, fields}`; `summary.byClass`
+    adjusted (`conflict−1`, chosen `+1`).
+  - **Re-run convergence (AC-4):** re-syncing the same source yields **0 created** on the 2nd run, no duplicate
+    child/teacher/class — the externalRef-first anchor + S1 per-row RESUME. Pinned by the students-handler
+    convergence test.
+  - **SIS-side delete (R6):** a student absent from a new pull is left **intact** (never auto-deleted); a
+    `status=tobedeleted` source row is skipped by the adapter. Destructive reconciliation stays a deliberate
+    future decision.
+  - **24h rollback (reuse S1):** an `oneroster` applied batch rolls back within 24h via the **same** reverse-order
+    `rollbackRow` + `rolled_back` + `import.rollback` audit; the FE copy reads "Annuler cette synchronisation"
+    (provenance-aware). The §E rollback-safety invariant holds for syncs.
+  - **FE:** the conflict-resolution island `ConflictResolver.tsx` replaces the S2 static "Voir les arbitrages"
+    link — an amber "à arbitrer" strip listing each conflict row + a focus-trapped `FormDrawer` per row with a
+    side-by-side source-vs-current table, a keyboard `radiogroup` (Garder l'actuel default / Prendre la source,
+    arrow keys, ≥44px, `motion-reduce`), `role=status` toast, and the `resolveImportConflict` server action.
+    Rollback block/button are origin-aware. **No schema, no new permission, no contract change.**
+  - **Tests:** S4 cases in `apps/worker/.../imports-engine.spec.ts` — `resolveRowConflict` (keep-current no-write,
+    take-source writes source, unsupported-handler rejects, vanished-entity throws not 500) + students-handler
+    re-run convergence (`unchanged`, 0 created) + matched protected-field divergence → `conflict` (no silent
+    overwrite). ADR-024 carries an `## Idempotent sync apply + conflict resolution + 24h rollback (E11-S4 —
+    amendment)` section.
 
 ## Decisions locked (this run)
 
@@ -152,10 +188,12 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
   irreversible cascade-deletion of a pre-existing child's record — now has its dedicated test in
   `apps/worker/.../imports-engine.spec.ts` ("SAFETY … rollback compensates ONLY rows this import CREATED"):
   an `updated`/`unchanged` row is flipped to `rolled_back` WITHOUT `handler.rollbackRow` being invoked.
-- **[OPEN after S2 → S4]** `all_or_nothing` semantics weakened: a `conflict` is discovered only in the worker
-  (after the enqueue-time invalid-row gate), leaves the row unapplied, yet the batch finalizes `applied`.
-  Intended (conflicts deferred to S4 arbitration, surfaced as "à arbitrer") — confirm the all-or-nothing
-  contract shift is acceptable.
+- **[resolved S4]** `all_or_nothing` semantics: a worker-discovered `conflict` leaves the row unapplied yet the
+  batch finalizes `applied`. **Confirmed acceptable** — S4 makes this intentional and complete: the `conflict`
+  rows are surfaced "à arbitrer" in the health panel and the admin resolves each via the
+  `POST /imports/:id/conflicts/:rowId/resolve` arbitration (keep-current/take-source, audited). The batch is
+  `applied` because the bulk write succeeded; the conflicts are a separate, human, reversible decision — not a
+  pipeline failure. No revert of the `all_or_nothing` shift.
 
 ## Operator note
 

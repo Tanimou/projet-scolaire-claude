@@ -1,6 +1,12 @@
 import { ImportMode, ImportRowStatus, Prisma, ReconciliationClass } from '@prisma/client';
 
-import { type ConflictField, type ImportCaches, type ImportHandler } from './handler.types';
+import {
+  type ConflictDecision,
+  type ConflictField,
+  type ConflictResolution,
+  type ImportCaches,
+  type ImportHandler,
+} from './handler.types';
 
 /**
  * The ONE apply/rollback engine — relocated verbatim from
@@ -292,4 +298,39 @@ export async function rollbackBatchRows(args: RollbackEngineArgs): Promise<Rollb
   });
 
   return { undone };
+}
+
+export type { ConflictDecision, ConflictResolution };
+
+export interface ResolveConflictArgs {
+  tx: Prisma.TransactionClient;
+  handler: ImportHandler;
+  /** The conflict row's NORMALISED payload (the source values). */
+  payload: Record<string, unknown>;
+  decision: ConflictDecision;
+  caches: ImportCaches;
+  schoolId: string;
+  actor: ApplyActor;
+}
+
+/**
+ * E11-S4 — resolve ONE arbitrated `conflict` row through the handler's
+ * `resolveConflict` (keep-current / take-source), inside the caller-supplied
+ * transaction. Framework-agnostic + shared (API in-request resolve path; no
+ * fork). The handler does the entity re-resolution + the (take-source only)
+ * write; this wrapper just guards that the type supports arbitration. The
+ * `import.conflict.resolve` audit row is written by the service caller (it owns
+ * the row/field context), keeping this a pure write helper.
+ */
+export async function resolveRowConflict(args: ResolveConflictArgs): Promise<ConflictResolution> {
+  const { tx, handler, payload, decision, caches, schoolId, actor } = args;
+  if (!handler.resolveConflict) {
+    throw new Error(`Le type « ${handler.type} » ne supporte pas l'arbitrage de conflit.`);
+  }
+  return handler.resolveConflict(payload, decision, {
+    tenantId: actor.tenantId,
+    schoolId,
+    caches,
+    tx,
+  });
 }

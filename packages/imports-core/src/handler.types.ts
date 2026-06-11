@@ -135,4 +135,40 @@ export interface ImportHandler {
 
   /** Compensate the apply — called by rollback. Must be idempotent. */
   rollbackRow(entityId: string, ctx: RollbackContext): Promise<void>;
+
+  /**
+   * E11-S4 — resolve a `conflict` row the admin arbitrated in the panel
+   * (keep-current / take-source). Called inside a transaction with the row's
+   * NORMALISED payload (the source values) and the admin's decision; the handler
+   * re-resolves the matched entity (tenant-scoped, by its idempotency anchor),
+   * applies the choice, and returns the post-resolution class + the matched
+   * entity id so the engine/service can flip the row to `applied` with the right
+   * `createdEntityId` (a PRE-EXISTING entity — so the S2 rollback-safety invariant
+   * keeps it out of the delete set). OPTIONAL: only handlers that emit `conflict`
+   * (students in v1) implement it; the service rejects a resolve on a type whose
+   * handler omits it. NEVER a silent overwrite — the only path that writes a
+   * protected field is an explicit `take_source` decision, audited by the caller.
+   */
+  resolveConflict?(
+    payload: Record<string, unknown>,
+    decision: ConflictDecision,
+    ctx: ApplyContext,
+  ): Promise<ConflictResolution>;
+}
+
+/** The admin's arbitration choice on a `conflict` row (E11-S4). */
+export type ConflictDecision = 'keep_current' | 'take_source';
+
+/** The outcome of resolving a `conflict` row (E11-S4). */
+export interface ConflictResolution {
+  /** The matched, pre-existing entity id (used as `createdEntityId` for bookkeeping). */
+  entityId: string;
+  type: string;
+  /**
+   * Post-resolution class: `keep_current` → `unchanged` (nothing written);
+   * `take_source` → `updated` (the source values were written). Never `created`
+   * (a conflict always matched an existing entity) and never `conflict` (the
+   * arbitration is the terminal decision).
+   */
+  reconciliation: 'unchanged' | 'updated';
 }

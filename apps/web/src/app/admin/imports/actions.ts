@@ -43,6 +43,24 @@ export async function applyImport(id: string, mode: 'all_or_nothing' | 'skip_inv
   }
 }
 
+export async function resolveImportConflict(
+  batchId: string,
+  rowId: string,
+  decision: 'keep_current' | 'take_source',
+): Promise<Result> {
+  try {
+    const data = await api(`/api/v1/imports/${batchId}/conflicts/${rowId}/resolve`, {
+      method: 'POST',
+      body: { decision },
+    });
+    revalidatePath(`/admin/imports/${batchId}`);
+    revalidatePath('/admin/dashboard');
+    return { ok: true, data };
+  } catch (err) {
+    return toError(err);
+  }
+}
+
 export async function rollbackImport(id: string): Promise<Result> {
   try {
     const data = await api(`/api/v1/imports/${id}/rollback`, { method: 'POST' });

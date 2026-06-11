@@ -174,7 +174,7 @@ AC-10 (tenant+audit+RGPD), AC-11 (reuse) (spec.md).
 
 ---
 
-## [ ] S4 — Idempotent sync apply + conflict resolution + 24h rollback + re-run convergence · `[api][worker][web]` · P2 · ~M
+## [x] S4 — Idempotent sync apply + conflict resolution + 24h rollback + re-run convergence · `[api][worker][web]` · P2 · ~M — **SHIPPED**
 
 **Goal:** close the interop loop — apply a OneRoster-origin batch through the S1 spine, classify via S2,
 let the admin **resolve conflicts** (keep current / take source, audited — never a silent overwrite of a

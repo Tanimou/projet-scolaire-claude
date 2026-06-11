@@ -248,3 +248,77 @@ server-side; connect/pull write append-only `import.sync.connect`/`import.sync.p
   source, the admin landing on the students batch.
 - **Auto-delete a student absent from the new pull.** Rejected (R6) — a SIS-side removal surfaces as a soft
   conflict / "à vérifier" in S4, never an automatic destructive delete of a child's record.
+
+## Idempotent sync apply + conflict resolution + 24h rollback (E11-S4 — amendment)
+
+S4 **closes the interop loop** and flips E11 to shipped. It adds **no schema** and **no new
+execution/reconciliation engine** — an `origin=oneroster` batch applies through the S1 async worker
+(`applyBatchRows`) and is classified by the S2 reconciliation taxonomy exactly like a CSV import (§A above).
+S4's net-new is **admin conflict arbitration**, the proof of **re-run convergence**, and the **non-destructive
+SIS-delete** posture.
+
+### A. Conflict resolution — keep-current / take-source, audited, in-request (not the queue)
+A `conflict` row (a protected-field disagreement on a matched student, recorded by S2 with `conflictFields` and
+**no write**) blocks auto-apply of that row. The admin arbitrates it in the panel's focus-trapped `Drawer`
+(the E3-S3 hardened primitive): **`POST /api/v1/imports/:id/conflicts/:rowId/resolve`** with
+`decision: keep_current | take_source`, on the existing **`imports.execute`** permission (admin-held; no new
+permission). This is a **single targeted write run in-request** (one `$transaction`), deliberately NOT the
+`imports` queue — it is O(1), needs an immediate result, and has no crash-resume surface. The handler gains an
+optional **`resolveConflict(payload, decision, ctx)`** (only `studentsHandler` implements it in v1; the service
+rejects a resolve on a type that omits it); the shared engine wrapper **`resolveRowConflict`** keeps the call
+framework-agnostic (one implementation, no fork — the R4 rule extended to arbitration).
+- **`keep_current`** writes **nothing** (the child's identity is preserved verbatim) → the row flips to
+  `applied` / `reconciliation=unchanged`.
+- **`take_source`** is the **only** path that overwrites a protected field (firstName/lastName/birthDate) — and
+  only on an explicit, audited admin decision → the row flips to `applied` / `reconciliation=updated`.
+
+The row's `createdEntityId` is set to the **pre-existing matched entity** id, so the S2 rollback-safety
+invariant (§E) deliberately keeps it OUT of the delete set (we never created it). The flip uses a
+**from-status-guarded `updateMany`** (`WHERE reconciliation='conflict'`) so a concurrent double-resolve writes
+exactly once (the loser is a clear 400, never a second overwrite). An append-only **`import.conflict.resolve`**
+`AuditLog` row records `{ decision, entityId, reconciliation, fields }` (AC-6/AC-7 — no silent overwrite). The
+batch `summary.byClass` roll-up is adjusted (`conflict−1`, chosen class `+1`) so the health panel stays
+truthful without re-deriving from rows.
+
+### B. Re-run convergence (the AC-4 invariant, proven)
+Re-syncing the **same** source converges: every roster entity matched by `sourcedId`→`externalRef` is
+`unchanged` (or `updated` only where the source genuinely changed), **never re-inserted** — **0 created on the
+second run**, no duplicate child/teacher/class. The anchor is the S2 externalRef-first match (§B above), made
+within-batch idempotent by the handler caching a created student back into `studentsByExternalRef`. An
+interrupted/retried worker job converges via the S1 per-row RESUME (an already-`applied` row is skipped). Pinned
+by the S4 students-handler convergence test (a 2nd apply of an unchanged matched row → `unchanged`, `create`
+never called).
+
+### C. SIS-side delete → soft conflict / "à vérifier", never an auto-destructive delete (R6)
+A student present before but **absent from a new pull** is left **intact** — E11 **never** auto-deletes a
+child/entity on a sync diff. A soft-deleted source row (`status=tobedeleted`) is **skipped** by the adapter (no
+apply row), so it is neither re-created nor deleted. Destructive reconciliation stays a deliberate future
+decision behind explicit admin confirmation, out of scope here.
+
+Because an absent source row simply produces **no ImportRow**, the deletion would otherwise be **invisible**. So
+`IntegrationsService.sync` adds a **best-effort, read-only divergence** pass after producing the batches
+(`computeAbsentFromSource`): it diffs the school's `externalRef`-carrying students (the roster-managed pupils)
+against the pulled `sourcedId` set and records the ones absent from the pull as an additive
+`summary.absentFromSource: [{ externalRef, name }]` on the produced **students** batch (and on the `SyncResult`),
+plus an `absentFromSourceCount` on the `import.sync.pull` audit. The panel renders this kindly as "N élève(s)
+absent(s) de la dernière synchronisation — à vérifier" (amber/neutral, **never red, never a one-click delete**).
+The pass is **strictly non-destructive** (only reads students + writes the advisory JSON) and **best-effort**
+(any failure is swallowed → empty advisory, the sync still succeeds). No auto-delete code path exists anywhere.
+
+### D. 24h rollback (reuse S1, unchanged)
+An `origin=oneroster` applied batch is roll-back-able within 24h via the **same** reverse-order `rollbackRow`
+compensation + `rolled_back` status + `import.rollback` audit as a CSV import (the 24h window is checked at
+enqueue). The §E rollback-safety invariant holds for syncs: only rows the sync **created** are physically
+compensated; matched (`updated`/`unchanged`) and arbitrated rows leave the pre-existing child's record intact.
+The FE rollback copy reads "Annuler cette synchronisation" for an `oneroster` batch (provenance-aware), but the
+mechanism is identical.
+
+### Rejected (S4 alternatives)
+- **Resolve conflicts on the `imports` queue.** Rejected — arbitration is a single O(1) write needing an
+  immediate result; queuing it adds latency, a poll surface and a crash-resume case for no benefit. The async
+  queue stays for the bulk apply/rollback only.
+- **A new `conflicts.resolve` permission.** Rejected — the resolve rides the existing `imports.execute` (the
+  whole import-detail surface is already gated by it; admin holds it). No new permission (the R1 house style).
+- **`take_source` auto-applied by the worker.** Rejected — a protected-field overwrite of a child's identity
+  MUST be a human, audited decision; the apply leaves the row in `conflict` until the admin chooses (the
+  children's-data guardrail).

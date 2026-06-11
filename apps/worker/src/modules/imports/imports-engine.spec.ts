@@ -1,7 +1,9 @@
 import { ImportRowStatus, ReconciliationClass, type ImportMode } from '@prisma/client';
 import {
   applyBatchRows,
+  resolveRowConflict,
   rollbackBatchRows,
+  studentsHandler,
   type EngineRow,
   type ImportHandler,
 } from '@pilotage/imports-core';
@@ -352,5 +354,203 @@ describe('imports-core engine — rollbackBatchRows', () => {
     // ALL four applied rows are flipped rolled_back for status bookkeeping (reverse order).
     expect(rowUpdates.map((u) => u.id)).toEqual(['r4', 'r3', 'r2', 'r1']);
     expect(rowUpdates.every((u) => u.data.status === ImportRowStatus.rolled_back)).toBe(true);
+  });
+});
+
+describe('imports-core engine — conflict resolution (E11-S4)', () => {
+  it('rejects a resolve on a handler that does not support arbitration', async () => {
+    const base = makeCountingHandler().handler; // no resolveConflict
+    await expect(
+      resolveRowConflict({
+        tx: {} as never,
+        handler: base,
+        payload: {},
+        decision: 'keep_current',
+        caches: {} as never,
+        schoolId: 'school-1',
+        actor: ACTOR,
+      }),
+    ).rejects.toThrow(/ne supporte pas/);
+  });
+
+  it('keep_current → unchanged, writes NOTHING to the matched student (child identity preserved)', async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const tx = {
+      student: {
+        findFirst: jest.fn(async () => ({ id: 'existing-1' })),
+        update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          updates.push(data);
+          return { id: 'existing-1' };
+        }),
+      },
+    };
+
+    const res = await resolveRowConflict({
+      tx: tx as never,
+      handler: studentsHandler,
+      payload: { externalRef: 'EL-1', firstName: 'Léa', lastName: 'Bernard' },
+      decision: 'keep_current',
+      caches: {} as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+    });
+
+    expect(res).toEqual({ entityId: 'existing-1', type: 'student', reconciliation: ReconciliationClass.unchanged });
+    expect(tx.student.update).not.toHaveBeenCalled(); // NO write — the only safe default
+  });
+
+  it('take_source → updated, writes the source identity onto the EXISTING student (audited overwrite, not silent)', async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const tx = {
+      student: {
+        findFirst: jest.fn(async () => ({ id: 'existing-1' })),
+        update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+          updates.push({ where, ...data });
+          return { id: where.id };
+        }),
+      },
+    };
+
+    const res = await resolveRowConflict({
+      tx: tx as never,
+      handler: studentsHandler,
+      payload: { externalRef: 'EL-1', firstName: 'Léa', lastName: 'Bernard', birthDate: '2012-03-15' },
+      decision: 'take_source',
+      caches: {} as never,
+      schoolId: 'school-1',
+      actor: ACTOR,
+    });
+
+    expect(res).toEqual({ entityId: 'existing-1', type: 'student', reconciliation: ReconciliationClass.updated });
+    expect(tx.student.update).toHaveBeenCalledTimes(1);
+    expect(updates[0]).toMatchObject({ firstName: 'Léa', lastName: 'Bernard' });
+    // The matched entity id is the PRE-EXISTING one → rollback keeps it out of the delete set.
+    expect(res.entityId).toBe('existing-1');
+  });
+
+  it('throws (never a 500) when the matched student vanished before arbitration', async () => {
+    const tx = { student: { findFirst: jest.fn(async () => null), update: jest.fn() } };
+    await expect(
+      resolveRowConflict({
+        tx: tx as never,
+        handler: studentsHandler,
+        payload: { externalRef: 'EL-gone', firstName: 'Léa', lastName: 'Bernard' },
+        decision: 'take_source',
+        caches: {} as never,
+        schoolId: 'school-1',
+        actor: ACTOR,
+      }),
+    ).rejects.toThrow(/introuvable/);
+  });
+});
+
+describe('imports-core students handler — re-run convergence (E11-S4 AC-4)', () => {
+  /** Build the minimal caches the students handler reads, seeded with one existing student. */
+  function cachesWithExisting(existing: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    birthDate: Date | null;
+    email: string | null;
+    notes: string | null;
+    externalRef: string;
+  }) {
+    return {
+      gradeLevelsByCode: new Map(),
+      gradeLevelsByName: new Map(),
+      classNamesPerYearLevel: new Set<string>(),
+      classSectionsByName: new Map(),
+      subjectsByCode: new Map(),
+      studentExternalRefs: new Map([[existing.externalRef, existing.id]]),
+      studentsByExternalRef: new Map([
+        [
+          existing.externalRef,
+          {
+            id: existing.id,
+            firstName: existing.firstName,
+            lastName: existing.lastName,
+            birthDate: existing.birthDate,
+            email: existing.email,
+            notes: existing.notes,
+          },
+        ],
+      ]),
+      guardiansByEmail: new Map(),
+      activeAcademicYearId: null,
+    };
+  }
+
+  it('a 2nd sync of an UNCHANGED roster row converges to `unchanged` with 0 created — no duplicate student', async () => {
+    const caches = cachesWithExisting({
+      id: 'stu-1',
+      firstName: 'Léa',
+      lastName: 'Martin',
+      birthDate: new Date('2012-03-15'),
+      email: 'lea@example.local',
+      notes: null,
+      externalRef: 'EL-1',
+    });
+    const created: unknown[] = [];
+    const tx = {
+      student: {
+        create: jest.fn(async (args: unknown) => {
+          created.push(args);
+          return { id: 'should-not-happen' };
+        }),
+        update: jest.fn(),
+      },
+    };
+
+    // The SAME row the first sync already applied (matched by externalRef).
+    const normalized = {
+      firstName: 'Léa',
+      lastName: 'Martin',
+      birthDate: '2012-03-15',
+      externalRef: 'EL-1',
+      email: 'lea@example.local',
+      notes: undefined,
+      _matchedStudentId: 'stu-1',
+    };
+
+    const res = await studentsHandler.applyRow(normalized as never, {
+      tenantId: 'tenant-1',
+      schoolId: 'school-1',
+      caches: caches as never,
+      tx: tx as never,
+    });
+
+    expect(res.reconciliation).toBe(ReconciliationClass.unchanged);
+    expect(res.id).toBe('stu-1'); // points at the EXISTING student, not a new one
+    expect(tx.student.create).not.toHaveBeenCalled(); // 0 created on the re-run (AC-4)
+    expect(tx.student.update).not.toHaveBeenCalled(); // nothing changed → no write
+  });
+
+  it('a protected-field divergence on a matched row → `conflict` (recorded, never written) — not an auto-overwrite of a child', async () => {
+    const caches = cachesWithExisting({
+      id: 'stu-1',
+      firstName: 'Léa',
+      lastName: 'Martin',
+      birthDate: new Date('2012-03-15'),
+      email: null,
+      notes: null,
+      externalRef: 'EL-1',
+    });
+    const tx = { student: { create: jest.fn(), update: jest.fn() } };
+
+    const res = await studentsHandler.applyRow(
+      {
+        firstName: 'Léa',
+        lastName: 'Bernard', // diverges from the stored 'Martin'
+        birthDate: '2012-03-15',
+        externalRef: 'EL-1',
+        _matchedStudentId: 'stu-1',
+      } as never,
+      { tenantId: 'tenant-1', schoolId: 'school-1', caches: caches as never, tx: tx as never },
+    );
+
+    expect(res.reconciliation).toBe(ReconciliationClass.conflict);
+    expect(res.conflictFields).toEqual([{ field: 'lastName', current: 'Martin', source: 'Bernard' }]);
+    expect(tx.student.update).not.toHaveBeenCalled(); // no silent overwrite (AC-6)
+    expect(tx.student.create).not.toHaveBeenCalled();
   });
 });

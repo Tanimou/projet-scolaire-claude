@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Sparkles,
   Tag,
+  UserMinus,
   XCircle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -36,6 +37,7 @@ import {
 } from '@pilotage/ui';
 
 import { ApplyControls, RollbackButtonClient } from './ApplyControls';
+import { ConflictResolver } from './ConflictResolver';
 import { ImportStatusPoller } from './ImportStatusPoller';
 import { RowsFilters } from './RowsFilters';
 import type {
@@ -427,6 +429,14 @@ export default async function ImportDetailPage({
   const byClass = deriveByClass(allRows, summary.byClass);
   const showRecon = batch.status === 'applied' && byClass !== null;
 
+  // E11-S4 — the still-open conflict rows the admin can arbitrate. A `conflict`
+  // row stays `valid` with `reconciliation='conflict'` and a `conflictFields`
+  // diff; once resolved it flips to `applied` (unchanged|updated) and drops out.
+  const conflictRows =
+    batch.status === 'applied'
+      ? allRows.filter((r) => r.reconciliation === 'conflict')
+      : [];
+
   // Filter pipeline: status → errorField → reconciliation → search
   const filtered = allRows.filter((r) => {
     if (status && r.status !== status) return false;
@@ -581,6 +591,12 @@ export default async function ImportDetailPage({
 
       {showRecon && byClass && <ReconciliationPanel byClass={byClass} />}
 
+      {batch.origin === 'oneroster' &&
+        Array.isArray(summary.absentFromSource) &&
+        summary.absentFromSource.length > 0 && (
+          <AbsentFromSourcePanel entries={summary.absentFromSource} />
+        )}
+
       <div className="mt-6 grid gap-5 lg:grid-cols-5">
         <section className="lg:col-span-3 space-y-5">
           {batch.errorMessage && (
@@ -610,19 +626,16 @@ export default async function ImportDetailPage({
             <ApplyControls batchId={batch.id} invalidCount={invalidCount} />
           )}
 
-          {showRecon && byClass && byClass.conflict > 0 && (
-            <ActionStrip
-              tone="amber"
-              icon={AlertTriangle}
-              title={`${byClass.conflict} ligne${byClass.conflict > 1 ? 's' : ''} à arbitrer`}
-              body="La source et vos données diffèrent sur un champ protégé — aucune n'a été écrasée."
-              actionLabel="Voir les arbitrages"
-              actionHref="?reconciliation=conflict"
-            />
+          {conflictRows.length > 0 && (
+            <ConflictResolver batchId={batch.id} conflictRows={conflictRows} />
           )}
 
           {batch.status === 'applied' && (
-            <RollbackBlock batchId={batch.id} appliedAt={batch.appliedAt!} />
+            <RollbackBlock
+              batchId={batch.id}
+              appliedAt={batch.appliedAt!}
+              isSync={batch.origin === 'oneroster'}
+            />
           )}
 
           {invalidCount > 0 && errorFacets.length > 0 && (
@@ -1081,6 +1094,64 @@ function ReconciliationPanel({
   );
 }
 
+/**
+ * "À vérifier" SIS-side divergence (E11-S4 / FR3, the R6 wall). A student that
+ * exists in Pilotage with a `sourcedId`/`externalRef` from this roster source
+ * but was ABSENT from the latest pull. E11 NEVER auto-deletes — this is a
+ * read-only, kindly-framed (amber, never red) review signal, with NO action
+ * that removes data. Renders only when the best-effort list is non-empty.
+ */
+function AbsentFromSourcePanel({
+  entries,
+}: {
+  entries: Array<{ externalRef: string; name?: string }>;
+}) {
+  const n = entries.length;
+  return (
+    <section className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+      <div className="flex items-start gap-3">
+        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 ring-1 ring-inset ring-black/5">
+          <UserMinus className="h-5 w-5" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-bold text-amber-900">
+            {n} élève{n > 1 ? 's' : ''} absent{n > 1 ? 's' : ''} de la dernière
+            synchronisation — à vérifier
+          </h3>
+          <p className="mt-1 text-xs text-amber-800">
+            {n > 1 ? 'Ces élèves étaient' : 'Cet élève était'} présent
+            {n > 1 ? 's' : ''} lors d&apos;une synchronisation précédente mais
+            {n > 1 ? ' ne figurent plus' : ' ne figure plus'} dans le dernier export de la
+            source. <strong>Aucune suppression automatique n&apos;a eu lieu</strong> — leurs
+            données restent intactes. Vérifiez manuellement s&apos;il s&apos;agit d&apos;un départ
+            réel avant toute action.
+          </p>
+          <ul className="mt-3 grid gap-1.5 sm:grid-cols-2" role="list">
+            {entries.slice(0, 12).map((e) => (
+              <li
+                key={e.externalRef}
+                className="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-1.5 text-[12px] ring-1 ring-amber-200/70"
+              >
+                <span className="truncate font-medium text-slate-800">
+                  {e.name?.trim() || 'Élève'}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] text-slate-400">
+                  {e.externalRef}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {n > 12 && (
+            <p className="mt-2 text-[11px] text-amber-700">
+              +{n - 12} autre{n - 12 > 1 ? 's' : ''} à vérifier
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /** Compact source-vs-current `<dl>` diff for a conflict/updated row. */
 function ConflictDiff({
   fields,
@@ -1132,13 +1203,22 @@ function ConflictDiff({
   );
 }
 
-function RollbackBlock({ batchId, appliedAt }: { batchId: string; appliedAt: string }) {
+function RollbackBlock({
+  batchId,
+  appliedAt,
+  isSync,
+}: {
+  batchId: string;
+  appliedAt: string;
+  isSync?: boolean;
+}) {
   const expiresAt = new Date(new Date(appliedAt).getTime() + ROLLBACK_WINDOW_HOURS * 3_600_000);
   const expired = Date.now() > expiresAt.getTime();
   const hoursLeft = Math.max(
     0,
     Math.round((expiresAt.getTime() - Date.now()) / 3_600_000),
   );
+  const noun = isSync ? 'cette synchronisation' : 'cet import';
   return (
     <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1151,22 +1231,22 @@ function RollbackBlock({ batchId, appliedAt }: { batchId: string; appliedAt: str
             <p className="mt-1 text-xs text-amber-800">
               {expired ? (
                 <>
-                  L&apos;import a plus de {ROLLBACK_WINDOW_HOURS} h — le rollback n&apos;est plus
-                  disponible. Pour corriger, créez un nouvel import.
+                  {isSync ? 'Cette synchronisation a' : 'L’import a'} plus de {ROLLBACK_WINDOW_HOURS} h —
+                  le rollback n&apos;est plus disponible. Pour corriger, relancez {noun}.
                 </>
               ) : (
                 <>
-                  Vous pouvez annuler cet import jusqu&apos;à{' '}
+                  Vous pouvez annuler {noun} jusqu&apos;à{' '}
                   <strong>{fmtDateTime(expiresAt.toISOString())}</strong>{' '}
                   <span className="text-amber-700">({hoursLeft} h restantes)</span>. Toutes les
-                  entités créées seront supprimées.
+                  entités créées seront supprimées (les entités existantes restent intactes).
                 </>
               )}
             </p>
           </div>
         </div>
         {!expired ? (
-          <RollbackButtonClient batchId={batchId} />
+          <RollbackButtonClient batchId={batchId} isSync={isSync} />
         ) : (
           <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-bold uppercase tracking-wider text-slate-600">
             Fenêtre dépassée
