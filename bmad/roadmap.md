@@ -586,7 +586,29 @@ filler (E9 enrollment self-service / E10 quality bar).**
   non-goals: no new product capability/endpoint/schema/permission/queue; no CI-provider pipeline standup
   (recorded follow-on); no build/rebuild in the E2E path; no new seed or real children's data;
   no visual-diff/perf/cross-browser/AAA/manual-audit; no widening of any ABAC/tenant/portal wall.
-  **Next slice → E10-S1.**
+  **E10-S1 is now shipped** (`epic-slice` — P2 `[test][a11y][e2e]`, needs human review): the load-bearing
+  spine — a reusable portal-aware authenticated-session fixture (`apps/web/tests/e2e/fixtures/users.ts`
+  env-overridable demo-seed table + `auth.setup.ts` setup project logging in once per role via the REAL
+  `/{portal}/login` form, asserting landing URL + `expectedRole`, transport-only skip-when-down +
+  `fixtures/portal-fixtures.ts` per-role `adminPage`/`teacherPage`/`parentPage`/`studentPage` contexts
+  over the cached git-ignored `.auth/{role}.json`); the first critical journey
+  `journeys/grade-to-alert.spec.ts` (`@journey`) that **guards the cahier's promise** — FAILS unless the
+  first parent alert carries rule (CODE_LABEL pill) + subject/title + a non-empty body + the E1 "Que
+  puis-je faire ?" CTA (information→action, not a 200); the first authenticated WCAG-2.2-AA axe scan
+  `a11y/authenticated.a11y.spec.ts` (`@a11y`) of `/parent/dashboard` (critical/serious hard-fail) **plus a
+  sanity-injection test proving the gate bites** (no false green); `playwright.config.ts` gains a `setup`
+  project + a `setup`-dependent authenticated project running ONLY `journeys/**`+`a11y/**` while the public
+  `chromium` project IGNORES them (PM-7 isolation, smoke runs once logged-out); `package.json`
+  `test:e2e:a11y`+`test:e2e:journey` scripts; `.gitignore` ignores the live-session `.auth/` (AC-8); and
+  **`docs/adr/ADR-023-authenticated-e2e-and-a11y-layer.md`** (Accepted, 023 re-verified next-free after
+  022). **No schema/endpoint/permission/`NotificationKind`/queue change; no build in the E2E path; no WCAG
+  remediation needed in this slice's authored markup.** **Merge evidence required (Murat gate):** one
+  non-vacuous authenticated run against the booted `:3100` stack — `test:e2e:journey` PASSES (not skipped)
+  + `test:e2e:a11y` PASSES incl. the sanity-injection — since the typecheck gate can't exercise a
+  browser suite. **Next slice → E10-S2** (`epic-slice`: the parent child-claim → admin approval
+  cross-portal journey `tests/e2e/journeys/child-claim-approval.spec.ts`, reusing the S1 fixture
+  (`parentPage` + `adminPage` in one spec); no schema, no new fixture, no endpoint; run against `:3100`,
+  never build).
 - **E11 — Standards interop (OneRoster/LTI) + async imports** · `proposed` · ~M — move bulk import
   to the worker (today blocking in-request) + OneRoster roster sync. Interoperability per the cahier.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store

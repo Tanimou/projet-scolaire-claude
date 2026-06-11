@@ -47,10 +47,29 @@ PLAYWRIGHT_BASE_URL=http://localhost:3100 pnpm --filter @pilotage/web test:e2e
 
 - A Playwright **`setup` project** (`tests/e2e/auth.setup.ts`) logs in **once per role** via the real
   `/{portal}/login` form with the demo credentials, then saves `storageState` to `.auth/{role}.json`.
-- Test projects depend on `setup` and either set `use.storageState` per project, or import per-role
-  fixtures (`adminPage`/`teacherPage`/`parentPage`/`studentPage`) from `tests/e2e/fixtures/auth.ts`.
+  It **asserts** the login landed on the portal landing AND the session carries the expected realm role —
+  a rejected login **fails** the setup; only a genuinely unreachable stack **skips** it (no false red).
+- Test projects depend on `setup` and import the per-role fixtures
+  (`adminPage`/`teacherPage`/`parentPage`/`studentPage`) from `tests/e2e/fixtures/portal-fixtures.ts`.
+  Each fixture opens its role's own context from the cached `storageState` (so one spec can drive two
+  roles, e.g. the S2/S3 cross-portal journeys), and `test.skip`s gracefully if the session is missing.
 - Net effect: a test starts **already signed in as the right audience** with no login typed in its body,
   and login is exercised in exactly one place.
+
+### Credentials (env-overridable; demo-seed-backed)
+
+Per portal: `E2E_<PORTAL>_EMAIL` / `E2E_<PORTAL>_PASSWORD` (operator/CI override) → else the documented
+demo default. The **parent** default targets the rich `voltaire-demo` graph the grade→alert journey needs;
+if your local seed places that graph under a different parent account, pin it:
+
+```bash
+E2E_PARENT_EMAIL=parent.demo@voltaire.fr E2E_PARENT_PASSWORD='Demo!2024Pilotage' \
+  PLAYWRIGHT_SKIP_SERVER=1 pnpm --filter @pilotage/web test:e2e:journey
+```
+
+> Prerequisite for the grade→alert journey: the demo parent (e.g. `apps/api/prisma/seed-demo-parent.ts`)
+> must be present with at least one open alert. If the seed legitimately has no open alert, the journey
+> **skips** (non-vacuous guard) rather than passing on an empty page.
 
 ## 3. Add a one-line authenticated journey (the standing payoff)
 
@@ -58,7 +77,7 @@ A future epic closes its slice with a journey like this — already-signed-in in
 
 ```ts
 // apps/web/tests/e2e/journeys/my-new-surface.spec.ts
-import { test, expect } from '../fixtures/auth';   // per-role fixtures
+import { expect, test } from '../fixtures/portal-fixtures';   // per-role fixtures
 
 test('parent sees the new surface @journey', async ({ parentPage }) => {
   await parentPage.goto('/parent/my-new-surface');
@@ -67,6 +86,11 @@ test('parent sees the new surface @journey', async ({ parentPage }) => {
   await expect(parentPage.getByRole('button', { name: /Agir/i })).toBeVisible();
 });
 ```
+
+The S1 grade→alert journey (`tests/e2e/journeys/grade-to-alert.spec.ts`) is the worked example: it opens
+`/parent/recommendations` already-signed-in and FAILS unless the first alert carries its **rule** (the
+CODE_LABEL pill), a **subject/title**, a **non-empty explanatory body** (threshold/trend) AND the E1
+**"Que puis-je faire ?"** next-step CTA — guarding information→action, not a 200.
 
 And a one-line a11y assertion on the same surface:
 
