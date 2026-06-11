@@ -1,0 +1,357 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — E11 Standards interop (OneRoster) + async imports
+  version: 0.1.0-spec
+  description: >
+    Contract sketch for E11. Extends the EXISTING /imports surface (ADR-017) for async execution +
+    reconciliation, and adds a OneRoster roster-sync surface under /integrations on the EXISTING
+    `integrations.write` permission. Spec-run draft — endpoints land per slice; shapes are illustrative
+    and reconciled against the verified ImportBatch/ImportRow models. All paths are under /api/v1.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: imports
+    description: Bulk import (async, reconciled) — admin, `imports.execute`
+  - name: integrations
+    description: OneRoster roster sync — admin, `integrations.write`
+
+paths:
+  # ────────────────────────────────────────────────────────────────────────
+  # S1 — async import execution (mutates the EXISTING apply endpoint's semantics)
+  # ────────────────────────────────────────────────────────────────────────
+  /imports/{id}/apply:
+    post:
+      tags: [imports]
+      summary: Enqueue the apply of a validated batch (ASYNC — S1)
+      description: >
+        UNCHANGED route; CHANGED semantics. No longer runs the write transaction in-request. Transitions
+        the batch validated→queued, enqueues it to QUEUE_IMPORTS, and returns immediately with status
+        `queued`. The worker drains it asynchronously. Idempotent: re-applying a queued/applying batch is a
+        no-op 200. Permission `imports.execute`. Tenant-scoped.
+      operationId: enqueueApply
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  $ref: '#/components/schemas/ImportMode'
+      responses:
+        '202':
+          description: Enqueued (returned as 200 by Nest convention with status=queued in the body)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportBatchDetail' }
+        '400': { description: Batch not in `validated` state, or all_or_nothing with invalid rows }
+        '403': { description: Missing `imports.execute` or cross-tenant }
+        '404': { description: Batch not found }
+
+  /imports/{id}:
+    get:
+      tags: [imports]
+      summary: Read a batch + rows (status polling + reconciliation summary)
+      description: >
+        UNCHANGED route, enriched payload. The admin batch-detail page polls this. Reflects
+        queued|applying|applied|failed, the live progress counter (summary.processedRows/totalToApply), and
+        the reconciliation roll-up + per-row reconciliation class (S2). Permission `imports.execute`.
+      operationId: getBatch
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportBatchDetail' }
+        '403': { description: Cross-tenant }
+        '404': { description: Not found }
+
+  /imports/{id}/rollback:
+    post:
+      tags: [imports]
+      summary: Roll back an applied batch within 24h (UNCHANGED — async-safe)
+      description: >
+        Reverse-order per-row compensation; status→rolled_back; append-only audit. Works for both
+        csv_upload and oneroster-origin batches (S4 reuses this). Permission `imports.execute`.
+      operationId: rollbackBatch
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportBatchDetail' }
+        '400': { description: Not applied, or > 24h window }
+        '404': { description: Not found }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # S2 — reconciliation row drill-down (read; the health panel)
+  # ────────────────────────────────────────────────────────────────────────
+  /imports/{id}/reconciliation:
+    get:
+      tags: [imports]
+      summary: Reconciliation summary + per-class row facets for the health panel (S2)
+      description: >
+        One aggregate read powering the "Import & sync health" panel — counts per reconciliation class and
+        the rows, filterable by class. No client N+1. Permission `imports.execute`. Tenant-scoped.
+      operationId: getReconciliation
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+        - in: query
+          name: class
+          schema: { $ref: '#/components/schemas/ReconciliationClass' }
+          description: Optional filter to one reconciliation class
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationSummary' }
+
+  /imports/{id}/conflicts/{rowId}/resolve:
+    post:
+      tags: [imports]
+      summary: Resolve a conflict row — keep current or take source (S2/S4)
+      description: >
+        For a row with reconciliation=conflict, the admin chooses. `keep_current` skips the change;
+        `take_source` applies the source value. Records an append-only import.conflict.resolve audit row.
+        Never a silent overwrite. Permission `imports.execute`. Tenant-scoped.
+      operationId: resolveConflict
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+        - in: path
+          name: rowId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution:
+                  type: string
+                  enum: [keep_current, take_source]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportRow' }
+        '400': { description: Row is not a conflict }
+        '404': { description: Batch/row not found }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # S3 + S4 — OneRoster source (admin, integrations.write)
+  # ────────────────────────────────────────────────────────────────────────
+  /integrations/roster-sources:
+    get:
+      tags: [integrations]
+      summary: List the tenant's roster sources (S3)
+      operationId: listRosterSources
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RosterSource' }
+    post:
+      tags: [integrations]
+      summary: Connect a OneRoster source (S3)
+      description: >
+        Create a RosterSource. For oneroster_csv the bundle is uploaded; for oneroster_rest a base-url +
+        credential are supplied (the credential is stored as an opaque ref, NEVER returned). Permission
+        `integrations.write`. Tenant + school scoped (server-derived).
+      operationId: createRosterSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRosterSource' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RosterSource' }
+        '403': { description: Missing `integrations.write` }
+
+  /integrations/roster-sources/{id}/sync:
+    post:
+      tags: [integrations]
+      summary: Pull + map the source into an ImportBatch (S3), enqueue (S4)
+      description: >
+        Pulls the OneRoster source, validates + maps each entity onto the existing ImportRow payload shape
+        per type, creates an ImportBatch(origin=oneroster), then (S4) enqueues it to QUEUE_IMPORTS for the
+        SAME async reconciled apply as a CSV import. Idempotent re-sync converges (no duplicate creates).
+        Returns the produced batch. Append-only import.sync.pull / import.sync.apply audit. Permission
+        `integrations.write`.
+      operationId: syncRosterSource
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: dryRun
+          schema: { type: boolean, default: false }
+          description: When true, pulls + maps + classifies but does NOT apply — returns the reconciliation plan only.
+      responses:
+        '202':
+          description: Batch produced (and enqueued unless dryRun)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportBatchDetail' }
+        '400': { description: Source unreachable / bundle malformed }
+        '403': { description: Missing `integrations.write` or cross-tenant }
+        '404': { description: Source not found }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    BatchId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    ImportMode:
+      type: string
+      enum: [all_or_nothing, skip_invalid]
+    ImportStatus:
+      type: string
+      enum: [uploaded, validating, validated, queued, applying, applied, failed, rolled_back]
+    ImportOrigin:
+      type: string
+      enum: [csv_upload, oneroster]
+    ReconciliationClass:
+      type: string
+      enum: [created, updated, unchanged, conflict, skipped]
+    ImportBatchDetail:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, example: students }
+        origin: { $ref: '#/components/schemas/ImportOrigin' }
+        fileName: { type: string }
+        status: { $ref: '#/components/schemas/ImportStatus' }
+        mode: { $ref: '#/components/schemas/ImportMode', nullable: true }
+        summary:
+          type: object
+          description: Json carrier — totals + live progress + reconciliation roll-up
+          properties:
+            totalRows: { type: integer }
+            validCount: { type: integer }
+            invalidCount: { type: integer }
+            processedRows: { type: integer, description: live progress (queued/applying) }
+            totalToApply: { type: integer }
+            applied: { type: integer }
+            skipped: { type: integer }
+            reconciliation:
+              type: object
+              properties:
+                created: { type: integer }
+                updated: { type: integer }
+                unchanged: { type: integer }
+                conflict: { type: integer }
+                skipped: { type: integer }
+        startedAt: { type: string, format: date-time }
+        validatedAt: { type: string, format: date-time, nullable: true }
+        appliedAt: { type: string, format: date-time, nullable: true }
+        rolledBackAt: { type: string, format: date-time, nullable: true }
+        errorMessage: { type: string, nullable: true }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ImportRow' }
+    ImportRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        rowIndex: { type: integer }
+        status:
+          type: string
+          enum: [pending, valid, invalid, applied, skipped, rolled_back]
+        reconciliation:
+          $ref: '#/components/schemas/ReconciliationClass'
+          nullable: true
+        payload: { type: object, additionalProperties: true }
+        errors:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              field: { type: string, nullable: true }
+              message: { type: string }
+              hint: { type: string, nullable: true }
+        conflictFields:
+          type: array
+          nullable: true
+          description: Present when reconciliation=conflict — source vs current per field
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              current: { type: string, nullable: true }
+              source: { type: string, nullable: true }
+        createdEntityId: { type: string, format: uuid, nullable: true }
+        createdEntityType: { type: string, nullable: true }
+    ReconciliationSummary:
+      type: object
+      properties:
+        batchId: { type: string, format: uuid }
+        counts:
+          type: object
+          properties:
+            created: { type: integer }
+            updated: { type: integer }
+            unchanged: { type: integer }
+            conflict: { type: integer }
+            skipped: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ImportRow' }
+        page: { type: integer }
+        totalPages: { type: integer }
+    RosterSource:
+      type: object
+      description: Credential is NEVER returned — opaque ref only, resolved server-side at pull.
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [oneroster_csv, oneroster_rest] }
+        label: { type: string }
+        baseUrl: { type: string, nullable: true }
+        status: { type: string, enum: [idle, pulling, mapped, failed] }
+        lastSyncAt: { type: string, format: date-time, nullable: true }
+        lastBatchId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+    CreateRosterSource:
+      type: object
+      required: [kind, label]
+      properties:
+        kind: { type: string, enum: [oneroster_csv, oneroster_rest] }
+        label: { type: string, minLength: 1, maxLength: 120 }
+        baseUrl:
+          type: string
+          nullable: true
+          description: Required when kind=oneroster_rest
+        credential:
+          type: string
+          nullable: true
+          description: Write-only — stored as an opaque ref, never echoed back. REST only.
