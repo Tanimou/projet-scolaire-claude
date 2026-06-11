@@ -717,6 +717,13 @@ model ImportBatch {
   status       ImportStatus @default(uploaded)
   mode         ImportMode?
   summary      Json         @default("{}")
+  // E11-S5 — the async worker's lease instant (ADR-024 §4 / FR6). Stamped
+  // atomically WITH the `→ applying` claim and heartbeated during a long apply.
+  // Promoted out of `summary` Json to a typed scalar so the stale-reclaim is a
+  // single-winner compare-and-swap (`updateMany WHERE status=applying AND
+  // claimedAt=<observed> SET claimedAt=now`) expressible in Prisma's typed API —
+  // null = never claimed / legacy pre-S5 claim (reclaimed defensively).
+  claimedAt    DateTime?    @map("claimed_at") @db.Timestamptz(6)
   triggeredBy  String?      @map("triggered_by") @db.Uuid
   startedAt    DateTime     @default(now()) @map("started_at") @db.Timestamptz(6)
   validatedAt  DateTime?    @map("validated_at") @db.Timestamptz(6)

@@ -16,63 +16,61 @@ import { ImportStatus } from '@prisma/client';
  * expires; a live worker's batch is left alone). This mirrors the
  * analytics-snapshots / E7-S5 `processedAt`-keyed reclaim.
  *
- * The claim instant is the `claimedAt` ISO string the processor stamps into the
- * batch `summary` Json at claim time (no schema column — the live progress
- * counter already rides `summary`). A missing/unparseable `claimedAt` on an
- * `applying` batch is a pre-hardening / legacy claim → treated as stale
- * (defensive reclaim, the snapshot `processedAt: null` precedent), so a batch
- * stamped before this change can never wedge forever.
+ * **The claim instant is the typed `ImportBatch.claimedAt` scalar column** (E11-S5
+ * promoted it out of the `summary` Json). That promotion is load-bearing: it lets
+ * the processor express the stale-reclaim as a **single-winner compare-and-swap**
+ * — `updateMany WHERE status='applying' AND claimedAt=<observed> SET claimedAt=now`
+ * — in Prisma's typed API (a Json key cannot be predicated by `updateMany`). A
+ * `null` `claimedAt` on an `applying` batch is a pre-S5 / never-stamped claim →
+ * treated as stale (defensive reclaim, the snapshot `processedAt: null` precedent),
+ * so a batch claimed before this change can never wedge forever.
  */
 
 /** A `applying` batch whose claim is older than this (minutes) is reclaimable. */
 export const IMPORTS_APPLY_STALE_MIN = Number(process.env.IMPORTS_APPLY_STALE_MIN ?? 15);
 
-/** The decision outcome — which status the from-status-guarded claim should target. */
+/**
+ * The decision outcome. The `kind` tells the processor which single-winner
+ * `updateMany` to fire:
+ *  - `fresh`   → `WHERE status='queued'                       SET status='applying', claimedAt=now`
+ *               (the status flip elects one winner; the loser matches 0 rows).
+ *  - `reclaim` → `WHERE status='applying' AND claimedAt=<observedClaimedAt> SET claimedAt=now`
+ *               (compare-and-swap on the observed lease instant elects one winner
+ *               even though the status does not change; the loser's stale
+ *               `claimedAt` no longer matches once the winner re-leases).
+ */
 export type ClaimDecision =
-  | { claimable: true; fromStatus: ImportStatus }
+  | { claimable: true; kind: 'fresh' }
+  | { claimable: true; kind: 'reclaim'; observedClaimedAt: Date | null }
   | { claimable: false; reason: 'terminal' | 'lease-held' };
 
 /**
- * Read the stamped claim instant out of the batch `summary` Json. Returns `null`
- * when absent or unparseable (legacy / pre-hardening claim → reclaim defensively).
- */
-export function readClaimedAt(summary: unknown): Date | null {
-  if (!summary || typeof summary !== 'object') return null;
-  const raw = (summary as Record<string, unknown>).claimedAt;
-  if (typeof raw !== 'string') return null;
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? null : new Date(ms);
-}
-
-/**
- * Decide whether a batch in the given status (with the given `summary`) may be
- * claimed `→ applying`, and from which status the from-status-guarded
- * `updateMany` should fire.
+ * Decide whether a batch in the given status (with the given lease instant) may
+ * be claimed `→ applying`.
  *
- *  - `queued` → always claimable (the normal first delivery).
- *  - `applying` → claimable **only** when the stamped `claimedAt` is older than
- *    the lease (or absent — a legacy/pre-hardening claim). A fresh claim by a
- *    live worker is `lease-held` and the re-delivered job exits without
- *    re-admitting it.
+ *  - `queued` → always claimable (the normal first delivery) ⇒ `fresh`.
+ *  - `applying` → claimable **only** when `claimedAt` is older than the lease
+ *    (or `null` — a legacy/pre-S5 / never-stamped claim) ⇒ `reclaim` carrying the
+ *    observed instant for the CAS guard. A fresh claim by a live worker is
+ *    `lease-held` and the re-delivered job exits without re-admitting it.
  *  - anything else (validated / applied / failed / rolled_back …) → `terminal`.
  *
  * `now`/`staleMin` are injectable for deterministic tests.
  */
 export function decideClaim(
   status: ImportStatus,
-  summary: unknown,
+  claimedAt: Date | null,
   now: Date = new Date(),
   staleMin: number = IMPORTS_APPLY_STALE_MIN,
 ): ClaimDecision {
   if (status === ImportStatus.queued) {
-    return { claimable: true, fromStatus: ImportStatus.queued };
+    return { claimable: true, kind: 'fresh' };
   }
   if (status === ImportStatus.applying) {
-    const claimedAt = readClaimedAt(summary);
     const cutoff = new Date(now.getTime() - staleMin * 60 * 1000);
-    // null claimedAt → legacy/pre-hardening claim → reclaim defensively.
+    // null claimedAt → legacy/pre-S5 claim → reclaim defensively.
     if (claimedAt === null || claimedAt < cutoff) {
-      return { claimable: true, fromStatus: ImportStatus.applying };
+      return { claimable: true, kind: 'reclaim', observedClaimedAt: claimedAt };
     }
     return { claimable: false, reason: 'lease-held' };
   }

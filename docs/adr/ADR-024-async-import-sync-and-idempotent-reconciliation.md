@@ -333,21 +333,32 @@ which under BullMQ at-least-once delivery let a re-delivered / duplicate job re-
 RESUME. This amendment brings the implementation to the §4 contract (worker-only, **additive, no schema /
 permission / contract change**):
 
-- The `ImportsProcessor` claim now reads the batch `status` + the stamped `summary.claimedAt` first, then
-  routes through a pure, unit-tested `decideClaim` helper (`apps/worker/src/modules/imports/import-claim.ts`):
-  `queued` → always claimable; `applying` → reclaimable **only** when `claimedAt < now − IMPORTS_APPLY_STALE_MIN`
-  (default 15 min, env-overridable) **or** `claimedAt` is absent/unparseable (a legacy / pre-hardening claim →
-  reclaimed defensively, the analytics-snapshots `processedAt: null` precedent); every other status → terminal,
-  never claimed.
-- The from-status-guarded `updateMany` is now keyed on the **observed** status (`WHERE status = fromStatus`),
-  so a concurrent claim still races to exactly one winner (`count === 0` loser no-ops) — the AC-4 single-winner
-  guarantee is preserved; only the *admission* of a stale `applying` row is now gated.
-- Applied to **both** the apply and rollback paths. The rollback path stamps its own fresh `claimedAt` at claim
-  time so its lease is keyed on the rollback's claim instant, not a stale timestamp left by the prior apply.
-- The claim instant rides the existing `summary` Json (already stamped at apply-claim time, §4 "incremental
-  progress") — **no new column**. Pinned by `import-claim.spec.ts`.
+- The `ImportsProcessor` claim now reads the batch `status` + the lease instant first, then routes through a
+  pure, unit-tested `decideClaim` helper (`apps/worker/src/modules/imports/import-claim.ts`): `queued` →
+  always claimable (`fresh`); `applying` → reclaimable **only** when `claimedAt < now − IMPORTS_APPLY_STALE_MIN`
+  (default 15 min, env-overridable) **or** `claimedAt` is `null` (a legacy / pre-S5 / never-stamped claim →
+  reclaimed defensively, the analytics-snapshots `processedAt: null` precedent) ⇒ `reclaim` carrying the
+  observed instant; every other status → terminal, never claimed.
+- **The lease instant is a typed `ImportBatch.claimedAt` scalar column** (additive, nullable — promoted out of
+  the `summary` Json). This is load-bearing: it makes the stale-reclaim a **single-winner compare-and-swap that
+  is expressible in Prisma's typed `updateMany`** (a Json key cannot be predicated). The claim issues ONE atomic
+  statement (claim **and** stamp together — no read-to-stamp TOCTOU a re-delivery could slip through):
+  - `fresh`   → `updateMany WHERE status='queued'                       SET status='applying', claimedAt=now`
+    — the status flip elects exactly one winner (the loser matches 0 rows).
+  - `reclaim` → `updateMany WHERE status='applying' AND claimedAt=<observed> SET claimedAt=now`
+    — a CAS on the observed lease instant elects exactly one winner **even though the status stays `applying`**:
+    once the winner re-leases, the loser's stale `claimedAt` no longer matches (`count === 0` → skip). This
+    closes the prior gap where two simultaneously-stale re-deliveries both passed an `applying → applying`
+    no-op guard.
+- Applied to **both** the apply and rollback paths via ONE shared `claim()` helper so their admission semantics
+  cannot drift. During a long apply the periodic progress flush **heartbeats** the `claimedAt` column, so a
+  re-delivery mid-run reads `lease-held` and skips.
 
 The lease default (`IMPORTS_APPLY_STALE_MIN = 15`) mirrors `SNAPSHOT_RECOMPUTE_STALE_MIN`. A dead worker's
-batch still self-heals after the lease (BullMQ re-delivers the stalled job; the now-stale claim is re-admitted
-and the per-row RESUME converges it). The only behaviour change is that a re-delivery against a **live** claim
-now no-ops (`lease-held`) instead of double-admitting.
+batch still self-heals after the lease (BullMQ re-delivers the stalled job; the now-stale claim is reclaimed by
+CAS and the per-row RESUME converges it). The invariant now **holds, not merely narrowed**: a re-delivery
+against a **live** claim no-ops (`lease-held`), and two concurrent **stale** re-deliveries admit **exactly one**
+worker — pinned by `import-claim.spec.ts` (the pure decision) **and** `imports.processor.spec.ts` (the wiring:
+two concurrent stale re-deliveries ⇒ `applyBatchRows`/`rollbackBatchRows` invoked **exactly once**, the loser
+`skipped`). **Schema:** one additive nullable column (`claimed_at`), `db push` — existing rows read `null`
+(reclaimed defensively, zero behaviour change). No permission / contract change.
