@@ -398,3 +398,53 @@ and now apply uniformly to enrollments. Pinned by `imports-engine.spec.ts` (same
 0 created, no throw; different-class → `conflict`, no write; a **mixed re-run batch** with one already-enrolled
 row + one new row finalises `applied` not `failed`, exactly 1 `created`). **No schema / contract / permission /
 endpoint / UI change.**
+
+## Enrollments conflict arbitration — `classSectionId` class-move verb (polish — amendment)
+
+This closes the recorded S-follow-on named just above ("a `classSectionId` arbitration verb on the enrollments
+handler is a recorded S-follow-on"). The S4 conflict-arbitration machinery — `POST /imports/:id/conflicts/:rowId/
+resolve {decision}`, the shared `resolveRowConflict` engine wrapper, the from-status-guarded `updateMany`, the
+append-only `import.conflict.resolve` audit, the `summary.byClass` roll-up adjust, the `ConflictResolver.tsx`
+panel — was **students-only** because only `studentsHandler` implemented the optional `ImportHandler.
+resolveConflict`. `enrollmentsHandler` now implements the **same signature**, so an admin can one-click resolve
+the `classSectionId` (class-move) conflict the re-sync amendment above records. **No new permission/endpoint/
+schema/queue, no service/controller/engine change** — all three are already handler-agnostic (dispatch by
+`requireHandler(batch.type)`); the only load-bearing edit is the handler method.
+
+The write shape is **materially different from the students protected-field overwrite** and is the load-bearing
+correctness point:
+
+- **`keep_current`** writes NOTHING (the child stays in their current class) → `unchanged`, `entityId = the
+  pre-existing active enrollment id`.
+- **`take_source`** is the ONLY audited enrollment-move write path: it **updates the EXISTING active enrollment's
+  `classSectionId` IN PLACE** (`enrollment.update({ where: { id: active.id }, data: { classSectionId } })`) —
+  "frees the old seat, enrolls the new class via the active-enrollment update" → `updated`, `entityId = active.id`.
+  It does **NOT** `enrollment.create` a new row: a create would (a) collide with the `@@unique([studentId,
+  classSectionId, academicYearId])` + the `(studentId, academicYearId) WHERE status='active'` partial-unique
+  index, and (b) put a freshly-created id on the row, which the §E rollback invariant would then either orphan or
+  wrong-delete. The in-place update keeps `entityId` a **pre-existing** enrollment, so a 24h rollback flips the
+  row to `rolled_back` for bookkeeping **without deleting the enrollment the import did not create** (§E holds
+  verbatim for the move).
+
+Re-resolution discipline mirrors `applyRow` (and the students precedent): the handler re-resolves `studentId`
+(from `studentExternalRef`) and the source `classSectionId`/`academicYearId` (from `className` + the active year)
+**from `ctx.caches` inside the tx, tenant/school-scoped**, never trusting the stale `_studentId`/`_classSectionId`
+baked at validate time (the combined-pull placeholder-UUID defect). It then re-finds the student's CURRENT active
+enrollment `ctx.tx.enrollment.findFirst({ studentId, academicYearId, status:'active', tenantId })`. A vanished
+student/class/enrollment throws a clear French error (`…introuvable…`) — a 4xx, never a 500.
+
+**Accepted carry-over (non-blocking):** the validate-time capacity guard does NOT re-run on arbitration, so an
+explicit admin `take_source` may move a child into a class at capacity. This is the established posture (the
+conflict was already recorded against that target class; capacity is a soft cap the admin can adjust) and is left
+as a recorded follow-on if a belt-and-braces capacity probe is later wanted.
+
+Pinned by `imports-engine.spec.ts` (Murat P0): (a) `keep_current` → `unchanged`, NO `enrollment.update`,
+`entityId = pre-existing active.id`; (b) `take_source` → `updated`, EXACTLY one `enrollment.update` to the
+re-resolved source class, ZERO `enrollment.create`, `entityId = active.id`; (c) a vanished active enrollment →
+throws `/introuvable/` (no 500), no write; (d) `resolveRowConflict` dispatches to `enrollmentsHandler` (no longer
+"ne supporte pas"); plus re-resolution authority (a stale `_classSectionId` never beats the cache) and a vanished
+student/class anchor throw. **FE:** `ConflictResolver.tsx` now labels an enrollment row by matricule/class
+("`STU-… → 6eB`") and renders the class-move conflict with resolved class names + class-move-aware copy
+(keep-current = "Garder la classe actuelle", take-source = "Déplacer vers {classe}") — the radiogroup/audit-notice
+structure and the `keep_current` safe default are unchanged. **No schema / contract / permission / endpoint /
+queue / worker change.**

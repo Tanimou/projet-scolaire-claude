@@ -22,7 +22,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api } from '@/lib/api-client';
+import { api, ApiError } from '@/lib/api-client';
 import {
   EmptyState,
   KpiCard,
@@ -218,6 +218,28 @@ function deriveByClass(
 function fmtConflictValue(v: unknown): string {
   if (v === null || v === undefined || v === '') return '∅';
   return String(v);
+}
+
+/**
+ * E11 polish — id → class-name map for rendering enrollment class-move conflicts
+ * legibly in the ConflictResolver. Best-effort: an API failure yields an empty
+ * map (the drawer then falls through to the raw UUID), never breaks the page.
+ */
+async function loadClassLabels(): Promise<Record<string, string>> {
+  try {
+    const resp = await api<{ data: Array<{ id: string; name: string }> }>(
+      '/api/v1/classes',
+      { cache: 'no-store' },
+    );
+    const map: Record<string, string> = {};
+    for (const c of resp.data ?? []) {
+      if (c?.id && c?.name) map[c.id] = c.name;
+    }
+    return map;
+  } catch (err) {
+    if (err instanceof ApiError) return {};
+    throw err;
+  }
 }
 
 function fmtDateTime(iso: string | null | undefined) {
@@ -437,6 +459,18 @@ export default async function ImportDetailPage({
       ? allRows.filter((r) => r.reconciliation === 'conflict')
       : [];
 
+  // E11 polish — an enrollments class-move conflict carries `classSectionId`
+  // UUIDs in its `conflictFields`. Resolve them to human class names so the
+  // arbitration drawer renders "6eA → 6eB", never two opaque ids. Fetch ONLY
+  // when this batch actually has enrollment conflicts (no cost otherwise), and
+  // degrade kindly (empty map → the UUID falls through as the label) on error.
+  const hasClassMoveConflict =
+    batch.type === 'enrollments' &&
+    conflictRows.some((r) =>
+      (r.conflictFields ?? []).some((f) => f.field === 'classSectionId'),
+    );
+  const classLabels = hasClassMoveConflict ? await loadClassLabels() : {};
+
   // Filter pipeline: status → errorField → reconciliation → search
   const filtered = allRows.filter((r) => {
     if (status && r.status !== status) return false;
@@ -627,7 +661,11 @@ export default async function ImportDetailPage({
           )}
 
           {conflictRows.length > 0 && (
-            <ConflictResolver batchId={batch.id} conflictRows={conflictRows} />
+            <ConflictResolver
+              batchId={batch.id}
+              conflictRows={conflictRows}
+              classLabels={classLabels}
+            />
           )}
 
           {batch.status === 'applied' && (
