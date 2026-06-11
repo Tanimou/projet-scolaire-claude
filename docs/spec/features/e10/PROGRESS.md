@@ -10,7 +10,7 @@
 | Slice | Title | Tags | Risk | Status | PR |
 |---|---|---|---|---|---|
 | S1 | Auth-session fixture + grade→alert journey + authenticated a11y smoke → **ADR-023** | `[test][a11y][e2e]` | P2 | `[x]` shipped | (this run) |
-| S2 | Journey #2: parent child-claim → admin approval (E9) | `[test][e2e]` | P2 | `[ ]` not started | — |
+| S2 | Journey #2: parent child-claim → admin approval (E9) | `[test][e2e]` | P2 | `[x]` shipped | (this run) |
 | S3 | Journey #3: parent ↔ teacher messaging (E2) | `[test][e2e]` | P2 | `[ ]` not started | — |
 | S4 | Cross-portal WCAG 2.2 AA sweep + remediation (R9 payoff) | `[a11y][test][ui]` | P2 | `[ ]` not started | — |
 
@@ -122,9 +122,44 @@
   critical/serious on the operator's stack, the remediation lands reuse-first per FR-6 — recorded for the
   S1 run against a booted stack).
 
+## What landed this run (S2 — implementation)
+
+- **Journey #2 (FR-4 / AC-4):** `apps/web/tests/e2e/journeys/child-claim-approval.spec.ts` (`@journey`) —
+  the cross-portal parent↔admin journey in ONE spec driving BOTH the S1 `parentPage` **and** `adminPage`
+  fixtures side by side (the cross-portal shape the per-role-context fixture was built for). The arc:
+  (1) parent submits an E9-S1 `ChildClaimDrawer` claim on `/parent/children` → asserts a calm
+  non-stigmatising acknowledgement ("Demande envoyée" OR "Vous êtes déjà rattaché·e" — both success
+  post-states, never a danger/`role=alert`); (2) admin opens `/admin/child-claims`, **approves** a pending
+  row (opportunistic + idempotent — calm no-op when the queue is already empty from a prior run); (3) parent
+  reloads → asserts the **atomic approve = access** invariant **structurally**: an approved guardianship
+  resolves to ≥1 accessible child dossier (the `Voir le profil`/`Voir le dossier` route resolves through
+  the real ABAC wall, not a bounce-to-login), and a pending row reads the neutral "En cours de validation"
+  (never a stigmatising state). The dossier link is **navigated** to confirm the counted access is REAL.
+- **Re-runnability (FR-8 / AC-4):** the journey is written **tolerant of prior state** — it asserts the
+  INVARIANT, not a virgin pre-state. The submit is product-level idempotent (E9-S1 byte-identical
+  ack / `already_linked`), the approve is opportunistic + server-idempotent (re-approve 200 / loser-409
+  resolved calmly), and the access gate is structural. A run-stamped surname (`E2E<base36 ts>`) makes a
+  fresh submit traceable without depending on running exactly once. Green on consecutive runs, no reseed.
+- **Fixture extension (no new fixture):** `tests/e2e/fixtures/users.ts` `ACTIVE_PORTALS` now
+  `['parent','admin']` (S2 needs the admin session) — the `auth.setup.ts` setup project authenticates the
+  rich `voltaire-demo` admin (`mme.dupont@voltaire.fr`, `guardianships.approve`) via the SAME gate-asserted
+  real-login path; a not-yet-provisioned admin still fails loudly, a down stack still skips cleanly.
+- **Non-vacuous degrade (PM mirror of S1):** if the E9 `db push` is not applied on the operator's stack,
+  `/parent/children` renders the calm "rattachement en ligne n'est pas encore disponible" banner — the
+  journey `test.skip`s gracefully rather than asserting a disabled surface (a not-yet-migrated backend is
+  not a false red).
+- **No schema / endpoint / permission / fixture / new ADR.** Reuses the S1 fixture spine + ADR-023
+  entirely; `parent`-side `ChildClaimDrawer`/`ChildClaimsStatusStrip` + `admin`-side `ChildClaimsQueue`
+  surfaces are **asserted**, not modified. No WCAG remediation needed in this slice's read paths (the E9
+  surfaces ship the StatusBadge text+icon non-colour-alone convention; the S4 cross-portal sweep is where a
+  surfaced critical/serious would be remediated). `.auth/` stays git-ignored; `webServer` stays `next dev`;
+  no build in any path (AC-8).
+
 ## Next action
 
-**Implement E10-S2** (`epic-slice`): the parent child-claim → admin approval cross-portal journey
-(`tests/e2e/journeys/child-claim-approval.spec.ts`), reusing the S1 fixture (`parentPage` + `adminPage` in
-one spec). No schema, no new fixture, no endpoint. Run against the already-running `:3100` stack — never
-build.
+**Implement E10-S3** (`epic-slice`): the parent ↔ teacher messaging cross-portal journey
+(`tests/e2e/journeys/parent-teacher-messaging.spec.ts`), reusing the S1 fixture (`parentPage` + `teacherPage`
+in one spec) and extending `ACTIVE_PORTALS` to add `teacher`. Unique run-stamped message text for
+re-runnability (FR-8); assert the dual-wall ABAC (guardianship ∩ teaching-assignment) round-trip both
+directions, and (where cheap) that an illegitimate pair is walled. No schema, no new fixture, no endpoint.
+Run against the already-running `:3100` stack — never build.

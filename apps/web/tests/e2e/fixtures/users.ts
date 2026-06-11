@@ -100,14 +100,16 @@ export const PORTALS: ReadonlyArray<Portal> = ['admin', 'teacher', 'parent', 'st
 /**
  * The portals the setup project actually authenticates THIS slice.
  *
- * S1 ships only the parent grade→alert journey + the parent a11y smoke, so the
- * setup authenticates ONLY `parent` — this keeps the setup from spuriously
- * failing on a stack where the `teacher@pilotage.local` / admin demo accounts are
- * not (yet) provisioned, while a real parent-auth break still fails loudly.
- * S2 adds `admin` (child-claim→approval), S3 adds `teacher` (messaging); they
- * extend this list (the `portalUser`/fixture machinery is already all-four-ready).
+ * S1 shipped only the parent grade→alert journey + the parent a11y smoke, so it
+ * authenticated ONLY `parent`. S2 (child-claim → admin approval) is a cross-portal
+ * parent↔admin journey, so the setup now ALSO authenticates `admin` — the rich
+ * `voltaire-demo` admin (`mme.dupont@voltaire.fr`, `guardianships.approve`) that
+ * works the approval queue. A real parent/admin-auth break still fails loudly
+ * (gate-asserted in `auth.setup.ts`); a not-yet-booted stack still skips cleanly.
+ * S3 will add `teacher` (messaging); they extend this list (the `portalUser`/
+ * fixture machinery is already all-four-ready).
  */
-export const ACTIVE_PORTALS: ReadonlyArray<Portal> = ['parent'];
+export const ACTIVE_PORTALS: ReadonlyArray<Portal> = ['parent', 'admin'];
 
 /** Path to a role's cached storage-state file (git-ignored, regenerated per run). */
 export function storageStatePath(portal: Portal): string {
