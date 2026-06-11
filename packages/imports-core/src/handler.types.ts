@@ -1,4 +1,19 @@
-import { ImportType, Prisma } from '@prisma/client';
+import { ImportType, Prisma, ReconciliationClass } from '@prisma/client';
+
+export { ReconciliationClass };
+
+/**
+ * E11-S2 — one entry of a `conflict` row's source-vs-current diff, recorded in
+ * `ImportRow.conflictFields`. An allow-list of identity fields only (never
+ * notes/free-text/medical); `current` is the value already on the existing
+ * entity, `source` is the value the import row proposes. Rendered side-by-side
+ * by the "Bilan d'import & synchronisation" panel — never silently resolved.
+ */
+export interface ConflictField {
+  field: string;
+  current: string | null;
+  source: string | null;
+}
 
 /**
  * Context passed to every handler step. Pre-loaded lookups make validation O(1).
@@ -26,6 +41,25 @@ export interface ImportCaches {
   classSectionsByName: Map<string, { id: string; gradeLevelId: string; academicYearId: string; maxStudents: number; currentSize: number }>;
   subjectsByCode: Map<string, { id: string; name: string }>;
   studentExternalRefs: Map<string, string>; // externalRef → student.id
+  /**
+   * E11-S2 — the EXISTING student's reconcilable fields keyed by externalRef, so
+   * the students handler can classify a matched re-import as unchanged/updated/
+   * conflict (FR3) without an extra per-row query (no N+1). Protected fields
+   * (firstName/lastName/birthDate) drive `conflict`; email/notes drive `updated`.
+   * Built once per batch from the same `student.findMany` that builds
+   * `studentExternalRefs`.
+   */
+  studentsByExternalRef: Map<
+    string,
+    {
+      id: string;
+      firstName: string;
+      lastName: string;
+      birthDate: Date | null;
+      email: string | null;
+      notes: string | null;
+    }
+  >;
   guardiansByEmail: Map<string, { id: string; firstName: string; lastName: string }>;
   activeAcademicYearId: string | null;
 }
@@ -46,6 +80,22 @@ export interface ValidationResult {
 export interface AppliedEntity {
   id: string;
   type: string;
+  /**
+   * E11-S2 — which reconciliation class this apply took (ADR-024 §reconciliation).
+   * ADDITIVE + optional: a handler that returns the old `{ id, type }` shape is
+   * treated by the engine as `created` (byte-parity — the 4 always-create handlers
+   * compile unchanged and default to `created`). The students handler (FR3) reports
+   * `updated`/`unchanged`, and `guardians` reports created/updated/unchanged from
+   * its existing upsert.
+   */
+  reconciliation?: ReconciliationClass;
+  /**
+   * E11-S2 — a `conflict` row's protected-field disagreement (FR4). When a handler
+   * returns `reconciliation: 'conflict'`, it writes NO entity (id is a sentinel/the
+   * existing id) and the engine keeps the row OUT of the `applied` set, records
+   * `conflictFields`, and counts it under `byClass.conflict`. No silent overwrite.
+   */
+  conflictFields?: ConflictField[];
 }
 
 export interface ImportTemplate {

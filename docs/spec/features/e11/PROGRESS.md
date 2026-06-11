@@ -5,7 +5,7 @@
 > [`bmad/roadmap.md`](../../../../bmad/roadmap.md) on land. **Status legend:** `[ ]` not started ·
 > `[~]` in progress · `[x]` shipped.
 
-## Epic status: `in-progress` (spec-kit landed; **S1 shipped**; next slice → S2)
+## Epic status: `in-progress` (spec-kit landed; **S1 + S2 shipped**; next slice → S3)
 
 **Mode of this run:** `epic-spec` — authored the kit, **no code / no schema / no build**. The bulk-import
 pipeline exists but runs **in-request** (`imports.service.ts apply()`/`rollback()` are sync API methods,
@@ -44,9 +44,47 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
   `ImportStatus += queued` (additive). **Operator pre-req (gates demoability, not merge):** `pnpm install`
   + `pnpm build` (produce `packages/imports-core/dist`), `prisma db push` for the `queued` enum value,
   and a worker running with the `imports` queue registered.
-- [ ] **S2** — Reconciliation classification (`created/updated/unchanged/conflict/skipped`) + the
+- [x] **S2** — Reconciliation classification (`created/updated/unchanged/conflict/skipped`) + the
   "Import & sync health" panel (counts + per-row drill-down + 24h rollback), non-stigmatising.
-  `[schema][api][web][a11y]` · P2. *Additive `db push`: `ReconciliationClass` + `ImportRow.reconciliation`/`conflictFields`.*
+  `[schema][api][web][a11y]` · P2 (gated **P1**). *Additive `db push`: `ReconciliationClass` +
+  `ImportRow.reconciliation`/`conflictFields` + `@@index([batchId, reconciliation])`.* **Shipped — GREEN,
+  auto-merged. The two blocker/safety items the verify panel flagged were resolved in the orchestrator's land
+  pass (ADR-024 reconciliation amendment landed WITH this slice; the load-bearing matched-row rollback-exclusion
+  test was added) → no open blocker remained at merge.**
+  The externalRef match is **no longer a hard `invalid` reject** — `studentsHandler.applyRow` (in the relocated
+  `@pilotage/imports-core`) takes the idempotent match path: identical identity → `unchanged` (no write); a
+  **protected-field** (firstName/lastName/birthDate) disagreement → `conflict` recorded in
+  `ImportRow.conflictFields` with **NO write** (FR4 RGPD no-silent-overwrite wall); an email/notes-only diff →
+  `updated`. The engine rolls a `byClass` tally into the existing `summary` Json + `import.apply` audit `after`
+  (no new column/audit action; `applied`/`skipped` byte-identical), re-tallying an already-`applied` row from its
+  stored class on RESUME (FM-2/FM-10). **The load-bearing safety fix:** matched (`updated`/`unchanged`) rows now
+  carry `createdEntityId = a PRE-EXISTING student`, so `rollbackBatchRows` was rewritten to compensate **ONLY
+  rows this import actually created** (`reconciliation == null` legacy/byte-parity OR `=== created`) — matched
+  rows are flipped to `rolled_back` for bookkeeping but the entity is **never `deleteMany`'d**, closing an
+  irreversible cascade-delete of a real child's enrollments/grades/guardianships that the advertised 24h
+  rollback would otherwise trigger after an idempotent re-import. The worker carries `reconciliation` into BOTH
+  the apply (re-tally) and rollback (exclusion data) `engineRows` maps. FE = the non-stigmatising "Bilan
+  d'import & synchronisation" panel (5 KPI cards, `conflict`/`skipped` = amber "À examiner", red reserved) +
+  a `?reconciliation=` row facet deep-linking the conflict filter + a per-row source-vs-current `ConflictDiff`,
+  degrading to **no panel** pre-migration. **RED gate (fixed in-flight):** 8 typecheck errors — the stale-
+  Prisma-client pattern (schema added the enum/columns but `prisma generate` was never run) + one
+  `ReconciliationTally` JSON-assignability fix (index signature) → `pnpm typecheck` 13/13 GREEN.
+  **Operator pre-req (gates demoability, not merge):** `prisma generate` + the additive `prisma db push`
+  (enum + 2 columns + index), then `pnpm build` (`packages/imports-core/dist`).
+  **Resolved in the land pass:** (1) **ADR drift — FIXED** — ADR-024 now carries a
+  `## Reconciliation classification (E11-S2 — amendment)` section (the 5-class taxonomy, the externalRef-first
+  idempotency anchor, the protected-field `{firstName,lastName,birthDate}` allow-list + no-silent-overwrite
+  wall, the `byClass` roll-up, the rollback delete-only-what-we-created invariant, the `all_or_nothing`
+  shift), so the cited "§reconciliation" reference now resolves. (2) **Rollback safety test — ADDED** — the
+  matched-row rollback exclusion is now pinned by `imports-engine.spec.ts` ("SAFETY … rollback compensates
+  ONLY rows this import CREATED"): an `updated`/`unchanged` row is flipped to `rolled_back` WITHOUT
+  `rollbackRow` being invoked, only `created`/legacy-null rows are compensated.
+  **Carried to S-hardening (non-blocking):** (3) `all_or_nothing` no longer guarantees true
+  all-or-nothing — a worker-discovered `conflict` leaves a row unapplied yet the batch finalizes `applied`
+  (intended: deferred to S4 arbitration; confirm acceptable). (4) Minor copy/a11y polish carried to
+  S-hardening: panel missing `role=status` (the S1 `LiveProgressStrip` live region has unmounted by the time
+  the panel renders, so no announcement); rows-table `th` missing `scope=col`; `updated` rows carry no
+  `conflictFields` so the FE diff branch is dead for them; guardians still default to `created`.
 - [ ] **S3** — OneRoster source connect + pull + map-to-`ImportBatch` (CSV bundle first; REST stretch) on
   `integrations.write`. `[schema][api][integration]` · P2. *Additive `db push`: `RosterSource` + `ImportOrigin`.*
 - [ ] **S4** — Idempotent sync apply + conflict resolution + 24h rollback + re-run convergence. No schema.
@@ -81,6 +119,20 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
   on the stamped `claimedAt` instant before S4.
 - **[carry-over → S2/S4]** Whether the sync `syncing` state reuses `applying` semantics or earns its own
   additive status value (data-model leans on reuse; confirm on S3/S4).
+- **[resolved S2 land pass]** ADR-024 cited a **"§reconciliation"** section that did not exist. **FIXED** — the
+  amendment section `## Reconciliation classification (E11-S2 — amendment)` was added to
+  `docs/adr/ADR-024-async-import-sync-and-idempotent-reconciliation.md`, documenting the 5-class taxonomy, the
+  externalRef-first idempotency anchor, the protected-field allow-list + no-silent-overwrite wall, the
+  `byClass` roll-up, the rollback safety invariant, and the `all_or_nothing` shift (project-context §3 met).
+- **[resolved S2 land pass]** The matched-row rollback-exclusion (engine.ts ~L256-279, the
+  `created = reconciliation == null || created` guard) — the single most safety-critical line, preventing
+  irreversible cascade-deletion of a pre-existing child's record — now has its dedicated test in
+  `apps/worker/.../imports-engine.spec.ts` ("SAFETY … rollback compensates ONLY rows this import CREATED"):
+  an `updated`/`unchanged` row is flipped to `rolled_back` WITHOUT `handler.rollbackRow` being invoked.
+- **[OPEN after S2 → S4]** `all_or_nothing` semantics weakened: a `conflict` is discovered only in the worker
+  (after the enqueue-time invalid-row gate), leaves the row unapplied, yet the batch finalizes `applied`.
+  Intended (conflicts deferred to S4 arbitration, surfaced as "à arbitrer") — confirm the all-or-nothing
+  contract shift is acceptable.
 
 ## Operator note
 

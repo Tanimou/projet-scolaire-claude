@@ -115,6 +115,8 @@ export class ImportsProcessor extends WorkerHost {
       status: r.status,
       payload: r.payload,
       createdEntityId: r.createdEntityId,
+      // E11-S2 — carry the stored class so a RESUME re-tallies `byClass` faithfully.
+      reconciliation: r.reconciliation,
     }));
 
     // Periodic progress flush — write at most every ~250ms so a mid-run poll is
@@ -155,12 +157,18 @@ export class ImportsProcessor extends WorkerHost {
           status: ImportStatus.applied,
           appliedAt: new Date(),
           errorMessage: null,
+          // ONE authoritative terminal summary write (FM-9): the reconciliation
+          // roll-up rides the existing `summary` Json (E11-S2 FR5) alongside the
+          // existing counters — no new column, no second query. `byClass` comes
+          // from the engine's returned tally so it can never drift from the
+          // per-row `ImportRow.reconciliation` written inside the same tx.
           summary: {
             ...baseSummary,
             processedRows: result.applied + result.skipped,
             totalToApply,
             applied: result.applied,
             skipped: result.skipped,
+            byClass: result.byClass,
             mode,
           },
         },
@@ -219,6 +227,11 @@ export class ImportsProcessor extends WorkerHost {
       status: r.status,
       payload: r.payload,
       createdEntityId: r.createdEntityId,
+      // E11-S2 SAFETY — carry the stored reconciliation class so rollback only
+      // undoes rows THIS import CREATED. Without it, a `updated`/`unchanged` row
+      // (createdEntityId = a pre-existing matched student) would be hard-deleted
+      // with cascade — irreversible loss of a real child's academic record.
+      reconciliation: r.reconciliation,
     }));
 
     try {

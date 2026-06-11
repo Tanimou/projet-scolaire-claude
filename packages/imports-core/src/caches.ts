@@ -34,7 +34,17 @@ export async function buildImportCaches(prisma: CachePrisma, schoolId: string): 
     }),
     prisma.student.findMany({
       where: { schoolId, externalRef: { not: null } },
-      select: { id: true, externalRef: true },
+      // E11-S2 — also select the reconcilable fields so a matched re-import can be
+      // classified unchanged/updated/conflict in `applyRow` with no extra query.
+      select: {
+        id: true,
+        externalRef: true,
+        firstName: true,
+        lastName: true,
+        birthDate: true,
+        email: true,
+        notes: true,
+      },
     }),
     prisma.guardian.findMany({
       where: { schoolId, email: { not: null } },
@@ -68,7 +78,19 @@ export async function buildImportCaches(prisma: CachePrisma, schoolId: string): 
     });
   }
   const studentExternalRefs = new Map<string, string>();
-  for (const s of students) if (s.externalRef) studentExternalRefs.set(s.externalRef, s.id);
+  const studentsByExternalRef: ImportCaches['studentsByExternalRef'] = new Map();
+  for (const s of students) {
+    if (!s.externalRef) continue;
+    studentExternalRefs.set(s.externalRef, s.id);
+    studentsByExternalRef.set(s.externalRef, {
+      id: s.id,
+      firstName: s.firstName,
+      lastName: s.lastName,
+      birthDate: s.birthDate,
+      email: s.email,
+      notes: s.notes,
+    });
+  }
 
   const guardiansByEmail = new Map<string, { id: string; firstName: string; lastName: string }>();
   for (const g of guardians) {
@@ -84,6 +106,7 @@ export async function buildImportCaches(prisma: CachePrisma, schoolId: string): 
     classSectionsByName,
     subjectsByCode,
     studentExternalRefs,
+    studentsByExternalRef,
     guardiansByEmail,
     activeAcademicYearId: ay?.id ?? null,
   };
