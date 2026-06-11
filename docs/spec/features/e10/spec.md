@@ -1,6 +1,6 @@
 # E10 — Quality bar: authenticated E2E + WCAG 2.2 AA
 
-> **Status:** in-progress (spec run) · **Size:** ~M · **Tier:** 4 (Foundation, quality & interop)
+> **Status:** shipped (S1–S4 all landed) · **Size:** ~M · **Tier:** 4 (Foundation, quality & interop)
 > **Why now:** E1–E9 are all shipped (E9-S1+S2 landed `241d107`/`710d5d4`; E7-S1→S6 + E8-S1→S3 + the
 > E1–E6 tiers all shipped). There is **no in-progress epic with an unstarted slice** and **no unspecced
 > in-progress epic**. Per Victor's promotion rule the highest `proposed` epic is promoted: the roadmap's

@@ -64,7 +64,29 @@ for (const portal of ACTIVE_PORTALS) {
 
     // Gate 1 — landed on the portal landing (guards storageState/cookie drift, PM-6).
     // A failed login keeps us on /login → this assertion fails loudly.
-    await page.waitForURL(`**${user.landing}`, { timeout: 15_000 });
+    //
+    // EXCEPTION — the `student` portal (E8) is OPERATOR-ACTIVATED: it needs the
+    // additive `Student.userProfileId` `db push` AND the `student` realm-role +
+    // demo learner provisioned (ADR-021). Unlike the established parent/admin/
+    // teacher demo accounts (assumed present), a not-yet-activated student is an
+    // EXPECTED stack state, not an auth regression. So for `student` ONLY, a login
+    // that does not land within the window is a GREEN SKIP (the S4 cross-portal
+    // sweep's student page then `test.skip`s via the missing storageState) rather
+    // than a loud fail — mirroring the non-vacuous posture of the journeys. Every
+    // other portal keeps the hard loud-fail (a rejected demo login IS a regression).
+    if (portal === 'student') {
+      const landed = await page
+        .waitForURL(`**${user.landing}`, { timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      setup.skip(
+        !landed,
+        `Student portal not provisioned (login did not reach ${user.landing}) — ` +
+          'the E8 db push + student realm-role/demo learner are operator-activated; skipping student setup.',
+      );
+    } else {
+      await page.waitForURL(`**${user.landing}`, { timeout: 15_000 });
+    }
     expect(page.url(), `login for ${portal} must land on ${user.landing}, not /login`).toContain(
       user.landing,
     );

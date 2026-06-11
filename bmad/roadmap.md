@@ -566,9 +566,9 @@ filler (E9 enrollment self-service / E10 quality bar).**
     **No schema change, no new permission, no new ADR, no second queue, no new `NotificationKind`** (reuses
     ADR-020/ADR-022). **`E9` is now `shipped` (both slices landed).** **Operator pre-req (gates demoability,
     not merge):** the additive `guardianship_claim` `prisma db push` + `packages/contracts/dist` rebuild.
-- **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `in-progress` · ongoing — Playwright journeys
-  (grade publish → parent alert; parent claims child; messaging) + fix axe-core violations on
-  authenticated pages. Maps to R9/R10. **Spec-kit:** ✅ landed `docs/spec/features/e10/` (2026-06-10,
+- **E10 — Quality bar: authenticated E2E + WCAG 2.2 AA** · `shipped` · ~M — Playwright journeys
+  (grade publish → parent alert; parent claims child; messaging) + an axe-core WCAG-2.2-AA sweep over the
+  authenticated pages. Maps to R9/R10. **All four slices (S1–S4) landed → `shipped`.** **Spec-kit:** ✅ landed `docs/spec/features/e10/` (2026-06-10,
   epic-spec, docs-only): spec/plan/data-model/contracts(openapi + auth-fixture/journeys/a11y-scan
   notes)/ux/tasks/quickstart/PROGRESS. Locked decisions: E10 extends the **existing** Playwright harness
   (`apps/web/playwright.config.ts` + `tests/e2e/smoke.spec.ts` + `@axe-core/playwright`, all on disk) for
@@ -641,11 +641,31 @@ filler (E9 enrollment self-service / E10 quality bar).**
   skip gracefully too. **No schema/endpoint/permission/fixture/ADR; reuses the S1 fixture spine + ADR-023 entirely;
   the E2 surfaces are asserted, not modified; `.auth/` stays git-ignored; `webServer` stays `next dev`; no build in
   any path.**
-  **Next slice → E10-S4** (`epic-slice` `[a11y][test][ui]`: the cross-portal WCAG 2.2 AA sweep + remediation
-  `tests/e2e/a11y/cross-portal.a11y.spec.ts` — a data-driven axe-core WCAG-2.2-AA scan over a representative
-  authenticated page per portal, each under its role session, asserting zero critical/serious; remediate the
-  surfaced violations reuse-first in `apps/web`/`packages/ui`. On land → E10 `shipped`. Run against `:3100`,
-  never build).
+  **E10-S4 is now shipped** (`epic-slice` — P2 `[a11y][test][ui]`): the R9 payoff — the cross-portal WCAG
+  2.2 AA sweep `tests/e2e/a11y/cross-portal.a11y.spec.ts` (`@a11y`), a **data-driven** (`SWEEP_TARGETS`
+  table, one row per page) axe-core WCAG-2.2-AA scan (`wcag2a wcag2aa wcag21a wcag21aa wcag22aa`, incl.
+  **SC 2.5.8 target-size**) over ONE representative authenticated page **per portal**, each riding its S1
+  role-session fixture: parent `/parent/dashboard` + `/parent/recommendations`; teacher `/teacher/grades`
+  (gradebook) + `/teacher/conversations`; admin `/admin/analytics` + `/admin/child-claims` (one queue);
+  student `/student/dashboard`. Each test is independent, asserts no bounce-to-`/login`, waits for the
+  stable `PortalShell` `PageHeader` heading, then asserts **zero critical/serious** (moderate/minor =
+  opportunistic punch-list). `ACTIVE_PORTALS` extended to `['parent','admin','teacher','student']` so the
+  E8 demo-learner session is authenticated for the student sweep; `auth.setup.ts` gives the
+  **operator-activated** `student` portal — and only it — a **soft-skip** when not yet provisioned (E8/
+  ADR-021: db push + realm-role + demo learner), so the student page `test.skip`s cleanly while every other
+  portal keeps the loud-fail (a rejected demo login IS a regression). `test:e2e:a11y` (unchanged grep) now
+  spans **public + authenticated parent + cross-portal** in one selection — the **standing a11y gate** —
+  documented in `quickstart.md` (three-layer table + the one-row extension recipe + the student
+  operator-activation note). Remediation is reuse-first on what the live sweep surfaces; the swept E1/E2/E6/
+  E8 + gradebook surfaces were A11y-reviewed to the bar in their own epics and carry **no
+  statically-identifiable critical/serious** (non-colour-alone `StatusBadge`, `role="group"`/`aria-label`
+  action groups, `aria-hidden` icons + text labels, ≥36px controls, `aria-live` regions, semantic
+  headings), so no speculative rewrite of working components was made (a confirmed-violation-first posture —
+  never regress a working feature without a real hit). **No schema/endpoint/permission/`NotificationKind`/
+  queue/new ADR; reuses the S1 fixture spine + ADR-023 entirely; `.auth/` stays git-ignored; `webServer`
+  stays `next dev`; no build in any path.** **Merge evidence (Murat gate):** one non-vacuous authenticated
+  run against the booted `:3100` stack — `test:e2e:a11y` PASSES across the cross-portal pages (browser suite
+  the typecheck gate can't exercise). **On land → E10 is `shipped`; the next run promotes E11 (interop).**
 - **E11 — Standards interop (OneRoster/LTI) + async imports** · `proposed` · ~M — move bulk import
   to the worker (today blocking in-request) + OneRoster roster sync. Interoperability per the cahier.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store

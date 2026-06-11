@@ -23,8 +23,17 @@ sessions to `apps/web/tests/e2e/.auth/{role}.json` — **git-ignored** (a live s
 # fast public pre-flight (login pages render + public a11y) — the existing smoke spec, unchanged:
 pnpm --filter @pilotage/web test:e2e:smoke
 
-# the WCAG 2.2 AA a11y gate (public + authenticated + cross-portal):
-pnpm --filter @pilotage/web test:e2e:a11y           # (added in S1; grep @a11y)
+# the WCAG 2.2 AA a11y gate (public + authenticated + cross-portal) — the STANDING a11y gate:
+pnpm --filter @pilotage/web test:e2e:a11y           # (grep @a11y)
+#   covers, in one selection:
+#     • public login pages              (smoke.spec.ts          — @a11y)
+#     • authenticated parent dashboard  (authenticated.a11y.spec.ts — @a11y, S1)
+#     • a representative authenticated page PER PORTAL (cross-portal.a11y.spec.ts — @a11y, S4):
+#         parent: /parent/dashboard + /parent/recommendations
+#         teacher: /teacher/grades  + /teacher/conversations
+#         admin:   /admin/analytics + /admin/child-claims
+#         student: /student/dashboard
+#   each scanned under its own role session; critical/serious = hard fail (WCAG 2.2 AA, incl. SC 2.5.8).
 
 # the authenticated critical journeys (grade→alert · claim→approve · messaging):
 pnpm --filter @pilotage/web test:e2e:journey        # (optional; grep @journey)
@@ -43,12 +52,38 @@ PLAYWRIGHT_BASE_URL=http://localhost:3100 pnpm --filter @pilotage/web test:e2e
 > rebuild`. Playwright's `webServer` starts `next dev` (not a build); `PLAYWRIGHT_SKIP_SERVER=1` reuses the
 > running server. The single per-sprint `pnpm build` is the orchestrator's, unrelated to the E2E suite.
 
+### `test:e2e:a11y` — the standing WCAG 2.2 AA gate (public + authenticated + cross-portal)
+
+After **S4**, the `@a11y` selection is the project's **standing accessibility gate**. It is a single grep
+that now spans three layers — and grows with the product:
+
+| Layer | Spec | Surfaces |
+|---|---|---|
+| Public | `tests/e2e/smoke.spec.ts` | the 3 portal **login** pages |
+| Authenticated (S1) | `tests/e2e/a11y/authenticated.a11y.spec.ts` | the authenticated **parent dashboard** (+ a sanity-injection that proves the gate bites) |
+| **Cross-portal (S4)** | `tests/e2e/a11y/cross-portal.a11y.spec.ts` | one representative authenticated page **per portal** — parent (`/parent/dashboard`, `/parent/recommendations`), teacher (`/teacher/grades`, `/teacher/conversations`), admin (`/admin/analytics`, `/admin/child-claims`), student (`/student/dashboard`) — each under its own role session |
+
+All of them assert **zero `critical`/`serious`** WCAG **2.2 AA** violations (tag set `wcag2a wcag2aa wcag21a
+wcag21aa wcag22aa`, incl. **SC 2.5.8 Target Size**); moderate/minor are an opportunistic punch-list, not a
+blocker (R5). A surfaced critical/serious is **fixed reuse-first** in `apps/web` (a genuinely shared fix
+lands in `packages/ui`, the E3-S3 hardened-`Drawer` precedent), not silenced — the PR shows the assertion
+and the fix together. **Adding a portal page to the gate is one row** in `SWEEP_TARGETS` (the data-driven
+table in `cross-portal.a11y.spec.ts`): `{ portal, path, label, heading }`.
+
+> The cross-portal sweep's **student** page rides the E8 demo learner, which is **operator-activated**
+> (additive `db push` + `student` realm-role + demo learner, ADR-021). On a stack where the student is not
+> yet provisioned, the `student` setup **skips** (not fails) and the student sweep `test.skip`s — never a
+> false red. Every other portal's demo account is assumed present (a rejected login is a real regression).
+
 ## 2. How the auth-session fixture works (the spine)
 
 - A Playwright **`setup` project** (`tests/e2e/auth.setup.ts`) logs in **once per role** via the real
   `/{portal}/login` form with the demo credentials, then saves `storageState` to `.auth/{role}.json`.
   It **asserts** the login landed on the portal landing AND the session carries the expected realm role —
   a rejected login **fails** the setup; only a genuinely unreachable stack **skips** it (no false red).
+  The **`student`** portal is the one exception (operator-activated, E8/ADR-021): a not-yet-provisioned
+  student login **skips** that role's setup rather than failing, so the cross-portal sweep's student page
+  skips cleanly until the operator activates the learner.
 - Test projects depend on `setup` and import the per-role fixtures
   (`adminPage`/`teacherPage`/`parentPage`/`studentPage`) from `tests/e2e/fixtures/portal-fixtures.ts`.
   Each fixture opens its role's own context from the cached `storageState` (so one spec can drive two
