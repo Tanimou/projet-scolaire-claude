@@ -448,3 +448,33 @@ student/class anchor throw. **FE:** `ConflictResolver.tsx` now labels an enrollm
 (keep-current = "Garder la classe actuelle", take-source = "Déplacer vers {classe}") — the radiogroup/audit-notice
 structure and the `keep_current` safe default are unchanged. **No schema / contract / permission / endpoint /
 queue / worker change.**
+
+## Enrollments class resolution is grade-level-disambiguating (polish — amendment)
+
+Closes the **Post-ship hardening #5 recorded follow-on (iii)** ("class re-resolution keys on `year:name` only (no
+`gradeLevelId`) → two same-named classes in different grade levels collide last-created-wins"). It is a real
+data-integrity defect, not new scope: a class name is unique only PER `(academicYearId, gradeLevelId)` —
+`@@unique([academicYearId, gradeLevelId, name])`, the same uniqueness `classesHandler` already enforces via
+`classNamesPerYearLevel` (`<year>:<gradeLevel>:<name>`). But the enrollments lookup cache `classSectionsByName`
+keyed on `<academicYearId>:<name>` ONLY, so two same-named sections in different grade levels (a "6eA" in 6ème and
+a stray "6eA" in 5ème) shared a key and the last `Map.set()` silently overwrote the earlier — an enrollments row
+(which carries ONLY `className`, no grade level by contract) would then resolve to the **arbitrary last-created**
+class and silently enroll the student into the **wrong grade level's class**.
+
+**Fix (additive, byte-parity for the common case):** `buildImportCaches` (`packages/imports-core/src/caches.ts`)
+records, in one pass, every `<academicYearId>:<name>` key seen in **more than one** grade level into a new
+`ImportCaches.classSectionsByNameAmbiguous: Set<string>`. The `enrollmentsHandler`'s three class lookups —
+`validateRow`, `applyRow`, `resolveConflict` — consult that set first and, when the name is ambiguous, **refuse to
+guess**: `validateRow` pushes a clear French `className` error; `applyRow`/`resolveConflict` throw a clear French
+`…ambiguë…` error (the engine wraps `applyRow`'s as `Ligne N : …`) — **never** the prior silent wrong-grade
+enrollment, and **never a 500** (a deterministic, message-bearing 4xx-equivalent). For the overwhelmingly common
+case where a name maps to exactly ONE class, the ambiguity set is empty and behaviour is **byte-identical** (same
+`classSectionsByName` resolution as before).
+
+This is **not a new architectural decision** — it reuses the documented "ambiguity ⇒ clear reject, never a silent
+mis-resolution" convention `classesHandler` already embodies. **No schema / contract / permission / endpoint /
+queue / worker / UI change** (the row shape, ImportType contracts, and admin surfaces are untouched; only the cache
+shape gains one additive in-memory `Set`, never persisted). Pinned by `imports-engine.spec.ts`: `buildImportCaches`
+flags a two-grade-level name ambiguous (and leaves a unique name clean + still-resolvable); `validateRow` →
+French `ambiguë` error + no `normalized`; `applyRow` → throws + ZERO `enrollment.create`; `resolveConflict` →
+throws + ZERO write; and an unambiguous name still enrolls (byte-parity).

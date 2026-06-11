@@ -1,11 +1,13 @@
 import { ImportRowStatus, ReconciliationClass, type ImportMode } from '@prisma/client';
 import {
   applyBatchRows,
+  buildImportCaches,
   enrollmentsHandler,
   resolveRowConflict,
   rollbackBatchRows,
   studentsHandler,
   type EngineRow,
+  type ImportContext,
   type ImportHandler,
 } from '@pilotage/imports-core';
 
@@ -459,6 +461,7 @@ describe('imports-core engine — conflict resolution (E11-S4)', () => {
       classSectionsByName: new Map([
         [`${EN_AY}:6eb`, { id: 'cls-6eB', gradeLevelId: 'gl-1', academicYearId: EN_AY, maxStudents: 30, currentSize: 0 }],
       ]),
+      classSectionsByNameAmbiguous: new Set<string>(),
       subjectsByCode: new Map(),
       studentExternalRefs: new Map([['EL-1', 'stu-1']]),
       studentsByExternalRef: new Map(),
@@ -554,6 +557,7 @@ describe('imports-core engine — enrollments conflict arbitration (E11 polish, 
       gradeLevelsByName: new Map(),
       classNamesPerYearLevel: new Set<string>(),
       classSectionsByName,
+      classSectionsByNameAmbiguous: new Set<string>(),
       subjectsByCode: new Map(),
       studentExternalRefs,
       studentsByExternalRef: new Map(),
@@ -704,6 +708,7 @@ describe('imports-core students handler — re-run convergence (E11-S4 AC-4)', (
       gradeLevelsByName: new Map(),
       classNamesPerYearLevel: new Set<string>(),
       classSectionsByName: new Map(),
+      classSectionsByNameAmbiguous: new Set<string>(),
       subjectsByCode: new Map(),
       studentExternalRefs: new Map([[existing.externalRef, existing.id]]),
       studentsByExternalRef: new Map([
@@ -829,6 +834,7 @@ describe('imports-core enrollments handler — apply-time re-resolution (E11-S3 
       gradeLevelsByName: new Map(),
       classNamesPerYearLevel: new Set<string>(),
       classSectionsByName,
+      classSectionsByNameAmbiguous: new Set<string>(),
       subjectsByCode: new Map(),
       studentExternalRefs,
       studentsByExternalRef: new Map(),
@@ -1010,6 +1016,7 @@ describe('imports-core enrollments handler — mixed re-run batch (E11-S4 FR5/AC
       gradeLevelsByName: new Map(),
       classNamesPerYearLevel: new Set<string>(),
       classSectionsByName,
+      classSectionsByNameAmbiguous: new Set<string>(),
       subjectsByCode: new Map(),
       studentExternalRefs: new Map<string, string>([
         ['EL-already', 'stu-already'],
@@ -1086,5 +1093,134 @@ describe('imports-core enrollments handler — mixed re-run batch (E11-S4 FR5/AC
     expect(r1Update.data.status).toBe(ImportRowStatus.applied);
     expect(r1Update.data.reconciliation).toBe(ReconciliationClass.unchanged);
     expect(r1Update.data.createdEntityId).toBe('enr-already');
+  });
+});
+
+describe('imports-core enrollments handler — grade-level disambiguation (E11 polish #5 follow-on iii)', () => {
+  const AY = 'ay-1';
+
+  /**
+   * `buildImportCaches` over a minimal fake prisma. The whole point of the fix is
+   * that the cache builder DETECTS a class name shared across >1 grade level and
+   * records the `<year>:<name>` key in `classSectionsByNameAmbiguous`. We drive it
+   * through the REAL builder (not a hand-rolled cache) so the detection logic is
+   * pinned, not just the handler branch.
+   */
+  function fakePrisma(classes: Array<{ id: string; name: string; gradeLevelId: string }>) {
+    return {
+      gradeLevel: { findMany: jest.fn().mockResolvedValue([]) },
+      subject: { findMany: jest.fn().mockResolvedValue([]) },
+      classSection: {
+        findMany: jest.fn().mockResolvedValue(
+          classes.map((c) => ({
+            id: c.id,
+            name: c.name,
+            gradeLevelId: c.gradeLevelId,
+            academicYearId: AY,
+            maxStudents: 30,
+            _count: { enrollments: 0 },
+          })),
+        ),
+      },
+      student: { findMany: jest.fn().mockResolvedValue([]) },
+      guardian: { findMany: jest.fn().mockResolvedValue([]) },
+      academicYear: { findFirst: jest.fn().mockResolvedValue({ id: AY }) },
+    } as never;
+  }
+
+  it('buildImportCaches flags a name shared across two grade levels as ambiguous (and leaves a unique name clean)', async () => {
+    // Two "6eA" (in two different grade levels) + one unique "5eB".
+    const caches = await buildImportCaches(
+      fakePrisma([
+        { id: 'cls-6eA-A', name: '6eA', gradeLevelId: 'gl-6' },
+        { id: 'cls-6eA-B', name: '6eA', gradeLevelId: 'gl-5' },
+        { id: 'cls-5eB', name: '5eB', gradeLevelId: 'gl-5' },
+      ]),
+      'school-1',
+    );
+
+    expect(caches.classSectionsByNameAmbiguous.has(`${AY}:6ea`)).toBe(true);
+    expect(caches.classSectionsByNameAmbiguous.has(`${AY}:5eb`)).toBe(false);
+    // The unique name still resolves to its single class (byte-parity).
+    expect(caches.classSectionsByName.get(`${AY}:5eb`)?.id).toBe('cls-5eB');
+  });
+
+  /** A cache whose only class name `6eA` is marked ambiguous (two grade levels). */
+  function ambiguousCaches() {
+    return {
+      gradeLevelsByCode: new Map(),
+      gradeLevelsByName: new Map(),
+      classNamesPerYearLevel: new Set<string>(),
+      classSectionsByName: new Map([
+        // last-write-wins arbitrary pick — must NOT be trusted for an ambiguous name
+        [`${AY}:6ea`, { id: 'cls-WRONG-GRADE', gradeLevelId: 'gl-5', academicYearId: AY, maxStudents: 30, currentSize: 0 }],
+      ]),
+      classSectionsByNameAmbiguous: new Set<string>([`${AY}:6ea`]),
+      subjectsByCode: new Map(),
+      studentExternalRefs: new Map<string, string>([['EL-1', 'stu-1']]),
+      studentsByExternalRef: new Map(),
+      guardiansByEmail: new Map(),
+      activeAcademicYearId: AY,
+    };
+  }
+
+  it('validateRow → a clear French "ambiguë" error (never silently picks a grade level)', () => {
+    const ctx: ImportContext = {
+      tenantId: 'tenant-1',
+      schoolId: 'school-1',
+      caches: ambiguousCaches() as never,
+    };
+    const res = enrollmentsHandler.validateRow({ studentExternalRef: 'EL-1', className: '6eA' }, ctx);
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => e.field === 'className' && /ambigu/i.test(e.message))).toBe(true);
+    // It did NOT bake the arbitrary wrong-grade class id into a normalized payload.
+    expect(res.normalized).toBeUndefined();
+  });
+
+  it('applyRow → throws a clear French error, creates NOTHING (never a wrong-grade enrollment)', async () => {
+    const create = jest.fn();
+    const tx = { enrollment: { findFirst: jest.fn().mockResolvedValue(null), create, deleteMany: jest.fn() } };
+    await expect(
+      enrollmentsHandler.applyRow(
+        { studentExternalRef: 'EL-1', className: '6eA' } as never,
+        { tenantId: 'tenant-1', schoolId: 'school-1', caches: ambiguousCaches() as never, tx: tx as never },
+      ),
+    ).rejects.toThrow(/ambigu/i);
+    expect(create).not.toHaveBeenCalled(); // never enrolled into the arbitrary wrong-grade class
+  });
+
+  it('resolveConflict → throws a clear French error (never arbitrates into the wrong grade level)', async () => {
+    const update = jest.fn();
+    const tx = { enrollment: { findFirst: jest.fn(), update } };
+    await expect(
+      resolveRowConflict({
+        tx: tx as never,
+        handler: enrollmentsHandler,
+        payload: { studentExternalRef: 'EL-1', className: '6eA' },
+        decision: 'take_source',
+        caches: ambiguousCaches() as never,
+        schoolId: 'school-1',
+        actor: ACTOR,
+      }),
+    ).rejects.toThrow(/ambigu/i);
+    expect(update).not.toHaveBeenCalled(); // no write toward an ambiguous class
+  });
+
+  it('an UNAMBIGUOUS name (single grade level) still resolves and enrolls (byte-parity)', async () => {
+    const create = jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'enr-new', ...data }));
+    const tx = { enrollment: { findFirst: jest.fn().mockResolvedValue(null), create, deleteMany: jest.fn() } };
+    const caches = {
+      ...ambiguousCaches(),
+      classSectionsByName: new Map([
+        [`${AY}:5eb`, { id: 'cls-5eB', gradeLevelId: 'gl-5', academicYearId: AY, maxStudents: 30, currentSize: 0 }],
+      ]),
+      classSectionsByNameAmbiguous: new Set<string>(), // 5eB is unique → not ambiguous
+    };
+    const res = await enrollmentsHandler.applyRow(
+      { studentExternalRef: 'EL-1', className: '5eB' } as never,
+      { tenantId: 'tenant-1', schoolId: 'school-1', caches: caches as never, tx: tx as never },
+    );
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(res.type).toBe('enrollment');
   });
 });

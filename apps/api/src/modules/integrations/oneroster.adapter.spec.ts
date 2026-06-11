@@ -112,6 +112,7 @@ describe('mapOneRosterBundle', () => {
         classSectionsByName: new Map([
           ['ay1:6ea', { id: 'placeholder-class', gradeLevelId: 'gl', academicYearId: 'ay1', maxStudents: 30, currentSize: 0 }],
         ]),
+        classSectionsByNameAmbiguous: new Set(),
         subjectsByCode: new Map(),
         studentExternalRefs: new Map([['stu-001', 'placeholder-student'], ['stu-002', 'placeholder-student-2']]),
         studentsByExternalRef: new Map(),
@@ -147,6 +148,7 @@ describe('mapOneRosterBundle', () => {
         gradeLevelsByName: new Map(),
         classNamesPerYearLevel: new Set(),
         classSectionsByName: new Map(),
+        classSectionsByNameAmbiguous: new Set(),
         subjectsByCode: new Map(),
         studentExternalRefs: new Map(),
         studentsByExternalRef: new Map(),

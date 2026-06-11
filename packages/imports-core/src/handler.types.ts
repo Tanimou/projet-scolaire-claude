@@ -39,6 +39,17 @@ export interface ImportCaches {
   gradeLevelsByName: Map<string, { id: string; name: string; code: string }>;
   classNamesPerYearLevel: Set<string>; // "<academicYearId>:<gradeLevelId>:<name>"
   classSectionsByName: Map<string, { id: string; gradeLevelId: string; academicYearId: string; maxStudents: number; currentSize: number }>;
+  /**
+   * E11 polish (#5 follow-on iii) — the `<academicYearId>:<name>` keys that map
+   * to MORE THAN ONE grade level's class (a class name is unique only PER
+   * `(academicYearId, gradeLevelId)`, not per year). An enrollments row carries
+   * only `className` (no grade level), so for an ambiguous name the
+   * `classSectionsByName` entry is an arbitrary last-write-wins pick and MUST NOT
+   * be trusted — the handler surfaces a clear French 4xx instead of silently
+   * enrolling the student into the wrong grade level's class. Empty for the
+   * common unambiguous case (byte-identical behaviour).
+   */
+  classSectionsByNameAmbiguous: Set<string>; // "<academicYearId>:<name>" present in >1 grade level
   subjectsByCode: Map<string, { id: string; name: string }>;
   studentExternalRefs: Map<string, string>; // externalRef → student.id
   /**

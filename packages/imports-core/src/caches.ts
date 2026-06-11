@@ -67,9 +67,25 @@ export async function buildImportCaches(prisma: CachePrisma, schoolId: string): 
     string,
     { id: string; gradeLevelId: string; academicYearId: string; maxStudents: number; currentSize: number }
   >();
+  // E11 polish (#5 follow-on iii) — grade-level disambiguation. A class name is
+  // unique only PER (year, gradeLevel) — `@@unique([academicYearId, gradeLevelId,
+  // name])`, NOT per year. Two same-named sections in different grade levels (e.g.
+  // a "6eA" in 6ème and a stray "6eA" in 5ème) share the `academicYearId:name`
+  // `classSectionsByName` key, so the last `set()` wins — silently overwriting the
+  // earlier entry. An enrollments row carries ONLY `className` (no grade level by
+  // contract), so it cannot pick between them. We record every such ambiguous
+  // `academicYearId:name` key here; the enrollments handler must NOT trust the
+  // (last-write-wins, arbitrary) `classSectionsByName` entry for an ambiguous name
+  // and instead surfaces a clear French 4xx. The overwhelmingly common
+  // unambiguous case is byte-identical (the name maps to exactly one class).
+  const classSectionsByNameAmbiguous = new Set<string>();
+  const seenNameKeys = new Set<string>();
   for (const c of classes) {
     classNamesPerYearLevel.add(`${c.academicYearId}:${c.gradeLevelId}:${c.name.toLowerCase()}`);
-    classSectionsByName.set(`${c.academicYearId}:${c.name.toLowerCase()}`, {
+    const nameKey = `${c.academicYearId}:${c.name.toLowerCase()}`;
+    if (seenNameKeys.has(nameKey)) classSectionsByNameAmbiguous.add(nameKey);
+    seenNameKeys.add(nameKey);
+    classSectionsByName.set(nameKey, {
       id: c.id,
       gradeLevelId: c.gradeLevelId,
       academicYearId: c.academicYearId,
@@ -104,6 +120,7 @@ export async function buildImportCaches(prisma: CachePrisma, schoolId: string): 
     gradeLevelsByName,
     classNamesPerYearLevel,
     classSectionsByName,
+    classSectionsByNameAmbiguous,
     subjectsByCode,
     studentExternalRefs,
     studentsByExternalRef,

@@ -20,6 +20,24 @@ interface EnrollmentInput {
   _academicYearId?: string;
 }
 
+/** A class name is ambiguous when the same name exists in >1 grade level this year. */
+function isAmbiguousClassName(
+  caches: ImportContext['caches'],
+  classKey: string | undefined,
+): boolean {
+  return Boolean(classKey && caches.classSectionsByNameAmbiguous.has(classKey));
+}
+
+/**
+ * The clear French 4xx surfaced when a class name maps to more than one grade
+ * level's class — an enrollments row carries only the name (no grade level), so
+ * we refuse to guess rather than silently enroll the student into the wrong
+ * grade level's class (E11 polish #5 follow-on iii).
+ */
+function ambiguousClassMessage(className: string): string {
+  return `Classe « ${className} » ambiguë : ce nom existe dans plusieurs niveaux pour l'année active. Renommez la classe (un nom par niveau) ou désambiguïsez l'export avant d'inscrire.`;
+}
+
 /**
  * Bulk enroll students into class sections. Uses the active academic year and resolves
  * the target class by name. Respects max-capacity (tracked in-memory across the batch).
@@ -80,7 +98,15 @@ export const enrollmentsHandler: ImportHandler = {
     } else {
       const key = `${ctx.caches.activeAcademicYearId}:${p.className.toLowerCase()}`;
       const cls = ctx.caches.classSectionsByName.get(key);
-      if (!cls) {
+      if (isAmbiguousClassName(ctx.caches, key)) {
+        // Same name in >1 grade level this year — the `classSectionsByName` entry
+        // is an arbitrary last-write-wins pick. Refuse rather than mis-enroll.
+        errors.push({
+          field: 'className',
+          message: ambiguousClassMessage(p.className),
+          hint: 'Un nom de classe doit être unique par niveau pour l\'année active.',
+        });
+      } else if (!cls) {
         errors.push({
           field: 'className',
           message: `Classe « ${p.className} » introuvable pour l'année active.`,
@@ -135,6 +161,13 @@ export const enrollmentsHandler: ImportHandler = {
     const activeYearId = ctx.caches.activeAcademicYearId;
     const classKey =
       activeYearId && p.className ? `${activeYearId}:${p.className.toLowerCase()}` : undefined;
+    // Grade-level disambiguation (E11 polish #5 follow-on iii): if the name maps
+    // to >1 grade level's class this year, the re-resolved `classSectionsByName`
+    // entry is an arbitrary last-write-wins pick — refuse with a clear French
+    // error (the engine wraps it `Ligne N : …`, never a wrong-grade enrollment).
+    if (isAmbiguousClassName(ctx.caches, classKey)) {
+      throw new Error(ambiguousClassMessage(p.className ?? ''));
+    }
     const resolvedClass = classKey ? ctx.caches.classSectionsByName.get(classKey) : undefined;
     const classSectionId = resolvedClass?.id ?? p._classSectionId;
     const academicYearId = resolvedClass?.academicYearId ?? p._academicYearId;
@@ -273,6 +306,12 @@ export const enrollmentsHandler: ImportHandler = {
     const activeYearId = ctx.caches.activeAcademicYearId;
     const classKey =
       activeYearId && p.className ? `${activeYearId}:${p.className.toLowerCase()}` : undefined;
+    // Grade-level disambiguation (E11 polish #5 follow-on iii): an ambiguous
+    // source class name must not be silently arbitrated into the wrong grade
+    // level's class — refuse with a clear French 4xx (never a 500).
+    if (isAmbiguousClassName(ctx.caches, classKey)) {
+      throw new Error(ambiguousClassMessage(p.className ?? ''));
+    }
     const resolvedClass = classKey ? ctx.caches.classSectionsByName.get(classKey) : undefined;
     const classSectionId = resolvedClass?.id ?? p._classSectionId;
     const academicYearId = resolvedClass?.academicYearId ?? p._academicYearId;
