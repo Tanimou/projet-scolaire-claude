@@ -811,7 +811,7 @@ filler (E9 enrollment self-service / E10 quality bar).**
   batch (FR10); (c) `MAX_ROWS` is enforced **per-type** not across the combined mapped count (12k combined
   passes); (d) the enrollments-batch placeholder-UUID linkage on a first combined pull (re-resolve at apply or
   ship students-only in v1); (e) the connect audit action is `import.sync.connect` not the spec's
-  `integration.roster_source.created`. **E11-S4 is now shipped** (`epic-slice` `[api][worker][web]` P2,
+  `integration.roster_source.created` **[closed by Post-ship hardening #4 below]**. **E11-S4 is now shipped** (`epic-slice` `[api][worker][web]` P2,
   **no schema** → **`E11` is `shipped`, all 4 slices landed**): the `origin=oneroster` batch applies through the
   S1 async worker + S2 reconciliation classification with **zero new execution code**; net-new = admin conflict
   arbitration (`POST /imports/:id/conflicts/:rowId/resolve` keep-current/take-source on the existing
@@ -844,6 +844,16 @@ filler (E9 enrollment self-service / E10 quality bar).**
   `ConflictResolver` toast `role=status` coexist on the applied-with-conflicts path after an arbitration
   `router.refresh()` (two live regions) — accepted: they serve distinct purposes and the toast is the
   intended announcement. **Gate:** `pnpm typecheck` pass; P3 / presentational-only / `needsHumanReview:false`.
+  **Post-ship hardening #4 (2026-06-11, `polish` run — P3 `[api][integration][audit]`, audit-string-only,
+  no schema/contract/permission/endpoint/UI change):** closes S3 verify-panel follow-up **(e)** — the
+  OneRoster source-connect append-only audit action was implemented as the ad-hoc `import.sync.connect`
+  rather than the ADR-024 §E / spec-mandated **`integration.roster_source.created`**. Renamed at the single
+  `connect()` audit call site in `apps/api/src/modules/integrations/integrations.service.ts`; pinned by a new
+  assertion in `integrations.service.spec.ts` (`expect(auditData.action).toBe('integration.roster_source.created')`
+  + `resourceType === 'roster_source'`). Docs realigned: ADR-024 §E + the S3 slice note above now read
+  `integration.roster_source.created`/`import.sync.pull`. Append-only audit semantics preserved (still one
+  `auditLog.create` per connect, presence-only `after`, never the secret); the `import.sync.pull` action on the
+  sync path is unchanged. **Gate:** P3 / audit-string-only / `needsHumanReview:false`.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
   card data, PSP later. Out of MVP; do not start without explicit go.
 

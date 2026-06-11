@@ -238,7 +238,7 @@ recorded REST stretch (R3) needs no schema rewrite.
 ### E. Permission — reuse `integrations.write` (no new permission)
 The connect/list/sync endpoints ride the **existing admin-held `integrations.write`** permission (R1) — no
 parent/teacher/student ever holds it; CSV import keeps `imports.execute`. Every read/write is tenant-scoped
-server-side; connect/pull write append-only `import.sync.connect`/`import.sync.pull` audit rows.
+server-side; connect/pull write append-only `integration.roster_source.created`/`import.sync.pull` audit rows.
 
 ### Rejected (S3 alternatives)
 - **A live OneRoster REST/OAuth client in v1.** Deferred (R3) — CSV bundle maps cleanly onto the existing
