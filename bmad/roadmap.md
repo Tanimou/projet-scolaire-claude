@@ -684,6 +684,23 @@ filler (E9 enrollment self-service / E10 quality bar).**
   a multi-school admin who switched their active school can no longer mis-file a school-A roster under school-B; plus a combined-
   total `MAX_ROWS` pre-commit guard (per-type caps could previously sum past the cap). `ForbiddenException` fully removed from
   both files.
+  **Post-ship hardening #2 (2026-06-11, `polish` run — needs human review, not auto-merged):** a worker-only `[worker][concurrency][imports][async]`
+  fix to the S1 async-import claim. The stale-`applying` reclaim was an **unconditional** re-admit (`updateMany WHERE
+  status IN ('queued','applying')`), NOT the `claimedAt < now − IMPORTS_APPLY_STALE_MIN` lease ADR-024 §4/FR6 specify — so a
+  re-delivered/duplicate BullMQ job could double-admit a batch a still-alive worker was mid-`$transaction` on. The
+  `ImportsProcessor` apply + rollback claims now read the batch `status` + stamped `summary.claimedAt` first and route
+  through a new pure, 14-case-tested `decideClaim` helper (`apps/worker/src/modules/imports/import-claim.ts` +
+  `import-claim.spec.ts`): `queued` always claimable; `applying` reclaimable ONLY when its claim is stale (default 15 min,
+  `IMPORTS_APPLY_STALE_MIN`, env-overridable) or its `claimedAt` is absent/unparseable (legacy → defensive reclaim,
+  mirroring the analytics-snapshots/E7-S5 `processedAt`-keyed reclaim). The from-status-guarded `updateMany` is now keyed on
+  the **observed** status (preserving the `count===0` lost-race no-op); the rollback path stamps its own fresh `claimedAt` at
+  claim so its lease keys on the rollback, not a stale apply timestamp. ADR-024 carries a `## Stale-lease reclaim — implemented
+  (polish — amendment)` section. **No schema / permission / contract / second-queue change.** **Known residual flagged for
+  human review (escalation panel):** a claim-to-stamp TOCTOU window on the `queued`-first-delivery apply path — the claim
+  `updateMany` flips `queued→applying` (processor ~L83) but `claimedAt` is stamped ~6 statements later (~L120), so a
+  re-delivery arriving in that window sees `applying` + absent `claimedAt` and defensively reclaims (narrowed, not eliminated;
+  per-row RESUME + the `$transaction` keep it data-safe). Mechanical fix = fold the stamp into the claiming `updateMany.data`.
+  Murat gate also requests a processor-level `imports.processor.spec.ts` pinning single-winner-under-stale-reclaim before merge.
   **Spec-kit:** ✅ landed `docs/spec/features/e11/` (this run, epic-spec, docs-only): spec/plan/data-model/
   contracts(openapi)/ux/tasks/quickstart/PROGRESS. Grounded in the verified codebase: bulk import (ADR-017)
   already works but runs **synchronously in the HTTP request** — `ImportsService.apply()` is a single

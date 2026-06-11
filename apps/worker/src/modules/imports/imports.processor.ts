@@ -13,6 +13,7 @@ import type { Job } from 'bullmq';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
+import { decideClaim } from './import-claim';
 
 /**
  * Drains the third `imports` BullMQ queue (E11-S1, ADR-024). The structural
@@ -20,10 +21,14 @@ import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
  * rollback-able** job — so it is crash-safe + idempotent:
  *
  *  1. Claim `queued → applying` via a from-status-guarded `updateMany`
- *     (`status IN (queued, applying)`) — `count === 0` ⇒ terminal/lost-race,
- *     return without applying (AC-4 single-winner; a stale `applying` batch from
- *     a dead worker is reclaimable because BullMQ re-delivers stalled jobs and
- *     this claim re-admits an `applying` row, FR6).
+ *     keyed on the **observed** status — `count === 0` ⇒ lost-race, return
+ *     without applying (AC-4 single-winner). The `applying → applying` re-admit
+ *     is **lease-gated** (`decideClaim`, ADR-024 §4 / FR6): a re-delivered job
+ *     reclaims an `applying` batch ONLY when its stamped `claimedAt` is older
+ *     than `IMPORTS_APPLY_STALE_MIN` — so a dead worker's batch self-heals after
+ *     the lease, but a re-delivery can NOT double-admit a batch a still-alive
+ *     worker is actively applying (mirrors the analytics-snapshots / E7-S5
+ *     `processedAt`-keyed reclaim).
  *  2. Per-row RESUME — a row already `applied` with a `createdEntityId` is
  *     SKIPPED by the shared engine, never re-applied (AC-3 no double-apply).
  *  3. The SAME relocated engine (`@pilotage/imports-core`) runs the SAME
@@ -58,14 +63,33 @@ export class ImportsProcessor extends WorkerHost {
   ): Promise<{ batchId: string; outcome: string }> {
     const { batchId, tenantId, schoolId, actorId } = payload;
 
-    // (1) From-status-guarded claim queued → applying. Reclaims a stale
-    // `applying` (dead worker) too — per-row resume makes that safe.
+    // (1) Lease-gated from-status-guarded claim → applying. Read the current
+    // status + stamped `claimedAt` (in `summary`) first, then decide: `queued`
+    // is always claimable; an `applying` batch is reclaimable ONLY when its
+    // claim is stale (dead-worker self-heal, per-row resume makes it safe) —
+    // never when a live worker holds the lease (ADR-024 §4 / FR6, the
+    // double-admit a re-delivered job would otherwise cause).
+    const current = await this.prisma.importBatch.findFirst({
+      where: { id: batchId, tenantId },
+      select: { status: true, summary: true },
+    });
+    if (!current) {
+      this.logger.warn(`[imports.apply] ${batchId} — not found (tenant ${tenantId}), skipping`);
+      return { batchId, outcome: 'skipped' };
+    }
+    const decision = decideClaim(current.status, current.summary);
+    if (!decision.claimable) {
+      this.logger.warn(`[imports.apply] ${batchId} — not claimable (${decision.reason}), skipping`);
+      return { batchId, outcome: 'skipped' };
+    }
+    // From-status-guarded on the OBSERVED status so a concurrent claim still
+    // races to exactly one winner (`count === 0` loser no-ops).
     const claimed = await this.prisma.importBatch.updateMany({
-      where: { id: batchId, tenantId, status: { in: [ImportStatus.queued, ImportStatus.applying] } },
+      where: { id: batchId, tenantId, status: decision.fromStatus },
       data: { status: ImportStatus.applying },
     });
     if (claimed.count === 0) {
-      this.logger.warn(`[imports.apply] ${batchId} — not claimable (terminal/lost-race), skipping`);
+      this.logger.warn(`[imports.apply] ${batchId} — lost claim race, skipping`);
       return { batchId, outcome: 'skipped' };
     }
 
@@ -195,14 +219,29 @@ export class ImportsProcessor extends WorkerHost {
   private async processRollback(payload: ImportJobPayload): Promise<{ batchId: string; outcome: string }> {
     const { batchId, tenantId, actorId } = payload;
 
-    // Claim queued → applying (reusing `applying` as the in-flight state for the
-    // rollback too) — from-status-guarded so a redelivery converges.
+    // Lease-gated claim → applying (reusing `applying` as the in-flight state for
+    // the rollback too). Same lease gate as apply: an `applying` batch is
+    // reclaimed only when its stamped `claimedAt` is stale, so a re-delivered
+    // rollback can't double-admit a batch a live worker is mid-rollback on.
+    const current = await this.prisma.importBatch.findFirst({
+      where: { id: batchId, tenantId },
+      select: { status: true, summary: true },
+    });
+    if (!current) {
+      this.logger.warn(`[imports.rollback] ${batchId} — not found (tenant ${tenantId}), skipping`);
+      return { batchId, outcome: 'skipped' };
+    }
+    const decision = decideClaim(current.status, current.summary);
+    if (!decision.claimable) {
+      this.logger.warn(`[imports.rollback] ${batchId} — not claimable (${decision.reason}), skipping`);
+      return { batchId, outcome: 'skipped' };
+    }
     const claimed = await this.prisma.importBatch.updateMany({
-      where: { id: batchId, tenantId, status: { in: [ImportStatus.queued, ImportStatus.applying] } },
+      where: { id: batchId, tenantId, status: decision.fromStatus },
       data: { status: ImportStatus.applying },
     });
     if (claimed.count === 0) {
-      this.logger.warn(`[imports.rollback] ${batchId} — not claimable, skipping`);
+      this.logger.warn(`[imports.rollback] ${batchId} — lost claim race, skipping`);
       return { batchId, outcome: 'skipped' };
     }
 
@@ -211,6 +250,15 @@ export class ImportsProcessor extends WorkerHost {
       include: { rows: { orderBy: { rowIndex: 'asc' } } },
     });
     if (!batch) return { batchId, outcome: 'missing' };
+
+    // Stamp THIS rollback's claim instant so the lease keys on the rollback claim,
+    // not a stale `claimedAt` left over from the prior apply (else a re-delivered
+    // rollback would see an old timestamp and wrongly re-admit a live rollback).
+    const baseSummary = (batch.summary as Record<string, unknown>) ?? {};
+    await this.prisma.importBatch.update({
+      where: { id: batch.id },
+      data: { summary: { ...baseSummary, claimedAt: new Date().toISOString() } },
+    });
 
     const handler = getHandler(batch.type);
     if (!handler) {

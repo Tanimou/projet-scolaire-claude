@@ -322,3 +322,32 @@ mechanism is identical.
 - **`take_source` auto-applied by the worker.** Rejected — a protected-field overwrite of a child's identity
   MUST be a human, audited decision; the apply leaves the row in `conflict` until the admin chooses (the
   children's-data guardrail).
+
+## Stale-lease reclaim — implemented (polish — amendment)
+
+§4 specified that an `applying` batch is reclaimable **only** once its claim instant is older than a lease
+window (`IMPORTS_APPLY_STALE_MIN`), keyed on the **claim instant** not the enqueue instant. The S1 worker
+shipped this as an **unconditional** re-admit instead (`updateMany WHERE status IN ('queued','applying')`),
+which under BullMQ at-least-once delivery let a re-delivered / duplicate job re-claim a batch a
+**still-alive** worker was actively mid-apply on — two workers racing the same `$transaction` and per-row
+RESUME. This amendment brings the implementation to the §4 contract (worker-only, **additive, no schema /
+permission / contract change**):
+
+- The `ImportsProcessor` claim now reads the batch `status` + the stamped `summary.claimedAt` first, then
+  routes through a pure, unit-tested `decideClaim` helper (`apps/worker/src/modules/imports/import-claim.ts`):
+  `queued` → always claimable; `applying` → reclaimable **only** when `claimedAt < now − IMPORTS_APPLY_STALE_MIN`
+  (default 15 min, env-overridable) **or** `claimedAt` is absent/unparseable (a legacy / pre-hardening claim →
+  reclaimed defensively, the analytics-snapshots `processedAt: null` precedent); every other status → terminal,
+  never claimed.
+- The from-status-guarded `updateMany` is now keyed on the **observed** status (`WHERE status = fromStatus`),
+  so a concurrent claim still races to exactly one winner (`count === 0` loser no-ops) — the AC-4 single-winner
+  guarantee is preserved; only the *admission* of a stale `applying` row is now gated.
+- Applied to **both** the apply and rollback paths. The rollback path stamps its own fresh `claimedAt` at claim
+  time so its lease is keyed on the rollback's claim instant, not a stale timestamp left by the prior apply.
+- The claim instant rides the existing `summary` Json (already stamped at apply-claim time, §4 "incremental
+  progress") — **no new column**. Pinned by `import-claim.spec.ts`.
+
+The lease default (`IMPORTS_APPLY_STALE_MIN = 15`) mirrors `SNAPSHOT_RECOMPUTE_STALE_MIN`. A dead worker's
+batch still self-heals after the lease (BullMQ re-delivers the stalled job; the now-stale claim is re-admitted
+and the per-row RESUME converges it). The only behaviour change is that a re-delivery against a **live** claim
+now no-ops (`lease-held`) instead of double-admitting.

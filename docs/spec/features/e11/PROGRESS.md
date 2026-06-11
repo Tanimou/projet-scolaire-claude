@@ -7,7 +7,27 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
-> **Post-ship hardening (2026-06-11, `polish` run — needs human review, NOT auto-merged).** A small
+> **Post-ship hardening #2 (2026-06-11, `polish` run — needs human review, NOT auto-merged).** A worker-only
+> `[worker][concurrency][imports][async]` follow-up to the S1 async-import claim (3 files changed +
+> 1 new helper + 1 new spec; **no schema / no contract / no permission / no second-queue change**). The S1
+> stale-`applying` reclaim was an **unconditional** re-admit (`updateMany WHERE status IN ('queued','applying')`),
+> NOT the `claimedAt < now − IMPORTS_APPLY_STALE_MIN` lease ADR-024 §4 / FR6 specify — so a re-delivered /
+> duplicate BullMQ job could double-admit a batch a **still-alive** worker was mid-`$transaction` on. The
+> `ImportsProcessor` apply + rollback claims now read `status` + stamped `summary.claimedAt` first and route
+> through the new pure, unit-tested `decideClaim` helper (`apps/worker/src/modules/imports/import-claim.ts` +
+> `import-claim.spec.ts`): `queued` always claimable; `applying` reclaimable ONLY when its claim is stale
+> (default 15 min, env-overridable) or its `claimedAt` is absent/unparseable (legacy → defensive reclaim). The
+> from-status-guarded `updateMany` is keyed on the **observed** status (preserves the `count===0` lost-race
+> no-op); the rollback path stamps its own fresh `claimedAt` at claim. ADR-024 carries a `## Stale-lease reclaim
+> — implemented (polish — amendment)` section. **Known residual flagged for human review (escalation panel):**
+> a claim-to-stamp TOCTOU window on the `queued`-first-delivery apply path (claim flips `queued→applying` at
+> processor ~L83 but `claimedAt` is stamped ~L120, so a re-delivery in that window defensively reclaims —
+> narrowed, not eliminated; per-row RESUME + the `$transaction` keep it data-safe). Mechanical fix = fold the
+> stamp into the claiming `updateMany.data`. Murat gate also requests a processor-level
+> `imports.processor.spec.ts` pinning single-winner-under-stale-reclaim before merge. **This diff is uncommitted
+> and has NOT been through the routine's full build gate** — a human should land it on a fresh `ci/*` branch.
+>
+> **Post-ship hardening #1 (2026-06-11, `polish` run — needs human review, NOT auto-merged).** A small
 > `[security][auth][multi-tenant][abac]` follow-up on the S3 `IntegrationsService` (one file + its spec;
 > **no schema / no contract / no permission change**). (1) **Tenant wall moved into the query** —
 > `requireSource` now does `findFirst({ where: { id, tenantId } })` → 404, replacing the old
@@ -192,11 +212,25 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
 - **[resolved S1]** The relocated apply logic lives in a **new `packages/imports-core` workspace package**
   (`main → dist`, the `@pilotage/contracts` precedent); the API `handlers/index.ts`+`handler.types.ts` are
   thin re-exports, so API (validate) + worker (apply) share ONE implementation, no fork.
-- **[carry-over → S-hardening]** The stale-`applying` reclaim is currently an **unconditional** re-admit
+- **[resolved — polish run 2026-06-11]** The stale-`applying` reclaim was an **unconditional** re-admit
   (`status IN (queued, applying)`), NOT the `claimedAt < now - IMPORTS_APPLY_STALE_MIN` lease the ADR/FR6
-  cite (the analytics-snapshots `processedAt`-keyed reclaim). The dead-worker case is safe (Postgres rolls
-  back the dropped tx); the **blocked-but-recovering** worker case is the gap — gate the `applying` re-admit
-  on the stamped `claimedAt` instant before S4.
+  cite. **FIXED (worker-only, additive, no schema/permission/contract change):** the `ImportsProcessor`
+  claim now reads the batch status + stamped `summary.claimedAt` first and routes through the pure
+  `decideClaim` helper (`apps/worker/.../imports/import-claim.ts`) — `queued` is always claimable; an
+  `applying` batch is re-admitted **only** when its claim is older than `IMPORTS_APPLY_STALE_MIN` (default
+  15 min, env-overridable, mirroring the analytics-snapshots / E7-S5 `processedAt`-keyed reclaim) or its
+  `claimedAt` is absent/unparseable (legacy/pre-hardening claim → reclaimed defensively). A re-delivered
+  job can no longer double-admit a batch a **still-alive** worker holds the lease on; a genuinely dead
+  worker's batch self-heals after the lease. The from-status-guarded `updateMany` is now keyed on the
+  **observed** status (preserving the `count===0` lost-race no-op). Applied to BOTH the apply and rollback
+  paths (rollback now stamps its own fresh `claimedAt` at claim so its lease isn't keyed on a stale apply
+  timestamp). Pinned by `import-claim.spec.ts` (fresh→held, stale→reclaim, boundary, missing/null/garbage
+  →defensive reclaim, terminal→never). **No schema, no `db push`, no contract/permission change** — this
+  is the only remaining S1 carry-over closed. **Known residual (flagged for human review, not yet closed):** a
+  claim-to-stamp TOCTOU on the `queued`-first-delivery apply path — the claim flips `queued→applying` before
+  `claimedAt` is stamped, so a re-delivery arriving in that narrow window defensively reclaims (per-row RESUME +
+  the `$transaction` keep it data-safe; mechanical fix = stamp `claimedAt` inside the claiming `updateMany.data`).
+  Murat requests a processor-level `imports.processor.spec.ts` (single-winner-under-stale-reclaim) before merge.
 - **[carry-over → S2/S4]** Whether the sync `syncing` state reuses `applying` semantics or earns its own
   additive status value (data-model leans on reuse; confirm on S3/S4).
 - **[resolved S2 land pass]** ADR-024 cited a **"§reconciliation"** section that did not exist. **FIXED** — the
