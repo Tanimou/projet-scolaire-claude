@@ -810,7 +810,7 @@ filler (E9 enrollment self-service / E10 quality bar).**
   (`forTenant`) not `source.schoolId`, so a multi-school tenant can mis-file a school-A roster into a school-B
   batch (FR10); (c) `MAX_ROWS` is enforced **per-type** not across the combined mapped count (12k combined
   passes); (d) the enrollments-batch placeholder-UUID linkage on a first combined pull (re-resolve at apply or
-  ship students-only in v1); (e) the connect audit action is `import.sync.connect` not the spec's
+  ship students-only in v1) **[closed by Post-ship hardening #5 below]**; (e) the connect audit action is `import.sync.connect` not the spec's
   `integration.roster_source.created` **[closed by Post-ship hardening #4 below]**. **E11-S4 is now shipped** (`epic-slice` `[api][worker][web]` P2,
   **no schema** → **`E11` is `shipped`, all 4 slices landed**): the `origin=oneroster` batch applies through the
   S1 async worker + S2 reconciliation classification with **zero new execution code**; net-new = admin conflict
@@ -854,6 +854,45 @@ filler (E9 enrollment self-service / E10 quality bar).**
   `integration.roster_source.created`/`import.sync.pull`. Append-only audit semantics preserved (still one
   `auditLog.create` per connect, presence-only `after`, never the secret); the `import.sync.pull` action on the
   sync path is unchanged. **Gate:** P3 / audit-string-only / `needsHumanReview:false`.
+  **Post-ship hardening #5 (2026-06-11, `polish` run — P2 `[imports][integration][oneroster][import-apply][data-integrity][worker]`, needs human review):**
+  closes S3 verify-panel follow-up **(d)** — the most consequential of the five, a real data-integrity defect.
+  On a FIRST combined OneRoster pull the enrollments handler's `validateRow` baked `primeCaches` placeholder
+  UUIDs (`_studentId`/`_classSectionId`, minted for same-pull-but-not-yet-created students/classes) into the
+  persisted `ImportRow`, and the worker's `applyRow` used them verbatim → `enrollment.create` against a
+  **phantom FK**, failing the whole batch. **Two-part fix (Approach A — re-resolve at apply, the architect's
+  authoritative ruling — NOT defer-to-a-2nd-sync; the enrollment lands on the FIRST pull, AC-1):** (1)
+  `enrollmentsHandler.applyRow` (`packages/imports-core/src/handlers/enrollments.handler.ts`) now RE-RESOLVES
+  the durable natural keys (`studentExternalRef`/`className`) against the caches the engine rebuilds **from the
+  DB** at apply time (`buildImportCaches`); because batches apply in dependency order
+  (classes → students → enrollments) the real student/class exist by then and carry their real ids. It falls
+  back to the stored `_studentId`/`_classSectionId` only on the CSV path (byte-parity, where the baked id IS
+  the real DB id) and throws a clear French `Élève/Classe introuvable` error — **never a phantom-FK 500** —
+  when an anchor cannot re-resolve. (2) `IntegrationsService.createValidatedBatch` strips the `_`-prefixed
+  placeholder ids from the persisted **valid** enrollments payload (FR1), so a `primeCaches` randomUUID can
+  never reach the DB. Tenant/school-safe (apply-time caches are built from `batch.schoolId`, every
+  `buildImportCaches` query is `schoolId`-scoped, `externalRef` is `@@unique([schoolId, externalRef])`,
+  `enrollment.create` stamps `ctx.tenantId`); the Sentinel/Winston/Murat escalation panel passed (no blocker).
+  Pinned by 3 spec files (`imports-engine.spec.ts` — combined-pull apply-time re-resolution + CSV byte-parity
+  fallback + throw-no-create; `integrations.service.spec.ts` — strip-on-persist; `oneroster.adapter.spec.ts`).
+  **5 files, +457/-13, no schema / no contract / no permission / no endpoint / no UI change.** **Known
+  operator-enforced (not code-enforced) precondition surfaced for human review:** the apply ORDER
+  (classes → students → enrollments) is operator-driven — each batch applies via a separate admin-triggered
+  `POST /imports/:id/apply`; nothing in the system serializes or auto-enqueues them. Applying the enrollments
+  batch out of order (before students/classes commit) makes every row throw the clean French error (no
+  corruption, fail-safe — the placeholder fallback is now gone too) and the batch finalizes `failed` after the
+  BullMQ retries; the operator must re-apply after the prerequisites. **Operator pre-reqs (gate runtime
+  effect, not merge):** the worker executes the compiled `@pilotage/imports-core/dist/index.js` (`main`), so
+  the handler edit is inert until the single post-Workflow `pnpm build` rebuilds `dist`; plus the standing
+  S1–S4 `prisma db push` + `prisma generate` + a worker draining the `imports` queue. **Gate:** `typecheck`
+  pass; P2 / `needsHumanReview:true`. **Recorded follow-on hardening (non-blocking, from the verify panel):**
+  (i) the invalid-branch enrollment payload is NOT stripped — an INVALID enrollments `ImportRow` can still
+  carry a `primeCaches` placeholder UUID (functionally harmless, invalid rows never apply; a literal AC-2
+  completeness gap); (ii) a combined-pull RE-RUN throws `Élève déjà inscrit` on the active-enrollment guard,
+  which the engine re-throws → the WHOLE re-sync enrollments batch aborts rather than skipping the
+  already-enrolled rows (FR5 "0 created convergence" mischaracterises a throwing guard as a skip — decide
+  skip-vs-abort and add a mixed-batch test); (iii) class re-resolution keys on `year:name` only (no
+  `gradeLevelId`), so two same-named classes in different grade levels collide last-created-wins; (iv) no UI
+  gate / dependency check enforces the apply order.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
   card data, PSP later. Out of MVP; do not start without explicit go.
 
