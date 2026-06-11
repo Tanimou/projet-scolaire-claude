@@ -132,7 +132,7 @@ applying a batch with a mix of new + existing rows and watching the panel show t
 
 ---
 
-## [ ] S3 — OneRoster source: connect + pull + map-to-`ImportBatch` · `[schema][api][integration]` · P2 · ~M
+## [x] S3 — OneRoster source: connect + pull + map-to-`ImportBatch` · `[schema][api][integration]` · P2 · ~M — **SHIPPED**
 
 **Goal:** let an admin **connect a OneRoster source** and **pull + map** its roster into a normal validated
 `ImportBatch` — so a sync inherits S1's async apply + S2's reconciliation panel **for free**. v1 = a

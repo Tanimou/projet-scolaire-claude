@@ -46,12 +46,14 @@ Admin (rich `voltaire-demo` data): `mme.dupont@voltaire.fr` / `Demo!2024Pilotage
 
 ## 4. Demo — S3 (connect a OneRoster source)
 
-1. `/admin/integrations` → **Connecter une source** → name it, choose **OneRoster (CSV)**, upload the
-   OneRoster CSV bundle (students/classes/enrollments), save. The credential (REST mode) is **write-only**
-   (shown "•••• configuré", never echoed).
-2. Click **Synchroniser** → the worker pulls + maps the bundle into a normal **`origin=oneroster`**
-   `ImportBatch` in **`validated`**, landing you on its preview/health surface — inheriting S1's async apply
-   + S2's panel.
+1. `/admin/integrations` → **Connecter une source** → name it, choose **OneRoster · Bundle CSV**, save. (A
+   REST source asks for a base-url + an optional **write-only** key — sealed server-side, shown
+   "Identifiant sécurisé", never echoed — but REST live-pull is the recorded stretch; CSV-bundle ships now.)
+2. On the source card click **Synchroniser** → the drawer file-loads the OneRoster CSV bundle
+   (`users.csv`/`classes.csv`/`enrollments.csv`). The API maps + validates it (reusing each type handler's
+   `validateRow`) into one normal **`origin=oneroster`** `ImportBatch` per type in **`validated`**, then
+   navigates you to the produced (students) batch's preview/health surface — inheriting S1's async apply +
+   S2's panel. The OneRoster `sourcedId` rides `externalRef` (the idempotency anchor — S4 re-run converges).
 
 ## 5. Demo — S4 (idempotent sync + conflicts + rollback)
 

@@ -110,6 +110,31 @@ enum ReconciliationClass {
   skipped
 }
 
+/// E11-S3 — provenance discriminator on an ImportBatch. Nullable + defaulted
+/// `csv_upload` ⇒ every existing batch reads as a human CSV upload (zero
+/// behaviour change); a OneRoster-pulled batch carries `oneroster`.
+enum ImportOrigin {
+  csv_upload
+  oneroster
+}
+
+/// E11-S3 — the kind of roster source an admin connects. `oneroster_csv` = an
+/// uploaded OneRoster v1.1 CSV bundle (students/classes/enrollments); the REST
+/// variant is the optional stretch (the model admits it without a rewrite).
+enum RosterSourceKind {
+  oneroster_csv
+  oneroster_rest
+}
+
+/// E11-S3 — the sync lifecycle of a RosterSource. `mapped` = pulled + mapped
+/// into a validated ImportBatch, awaiting the admin's apply (S1 async spine).
+enum RosterSyncStatus {
+  idle
+  pulling
+  mapped
+  failed
+}
+
 enum CalendarEventType {
   vacation_break
   public_holiday
@@ -260,6 +285,7 @@ model School {
   guardians       Guardian[]
   teacherProfiles TeacherProfile[]
   importBatches   ImportBatch[]
+  rosterSources   RosterSource[]
   calendarEvents  CalendarEvent[]
   announcements   Announcement[]
   // E7 — remediation & tutoring catalogue (additive back-relations).
@@ -697,13 +723,19 @@ model ImportBatch {
   appliedAt    DateTime?    @map("applied_at") @db.Timestamptz(6)
   rolledBackAt DateTime?    @map("rolled_back_at") @db.Timestamptz(6)
   errorMessage String?      @map("error_message")
+  // E11-S3 — provenance (additive, nullable + defaulted ⇒ existing rows read
+  // `csv_upload`). `rosterSourceId` is set only when origin = oneroster.
+  origin         ImportOrigin? @default(csv_upload) @map("origin")
+  rosterSourceId String?       @map("roster_source_id") @db.Uuid
   createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  school School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  rows   ImportRow[]
+  school       School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  rosterSource RosterSource? @relation(fields: [rosterSourceId], references: [id], onDelete: SetNull)
+  rows         ImportRow[]
 
   @@index([tenantId, schoolId, createdAt])
+  @@index([rosterSourceId])
   @@map("import_batch")
 }
 
@@ -732,6 +764,38 @@ model ImportRow {
   @@index([batchId, status])
   @@index([batchId, reconciliation])
   @@map("import_row")
+}
+
+/// E11-S3 — a connected OneRoster (or other standards) roster source. Config +
+/// provenance only: a sync PRODUCES an ImportBatch (origin = oneroster), so the
+/// whole validate→apply→reconcile→rollback machinery is reused (no parallel
+/// pipeline). Tenant + school scoped, admin-only (`integrations.write`).
+///
+/// SECRET HANDLING (Sentinel gate): the raw credential is NEVER stored in
+/// plaintext and NEVER returned to the client. `credentialRef` holds an opaque
+/// server-side ref only, resolved at pull time. For the CSV-bundle v1 the
+/// credential is unused (the bundle is uploaded in the sync request itself).
+model RosterSource {
+  id            String           @id @default(uuid()) @db.Uuid
+  tenantId      String           @map("tenant_id") @db.Uuid
+  schoolId      String           @map("school_id") @db.Uuid
+  kind          RosterSourceKind
+  label         String
+  baseUrl       String?          @map("base_url")
+  credentialRef String?          @map("credential_ref")
+  status        RosterSyncStatus @default(idle)
+  lastSyncAt    DateTime?        @map("last_sync_at") @db.Timestamptz(6)
+  lastBatchId   String?          @map("last_batch_id") @db.Uuid
+  lastError     String?          @map("last_error")
+  createdBy     String?          @map("created_by") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  school   School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  batches  ImportBatch[]
+
+  @@index([tenantId, schoolId])
+  @@map("roster_source")
 }
 
 model Branding {

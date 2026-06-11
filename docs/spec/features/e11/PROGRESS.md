@@ -5,7 +5,7 @@
 > [`bmad/roadmap.md`](../../../../bmad/roadmap.md) on land. **Status legend:** `[ ]` not started ·
 > `[~]` in progress · `[x]` shipped.
 
-## Epic status: `in-progress` (spec-kit landed; **S1 + S2 shipped**; next slice → S3)
+## Epic status: `in-progress` (spec-kit landed; **S1 + S2 + S3 shipped**; next slice → S4)
 
 **Mode of this run:** `epic-spec` — authored the kit, **no code / no schema / no build**. The bulk-import
 pipeline exists but runs **in-request** (`imports.service.ts apply()`/`rollback()` are sync API methods,
@@ -85,8 +85,31 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
   S-hardening: panel missing `role=status` (the S1 `LiveProgressStrip` live region has unmounted by the time
   the panel renders, so no announcement); rows-table `th` missing `scope=col`; `updated` rows carry no
   `conflictFields` so the FE diff branch is dead for them; guardians still default to `created`.
-- [ ] **S3** — OneRoster source connect + pull + map-to-`ImportBatch` (CSV bundle first; REST stretch) on
-  `integrations.write`. `[schema][api][integration]` · P2. *Additive `db push`: `RosterSource` + `ImportOrigin`.*
+- [x] **S3** — OneRoster source connect + pull + map-to-`ImportBatch` (CSV bundle first; REST stretch) on
+  `integrations.write`. `[schema][api][integration]` · P2. *Additive `db push`: `ImportOrigin`/`RosterSourceKind`/
+  `RosterSyncStatus` enums + `RosterSource` model + `ImportBatch.origin`/`rosterSourceId`.* **Shipped.**
+  A new `IntegrationsModule` (`/api/v1/integrations/oneroster`) on the EXISTING admin-held `integrations.write`
+  (no new permission): `POST` connect (create a tenant+school-scoped `RosterSource`), `GET`/`GET :id` list, and
+  `POST :id/sync` which pulls a OneRoster v1.1 **CSV bundle** (uploaded in the request body), maps it via the
+  pure `oneroster.adapter.ts` onto the EXISTING `ImportRow` raw-row shape per `ImportType`
+  (`users`→students, `classes`→classes, `enrollments`→enrollments — **roster identity + enrollment only**, RGPD-
+  minimal, no birthDate/grades/medical), and produces one **`validated` `ImportBatch(origin=oneroster)`** per
+  mapped type — reusing each handler's `parseRow`/`validateRow` byte-for-byte (no forked validation), so the
+  sync inherits the **S1 async apply + S2 reconciliation panel for free** (the worker reads neither `origin`
+  nor `rosterSourceId`). The OneRoster `sourcedId` is carried into `externalRef` as the **idempotency anchor**
+  (S4 convergence). `MAX_ROWS` (5000) enforced per type; a too-large/empty pull is a `failed` pull, never a
+  corrupt apply. **Credential handling (Sentinel):** `RosterSource.credentialRef` stores an **opaque
+  server-side ref only** — never plaintext, **never returned** (the DTO exposes `hasCredential: boolean`).
+  Append-only `import.sync.connect`/`import.sync.pull` audit, tenant-scoped on every read/write. FE = a new
+  `/admin/integrations` surface (server page + `IntegrationsManager` client island: connect FormDrawer, source
+  cards with status badges, a sync FormDrawer that file-loads the bundle and **navigates to the produced
+  batch's health/detail surface** on success), a "OneRoster" origin badge on the batch detail header, and a new
+  "Intégrations" admin sidebar item — degrading kindly to "indisponible" pre-migration. ADR-024 carries an
+  `## OneRoster source connect + pull + map (E11-S3 — amendment)` section. *Targeted test:
+  `oneroster.adapter.spec.ts` (Murat P0 — mapped rows pass the SAME `validateRow`; sourcedId→externalRef anchor;
+  RGPD-min fields; non-student/soft-deleted rows skipped).* **Operator pre-req (gates demoability, not merge):**
+  the additive `prisma db push` (3 enums + `RosterSource` + 2 `ImportBatch` columns) + `prisma generate`, then
+  `pnpm build` (`@pilotage/imports-core` already built from S1).
 - [ ] **S4** — Idempotent sync apply + conflict resolution + 24h rollback + re-run convergence. No schema.
   `[api][worker][web]` · P2. **On land → `E11` is `shipped`.**
 

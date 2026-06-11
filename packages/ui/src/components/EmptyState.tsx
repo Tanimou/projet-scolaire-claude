@@ -14,7 +14,7 @@ export interface EmptyStateProps {
     onClick?: () => void;
   };
   /** Tone for the icon background */
-  tone?: 'slate' | 'blue' | 'green' | 'amber' | 'rose' | 'violet';
+  tone?: 'slate' | 'blue' | 'green' | 'amber' | 'rose' | 'violet' | 'sky' | 'teal';
   /** Optional secondary content (kept below CTA) */
   children?: ReactNode;
   className?: string;
@@ -27,6 +27,8 @@ const TONE_BG: Record<NonNullable<EmptyStateProps['tone']>, string> = {
   amber: 'bg-amber-50 text-amber-600',
   rose: 'bg-rose-50 text-rose-600',
   violet: 'bg-violet-50 text-violet-600',
+  sky: 'bg-sky-50 text-sky-600',
+  teal: 'bg-teal-50 text-teal-600',
 };
 
 /**

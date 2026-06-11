@@ -476,6 +476,11 @@ export default async function ImportDetailPage({
             <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
               <Tag className="h-3 w-3" /> {typeLabel}
             </span>
+            {batch.origin === 'oneroster' && (
+              <span className="ml-2 inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                <RefreshCw className="h-3 w-3" /> OneRoster
+              </span>
+            )}
             <span className="ml-2 text-[12px] text-slate-500">
               Import #{batch.id.slice(0, 8)} · démarré le {fmtDateTime(batch.startedAt)}
               {relative ? ` (${relative})` : ''}
