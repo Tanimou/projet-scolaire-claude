@@ -7,6 +7,36 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
+> **Post-ship hardening #3 (2026-06-11, `polish` run — P3 `[web][a11y][ui][imports]`, presentational-only).**
+> Closes the **S2 carry-over item (4)** a11y polish (recorded at the foot of the S2 slice note below) on the
+> applied-batch detail surface `apps/web/src/app/admin/imports/[id]/page.tsx`. Two corrections, both
+> presentational, **no schema / contract / permission / endpoint / `@pilotage/ui` change**: (1) every
+> reconciliation **rows-table `<th>` carries `scope="col"`** (`page.tsx:745-748` — column-header association so
+> a screen reader announces "Statut", "Données" etc. when navigating the row cells); (2) the
+> **`ReconciliationPanel` `<section>` exposes `role="status"` + `aria-live="polite"` with a STATIC
+> `aria-label`** ("Bilan d'import & synchronisation", `page.tsx:1057-1060`) — the changing
+> created/updated/unchanged counts are **not** part of the accessible name, so the `ImportStatusPoller`'s
+> poll-driven `router.refresh()` (2.5 s tick) never re-announces the tally on each refresh (the same static-
+> aria-label discipline as the E6-S4 `FreshnessChip`). **Known limitations recorded (accepted as-is, not
+> regressions — all match the story's own carry-over note + the FreshnessChip precedent):** (i) on the
+> poll-driven `applying→applied` transition the `LiveProgressStrip` `role=status` node UNMOUNTS and a DIFFERENT
+> `role=status` node (the panel) is INSERTED already carrying its content; aria-live regions inserted with
+> content already present are widely NOT announced by SR/browser combos (they announce subsequent mutations),
+> so the exact "page resolves to applied via refresh" scenario AC1 calls out is the one least likely to
+> actually announce — the inherent limit of the "reload-only live announcement on server-rendered surfaces"
+> approach already recorded for the FreshnessChip, not a regression from this diff (fix path if reliable
+> announcement is later required: a single always-mounted client live-region wrapper whose text mutates from
+> the progress phase → the outcome summary on refresh, so the SR perceives a mutation not a fresh insertion).
+> (ii) an all-zero `byClass` roll-up renders an announced-but-empty panel (`deriveByClass` treats a numeric-0
+> key as present → `showRecon` true, `total===0`); optional future guard = gate the panel render on
+> `total > 0`. (iii) the panel `role=status` and the `ConflictResolver` toast `role=status` coexist on the
+> applied-with-conflicts path after an arbitration `router.refresh()` (two live regions) — accepted: they
+> serve distinct purposes and the toast is the intended announcement; AC2's single-region guarantee holds at
+> initial render. **Gate:** `pnpm typecheck` pass; P3 / presentational-only / `needsHumanReview:false`.
+> Suggested follow-on test (low priority): a Playwright axe smoke on `/admin/imports/[id]` (applied batch)
+> asserting every rows-table `<th>` carries `scope="col"` and the panel `<section>` exposes
+> `role=status` + `aria-live=polite` with the static aria-label.
+>
 > **Post-ship hardening #2 (2026-06-11, `polish` run — GREEN, invariant now HOLDS).** A
 > `[worker][concurrency][imports][async][schema]` follow-up to the S1 async-import claim (processor + new
 > `decideClaim` helper + 2 specs + **one additive nullable column** `ImportBatch.claimedAt`; no contract /
@@ -128,6 +158,12 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
   S-hardening: panel missing `role=status` (the S1 `LiveProgressStrip` live region has unmounted by the time
   the panel renders, so no announcement); rows-table `th` missing `scope=col`; `updated` rows carry no
   `conflictFields` so the FE diff branch is dead for them; guardians still default to `created`.
+  **[a11y subset of (4) resolved — polish run 2026-06-11, see Post-ship hardening #3 above]** the panel
+  `<section>` now carries `role="status"` + `aria-live="polite"` + a STATIC `aria-label`, and every
+  rows-table `<th>` carries `scope="col"`. The known SR-insertion limitation (a live region inserted with
+  content already present is not reliably announced on the `applying→applied` refresh) is recorded as an
+  accepted carry-over matching the E6-S4 FreshnessChip precedent. The non-a11y parts of (4) (`updated`-row
+  `conflictFields`, guardians defaulting to `created`) remain open.
 - [x] **S3** — OneRoster source connect + pull + map-to-`ImportBatch` (CSV bundle first; REST stretch) on
   `integrations.write`. `[schema][api][integration]` · P2. *Additive `db push`: `ImportOrigin`/`RosterSourceKind`/
   `RosterSyncStatus` enums + `RosterSource` model + `ImportBatch.origin`/`rosterSourceId`.* **Shipped.**

@@ -742,10 +742,12 @@ export default async function ImportDetailPage({
               <table className="w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
                   <tr>
-                    <th className="px-4 py-3 text-left font-semibold">Ligne</th>
-                    <th className="px-4 py-3 text-left font-semibold">Statut</th>
-                    <th className="px-4 py-3 text-left font-semibold">Données</th>
-                    <th className="px-4 py-3 text-left font-semibold">Erreurs / Action</th>
+                    <th scope="col" className="px-4 py-3 text-left font-semibold">Ligne</th>
+                    <th scope="col" className="px-4 py-3 text-left font-semibold">Statut</th>
+                    <th scope="col" className="px-4 py-3 text-left font-semibold">Données</th>
+                    <th scope="col" className="px-4 py-3 text-left font-semibold">
+                      Erreurs / Action
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1027,9 +1029,16 @@ function LiveProgressStrip({
  * panel. Renders post-apply from the one batch payload (no client N+1). Five
  * re-bucketed KPI cards (À examiner only when conflict>0), each deep-linking the
  * rows table to `?reconciliation=<class>`. When the only non-zero class is
- * `unchanged`, a warm "tout est déjà à jour" hero replaces the grid. The whole
- * region is a plain section with a real heading — the live `role=status` already
- * lives in the S1 LiveProgressStrip, so we never double up a live region.
+ * `unchanged`, a warm "tout est déjà à jour" hero replaces the grid.
+ *
+ * A11y (E11-S2 carry-over): the panel <section> is the live region for the
+ * TERMINAL apply outcome — `role=status`/`aria-live=polite` with a STATIC,
+ * phase-only `aria-label` (the changing counts inside stay out of the accessible
+ * name so a poll-driven `router.refresh()` never re-announces the tally). No
+ * double live region: the S1 LiveProgressStrip renders ONLY while
+ * `status ∈ {queued,applying}` and has unmounted by the time this panel (rendered
+ * ONLY when `status==='applied'`) mounts — they are mutually exclusive in time.
+ * No `aria-live` on the KpiCard children (that would announce once-per-card).
  */
 function ReconciliationPanel({
   byClass,
@@ -1045,7 +1054,12 @@ function ReconciliationPanel({
     byClass.skipped === 0;
 
   return (
-    <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60">
+    <section
+      role="status"
+      aria-live="polite"
+      aria-label="Bilan d'import & synchronisation"
+      className="mt-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/60"
+    >
       <SectionHeader
         title="Bilan d'import & synchronisation"
         subtitle="Ce qui a réellement changé dans votre établissement"
