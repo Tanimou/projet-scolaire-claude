@@ -674,6 +674,16 @@ filler (E9 enrollment self-service / E10 quality bar).**
   to the worker (today blocking in-request) + OneRoster roster sync. Interoperability per the cahier.
   **All 4 slices landed (S1 async spine+ADR · S2 reconciliation panel · S3 OneRoster connect+pull+map ·
   S4 idempotent sync apply + conflict arbitration + 24h rollback + re-run convergence) → `E11` is `shipped`.**
+  **Post-ship hardening (2026-06-11, `polish` run — needs human review, not auto-merged):** a small `[security][auth][multi-tenant][abac]`
+  follow-up on the S3 `IntegrationsService` (`integrations.service.ts` + its spec, no schema/contract/permission change). Two
+  corrections: (1) the tenant wall moved INTO the query — `requireSource` now `findFirst({ where: { id, tenantId } })` → 404,
+  replacing the old `findUnique({ id })` + post-fetch `if (tenantId !== …) → 403` (ADR-002 "scope is the query, not a branch";
+  closes the 403-vs-404 cross-tenant existence oracle; a foreign id now takes ZERO lifecycle side-effect — the `pulling` write
+  never fires); (2) FR10 multi-school — `sync` files the batch + validation caches + active-year resolution + SIS-delete
+  divergence read under `source.schoolId` (re-validated by `forTenant`'s explicit-school arg), NOT the actor's active school, so
+  a multi-school admin who switched their active school can no longer mis-file a school-A roster under school-B; plus a combined-
+  total `MAX_ROWS` pre-commit guard (per-type caps could previously sum past the cap). `ForbiddenException` fully removed from
+  both files.
   **Spec-kit:** ✅ landed `docs/spec/features/e11/` (this run, epic-spec, docs-only): spec/plan/data-model/
   contracts(openapi)/ux/tasks/quickstart/PROGRESS. Grounded in the verified codebase: bulk import (ADR-017)
   already works but runs **synchronously in the HTTP request** — `ImportsService.apply()` is a single

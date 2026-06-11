@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ImportOrigin, ImportRowStatus, ImportStatus, ImportType, Prisma, RosterSourceKind, RosterSyncStatus } from '@prisma/client';
 
 import {
@@ -158,7 +158,15 @@ export class IntegrationsService {
     });
 
     try {
-      const { schoolId } = await this.ctx.forTenant(actor.tenantId);
+      // FR10 multi-school correctness: the batch, the validation caches, the
+      // active-year resolution AND the SIS-delete divergence read must all use
+      // the SOURCE's own school — NOT the actor's active/default school (which a
+      // multi-school tenant may have switched away from). We resolve the school
+      // context for `source.schoolId` (via `forTenant`'s explicit-school arg,
+      // which also re-validates the school belongs to the tenant), so the active
+      // year `buildImportCaches` derives matches the school the batch lands in.
+      const schoolId = source.schoolId;
+      await this.ctx.forTenant(actor.tenantId, schoolId);
       const mappedBundle = mapOneRosterBundle(bundle);
 
       if (mappedBundle.mapped.length === 0) {
@@ -167,14 +175,24 @@ export class IntegrationsService {
         );
       }
 
-      // Per-type MAX_ROWS guard (mirrors the CSV upload path) — a too-large pull
-      // is a failed pull, never a corrupt apply.
+      // MAX_ROWS guard (mirrors the CSV upload path) — a too-large pull is a
+      // failed pull, never a corrupt apply. Both guards run BEFORE any batch
+      // create so an over-cap pull leaves the source `failed` with zero rows.
+      // Per-type guard (defence-in-depth): a single type may not exceed the cap.
       for (const m of mappedBundle.mapped) {
         if (m.rows.length > ONEROSTER_MAX_ROWS) {
           throw new BadRequestException(
             `Trop de lignes « ${m.type} » (${m.rows.length}). Maximum ${ONEROSTER_MAX_ROWS} par synchronisation.`,
           );
         }
+      }
+      // Combined-total guard: e.g. 4000 users + 4000 enrollments each pass the
+      // per-type cap but together apply 8000 rows — reject on the mapped total.
+      const totalMapped = mappedBundle.mapped.reduce((sum, m) => sum + m.rows.length, 0);
+      if (totalMapped > ONEROSTER_MAX_ROWS) {
+        throw new BadRequestException(
+          `Trop de lignes au total (${totalMapped}). Maximum ${ONEROSTER_MAX_ROWS} par synchronisation.`,
+        );
       }
 
       // Build the lookup caches ONCE; reused across every produced batch. A sync
@@ -483,10 +501,15 @@ export class IntegrationsService {
     }
   }
 
+  /**
+   * Load a source tenant-scoped in ONE query (ADR-002 defence-in-depth). A
+   * cross-tenant id is INDISTINGUISHABLE from a non-existent id — both 404 —
+   * closing the existence oracle where a 403-vs-404 told an attacker the id
+   * exists in another tenant.
+   */
   private async requireSource(id: string, tenantId: string) {
-    const source = await this.prisma.rosterSource.findUnique({ where: { id } });
+    const source = await this.prisma.rosterSource.findFirst({ where: { id, tenantId } });
     if (!source) throw new NotFoundException('Source introuvable.');
-    if (source.tenantId !== tenantId) throw new ForbiddenException();
     return source;
   }
 

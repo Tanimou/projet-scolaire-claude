@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RosterSourceKind, RosterSyncStatus } from '@prisma/client';
 
 import { IntegrationsService } from './integrations.service';
@@ -44,17 +44,34 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
 }
 
 function makeService(
-  opts: { created?: Record<string, unknown>; found?: unknown; managedStudents?: unknown[] } = {},
+  opts: {
+    created?: Record<string, unknown>;
+    found?: unknown;
+    managedStudents?: unknown[];
+    /** Override the school `ctx.forTenant` resolves (to prove the batch follows the SOURCE, not the actor). */
+    ctxSchoolId?: string;
+  } = {},
 ) {
   const createdRows: Record<string, unknown>[] = [];
   let importRowCount = 0;
+  // The row the DB holds for this id (defaults to a TENANT-owned source).
+  const foundRow = opts.found === undefined ? sourceRow() : opts.found;
   const prisma = {
     rosterSource: {
       create: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) => {
         const row = sourceRow({ ...data, ...(opts.created ?? {}) });
         return Promise.resolve(row);
       }),
-      findUnique: jest.fn().mockResolvedValue(opts.found === undefined ? sourceRow() : opts.found),
+      // `requireSource` loads tenant-scoped via `findFirst({ where: { id, tenantId } })`.
+      // The mock HONOURS the `tenantId` predicate (the wall is the query, not a
+      // post-fetch branch): a row whose tenantId mismatches the where-clause is
+      // INVISIBLE → null → 404, exactly as Postgres would return.
+      findFirst: jest.fn().mockImplementation(({ where }: { where: Record<string, unknown> }) => {
+        if (!foundRow) return Promise.resolve(null);
+        const row = foundRow as Record<string, unknown>;
+        if (where.tenantId !== undefined && row.tenantId !== where.tenantId) return Promise.resolve(null);
+        return Promise.resolve(row);
+      }),
       findMany: jest.fn().mockResolvedValue([sourceRow({ credentialRef: 'vault:abc:def:xyz' })]),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
@@ -92,7 +109,16 @@ function makeService(
     auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
   };
   const ctx = {
-    forTenant: jest.fn().mockResolvedValue({ tenantId: TENANT, schoolId: SCHOOL, activeAcademicYearId: 'ay-1' }),
+    // `sync` now calls `forTenant(tenantId, source.schoolId)`. We echo back the
+    // 2nd-arg school when present so the mock can't silently mask a wrong school;
+    // `ctxSchoolId` lets a test make the resolved school DIFFER from the source.
+    forTenant: jest.fn().mockImplementation((tenantId: string, explicitSchoolId?: string) =>
+      Promise.resolve({
+        tenantId,
+        schoolId: opts.ctxSchoolId ?? explicitSchoolId ?? SCHOOL,
+        activeAcademicYearId: 'ay-1',
+      }),
+    ),
   };
   const service = new IntegrationsService(prisma as never, ctx as never);
   return {
@@ -156,13 +182,23 @@ describe('IntegrationsService — credential handling (Sentinel)', () => {
   });
 });
 
-describe('IntegrationsService — tenant wall (404-before-403)', () => {
-  it('sync on a cross-tenant source id throws (never leaks the row)', async () => {
-    // The source belongs to OTHER_TENANT; our actor is TENANT.
-    const { service } = makeService({ found: sourceRow({ tenantId: OTHER_TENANT }) });
+describe('IntegrationsService — tenant wall (404, no cross-tenant existence oracle)', () => {
+  it('sync on a cross-tenant source id throws 404 (NOT 403) — and takes NO lifecycle side-effect', async () => {
+    // The source belongs to OTHER_TENANT; our actor is TENANT. The tenant-scoped
+    // `findFirst({ id, tenantId })` returns null → 404, indistinguishable from a
+    // missing id (the existence oracle a 403-vs-404 used to leak is closed).
+    const { service, prisma } = makeService({ found: sourceRow({ tenantId: OTHER_TENANT }) });
     await expect(
       service.sync('src-1', ACTOR, { users: 'sourcedId,role,givenName,familyName\nx,student,A,B' }),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    // The scope is in the query (defence-in-depth), not a post-fetch branch.
+    expect(prisma.rosterSource.findFirst).toHaveBeenCalledWith({ where: { id: 'src-1', tenantId: TENANT } });
+    // No side-effect on a foreign id: the `pulling` lifecycle write never fires.
+    const pullingWrite = (prisma.rosterSource.updateMany as jest.Mock).mock.calls.find(
+      (c) => c[0].data?.status === RosterSyncStatus.pulling,
+    );
+    expect(pullingWrite).toBeUndefined();
   });
 
   it('sync on a missing source id throws 404', async () => {
@@ -170,9 +206,9 @@ describe('IntegrationsService — tenant wall (404-before-403)', () => {
     await expect(service.sync('nope', ACTOR, { users: '' })).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('getOne on a cross-tenant source id throws', async () => {
+  it('getOne on a cross-tenant source id throws 404 (NOT 403)', async () => {
     const { service } = makeService({ found: sourceRow({ tenantId: OTHER_TENANT }) });
-    await expect(service.getOne('src-1', ACTOR.tenantId)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.getOne('src-1', ACTOR.tenantId)).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 
@@ -209,6 +245,68 @@ describe('IntegrationsService — MAX_ROWS over-cap (pre-commit rejection)', () 
       (c) => c[0].data?.status === RosterSyncStatus.failed,
     );
     expect(failingUpdate).toBeDefined();
+  });
+
+  it('rejects a COMBINED over-cap pull (each type under, sum over) BEFORE any batch, source → failed', async () => {
+    // Two types EACH just over half the cap → each passes the per-type guard,
+    // but their COMBINED total exceeds ONEROSTER_MAX_ROWS → reject (FR-3).
+    const half = Math.floor(ONEROSTER_MAX_ROWS / 2) + 1;
+
+    const userHeader = 'sourcedId,role,givenName,familyName';
+    const userLines = [userHeader];
+    for (let i = 0; i < half; i++) userLines.push(`stu-${i},student,First${i},Last${i}`);
+
+    // classes need BOTH a title AND a grades column to map (adapter requirement).
+    const classHeader = 'sourcedId,title,grades';
+    const classLines = [classHeader];
+    for (let i = 0; i < half; i++) classLines.push(`cls-${i},Classe ${i},6`);
+
+    const { service, prisma } = makeService();
+    await expect(
+      service.sync('src-1', ACTOR, { users: userLines.join('\n'), classes: classLines.join('\n') }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    // No corrupt batch: the combined guard runs in the SAME pre-commit window.
+    expect(prisma.importBatch.create).not.toHaveBeenCalled();
+    expect(prisma.importRow.createMany).not.toHaveBeenCalled();
+
+    const failingUpdate = (prisma.rosterSource.updateMany as jest.Mock).mock.calls.find(
+      (c) => c[0].data?.status === RosterSyncStatus.failed,
+    );
+    expect(failingUpdate).toBeDefined();
+  });
+});
+
+describe('IntegrationsService — batch is filed under the SOURCE school (FR10 multi-school)', () => {
+  it('files every produced ImportBatch under source.schoolId, not the actor active school', async () => {
+    // The source lives in school-1; the actor's active school resolves to a
+    // DIFFERENT school. The batch (and its caches/divergence scope) MUST follow
+    // the source, never the actor — a school-A roster can't mis-file into school-B.
+    const SOURCE_SCHOOL = 'school-1';
+    const ACTOR_ACTIVE_SCHOOL = 'school-OTHER';
+    const { service, prisma } = makeService({
+      found: sourceRow({ schoolId: SOURCE_SCHOOL }),
+      ctxSchoolId: ACTOR_ACTIVE_SCHOOL, // forTenter would resolve the WRONG school
+    });
+
+    const res = await service.sync('src-1', ACTOR, {
+      users: 'sourcedId,role,givenName,familyName\nEL-1,student,Léa,Martin',
+    });
+    expect(res.primaryBatchId).toBeTruthy();
+
+    // Every batch is filed under the SOURCE's school, never the actor's active one.
+    const createCalls = (prisma.importBatch.create as jest.Mock).mock.calls;
+    expect(createCalls.length).toBeGreaterThan(0);
+    for (const call of createCalls) {
+      expect(call[0].data.schoolId).toBe(SOURCE_SCHOOL);
+      expect(call[0].data.schoolId).not.toBe(ACTOR_ACTIVE_SCHOOL);
+    }
+
+    // The school context is resolved for the SOURCE's school (so the active year
+    // + caches match the batch school) — not the actor's bare default.
+    expect((prisma.student.findMany as jest.Mock)).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ schoolId: SOURCE_SCHOOL }) }),
+    );
   });
 });
 
