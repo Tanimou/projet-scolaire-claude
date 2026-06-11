@@ -823,6 +823,27 @@ filler (E9 enrollment self-service / E10 quality bar).**
   focus-trapped `FormDrawer` + keyboard radiogroup + `role=status` toast). ADR-024 carries the S4 amendment
   section. The S3 follow-ups (a–e above) remain recorded as hardening — not in S4's scope. E12 is the next epic,
   parked.
+  **Post-ship hardening #3 (2026-06-11, `polish` run — P3 `[web][a11y][ui][imports]`, presentational-only,
+  no schema/contract/permission/endpoint change):** closes the S2 carry-over item (4) a11y polish on the
+  applied-batch detail surface `/admin/imports/[id]`. The reconciliation rows table `<th>` all carry
+  `scope="col"` (column-header association for SR table navigation), and the `ReconciliationPanel`
+  `<section>` exposes `role="status"` + `aria-live="polite"` with a **STATIC `aria-label`**
+  ("Bilan d'import & synchronisation") — the changing created/updated/unchanged counts are NOT part of the
+  accessible name, so a poll-driven `router.refresh()` (the `ImportStatusPoller` 2.5 s tick) never
+  re-announces the tally on each refresh (same discipline as the E6-S4 `FreshnessChip` static aria-label).
+  **Known limitations recorded (accepted, not regressions):** (i) on the poll-driven `applying→applied`
+  transition the `LiveProgressStrip` `role=status` node UNMOUNTS and the panel `role=status` is INSERTED
+  with content already present — aria-live regions inserted with content already in the DOM are widely NOT
+  announced (they announce subsequent mutations), so the exact "page resolves to applied via refresh"
+  scenario is the one least likely to actually announce; this is the same "reload-only live announcement on
+  server-rendered surfaces" the roadmap already recorded for the E6-S4 FreshnessChip, not a regression from
+  this diff (fix path if reliable announcement is later required: a single always-mounted client live-region
+  wrapper whose text mutates from progress phase → outcome summary on refresh). (ii) an all-zero `byClass`
+  roll-up renders an announced-but-empty panel (`deriveByClass` treats a numeric-0 key as present); optional
+  future guard = gate the panel render on `total > 0`. (iii) the panel `role=status` and the
+  `ConflictResolver` toast `role=status` coexist on the applied-with-conflicts path after an arbitration
+  `router.refresh()` (two live regions) — accepted: they serve distinct purposes and the toast is the
+  intended announcement. **Gate:** `pnpm typecheck` pass; P3 / presentational-only / `needsHumanReview:false`.
 - **E12 — Finance prep (isolated)** · `parked` · ~L — keep the domain isolated (ADR-018), never store
   card data, PSP later. Out of MVP; do not start without explicit go.
 
