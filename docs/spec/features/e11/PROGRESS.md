@@ -7,7 +7,29 @@
 
 ## Epic status: `shipped` (spec-kit landed; **S1 + S2 + S3 + S4 all shipped** — E11 complete)
 
-> **Post-ship hardening (2026-06-11, `polish` run — needs human review, NOT auto-merged).** A small
+> **Post-ship hardening #2 (2026-06-11, `polish` run — GREEN, invariant now HOLDS).** A
+> `[worker][concurrency][imports][async][schema]` follow-up to the S1 async-import claim (processor + new
+> `decideClaim` helper + 2 specs + **one additive nullable column** `ImportBatch.claimedAt`; no contract /
+> permission / second-queue change). The S1 stale-`applying` reclaim was an **unconditional** re-admit
+> (`updateMany WHERE status IN ('queued','applying')`), NOT the `claimedAt < now − IMPORTS_APPLY_STALE_MIN` lease
+> ADR-024 §4 / FR6 specify — so a re-delivered / duplicate BullMQ job could double-admit a batch a
+> **still-alive** worker was mid-`$transaction` on. **The fix makes the invariant genuinely hold (not merely
+> narrow it):** the lease instant was promoted out of `summary` Json to a **typed `ImportBatch.claimedAt`
+> scalar column**, so the apply + rollback claims (one shared `claim()` helper) issue a **single atomic
+> claim+stamp** `updateMany` — `fresh` (`WHERE status='queued' SET status='applying', claimedAt=now`, the status
+> flip elects one winner) or `reclaim` (`WHERE status='applying' AND claimedAt=<observed> SET claimedAt=now`, a
+> compare-and-swap on the lease instant that elects one winner even though status stays `applying`). This
+> **closes BOTH** prior residuals: (1) the claim-to-stamp TOCTOU (stamp is now atomic with the claim, no window)
+> and (2) the non-single-winner `applying→applying` no-op (the CAS makes the loser's stale `claimedAt` miss →
+> `count===0` skip). The progress flush heartbeats the `claimedAt` column so a long apply keeps its lease. Pinned
+> by the pure `import-claim.spec.ts` **and** the processor-level `imports.processor.spec.ts` Murat requested
+> (two concurrent stale re-deliveries ⇒ `applyBatchRows`/`rollbackBatchRows` invoked **exactly once**, loser
+> `skipped`). ADR-024 carries the updated `## Stale-lease reclaim — implemented (polish — amendment)` section.
+> **Gate:** `pnpm typecheck` 13/13 + `pnpm --filter @pilotage/worker --filter @pilotage/api build` exit 0 +
+> `import*` specs 32/32 green. **Operator pre-req (gates demoability, not merge):** `prisma db push` for the
+> additive `claimed_at` column (existing rows read `null` → reclaimed defensively, zero behaviour change).
+>
+> **Post-ship hardening #1 (2026-06-11, `polish` run — needs human review, NOT auto-merged).** A small
 > `[security][auth][multi-tenant][abac]` follow-up on the S3 `IntegrationsService` (one file + its spec;
 > **no schema / no contract / no permission change**). (1) **Tenant wall moved into the query** —
 > `requireSource` now does `findFirst({ where: { id, tenantId } })` → 404, replacing the old
@@ -192,11 +214,27 @@ tripwire → **ADR-024** (ADR-023 confirmed last on disk → 024 next-free).
 - **[resolved S1]** The relocated apply logic lives in a **new `packages/imports-core` workspace package**
   (`main → dist`, the `@pilotage/contracts` precedent); the API `handlers/index.ts`+`handler.types.ts` are
   thin re-exports, so API (validate) + worker (apply) share ONE implementation, no fork.
-- **[carry-over → S-hardening]** The stale-`applying` reclaim is currently an **unconditional** re-admit
+- **[resolved — polish run 2026-06-11]** The stale-`applying` reclaim was an **unconditional** re-admit
   (`status IN (queued, applying)`), NOT the `claimedAt < now - IMPORTS_APPLY_STALE_MIN` lease the ADR/FR6
-  cite (the analytics-snapshots `processedAt`-keyed reclaim). The dead-worker case is safe (Postgres rolls
-  back the dropped tx); the **blocked-but-recovering** worker case is the gap — gate the `applying` re-admit
-  on the stamped `claimedAt` instant before S4.
+  cite. **FIXED (worker-only, additive, no schema/permission/contract change):** the `ImportsProcessor`
+  claim now reads the batch status + stamped `summary.claimedAt` first and routes through the pure
+  `decideClaim` helper (`apps/worker/.../imports/import-claim.ts`) — `queued` is always claimable; an
+  `applying` batch is re-admitted **only** when its claim is older than `IMPORTS_APPLY_STALE_MIN` (default
+  15 min, env-overridable, mirroring the analytics-snapshots / E7-S5 `processedAt`-keyed reclaim) or its
+  `claimedAt` is absent/unparseable (legacy/pre-hardening claim → reclaimed defensively). A re-delivered
+  job can no longer double-admit a batch a **still-alive** worker holds the lease on; a genuinely dead
+  worker's batch self-heals after the lease. The from-status-guarded `updateMany` is now keyed on the
+  **observed** status (preserving the `count===0` lost-race no-op). Applied to BOTH the apply and rollback
+  paths (one shared `claim()` helper; rollback's claim stamps its own fresh `claimedAt` so its lease isn't
+  keyed on a stale apply timestamp). **The invariant now HOLDS, not merely narrowed:** the lease instant is a
+  typed `ImportBatch.claimedAt` scalar column, so the claim is a **single atomic claim+stamp** `updateMany`
+  (`fresh` = status flip; `reclaim` = compare-and-swap on the observed `claimedAt`), which closes BOTH the
+  claim-to-stamp TOCTOU (stamp atomic with the claim) AND the non-single-winner `applying→applying` no-op (the
+  CAS makes the loser miss). Pinned by `import-claim.spec.ts` (fresh→held, stale→reclaim, boundary, null→defensive
+  reclaim, terminal→never) **and** the processor-level `imports.processor.spec.ts` Murat requested (two concurrent
+  stale re-deliveries ⇒ engine invoked **exactly once**, loser `skipped`). **One additive nullable column
+  (`claimed_at`), `db push`** — existing rows read `null` (reclaimed defensively, zero behaviour change); no
+  contract/permission change. **This S1 carry-over is fully closed.**
 - **[carry-over → S2/S4]** Whether the sync `syncing` state reuses `applying` semantics or earns its own
   additive status value (data-model leans on reuse; confirm on S3/S4).
 - **[resolved S2 land pass]** ADR-024 cited a **"§reconciliation"** section that did not exist. **FIXED** — the
