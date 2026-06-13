@@ -718,6 +718,32 @@ filler (E9 enrollment self-service / E10 quality bar).**
   `## Enrollments conflict arbitration — classSectionId class-move verb (polish — amendment)` section. **No schema / contract /
   permission / endpoint / queue / worker change.** **Operator pre-req (gates runtime effect, not merge):** the single
   post-Workflow `pnpm build` rebuilds `@pilotage/imports-core/dist`.
+  **Post-ship hardening #8 (2026-06-11, `polish` run — P2 `[imports][oneroster][data-integrity][enrollments][reconciliation]`, needs human review):**
+  closes the recorded **Post-ship hardening #5 follow-on (iii)** (and PROGRESS Post-ship hardening #8 note) — a real
+  data-integrity defect: the enrollments class resolution keyed on `<academicYearId>:<name>` only, **dropping `gradeLevelId`**.
+  A class name is unique only PER `(academicYearId, gradeLevelId)` (`@@unique([academicYearId, gradeLevelId, name])`, the same
+  uniqueness `classesHandler` enforces via `classNamesPerYearLevel`), so two same-named sections in different grade levels (a
+  "6eA" in 6ème and a stray "6eA" in 5ème) shared the `classSectionsByName` Map key → last-`set()`-wins, silently enrolling an
+  enrollments row (which carries ONLY `className`, no grade level by contract) into the **arbitrary last-created** grade level's
+  class with no 4xx, no detection. **Fix (additive, byte-parity for the unambiguous common case):** `buildImportCaches`
+  (`packages/imports-core/src/caches.ts`) records, in one pass, every `<year>:<name>` key seen in >1 grade level into a new
+  additive `ImportCaches.classSectionsByNameAmbiguous: Set<string>`; the `enrollmentsHandler`'s three class lookups
+  (`validateRow`/`applyRow`/`resolveConflict`) consult it first and, for an ambiguous name, **refuse to guess** — `validateRow`
+  pushes a clear French `className` error; `applyRow`/`resolveConflict` throw a clear French `…ambiguë…` (the engine wraps
+  `applyRow`'s as `Ligne N : …`), **never** the prior silent wrong-grade enrollment, **never a 500**. The `introuvable`
+  0-match fallback, capacity tracker, idempotent unchanged/conflict, and P2002 guard stay byte-identical. **Not a new
+  architectural decision** (reuses the documented "ambiguity ⇒ clear reject" convention `classesHandler` already embodies).
+  ADR-024 carries `## Enrollments class resolution is grade-level-disambiguating (polish — amendment)`. Pinned by 5
+  `imports-engine.spec.ts` cases (`buildImportCaches` flags a two-grade-level name ambiguous; `validateRow` → French `ambiguë` +
+  no `normalized`; `applyRow` → throws + ZERO `enrollment.create`; `resolveConflict` → throws + ZERO write; unambiguous name
+  still enrolls). The 5 worker-spec cache literals + the 2 `oneroster.adapter.spec.ts` `ImportContext` literals gained the
+  additive `classSectionsByNameAmbiguous: new Set()` field. **No schema / contract / permission / endpoint / queue / worker /
+  UI change** (only the in-memory cache shape gains one additive `Set`, never persisted). **Operator pre-req (gates runtime
+  effect, not merge):** the single post-Workflow `pnpm build` rebuilds `@pilotage/imports-core/dist`. **Verify-panel note:** the
+  escalation GATE flagged a "dead `stripPlaceholders ? parsed : parsed` ternary" + a failing `integrations.service.spec.ts`
+  test as blockers — **both are false positives against a stale tool snapshot.** `integrations.service.ts` has ZERO diff this
+  run; its ternary already calls `stripResolvedIds` (line 393-394, committed in hardening #5's baseline). No code change was
+  needed; this slice is the cache+handler diff only.
   **Spec-kit:** ✅ landed `docs/spec/features/e11/` (this run, epic-spec, docs-only): spec/plan/data-model/
   contracts(openapi)/ux/tasks/quickstart/PROGRESS. Grounded in the verified codebase: bulk import (ADR-017)
   already works but runs **synchronously in the HTTP request** — `ImportsService.apply()` is a single
