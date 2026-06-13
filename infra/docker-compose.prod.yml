@@ -34,10 +34,12 @@ services:
   # ---- Keycloak: public issuer under /auth, behind the TLS-terminating proxy ----
   keycloak:
     environment:
-      # Fixed browser-facing base; combined with the relative path the realm issuer
-      # becomes ${PUBLIC_BASE_URL}/auth/realms/pilotage-scolaire (what tokens carry
-      # in `iss`, and what the api/web validate against via KEYCLOAK_PUBLIC_URL).
-      KC_HOSTNAME: ${PUBLIC_BASE_URL}
+      # The public base MUST include the /auth path: in Keycloak 26 the realm
+      # issuer = KC_HOSTNAME + /realms/<realm>, and KC_HTTP_RELATIVE_PATH alone is
+      # NOT folded into the advertised issuer. So we put /auth in KC_HOSTNAME (→ iss
+      # = ${PUBLIC_BASE_URL}/auth/realms/pilotage-scolaire, matching the api/web
+      # KEYCLOAK_PUBLIC_URL) and keep the matching serving path below.
+      KC_HOSTNAME: ${PUBLIC_BASE_URL}/auth
       KC_HTTP_RELATIVE_PATH: /auth
       KC_HOSTNAME_STRICT: "false"
       # Backchannel resolved from the request host → internal services reach
