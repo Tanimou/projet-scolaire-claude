@@ -27,7 +27,7 @@
     "bullmq": "^5.28.1",
     "exceljs": "^4.4.0",
     "ioredis": "^5.4.1",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^8.0.5",
     "pdfkit": "^0.15.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
