@@ -381,9 +381,13 @@ services:
     container_name: pilotage_nginx
     profiles: ["prod"]
     restart: unless-stopped
+    # Host ports are parametrised so the stack can run BEHIND an existing ingress
+    # (e.g. Traefik already owning 80/443 on a shared VPS). In that mode set
+    # HTTP_PORT/HTTPS_PORT to 127.0.0.1-bound values in .env and route Traefik to
+    # this container over a shared docker network (see infra/docker-compose.prod.yml).
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
