@@ -21,6 +21,7 @@
     "prisma:seed:demo": "tsx prisma/seed-demo.ts",
     "prisma:seed:demo:teacher": "tsx prisma/seed-demo-teacher.ts",
     "prisma:seed:demo:parent": "tsx prisma/seed-demo-parent.ts",
+    "prisma:seed:demo:enrich": "tsx prisma/seed-demo-enrich.ts",
     "prisma:seed:surfaces": "tsx prisma/seed-demo-surfaces.ts",
     "prisma:seed:keycloak": "tsx prisma/seed-keycloak-users.ts",
     "clean": "rimraf dist .turbo"
