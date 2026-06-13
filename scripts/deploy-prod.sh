@@ -89,6 +89,7 @@ seed_chain() {
   run_seed "Keycloak admin users"  pnpm --filter @pilotage/api run prisma:seed:keycloak
   run_seed "demo teacher login"    pnpm --filter @pilotage/api run prisma:seed:demo:teacher
   run_seed "demo parent login"     pnpm --filter @pilotage/api run prisma:seed:demo:parent
+  run_seed "demo student login"    pnpm --filter @pilotage/api run prisma:seed:demo:student
   run_seed "cross-portal surfaces" pnpm --filter @pilotage/api run prisma:seed:surfaces
   run_seed "announcements feed"    pnpm --filter @pilotage/api run prisma:seed:demo:enrich
   run_seed "dashboard fill"        pnpm --filter @pilotage/api run prisma:seed:demo:fill
