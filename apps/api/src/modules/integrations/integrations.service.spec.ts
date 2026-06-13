@@ -507,6 +507,43 @@ describe('IntegrationsService — combined-pull enrollment linkage (E11-S3 follo
     expect(enrBatch!.invalidCount).toBe(0);
   });
 
+  it('FR1/AC-2 (hardening #5 follow-on i) — an INVALID enrollment also persists NO `_`-prefixed placeholder id', async () => {
+    // No active academic year: `primeCaches` can't key the class, so the
+    // enrollment's `className` branch fails — but the student STILL resolves (a
+    // `primeCaches` placeholder `_studentId` is assigned to the in-place-mutated
+    // `parsed`). The row is INVALID, yet without the follow-on (i) fix the
+    // persisted invalid payload would still carry that placeholder UUID. The fix
+    // strips the `_`-prefixed ids from the invalid payload too (completeness — an
+    // invalid row never applies, but a placeholder must never be persisted).
+    const { service, importRows } = makeService({ activeYear: null });
+
+    const res = await service.sync('src-1', ACTOR, {
+      classes: CLASSES_CSV,
+      users: USERS_CSV,
+      enrollments: ENROLLMENTS_CSV,
+    });
+
+    const enrRows = enrollmentRows(importRows);
+    expect(enrRows).toHaveLength(1);
+    const row = enrRows[0]!;
+    // The row is INVALID (no active year → the className anchor can't resolve).
+    expect(row.status).toBe('invalid');
+    // AC-2 — even on the invalid branch the persisted payload keeps the durable
+    // natural keys and carries NO `primeCaches` placeholder id (the student
+    // resolved and stamped `_studentId` onto `parsed` before className failed).
+    const payload = row.payload as Record<string, unknown>;
+    expect(payload.studentExternalRef).toBe('stu-1');
+    expect(payload.className).toBe('6eA');
+    expect(payload).not.toHaveProperty('_studentId');
+    expect(payload).not.toHaveProperty('_classSectionId');
+    expect(payload).not.toHaveProperty('_academicYearId');
+
+    const enrBatch = res.batches.find((b) => b.type === 'enrollments');
+    expect(enrBatch).toBeDefined();
+    expect(enrBatch!.validCount).toBe(0);
+    expect(enrBatch!.invalidCount).toBe(1);
+  });
+
   it('FR3 — the produced batches keep classes → students → enrollments dependency order', async () => {
     // Apply ordering is what guarantees the apply-time re-resolution finds real
     // ids: classes + students must be produced (and applied) before enrollments.

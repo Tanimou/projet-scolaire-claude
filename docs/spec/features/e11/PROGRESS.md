@@ -136,9 +136,10 @@
 > prerequisites. **Operator pre-reqs (gate runtime effect, not merge):** the worker runs the compiled
 > `@pilotage/imports-core/dist/index.js` (`main`), so the handler edit is inert until the single post-Workflow
 > `pnpm build` rebuilds `dist`; plus the standing S1–S4 `prisma db push`/`prisma generate` + a worker draining
-> the `imports` queue. **Recorded follow-on hardening (non-blocking):** (i) the **invalid**-branch enrollment
-> payload is NOT stripped (an invalid row can still carry a placeholder UUID — harmless, never applies; a
-> literal AC-2 completeness gap); (ii) **[CLOSED by Post-ship hardening #6 above]** a combined-pull RE-RUN threw on the
+> the `imports` queue. **Recorded follow-on hardening (non-blocking):** (i) **[CLOSED by Post-ship hardening #8
+> above]** the **invalid**-branch enrollment payload was NOT stripped (an invalid row could still carry a
+> placeholder UUID — harmless, never applies; a literal AC-2 completeness gap) — #8 runs `stripResolvedIds` on
+> the invalid payload too; (ii) **[CLOSED by Post-ship hardening #6 above]** a combined-pull RE-RUN threw on the
 > active-enrollment guard which the engine re-threw → the whole re-sync enrollments batch aborted rather than
 > skipping already-enrolled rows — now converges to `unchanged` (same class) / `conflict` (different class), the
 > batch finalises `applied`, with the mixed-batch test added; (iii) **[CLOSED by Post-ship hardening #8 above]** class
