@@ -19,6 +19,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/imports-core/package.json packages/imports-core/package.json
 COPY packages/tsconfig/package.json packages/tsconfig/package.json
 COPY packages/eslint-config/package.json packages/eslint-config/package.json
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
@@ -29,6 +30,9 @@ COPY . .
 RUN pnpm --filter @pilotage/contracts build
 # `exec` required — see Dockerfile.api note (bare `prisma` is a silent no-op).
 RUN pnpm --filter @pilotage/api exec prisma generate
+# Build imports-core (workspace dep used at runtime) after prisma generate so its
+# tsc sees @prisma/client, and before the worker build + `pnpm deploy`.
+RUN pnpm --filter @pilotage/imports-core build
 RUN pnpm --filter @pilotage/worker build
 RUN pnpm --filter @pilotage/worker deploy --prod /prod/worker
 # The worker uses @prisma/client but owns no schema/CLI — regenerate the client

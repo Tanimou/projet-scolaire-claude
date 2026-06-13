@@ -21,6 +21,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/imports-core/package.json packages/imports-core/package.json
 COPY packages/tsconfig/package.json packages/tsconfig/package.json
 COPY packages/eslint-config/package.json packages/eslint-config/package.json
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
@@ -35,6 +36,11 @@ RUN pnpm --filter @pilotage/contracts build
 # finds none, and silently no-ops (exit 0) — leaving the client ungenerated and
 # every Prisma result typed `any`. `exec` runs the prisma binary instead.
 RUN pnpm --filter @pilotage/api exec prisma generate
+# imports-core is a workspace dep used by the api at runtime (main: dist/index.js)
+# AND its source is type-checked by `nest build`. Build it AFTER prisma generate
+# (its tsc needs the generated @prisma/client types) and BEFORE the api build +
+# `pnpm deploy` (which copies the dist into the pruned tree).
+RUN pnpm --filter @pilotage/imports-core build
 RUN pnpm --filter @pilotage/api build
 # Prune dev deps for runtime
 RUN pnpm --filter @pilotage/api deploy --prod /prod/api

@@ -1,0 +1,12 @@
+# Keep LF for files executed inside Linux containers / on the server, regardless
+# of the contributor's core.autocrlf. A CR in a shell script breaks the shebang.
+*.sh            text eol=lf
+*.mjs           text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+Dockerfile*     text eol=lf
+*.json          text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.prisma        text eol=lf
+.env*           text eol=lf

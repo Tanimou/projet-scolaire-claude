@@ -1,0 +1,2 @@
+# TLS is terminated by the host's Traefik in production; this dir only exists so
+# the base compose's `./nginx/certs` bind-mount has a source. Leave empty.

@@ -50,3 +50,6 @@ Thumbs.db
 # misc
 .cache/
 *.pem
+
+# Production deploy env (secrets) — never commit
+.env.prod

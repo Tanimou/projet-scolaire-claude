@@ -1,0 +1,131 @@
+# =============================================================================
+# Pilotage Scolaire — PRODUCTION override (Hostinger VPS srv861861.hstgr.cloud)
+# -----------------------------------------------------------------------------
+# Layered on top of infra/docker-compose.yml. It does THREE things:
+#   1. Rewrites every browser-facing URL from localhost → the real public origin
+#      (${PUBLIC_BASE_URL}). NEXT_PUBLIC_* are also passed as BUILD ARGS because
+#      Next.js inlines them at build time (runtime env can't override them).
+#   2. Serves Keycloak under the `/auth` path (KC_HTTP_RELATIVE_PATH) so the whole
+#      platform lives on a SINGLE origin behind one reverse proxy.
+#   3. Plugs our own nginx into the host's EXISTING Traefik (external network
+#      `root_web`) so Traefik terminates TLS (Let's Encrypt) and routes
+#      Host(${PUBLIC_HOST}) → nginx → {web, api, keycloak}. Nothing the host
+#      already runs is touched — we only ADD a labelled service.
+#
+# Usage (from repo root, on the server):
+#   docker compose --env-file .env.prod \
+#     -f infra/docker-compose.yml -f infra/docker-compose.prod.yml \
+#     --profile app --profile prod up -d --build
+# (the wrapper scripts/deploy-prod.sh does this + schema sync + the seed chain)
+#
+# Required .env.prod keys: PUBLIC_BASE_URL, PUBLIC_HOST, AUTH_SECRET, and the
+# 127.0.0.1-bound *_PORT values (so no infra port is exposed publicly — the VPS
+# firewall is open, so DB/Redis/MinIO MUST NOT bind 0.0.0.0).
+# =============================================================================
+
+networks:
+  # The host's Traefik lives here (created by /root/docker-compose.yml). We attach
+  # nginx to it so Traefik can reach us; we never redefine or own it.
+  root_web:
+    external: true
+
+services:
+
+  # ---- Keycloak: public issuer under /auth, behind the TLS-terminating proxy ----
+  keycloak:
+    environment:
+      # The public base MUST include the /auth path: in Keycloak 26 the realm
+      # issuer = KC_HOSTNAME + /realms/<realm>, and KC_HTTP_RELATIVE_PATH alone is
+      # NOT folded into the advertised issuer. So we put /auth in KC_HOSTNAME (→ iss
+      # = ${PUBLIC_BASE_URL}/auth/realms/pilotage-scolaire, matching the api/web
+      # KEYCLOAK_PUBLIC_URL) and keep the matching serving path below.
+      KC_HOSTNAME: ${PUBLIC_BASE_URL}/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME_STRICT: "false"
+      # Backchannel resolved from the request host → internal services reach
+      # token/jwks at http://keycloak:8080/auth without a public hairpin.
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_PROXY: edge
+      KC_HTTP_ENABLED: "true"
+    # The management health endpoint moves under the relative path too, so the base
+    # image's /health/ready probe 404s (→ false 'unhealthy'). Probe /auth/health/ready.
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /auth/health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q 'UP'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ---- API: validate the public issuer, fetch JWKS internally ----
+  api:
+    environment:
+      NODE_ENV: production
+      KEYCLOAK_URL: http://keycloak:8080/auth          # internal JWKS / admin ops
+      KEYCLOAK_PUBLIC_URL: ${PUBLIC_BASE_URL}/auth      # expected token issuer base
+      WEB_PUBLIC_URL: ${PUBLIC_BASE_URL}
+      CORS_ORIGINS: ${PUBLIC_BASE_URL}
+
+  # ---- Worker: same issuer wiring + public web origin for email deep-links ----
+  worker:
+    environment:
+      NODE_ENV: production
+      KEYCLOAK_URL: http://keycloak:8080/auth
+      KEYCLOAK_PUBLIC_URL: ${PUBLIC_BASE_URL}/auth
+      WEB_PUBLIC_URL: ${PUBLIC_BASE_URL}
+
+  # ---- Web (Next.js): public env baked at BUILD + server-side runtime wiring ----
+  web:
+    build:
+      args:
+        # Inlined into the client bundle. The browser hits the API same-origin and
+        # Keycloak under /auth on the public host.
+        NEXT_PUBLIC_API_URL: ${PUBLIC_BASE_URL}
+        NEXT_PUBLIC_KEYCLOAK_URL: ${PUBLIC_BASE_URL}/auth
+        NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${PUBLIC_BASE_URL}
+      NEXT_PUBLIC_KEYCLOAK_URL: ${PUBLIC_BASE_URL}/auth
+      # Server-side auth.ts: discovery/ROPC/refresh go internal; provider `issuer`
+      # is the public one (matches token iss).
+      KEYCLOAK_URL: http://keycloak:8080/auth
+      KEYCLOAK_PUBLIC_URL: ${PUBLIC_BASE_URL}/auth
+      # NextAuth: trustHost is already true in code; AUTH_URL is https → secure
+      # cookies are correctly enabled (the platform is served over TLS by Traefik).
+      AUTH_URL: ${PUBLIC_BASE_URL}
+      AUTH_TRUST_HOST: "true"
+      AUTH_SECRET: ${AUTH_SECRET}
+
+  # ---- Migrator: prisma db push runs at startup; keep it production-clean ----
+  migrator:
+    environment:
+      NODE_ENV: production
+
+  # ---- Seed (one-shot demo provisioning) ----
+  # MUST run as non-production (seed-demo.ts hard-aborts when NODE_ENV=production).
+  # Talks to Keycloak admin under /auth; covers BOTH admin-cred env spellings the
+  # different seed scripts read (KEYCLOAK_ADMIN/_PASS vs _USER/_PASSWORD).
+  seed:
+    environment:
+      NODE_ENV: development
+      KEYCLOAK_URL: http://keycloak:8080/auth
+      KEYCLOAK_REALM: pilotage-scolaire
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASS: admin
+      KEYCLOAK_ADMIN_USER: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_DEMO_PASSWORD: ${KEYCLOAK_DEMO_PASSWORD:-Demo!2024Pilotage}
+
+  # ---- nginx: single internal entrypoint, published TO Traefik (not to the host) ----
+  nginx:
+    networks:
+      - pilotage      # reach web / api / keycloak
+      - root_web      # be reachable by the host's Traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=root_web"
+      - "traefik.http.routers.pilotage.rule=Host(`${PUBLIC_HOST}`)"
+      - "traefik.http.routers.pilotage.entrypoints=websecure"
+      - "traefik.http.routers.pilotage.tls=true"
+      - "traefik.http.routers.pilotage.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.pilotage.loadbalancer.server.port=80"
