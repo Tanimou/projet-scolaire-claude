@@ -1,0 +1,95 @@
+{
+  "$schema": "known-test-failures",
+  "$doc": [
+    "Tests that are RED on main and are tolerated by scripts/test-ratchet.js until their finding is closed.",
+    "",
+    "This list may only ever SHRINK. The ratchet fails the build if a test not listed here fails (a regression),",
+    "and equally if a test listed here starts passing (remove it and close the finding).",
+    "",
+    "Every entry carries the finding id that owns the fix, so nothing here is 'silenced' — it is queued.",
+    "Established 2026-08-02 by the Daily Improvement V3 run for S-E02-2 (PF-55 / VAL-01), the first time these",
+    "suites had ever been executed. 18 entries at establishment."
+  ],
+  "apps": {
+    "api": {
+      "failures": {
+        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg builds the cycle drill-down ordered by cycle orderIndex": {
+          "finding": "PF-63",
+          "reason": "TypeError: Cannot read properties of undefined (reading 'getTime') — the spec's academic-year fixture no longer supplies the date field adminDashboard reads. Owner: V3-E03."
+        },
+        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg computes gradingRateByClass with correct completion % and status thresholds": {
+          "finding": "PF-63",
+          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
+        },
+        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg computes per-class teacher coverage with hasMainTeacher flag": {
+          "finding": "PF-63",
+          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
+        },
+        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg computes the student-teacher ratio over distinct active-year teachers": {
+          "finding": "PF-63",
+          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
+        },
+        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg counts distinct teachers per subject (teacherCoverageBySubject)": {
+          "finding": "PF-63",
+          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
+        },
+        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg no longer returns the removed cards (enrollmentRequests / teachingAssignmentsSummary / alertRules / recentExports)": {
+          "finding": "PF-63",
+          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
+        },
+        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg still exposes the legacy levels buckets alongside cycles": {
+          "finding": "PF-63",
+          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
+        },
+        "src/modules/remediation/remediation.service.spec.ts::RemediationService.catalogue — tenant + published + subject filter queries only published, tenant-scoped, subject-matching tutors with active slots": {
+          "finding": "PF-64",
+          "reason": "TypeError: Cannot read properties of undefined (reading 'findMany') — the prisma test double lacks a model the service now queries. This assertion is the tenant-scoping guard for the remediation catalogue, so it is G-TENANT evidence that is currently NOT running. Owner: V3-E10."
+        },
+        "src/modules/remediation/teacher-remediation.service.spec.ts::TeacherRemediationService.transition confirms a requested booking (the happy path) and returns the parent booker": {
+          "finding": "PF-64",
+          "reason": "TypeError: this.prisma.booking.updateMany is not a function — the service moved to updateMany, the test double was never grown to match. Owner: V3-E10."
+        },
+        "src/modules/remediation/teacher-remediation.service.spec.ts::TeacherRemediationService.transition maps no_show onto declined + an \"Absent\" note (no enum value, no schema change)": {
+          "finding": "PF-64",
+          "reason": "Same root cause — prisma.booking.updateMany missing from the test double. Owner: V3-E10."
+        },
+        "src/modules/remediation/teacher-remediation.service.spec.ts::TeacherRemediationService.transition marks a confirmed booking honoured (completed)": {
+          "finding": "PF-64",
+          "reason": "Same root cause — prisma.booking.updateMany missing from the test double. Owner: V3-E10."
+        }
+      }
+    },
+    "worker": {
+      "failures": {
+        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope writes per-subject averages byte-identical to the live mean (and the year roll-up)": {
+          "finding": "PF-65",
+          "reason": "TypeError: Cannot read properties of undefined (reading 'studentId') — the harness captured no snapshot write at all, so recomputeScope wrote nothing. Attribution between a stale harness and a genuinely inert snapshot pipeline is NOT yet established; if it is the pipeline, this is the same defect as PF-24 (snapshot queue has no consumer) and the G-TRUTH evidence for snapshots does not exist. Owner: V3-E03."
+        },
+        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope writes the coefficient-WEIGHTED global byte-identical to the live weightedSum/totalCoef": {
+          "finding": "PF-65",
+          "reason": "Same root cause — no snapshot write captured. Owner: V3-E03."
+        },
+        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope writes the class distribution histogram byte-identical to the live buckets": {
+          "finding": "PF-65",
+          "reason": "Same root cause — no snapshot write captured (reading 'subjectId' of undefined). Owner: V3-E03."
+        },
+        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope is idempotent — a re-run on unchanged grades produces identical figures": {
+          "finding": "PF-65",
+          "reason": "Same root cause — no snapshot write captured. Owner: V3-E03."
+        },
+        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope — idempotent rebuild (E6-S5) still writes the per-term row when a stored figure differs (real change)": {
+          "finding": "PF-65",
+          "reason": "Same root cause — no snapshot write captured. Owner: V3-E03."
+        },
+        "src/modules/parent-digest/digest-email.template.spec.ts::renderDigestEmail absolutises the recommended-action CTA onto the web base url (no double slash)": {
+          "finding": "PF-66",
+          "reason": "The rendered digest does not contain the absolutised CTA url the spec asserts, so the parent digest's recommended-action deep link is not provably correct. Owner: V3-E11."
+        },
+        "src/modules/parent-digest/parent-digest-cron.spec.ts::ParentDigestCronService.tick re-entrancy guard: an in-flight tick makes a concurrent tick a no-op": {
+          "finding": "PF-66",
+          "reason": "TypeError: release is not a function — the lock double no longer matches the service's lock contract, so the re-entrancy guard that prevents duplicate parent digests is unverified. Owner: V3-E11."
+        }
+      }
+    }
+  }
+}

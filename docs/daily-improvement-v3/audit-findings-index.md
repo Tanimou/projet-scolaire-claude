@@ -44,6 +44,31 @@ finding id; nothing is closed without evidence against the finding.
 | **PF-10** | Coefficient-matrix save accepts **foreign-tenant identifiers**, re-weighting another tenant's averages | `BROKEN_SECURITY` | DEFECT | A2 App. B.1, C.3 | L0 | V3-E05 |
 | **PF-11** | Notification fan-out **dedup query is not tenant-scoped** | `BROKEN_SECURITY` | DEFECT | A2 App. B.4, C.3 | L0 | V3-E05 |
 | **PF-59** | GitHub Actions is **account-locked for billing**, so no CI job starts on any branch. Every check reports `failure` in ~3 s having executed zero steps. V3's premise — gates *executed*, not asserted — has no runner to execute them on; `VAL-01` cannot be satisfied and every gate needing a test run degrades to `evidence: deferred` | `BROKEN_RUNTIME` | ARCH_PREREQ | Discovered by the V3 run of 2026-08-02 | L0 | V3-E02 |
+| **PF-62** | **The entire teacher grading REST surface is unmounted in production.** `3341ed0` (2026-06-01) deleted `controllers: [AssessmentsController, GradesController]` from `GradesModule` while exposing `GradesService` to the parent dashboard. Both controller files still exist and still compile; they are simply registered in **no NestJS module anywhere**, so `/api/v1/assessments/*` (create/edit evaluations) and `/api/v1/grades/*` (enter notes, batch, gradebook, flag, revise) return router-level 404. Teachers cannot create an assessment or enter a grade on the hosted deployment | `BROKEN_RUNTIME` | DEFECT | Discovered by the V3 run of 2026-08-02, by executing the suite for the first time | L1 | V3-E02 → V3-E07/E08 |
+
+**PF-62 evidence — measured on the live deployment, not inferred.** Probing
+`https://pilotage.srv861861.hstgr.cloud`, using an unmatched path and a mounted path as controls:
+
+```
+404  /api/v1/definitely-not-a-route     ← control: unmatched → 404 "Cannot GET …"
+404  /api/v1/assessments                ← UNMOUNTED
+404  /api/v1/grades/gradebook/x         ← UNMOUNTED
+401  /api/v1/notifications              ← control: mounted → guard rejects
+```
+
+A mounted-but-unauthorised route answers `401`; these answer `404`, exactly like a route that does not exist.
+
+**Why nobody saw it for seven weeks.** A regression guard for *precisely this defect*
+(`apps/api/src/modules/grades/grades.module.spec.ts`) was written on 2026-06-10 (`d0c3841`) and has been **red ever
+since** — because the suite had never been executed. This is the concrete cost of `PF-55`, and the reason `S-E02-2` is
+not a hygiene story.
+
+**A second, independent defect this exposed.** The local Docker image (built 2026-06-06) *does* carry
+`controllers: [AssessmentsController, GradesController]` in its compiled `dist/modules/grades/grades.module.js`, yet
+**no ref in the repository** has contained that line since 2026-06-01. The running artefact was therefore built from an
+uncommitted working tree and diverges from `main`. Local behaviour stayed healthy while production was broken — which
+is why manual testing never caught it either. This is the deploy-gate half of `VAL-10` / `R-05` (compare the running
+SHA against the expected one) arguing for its own existence.
 
 **PF-59 evidence.** The GitHub check-run annotation is explicit — no inference involved:
 
@@ -63,6 +88,10 @@ It is a Step-6 *credential/decision-required* stop condition for any story whose
 | ID | Finding | Class | Type | Source | Layer | Epic |
 |---|---|---|---|---|---|---|
 | **PF-60** | The BMAD sprint workflow **silently overrides the routine's story selection**. `bmad/workflows/sprint.workflow.js:138` resolves `epicId = (intake && intake.epic) \|\| ARG_EPIC`, so the intake agent's own pick beats the operator override in `args`; the prompt (line 125) only asks it to "honor it unless clearly unsafe". Observed live: the routine selected `S-E02-1` and the workflow started implementing `S-E06-2`. **V3's layer/priority selection rule becomes decorative — the V2 failure mode V3 exists to prevent** | `BROKEN_RUNTIME` | ARCH_PREREQ | Discovered by the V3 run of 2026-08-02 | L0 | V3-E02 |
+| **PF-63** | **7 `AnalyticsService.adminDashboard` specs are red** — every one dies on `TypeError: Cannot read properties of undefined (reading 'getTime')`, i.e. the spec's academic-year fixture no longer supplies a date the service reads. The admin dashboard's cycle drill-down, teacher-coverage, grading-rate and student-teacher-ratio figures therefore have **no passing test behind them** — precisely the numbers `PF-04`/`PF-36` say disagree across portals | `BROKEN_TRUTH` | DEFECT | Discovered by the V3 run of 2026-08-02 (first execution of the suite) | L0 | V3-E03 |
+| **PF-64** | **4 remediation specs are red on stale Prisma test doubles** — `this.prisma.booking.updateMany is not a function` (3) and a missing model on the catalogue query (1). The catalogue one asserts *tenant scoping*, so a **G-TENANT guard is currently not executing**; the transition ones cover the teacher booking state machine | `BROKEN_RUNTIME` | DEFECT | Discovered by the V3 run of 2026-08-02 | L1 | V3-E10 |
+| **PF-65** | **5 `SnapshotRecomputeService.recomputeScope` specs are red**: the harness captures **no snapshot write at all** (`Cannot read properties of undefined`), so the assertions that snapshots are byte-identical to the live computation, and idempotent, never run. Attribution between a stale harness and a genuinely inert snapshot pipeline is **not yet established** — if it is the pipeline, this is the same defect as `PF-24` and the analytics layer has no G-TRUTH evidence at all | `BROKEN_TRUTH` | DEFECT | Discovered by the V3 run of 2026-08-02 | L0 | V3-E03 |
+| **PF-66** | **2 parent-digest specs are red**: the rendered digest does not contain the absolutised recommended-action CTA the spec asserts, and the cron re-entrancy guard dies on `release is not a function`. The guard that stops a parent receiving **duplicate digests** is therefore unverified | `BROKEN_RUNTIME` | DEFECT | Discovered by the V3 run of 2026-08-02 | L1 | V3-E11 |
 | **PF-12** | Parent child/enrollment state contradicts itself: dashboard/detail say active; children list, "My family" and claim panel say none | `BROKEN_TRUTH` | DEFECT | A2 §7, App. B.7 | L0 | V3-E03 |
 | **PF-13** | Class gradebook links pass a **class-section id** where the page expects a **teaching-assignment id**; dashboard "create assessment" shares the broken URL | `BROKEN_RUNTIME` | DEFECT | A2 §6.1, App. B.6 | L1 | V3-E07 |
 | **PF-14** | `/admin/audit` crashes (server/client boundary); `/admin/reports` is 404 | `BROKEN_RUNTIME` | DEFECT | A2 §5.6, App. B.5 | L0 | V3-E04 |

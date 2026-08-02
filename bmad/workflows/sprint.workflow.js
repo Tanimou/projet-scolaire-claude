@@ -122,7 +122,7 @@ phase('Intake')
 const intake = await agent(
   `${GUARD}\nYou are VICTOR (Product Strategist) working with MARY (Analyst). Decide what this run builds, biased toward MEDIUM-TO-LARGE features — not polish.
 Read ${WT}/bmad/roadmap.md (the epic backlog + status), and if an epic is in progress its ${WT}/docs/spec/features/<id>/PROGRESS.md and tasks.md. Also skim PLAN.md, docs/spec/REDESIGN-PROGRESS.md, recent git log and open PRs (gh pr list).
-${ARG_MODE !== 'auto' ? `Operator override: mode=${ARG_MODE} epic=${ARG_EPIC} slice=${ARG_SLICE}. Honor it unless clearly unsafe.` : ''}
+${ARG_MODE !== 'auto' ? `Operator override (AUTHORITATIVE — this run WILL build it, your answer cannot change it): mode=${ARG_MODE} epic=${ARG_EPIC} slice=${ARG_SLICE}. Return exactly these values for mode/epic/slice and spend your effort on the INTENT instead. If you believe the override is unsafe, still return it and say why in the intent — a human reads the run log.` : ''}
 ${HINT ? 'Operator hint: ' + HINT : ''}
 Decide the run MODE:
   • epic-spec  — the chosen epic has NO docs/spec/features/<id>/spec.md yet → THIS run writes its spec-kit (docs only, no code).
@@ -134,9 +134,32 @@ Return mode, epic (id+title), the specific slice (for epic-slice), and a single 
   { label: 'victor:intake', phase: 'Intake', schema: INTAKE_SCHEMA }
 )
 
-const mode = intake && intake.mode ? String(intake.mode) : 'polish'
-const epicId = (intake && intake.epic) || ARG_EPIC || ''
+// PF-60 — the OPERATOR OVERRIDE WINS. Previously this read
+// `(intake && intake.epic) || ARG_EPIC`, so the intake agent's own pick silently
+// beat the epic/slice the caller passed in `args`, and `mode` ignored ARG_MODE
+// entirely. That made the Daily Improvement V3 selection rule decorative: the
+// routine could select S-E02-1 and the workflow would go build S-E06-2 instead.
+// An explicit override is a decision already taken upstream (layer order,
+// dependency map, blocked-story rules) — the intake agent does not get a vote on
+// it. It is only consulted when the caller passed no override (`auto`).
+const intakeMode = intake && intake.mode ? String(intake.mode) : 'polish'
+const intakeEpic = (intake && intake.epic) || ''
+const intakeSlice = (intake && intake.slice) || ''
+
+const mode = ARG_MODE !== 'auto' ? ARG_MODE : intakeMode
+const epicId = ARG_EPIC || intakeEpic
+const slice = ARG_SLICE || intakeSlice
 const epicDir = epicId ? `${WT}/docs/spec/features/${epicId.toLowerCase()}` : ''
+
+// Disagreement is not silently resolved — it is reported, because it usually
+// means the roadmap the intake agent read and the story the operator selected
+// have diverged, and a human needs to know which one is stale.
+if (ARG_EPIC && intakeEpic && intakeEpic !== ARG_EPIC) {
+  log(`⚠️ intake picked epic ${intakeEpic} but the operator override is ${ARG_EPIC} — honoring the override (PF-60)`)
+}
+if (ARG_MODE !== 'auto' && intakeMode !== ARG_MODE) {
+  log(`⚠️ intake picked mode ${intakeMode} but the operator override is ${ARG_MODE} — honoring the override (PF-60)`)
+}
 
 // =============================================================================
 // BRANCH A — EPIC-SPEC: write the spec-kit folder (docs only, NO build)
@@ -194,7 +217,7 @@ Write real, specific content (no placeholders). Make the edits now. Then return 
 // BRANCH B — EPIC-SLICE / POLISH: implement ONE vertical slice (build = 1×)
 // =============================================================================
 phase('Plan')
-const sliceCtx = `MODE: ${mode}\nEPIC: ${epicId} ${intake && intake.epicTitle ? '— ' + intake.epicTitle : ''}\nSLICE: ${(intake && intake.slice) || ARG_SLICE || '(polish — no epic slice)'}\nINTENT: ${intake && intake.intent}\nFor epic-slice runs, read ${epicDir}/spec.md, tasks.md and PROGRESS.md and implement ONLY the next slice — a thin VERTICAL slice (DB + API + UI + worker as needed) that is demoable end-to-end and fits ONE PR.`
+const sliceCtx = `MODE: ${mode}\nEPIC: ${epicId} ${intake && intake.epicTitle ? '— ' + intake.epicTitle : ''}\nSLICE: ${slice || '(polish — no epic slice)'}\nINTENT: ${intake && intake.intent}\nFor epic-slice runs, read ${epicDir}/spec.md, tasks.md and PROGRESS.md and implement ONLY the next slice — a thin VERTICAL slice (DB + API + UI + worker as needed) that is demoable end-to-end and fits ONE PR.`
 const [spec, archRuling, uxNotes, preMortem, testDesign] = await parallel([
   () => agent(
     `${GUARD}\nYou are JOHN, the BMAD PM. Author a SELF-CONTAINED story spec for THIS slice — a developer must be able to implement it with no other context. Set touchesUi / touchesBackend / touchesWorker honestly. Keep it to ONE shippable vertical slice (do NOT try to build the whole epic).\n\n${sliceCtx}`,
@@ -321,7 +344,7 @@ return {
   docsOnly: false,
   mode,
   epic: epicId,
-  slice: (intake && intake.slice) || ARG_SLICE || '',
+  slice: slice || '',
   intake, spec, architectRuling: archRuling, uxNotes, preMortem, testDesign,
   changes: implResults,
   verify: { gate, confirmedFindings: confirmed, blockers, typecheckFailed, highRisk, fixNote, panel },
