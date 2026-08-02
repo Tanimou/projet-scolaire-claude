@@ -38,12 +38,19 @@ installed routine.
 
 ---
 
-## S-E02-1 — Baseline migration from the hosted schema, and stop `db push`
+## S-E02-1 — Baseline migration from the hosted schema, and stop `db push` · 🟡 `partial` 2026-08-02
 
 | | |
 |---|---|
 | **Epic** | V3-E02 · **Finding** PF-03, VAL-10 · **Gates** G-MIGRATION |
 | **blockedBy** | — · **requiresDecision** — · **Size** M |
+
+> **Status 2026-08-02.** The **code half is delivered and evidenced** (baseline committed, `db push` gone from every
+> executable path, fail-safe migrator, boot preflight, `/version` manifest — see `docs/spec/features/v3-e02/PROGRESS.md`).
+> The **hosted half is not**: introspecting and baselining the production database needs credentials the unattended
+> routine does not hold, so implementation note 1–2 became `docs/runbooks/baseline-hosted-database.md` instead.
+> Because the baseline was generated from `schema.prisma` rather than from the hosted database, the runbook's **drift
+> check is mandatory before `migrate resolve`** — a non-empty diff is S-E02-5, not a baseline.
 
 **Why.** Production startup runs `prisma db push --accept-data-loss` against a database with **no migration history**.
 No one can prove which schema transition produced the hosted database, or roll one back. This is the single change that

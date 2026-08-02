@@ -6,13 +6,20 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
+import { assertMigrationsClean } from './shared/migrations/migration-preflight';
+import { PrismaService } from './shared/prisma/prisma.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const logger = new Logger('Bootstrap');
 
+  // Preflight schéma (S-E02-1 / PF-03) : ne jamais servir de trafic contre un
+  // schéma inconnu. Lève et fait sortir le process en cas de migration absente,
+  // en attente ou échouée — c'est volontairement bruyant (DNC-08).
+  await assertMigrationsClean(app.get(PrismaService), logger);
+
   app.use(helmet({ contentSecurityPolicy: false }));
-  app.setGlobalPrefix('api/v1', { exclude: ['healthz', 'readyz', '/'] });
+  app.setGlobalPrefix('api/v1', { exclude: ['healthz', 'readyz', 'version', '/'] });
   app.enableCors({
     origin: (process.env.CORS_ORIGINS ?? 'http://localhost:3000').split(','),
     credentials: true,

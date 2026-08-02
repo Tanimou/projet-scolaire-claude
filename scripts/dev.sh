@@ -69,9 +69,12 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-# --- 3. Sync schema (prisma db push) ---------------------------------------
-say "Synchronisation du schéma (prisma db push)…"
-pnpm --filter @pilotage/api exec prisma db push --skip-generate
+# --- 3. Migrations (prisma migrate deploy) ----------------------------------
+# Même chemin de code qu'en production (S-E02-1 / PF-03) : dev et prod appliquent
+# le MÊME historique de migrations. Sur une base dev créée à l'ancienne par
+# `db push`, le script refuse et imprime la commande de baseline à jouer une fois.
+say "Application des migrations (prisma migrate deploy)…"
+sh infra/docker/migrate-entrypoint.sh
 
 # --- 4. Seed démo (idempotent) ---------------------------------------------
 if [ "$NO_SEED" = "0" ]; then

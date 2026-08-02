@@ -96,7 +96,10 @@ services:
       AUTH_TRUST_HOST: "true"
       AUTH_SECRET: ${AUTH_SECRET}
 
-  # ---- Migrator: prisma db push runs at startup; keep it production-clean ----
+  # ---- Migrator: applique les migrations revues (prisma migrate deploy) ----
+  # La commande est héritée de docker-compose.yml : l'entrypoint sûr
+  # infra/docker/migrate-entrypoint.sh. Aucune surcharge nécessaire ici — et
+  # surtout aucune réintroduction de `db push` (PF-03 / S-E02-1).
   migrator:
     environment:
       NODE_ENV: production
