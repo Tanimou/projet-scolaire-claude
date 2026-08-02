@@ -40,6 +40,10 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '${{ env.NODE_VERSION }}', cache: 'pnpm' }
       - run: pnpm install --frozen-lockfile
+      # `lint` dependsOn `^build` in turbo.json, and the API build needs the
+      # generated Prisma client — without this the lint job dies on unresolvable
+      # `@prisma/client` types rather than on a lint rule.
+      - run: pnpm --filter @pilotage/api prisma generate
       - run: pnpm lint
 
   typecheck:
@@ -97,4 +101,10 @@ jobs:
         with: { node-version: '${{ env.NODE_VERSION }}', cache: 'pnpm' }
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @pilotage/api prisma generate
-      - run: pnpm test --if-present
+      # Was `pnpm test --if-present`. `--if-present` is a pnpm flag, not a turbo
+      # one, so turbo received it as an unknown argument — and more importantly the
+      # phrasing invited "no test script? then nothing to check". Both suites are
+      # now run through the ratchet, which fails on any NEW failure and on any
+      # baseline entry that starts passing. See scripts/test-ratchet.js.
+      - run: node scripts/test-ratchet.js api
+      - run: node scripts/test-ratchet.js worker
