@@ -11,7 +11,7 @@ without re-reading the four audit reports. Fields: `id`, `epic`, `finding`, `gat
 
 ---
 
-## S-E02-0 — Land the V3 substrate on `main` · `closed` 2026-08-02
+## S-E02-0 — Land the V3 substrate on `main` · `in-progress` 2026-08-02
 
 | | |
 |---|---|

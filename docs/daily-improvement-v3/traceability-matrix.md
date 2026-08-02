@@ -61,7 +61,7 @@ as the change. A PR that touches a finding without updating its row is **not gre
 | VAL-07 custom-role create/edit/deny scenarios | V3-E05 | S-E05-1 | `open` | — | — | G-AUTHZ |
 | VAL-03 migration + backup/restore rehearsal | V3-E02 | S-E02-3 | `open` | — | — | G-MIGRATION |
 | VAL-10 running build SHA / schema version | V3-E02 | S-E02-1 | `open` | — | — | G-MIGRATION |
-| PF-58 V3 substrate uncommitted; routine unrunnable | V3-E02 | S-E02-0 | `closed` | n/a — docs-only | PR #170: 4 audits + 17 planning docs + 40 evidence files tracked on `main`; `routine/` byte-identical to installed `SKILL.md` (`diff` clean) | G-DNC |
+| PF-58 V3 substrate uncommitted; routine unrunnable | V3-E02 | S-E02-0 | `in-progress` | n/a — docs-only | commit `b665887` on `ci/2026-08-02-v3-substrate-landing`: 4 audits + 17 planning docs + 40 evidence files staged and committed; `routine/` byte-identical to installed `SKILL.md` (`diff` clean). **Not yet on `main`** — push blocked, see run log | G-DNC |
 
 ## 2. Layer 1 — Signature loop
 
@@ -138,12 +138,15 @@ Checked by gate **G-DNC** on every run. A story that reproduces one of these is 
 
 | Layer | Findings mapped | Closed | Open | Blocked |
 |---|---|---|---|---|
-| L0 | 43 | 1 | 42 | 0 |
+| L0 | 43 | 0 | 43 | 0 |
 | L1 | 17 | 0 | 17 | 0 |
 | L2 | 12 | 0 | 12 | 0 |
 | L3 | 8 | 0 | 8 | 0 |
 | L4 | 10 | 0 | 10 | 0 |
-| **Total** | **90** | **1** | **89** | **0** |
+| **Total** | **90** | **0** | **90** | **0** |
+
+`PF-58` is `in-progress`, not `closed`: the work is committed but the push was blocked, so it is not on `main` yet.
+It closes when the PR merges.
 
 *(12 `DNC` rules and 10 `VAL` obligations are tracked separately above; several `VAL` items are also mapped to L0
 stories, so the totals here count each finding once at its owning layer.)*
@@ -154,4 +157,4 @@ Baseline recorded 2026-08-02, before the first V3 run.
 
 | Date | Story | Findings closed | Findings discovered | Build | Notes |
 |---|---|---|---|---|---|
-| 2026-08-02 | S-E02-0 — land the V3 substrate | PF-58 | PF-58 | n/a (`docsOnly`) | Substrate existed only as untracked files in worktree `youthful-chaum-6aad5c`; `main` had none of it, so routine Step 1 could not execute. `S-E02-1` deferred: needs hosted-DB credentials and **D-01**. BMAD Workflow deliberately skipped — nothing to implement, the artefacts were already authored. |
+| 2026-08-02 | S-E02-0 — land the V3 substrate | none yet (PF-58 `in-progress`) | PF-58 | n/a (`docsOnly`) | Substrate existed only as untracked files in worktree `youthful-chaum-6aad5c`; `main` had none of it, so routine Step 1 could not execute. Committed as `b665887`, **but `git push` was denied by the sandbox permission classifier** — the branch is local-only and needs a human to push and open the PR. `S-E02-1` deferred: needs hosted-DB credentials and **D-01**. BMAD Workflow deliberately skipped — nothing to implement, the artefacts were already authored. |

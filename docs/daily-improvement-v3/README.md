@@ -73,9 +73,10 @@ attendance endpoints with no ABAC at all. **V2 shipped against a guardrail that 
 
 Baseline recorded 2026-08-02, before the first V3 run: **89 findings mapped, 0 closed.**
 
-After run 1 (2026-08-02, story `S-E02-0`): **90 mapped, 1 closed.** That run discovered and closed **PF-58** — this
-substrate was authored but never committed, so `main` had none of it and the routine's Step 1 could not execute. The
-run log lives at the foot of [`traceability-matrix.md`](traceability-matrix.md).
+After run 1 (2026-08-02, story `S-E02-0`): **90 mapped, 0 closed, 1 in-progress.** That run discovered **PF-58** — this
+substrate was authored but never committed, so `main` had none of it and the routine's Step 1 could not execute. The fix
+is committed on `ci/2026-08-02-v3-substrate-landing` but the push was blocked, so it is **not yet on `main`**; `PF-58`
+closes when that PR merges. The run log lives at the foot of [`traceability-matrix.md`](traceability-matrix.md).
 
 Sprint 01 is fully story-specified. Sprint 02+ story specs are produced by the routine in `epic-spec` mode against the
 epic files, using the established `docs/spec/features/<epic>/` layout.
