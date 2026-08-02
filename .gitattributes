@@ -10,3 +10,8 @@ Dockerfile*     text eol=lf
 *.tsx           text eol=lf
 *.prisma        text eol=lf
 .env*           text eol=lf
+
+# The V3 routine mirror must stay byte-comparable to the installed artefacts under
+# ~/.claude/scheduled-tasks/, which are always LF. Without this, a Windows checkout
+# rewrites the mirror to CRLF and the documented drift check reports a false diff.
+docs/daily-improvement-v3/routine/*.md  text eol=lf

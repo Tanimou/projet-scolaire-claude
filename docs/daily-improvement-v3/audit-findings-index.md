@@ -1,0 +1,209 @@
+# Audit Findings Index — the traceable backbone of Daily Improvement V3
+
+Every V3 epic, story and acceptance criterion traces back to a row in this file. Nothing enters the roadmap without a
+finding id; nothing is closed without evidence against the finding.
+
+**Sources** (round-5 authoritative, 2026-08-02)
+`A1` = `01_Lakoli_Platform_Audit.md` · `A2` = `02_Internal_Platform_Audit.md` · `A3` = `03_Comparative_Gap_Analysis.md`
+`A4` = `04_Exploration_Coverage_Matrix.md` · `E1` = `audit-evidence/lakoli/lakoli_deep-workflow-browser-audit-07.md`
+`E2` = `audit-evidence/internal/internal_hosted-multirole-browser-audit-04.md`
+
+**Classification vocabulary** — deliberately *not* collapsed to "missing/present", per A2 Appendix A and A4 §1:
+
+| Code | Meaning |
+|---|---|
+| `BROKEN_RUNTIME` | Route/action exists and fails at runtime |
+| `BROKEN_TRUTH` | Multiple surfaces report mutually incompatible facts from one dataset |
+| `BROKEN_SECURITY` | Reachable path violates tenancy, ABAC or privilege boundaries |
+| `SOURCE_ONLY` | Implemented in repo; hosted API/schema cannot serve it |
+| `BACKEND_ONLY` | Endpoint/model exists with no reachable product control |
+| `UI_ONLY / MOCK` | Surface exists without dependable backend truth |
+| `NOT_IMPLEMENTED` | Explicitly deferred or absent |
+| `BLOCKED_BY_DEPENDENCY` | Needs a record, provider, credential or installed dependency |
+| `MISSING_CAPABILITY` | Competitor-proven capability we do not have |
+| `DO_NOT_COPY` | Lakoli behaviour we must consciously *not* reproduce |
+
+**Work-type vocabulary** — drives which V3 layer a finding lands in:
+`DEFECT` · `ARCH_PREREQ` (architectural prerequisite) · `CAPABILITY` (net-new) · `VALIDATION` (evidence, not code).
+
+---
+
+## 1. P0 — release-blocking (Pilotage)
+
+| ID | Finding | Class | Type | Source | Layer | Epic |
+|---|---|---|---|---|---|---|
+| **PF-01** | New/unmapped authenticated profiles are attached to a hard-coded `demo` tenant (`UserSyncService`, public registration) | `BROKEN_SECURITY` | ARCH_PREREQ | A2 §11, §14; E2 | L0 | V3-E01 |
+| **PF-02** | `withTenant` helper exists with **no call sites**; no `CREATE POLICY` / `ENABLE ROW LEVEL SECURITY` anywhere. The "repositories are RLS-isolated" comment is unsupported | `BROKEN_SECURITY` | ARCH_PREREQ | A2 §11, §14; E2 | L0 | V3-E01 |
+| **PF-03** | Production startup runs `prisma db push --accept-data-loss`; repository has **no SQL migration history**; prod compose runs demo seed outside `NODE_ENV=production` | `BROKEN_SECURITY` | ARCH_PREREQ | A2 §12, §14; E2 | L0 | V3-E02 |
+| **PF-04** | One dataset yields mutually incompatible grade/assessment/enrollment/alert counts across admin, teacher, parent, student | `BROKEN_TRUTH` | ARCH_PREREQ | A2 §5.1, §5.3, App. D | L0 | V3-E03 |
+| **PF-05** | Parent grades page returns **zero** for a child whose published grade is visible on dashboard, subjects, printable report and the student portal | `BROKEN_TRUTH` | DEFECT | A2 §7, §14; E2 | L0 | V3-E03 |
+| **PF-06** | Attendance can **silently partially save**; downstream rates then consume corrupt completeness | `BROKEN_RUNTIME` | DEFECT | A2 App. C.3, App. G | L1 | V3-E09 |
+| **PF-07** | Two attendance read endpoints have **no teacher ABAC** — any teacher reads any class's roster and student PII | `BROKEN_SECURITY` | DEFECT | A2 App. C.2, App. G | L0 | V3-E05 |
+| **PF-08** | Custom roles are **global across tenants** — cross-tenant read, write and delete of another school's roles and permission sets | `BROKEN_SECURITY` | DEFECT | A2 App. C.3, App. G | L0 | V3-E05 |
+| **PF-09** | An administrator can mint a role carrying permissions they do **not** themselves hold (privilege escalation) | `BROKEN_SECURITY` | DEFECT | A2 App. C.3, App. E | L0 | V3-E05 |
+| **PF-10** | Coefficient-matrix save accepts **foreign-tenant identifiers**, re-weighting another tenant's averages | `BROKEN_SECURITY` | DEFECT | A2 App. B.1, C.3 | L0 | V3-E05 |
+| **PF-11** | Notification fan-out **dedup query is not tenant-scoped** | `BROKEN_SECURITY` | DEFECT | A2 App. B.4, C.3 | L0 | V3-E05 |
+| **PF-59** | GitHub Actions is **account-locked for billing**, so no CI job starts on any branch. Every check reports `failure` in ~3 s having executed zero steps. V3's premise — gates *executed*, not asserted — has no runner to execute them on; `VAL-01` cannot be satisfied and every gate needing a test run degrades to `evidence: deferred` | `BROKEN_RUNTIME` | ARCH_PREREQ | Discovered by the V3 run of 2026-08-02 | L0 | V3-E02 |
+
+**PF-59 evidence.** The GitHub check-run annotation is explicit — no inference involved:
+
+```
+GET /repos/Tanimou/projet-scolaire-claude/check-runs/91540293327/annotations
+[{"annotation_level":"failure","path":".github",
+  "message":"The job was not started because your account is locked due to a billing issue."}]
+```
+
+Scope: repository-wide and content-independent. The unrelated Dependabot PR #169 (2026-07-28) fails identically,
+as does every `main` run since. Job logs return `BlobNotFound` because no job ever produced any.
+Resolution is an account/billing action by the owner — **not** a code change, so no story can close this.
+It is a Step-6 *credential/decision-required* stop condition for any story whose gate evidence depends on CI.
+
+## 2. P1 — blocks trustworthy operation
+
+| ID | Finding | Class | Type | Source | Layer | Epic |
+|---|---|---|---|---|---|---|
+| **PF-12** | Parent child/enrollment state contradicts itself: dashboard/detail say active; children list, "My family" and claim panel say none | `BROKEN_TRUTH` | DEFECT | A2 §7, App. B.7 | L0 | V3-E03 |
+| **PF-13** | Class gradebook links pass a **class-section id** where the page expects a **teaching-assignment id**; dashboard "create assessment" shares the broken URL | `BROKEN_RUNTIME` | DEFECT | A2 §6.1, App. B.6 | L1 | V3-E07 |
+| **PF-14** | `/admin/audit` crashes (server/client boundary); `/admin/reports` is 404 | `BROKEN_RUNTIME` | DEFECT | A2 §5.6, App. B.5 | L0 | V3-E04 |
+| **PF-15** | Active academic year is **2023–2024** on a 2026 audit date; 2026 events attach to it; printable report mixes 2026 generation with 2023–24 | `BROKEN_TRUTH` | DEFECT | A2 §5.2, App. D | L0 | V3-E03 |
+| **PF-16** | Whole-school announcement estimated 191 accounts but broke down as 1 parent / 0 teachers / 0 admins / **190 "other"**; the student never received it; recipient roles blank | `BROKEN_TRUTH` | DEFECT | A2 §5.4, §8 | L1 | V3-E11 |
+| **PF-17** | Hosted UI ships **development-only Maildev `localhost` instructions** and visible seed artefacts/author labels | `BROKEN_SECURITY` | DEFECT | A2 §4, §12 | L0 | V3-E06 |
+| **PF-18** | Student identity client is **aliased to the parent client**; student password reset targets the parent client | `BROKEN_SECURITY` | DEFECT | A2 §8, §11 | L0 | V3-E01 |
+| **PF-19** | `/admin/classes/new` is linked prominently but falls into the `[id]` dynamic route and crashes | `BROKEN_RUNTIME` | DEFECT | A2 §5.2, App. B.1 | L0 | V3-E06 |
+| **PF-20** | Dashboard enrollment/alert totals disagree with their own queues and rule lists (28 pending vs empty queue; 4 alerts vs 0 rules) | `BROKEN_TRUTH` | DEFECT | A2 §5.1 | L0 | V3-E03 |
+| **PF-21** | Student **date of birth is silently dropped** on create/read-back | `BROKEN_RUNTIME` | DEFECT | A2 §5.2, App. G | L1 | V3-E08 |
+| **PF-22** | Editing a cahier-de-texte entry returns **400 every time** | `BROKEN_RUNTIME` | DEFECT | A2 App. B.6, C.3 | L1 | V3-E08 |
+| **PF-23** | Calendar edit **destroys `cycle_scope`** and drops `academicYearId`; multi-month events are invisible outside their start month | `BROKEN_RUNTIME` | DEFECT | A2 App. B.3, C.3 | L1 | V3-E08 |
+| **PF-24** | Snapshot recompute is enqueued but **no consumer exists in this codebase**; comments assert a worker that is not here; the hosted drain cannot mark a repeated scope `done` | `SOURCE_ONLY` | DEFECT | A2 App. C.3, C.4 | L0 | V3-E03 |
+| **PF-25** | Wrong password is reported as **"MFA required"**; `mfaEnabled` is hard-coded `false` | `BROKEN_RUNTIME` | DEFECT | A2 App. C.3, G | L0 | V3-E05 |
+| **PF-26** | Logout does not end the Keycloak session (no RP-initiated logout); middleware never inspects `session.error`, so dead sessions keep browsing; middleware declares 9 non-existent auth routes | `BROKEN_SECURITY` | DEFECT | A2 App. C.2, C.3 | L0 | V3-E05 |
+| **PF-27** | Parent can **terminally close a school-created remediation plan**; no direct booking action | `BROKEN_SECURITY` | DEFECT | A2 §7, App. B.7 | L1 | V3-E10 |
+| **PF-28** | Alert filters, exports and totals operate on a truncated **≤100-row per-status window**; announcement engagement truncates at 500; announcement list is unpaginated | `BROKEN_TRUTH` | DEFECT | A2 App. C.3 | L1 | V3-E10 |
+| **PF-29** | Calendar "import French holidays" executes **immediately with no confirmation** and wrote 22 rows into the stale active year | `BROKEN_RUNTIME` | DEFECT | A2 §5.5; E2 | L0 | V3-E06 |
+| **PF-30** | `POST /grades/batch` is an **N+1 inside a transaction** and fabricates phantom revisions | `BROKEN_RUNTIME` | DEFECT | A2 App. C.3 | L1 | V3-E08 |
+| **PF-31** | Role grant/revoke and school mutations write **no audit row** (ADR-015 mandates it); audit actor role is hard-coded `school_admin`; `ip_address`/`user_agent`/`hash`/`prev_hash` are **never written** | `BROKEN_SECURITY` | DEFECT | A2 App. B.5, C.2 | L0 | V3-E04 |
+| **PF-32** | Audit `to` date filter silently drops the selected end day; **three of four audit KPIs are structurally wrong** | `BROKEN_TRUTH` | DEFECT | A2 App. B.5 | L0 | V3-E04 |
+| **PF-33** | An existing class is **29/28 over capacity** although manual enrollment correctly rejects overflow — import/history bypasses the invariant | `BROKEN_TRUTH` | DEFECT | A2 §5.2, App. G | L2 | V3-E12 |
+| **PF-34** | Teacher class messaging link is 404; the alternate composer computes **zero recipients** for a class with known families | `BROKEN_RUNTIME` | DEFECT | A2 §6.3 | L1 | V3-E11 |
+
+## 3. P2 / P3 — correctness, safety and credibility
+
+| ID | Finding | Class | Type | Source | Layer | Epic |
+|---|---|---|---|---|---|---|
+| **PF-35** | Parent attendance mixes a **different class** into the child's history without labelling and shows an invalid **−71.4-point trend** | `BROKEN_TRUTH` | DEFECT | A2 §7 | L1 | V3-E09 |
+| **PF-36** | Teacher counts vary 43 / 46 / 48 and one class alternates 25 / 26 | `BROKEN_TRUTH` | DEFECT | A2 §6 | L0 | V3-E03 |
+| **PF-37** | New lesson defaults to **Published** — parent-visible before review | `BROKEN_RUNTIME` | DEFECT | A2 §6.2 | L1 | V3-E08 |
+| **PF-38** | Legal (`/legal/privacy`, `/terms`, `/cookies`), `/pricing`, `/contact`, `/help` all **404 while parent registration requires accepting them** | `NOT_IMPLEMENTED` | DEFECT | A2 §4; E2 | L0 | V3-E06 |
+| **PF-39** | Teacher/parent profile and help links 404; teacher notification settings contain parent copy ("your child"); teacher "Import grades" points into the admin portal | `NOT_IMPLEMENTED` | DEFECT | A2 §6.3 | L0 | V3-E06 |
+| **PF-40** | Async KPI counters expose contradictory interim values (parent calendar 14→36; credit 0↔99 analogue) | `UI_ONLY / MOCK` | DEFECT | A2 §14 | L0 | V3-E03 |
+| **PF-41** | Guardians list has a hard **200-row ceiling**; filters and export operate on the truncated set | `BROKEN_TRUTH` | DEFECT | A2 App. B.2 | L2 | V3-E12 |
+| **PF-42** | `/admin/students` "Niveau" filter is **wired to nothing**; the table **fabricates some metrics as facts**; search triggers a full server render per keystroke | `UI_ONLY / MOCK` | DEFECT | A2 App. B.2 | L1 | V3-E08 |
+| **PF-43** | Conversation moderation is **write-only** — `reviewed`/`dismissed`/`blocked` are unreachable | `NOT_IMPLEMENTED` | DEFECT | A2 App. B.4 | L1 | V3-E11 |
+| **PF-44** | Meeting request "Clôturer" **resolves** with different semantics — the UI reports a lie | `BROKEN_RUNTIME` | DEFECT | A2 App. B.4 | L1 | V3-E10 |
+| **PF-45** | Helmet **CSP is explicitly disabled**; branding values are injected unvalidated into a server-rendered `<style>` | `BROKEN_SECURITY` | DEFECT | A2 §11, App. E | L0 | V3-E06 |
+| **PF-46** | `POST /auth/register-parent` is **public, unthrottled and self-verifies email** | `BROKEN_SECURITY` | DEFECT | A2 App. C.3 | L0 | V3-E05 |
+| **PF-47** | Enrollment **approval/rejection workflow is explicitly not implemented** | `NOT_IMPLEMENTED` | CAPABILITY | A2 App. B.2 | L2 | V3-E12 |
+| **PF-48** | "Documents" / "Ressources" are two full sidebar features over a field **nothing writes**; direct upload deferred | `BACKEND_ONLY` | CAPABILITY | A2 §6.3, App. B.6 | L2 | V3-E13 |
+| **PF-49** | `BEHAVIOR_ALERT` can be enabled but **can never fire**; rule bounds are not server-enforced and the UI minimum disagrees with the evaluator | `NOT_IMPLEMENTED` | DEFECT | A2 App. B.3 | L1 | V3-E10 |
+| **PF-50** | `/admin/assignments` renders **290 rows unpaginated**; unread counts fetch every message; parent dashboard fans out per child | `UI_ONLY / MOCK` | DEFECT | A2 App. K.4 | L1 | V3-E03 |
+| **PF-51** | `PATCH /cycles/grade-levels/:levelId` runs **zero validation** and mass-assigns straight into Prisma; several query params bypass validation; notification `kind` accepts arbitrary strings | `BROKEN_SECURITY` | DEFECT | A2 App. C.2, C.3 | L0 | V3-E05 |
+| **PF-52** | `hasPermission()` exists and is **never used** — no client-side permission gating; `users.suspend` is granted with **no implementation**; role revocation is backend-only | `BACKEND_ONLY` | DEFECT | A2 App. C.3 | L0 | V3-E05 |
+| **PF-53** | Invite flow and permission rewrites are **non-atomic** and leave orphan/partial state; 18 granted permission codes are absent from the role builder; 5 required codes unseeded | `BROKEN_RUNTIME` | DEFECT | A2 App. C.3 | L0 | V3-E05 |
+| **PF-54** | Hard-coded credential fallbacks and development URLs ship in production-facing code | `BROKEN_SECURITY` | DEFECT | A2 App. C.3 | L0 | V3-E06 |
+| **PF-55** | 50 spec files exist but **test/typecheck execution is blocked** by missing dependencies and generated artefacts; no CI evidence of pass | `BLOCKED_BY_DEPENDENCY` | VALIDATION | A2 §13 | L0 | V3-E02 |
+| **PF-56** | Optional observability only; no traces, SLOs, alert delivery or restore exercise; landing-page availability/security claims unvalidated | `BLOCKED_BY_DEPENDENCY` | VALIDATION | A2 §13, §4 | L0 | V3-E02 |
+| **PF-57** | Student portal has **no profile/settings** surface; help 404 | `NOT_IMPLEMENTED` | CAPABILITY | A2 §8 | L2 | V3-E06 |
+| **PF-58** | The entire V3 substrate (4 audits, 17 planning docs, 40 evidence files) was authored **only as untracked files inside a throwaway git worktree** and never committed. `main` had none of it, so the routine's Step 1 — which reads `roadmap.md`, `traceability-matrix.md`, `dependency-map.md`, `risk-register.md`, `open-decisions.md` — could not execute at all. The in-repo routine copy had also drifted behind the installed `SKILL.md` | `BLOCKED_BY_DEPENDENCY` | ARCH_PREREQ | V3 run 2026-08-02 | L0 | V3-E02 |
+
+> **PF-58 is the class of failure the routine is least able to see.** The planning work was done well and lost anyway,
+> because "produced" was conflated with "committed". Same conflation as A2 App. A's *UI exists ≠ feature delivered*.
+> Mitigation now in force: the in-repo `routine/` copies must be byte-identical to the installed artefacts, so drift is
+> a one-line `diff` (see `README.md` → *Where the routine lives*). Related: the known Workflow worktree-path bug, where
+> sprint agents edit the main repo rather than their assigned worktree — here the failure ran in the opposite direction.
+
+## 4. Capability gaps proven by Lakoli (`MISSING_CAPABILITY`)
+
+Sequenced *after* L0/L1 by design — see `roadmap.md` §3 for why.
+
+| ID | Capability | Lakoli evidence | Pilotage today | Layer | Epic |
+|---|---|---|---|---|---|
+| **LG-01** | Fee catalogue: 18 fee types, schedule, cycle/class/service scope, non-retroactive scope changes | A1 §5.3, App. A.2 | Absent | L3 | V3-E15 |
+| **LG-02** | Receivable ledger with balance/status/adjustments; post-payment identity lock | A1 App. A.2 | Absent | L3 | V3-E15 |
+| **LG-03** | Counter payment: 8 modes, receipt, cashier session, journal | A1 App. A.2 | Absent | L3 | V3-E16 |
+| **LG-04** | Daily cash closing with theoretical-vs-counted variance and formal PV | A1 App. A.2 | Absent | L3 | V3-E16 |
+| **LG-05** | Two-layer reconciliation (internal ledger + provider settlement) | A1 App. A.2 | Absent | L3 | V3-E16 |
+| **LG-06** | Discounts/bursaries, 8 default criteria, targeted grant | A1 App. A.2 | Absent | L3 | V3-E15 |
+| **LG-07** | Refund and typed mass-cancellation as dedicated operations | A1 App. A.2 | Absent | L3 | V3-E16 |
+| **LG-08** | Forecast-vs-actual budget | A1 App. A.2 | Absent | L4 | V3-E18 |
+| **LG-09** | Online payment providers, payment links, signed callbacks | A1 App. C.3 | Absent | L3 | V3-E16 |
+| **LG-10** | SMS campaigns: mandatory simulation, 16 trigger events, wallet, delivery log, J+7/30/60/90 ladder | A1 App. A.4 | Absent | L4 | V3-E17 |
+| **LG-11** | WhatsApp deep-link assistants | A1 App. A.4 | Absent | L4 | V3-E17 |
+| **LG-12** | Unified admissions funnel: `preinscription_creee → paiement_demande → paiement_recu → dossier_complet → validee` + document conformity states | A1 App. A.1 | Enrollment requests exist; approval not implemented | L2 | V3-E12 |
+| **LG-13** | Re-enrollment campaign: 6 steps, 4 independent state axes | A1 App. A.1 | Absent | L2 | V3-E14 |
+| **LG-14** | End-of-year decisions: 7 outcomes, 6 non-computability codes, publish/freeze/hash/reopen with reason | A1 App. A.1 | Absent | L2 | V3-E14 |
+| **LG-15** | 10+ official document generators, registry, branding, QR authenticity | A1 App. A.7 | Bulletins/exports only; reports 404 | L2 | V3-E13 |
+| **LG-16** | Timetable: rooms, slots, conflicts, workload, print | A1 App. A.3 | Absent | L4 | V3-E18 |
+| **LG-17** | Discipline: incident/measure/convocation lifecycles with Direction validation | A1 App. A.6 | Absent | L4 | V3-E18 |
+| **LG-18** | Clubs/activities: 18 types, 16 domains, publication, printed recap | A1 App. A.6 | Absent | L4 | V3-E18 |
+| **LG-19** | HR: staff registry, 9 departments, 6 contract types, contract lifecycle | A1 App. A.5 | Absent | L4 | V3-E18 |
+| **LG-20** | Statutory payroll: 19 rubric codes, CNPS/CMU/IRPP, batch validation | A1 App. A.5 | Absent | L4 | V3-E18 |
+| **LG-21** | Staff timekeeping: 6 event types, bulk four-eyes, monthly report | A1 App. A.5 | Absent | L4 | V3-E18 |
+| **LG-22** | Cafeteria / transport / other services as subscription + charge primitives | A1 App. A.2 | Absent | L4 | V3-E18 |
+| **LG-23** | Student document control: `a_controler / conforme / a_corriger` with reason | A1 App. A.1 | Empty; no writer | L2 | V3-E13 |
+| **LG-24** | Guided tours (63) + 10-step onboarding checklist + 73 help articles | A1 App. A.7 | Thin guidance; help 404 | L2 | V3-E13 |
+| **LG-25** | Tenant exit export: reason, name confirmation, idempotency key, SHA-256 manifest | A1 App. A.7 | Exports exist; no whole-tenant package | L2 | V3-E13 |
+| **LG-26** | Sensitive follow-up behind **nominative, time- and domain-limited habilitation** | A1 App. A.6 | Absent | L4 | V3-E18 |
+| **LG-27** | Bulk import: aliases, preview, 2 000-row cap, receivable side effect, double confirmation | A1 App. A.1 | Async design exists, **runtime unproven** | L2 | V3-E12 |
+| **LG-28** | Period closure lifecycle with prechecks; reopen depublishes official results | A1 App. A.3 | Absent | L2 | V3-E14 |
+| **LG-29** | Lesson book `draft → submitted → visa → correct` | A1 App. A.3 | Lessons default Published, edit broken | L1 | V3-E08 |
+
+## 5. `DO_NOT_COPY` register — Lakoli behaviours V3 must consciously avoid
+
+Sourced from A3 Appendix C and A1 §11. **V3's routine must fail a story that reproduces any of these.**
+
+| ID | Lakoli behaviour | Why it must not be copied |
+|---|---|---|
+| **DNC-01** | Debt KPI (~5k) disagrees with detailed ledger (~8k) | Finance loses trust; build ledger invariants first |
+| **DNC-02** | Future-dated attendance accepted | Official registers become impossible |
+| **DNC-03** | Discipline event date drifts after save | Safeguarding chronology fails |
+| **DNC-04** | Public and staff pre-enrollment are separate silos | Duplicate applicants and manual matching |
+| **DNC-05** | HR → teacher assignment email deadlock | Cross-module onboarding blocks |
+| **DNC-06** | Guides promise deeper behaviour than runtime delivers | Expectation debt |
+| **DNC-07** | WhatsApp templates/state in `localStorage`; one hard-coded client template | No central audit or delivery truth; tenant leakage |
+| **DNC-08** | AI health audit missed manually reproduced defects | Automation is a signal, never a release gate |
+| **DNC-09** | Gated shipped modules labelled "coming soon" | Bundle/support/security ambiguity |
+| **DNC-10** | Hard-coded demo-account billing bypass | Backdoor by string comparison |
+| **DNC-11** | Refused applicant leaks into official document population | Admission-state/privacy boundary failure |
+| **DNC-12** | "Irreversible" cash close contradicted by later mass-cancellation tooling | Accounting policy incoherence |
+
+## 6. Validation obligations (not code — evidence)
+
+| ID | Obligation | Source | Owner lens | Gate |
+|---|---|---|---|---|
+| **VAL-01** | Clean dependency install + full CI run (lint, typecheck, unit, integration, Playwright, a11y) — **blocked by `PF-59`** (no runner starts) | A2 §13, §16 | Engineering | G1 |
+| **VAL-02** | Two-tenant adversarial suite on every read/write/export/job | A2 §16, App. E | Security | G0 |
+| **VAL-03** | Migration upgrade/downgrade + backup/restore rehearsal, timed | A2 §16; A3 §8 Phase 0 | Operator | G1 |
+| **VAL-04** | Production Keycloak client/redirect/audience review | A2 §16 | Security | G0 |
+| **VAL-05** | Provider sandbox: delivery, retry, callback, outage, reconciliation | A2 §16; A3 §4.3 | Finance/Comms | G4/G6 |
+| **VAL-06** | Import batch validation → apply → rollback with a synthetic batch | A2 §16; A4 §4.2 | Data migration | G6 |
+| **VAL-07** | Custom-role create/edit/deny scenarios | A2 §16 | Security | G0 |
+| **VAL-08** | Full WCAG keyboard / screen-reader / contrast audit | A2 §16 | Accessibility | G7 |
+| **VAL-09** | Load, queue/DLQ, object-storage and observability/SLO tests | A2 §16 | Operations | G7 |
+| **VAL-10** | Confirm which build SHA + Prisma schema version actually run in web/API/worker | A2 App. I Q1–Q2 | Operator | G1 |
+
+## 7. Counting summary
+
+| Bucket | Count |
+|---|---|
+| P0 defects/prerequisites | 12 |
+| P1 | 23 |
+| P2/P3 | 24 |
+| Lakoli capability gaps | 29 |
+| Do-not-copy rules | 12 |
+| Validation obligations | 10 |
+| **Total tracked items** | **110** |
+
+Delta since the 2026-08-02 baseline: **+2** — `PF-58` (substrate not on `main`, see §3) and `PF-59`
+(Actions billing lock, see §1), both discovered by V3 runs on 2026-08-02.
+
+Every one of these appears in `traceability-matrix.md` with its epic, story, test and evidence slot.
