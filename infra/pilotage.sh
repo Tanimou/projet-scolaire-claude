@@ -18,7 +18,7 @@
 #                      daily-improvement routine calls instead of host install+build.
 #   rebuild [svc...]   Like update but --no-cache (force a clean image rebuild).
 #   restart [svc...]   Restart running container(s) — no image rebuild.
-#   migrate            Run `prisma db push` (schema → database) only.
+#   migrate            Apply reviewed migrations (`prisma migrate deploy`) only.
 #   seed               Run the demo/data seed (one-shot).
 #   down               Stop & remove containers (KEEPS volumes / data).
 #   reset              down -v (WIPE volumes) then a fresh `up`.
@@ -44,10 +44,10 @@ ENV_FILE="$ROOT_DIR/.env"
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
-# `migrator` MUST be rebuilt too: it runs `prisma db push` from the SAME source as
-# the apps, so a stale migrator image would sync an OLD schema (db push reports
-# "already in sync" → exit 0 but new tables are never created, and new-feature
-# endpoints then 500 on the missing tables). It builds the shared `build` stage of
+# `migrator` MUST be rebuilt too: it applies migrations from the SAME source as
+# the apps, so a stale migrator image would ship an OLD migration set (the newest
+# migrations are simply absent from the image, so new tables are never created and
+# new-feature endpoints then 500). It builds the shared `build` stage of
 # Dockerfile.api, so it's a cache hit after `api` — negligible extra build time.
 APP_SERVICES_DEFAULT=(api worker web migrator)
 HEALTH_SERVICES=(api web)   # migrator is one-shot (exits 0) — never health-waited
@@ -117,7 +117,7 @@ cmd_update() {
   local svcs=("$@"); [[ ${#svcs[@]} -eq 0 ]] && svcs=("${APP_SERVICES_DEFAULT[@]}")
   build_apps "" "${svcs[@]}"
   log "Recreating containers + syncing schema…"
-  # --profile app pulls in migrator (one-shot db push) ahead of api via depends_on.
+  # --profile app pulls in migrator (one-shot migrate deploy) ahead of api via depends_on.
   compose --profile app up -d
   wait_healthy
   ok "Update complete."
@@ -142,9 +142,9 @@ cmd_restart() {
 }
 
 cmd_migrate() {
-  log "Syncing schema (prisma db push)…"
+  log "Applying reviewed migrations (prisma migrate deploy)…"
   compose --profile app run --rm migrator
-  ok "Schema in sync."
+  ok "Migrations applied."
 }
 
 cmd_seed() {

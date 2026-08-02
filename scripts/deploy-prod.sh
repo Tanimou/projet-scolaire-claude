@@ -3,7 +3,7 @@
 # Pilotage Scolaire — PRODUCTION deploy (Hostinger VPS, behind existing Traefik)
 # -----------------------------------------------------------------------------
 # One command, end to end:
-#   build images → start full stack → sync schema (prisma db push) → align the
+#   build images → start full stack → apply migrations (migrate deploy) → align the
 #   Keycloak redirect URLs → seed a coherent cross-portal demo → wait healthy.
 #
 # Layers infra/docker-compose.yml + infra/docker-compose.prod.yml and reads
@@ -120,7 +120,7 @@ for i in $(seq 1 60); do
   [ "$i" = 60 ] && die "Postgres not ready after 60s."
   sleep 1
 done
-wait_healthy api 240        # implies migrator (prisma db push) completed_successfully
+wait_healthy api 240        # implies migrator (migrate deploy) completed_successfully
 wait_healthy web 180
 
 # Keycloak readiness: poll the realm discovery under /auth from inside the network

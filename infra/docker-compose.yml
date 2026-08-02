@@ -217,6 +217,7 @@ services:
   # -------------------------------------------------------------------------
   # Prisma migrator (one-shot avant API) — opt-in via `--profile app`
   # In local dev you run `pnpm prisma:migrate:dev` directly from the host.
+  # Ce service applique des migrations revues ; il ne synchronise plus le schéma.
   # -------------------------------------------------------------------------
   migrator:
     build:
@@ -227,10 +228,12 @@ services:
     profiles: ["app"]
     environment:
       <<: *app-env
-    # No SQL migration history in the repo — schema is driven by `prisma db push`
-    # (idempotent sync of schema.prisma → database). Client is already generated
-    # in the image, so skip regeneration here.
-    command: ["pnpm", "--filter", "@pilotage/api", "exec", "prisma", "db", "push", "--skip-generate", "--accept-data-loss"]
+    # Le schéma est piloté par un historique SQL revu (apps/api/prisma/migrations),
+    # appliqué via `prisma migrate deploy`. L'entrypoint REFUSE de migrer une base
+    # qui porte déjà un schéma sans `_prisma_migrations` : la baseline est une
+    # action opérateur (docs/runbooks/baseline-hosted-database.md).
+    # Plus de `db push`, plus de `--accept-data-loss` — PF-03 / S-E02-1.
+    command: ["sh", "/app/infra/docker/migrate-entrypoint.sh"]
     depends_on:
       postgres:
         condition: service_healthy

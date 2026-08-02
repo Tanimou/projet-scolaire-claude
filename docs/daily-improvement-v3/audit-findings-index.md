@@ -62,6 +62,7 @@ It is a Step-6 *credential/decision-required* stop condition for any story whose
 
 | ID | Finding | Class | Type | Source | Layer | Epic |
 |---|---|---|---|---|---|---|
+| **PF-60** | The BMAD sprint workflow **silently overrides the routine's story selection**. `bmad/workflows/sprint.workflow.js:138` resolves `epicId = (intake && intake.epic) \|\| ARG_EPIC`, so the intake agent's own pick beats the operator override in `args`; the prompt (line 125) only asks it to "honor it unless clearly unsafe". Observed live: the routine selected `S-E02-1` and the workflow started implementing `S-E06-2`. **V3's layer/priority selection rule becomes decorative — the V2 failure mode V3 exists to prevent** | `BROKEN_RUNTIME` | ARCH_PREREQ | Discovered by the V3 run of 2026-08-02 | L0 | V3-E02 |
 | **PF-12** | Parent child/enrollment state contradicts itself: dashboard/detail say active; children list, "My family" and claim panel say none | `BROKEN_TRUTH` | DEFECT | A2 §7, App. B.7 | L0 | V3-E03 |
 | **PF-13** | Class gradebook links pass a **class-section id** where the page expects a **teaching-assignment id**; dashboard "create assessment" shares the broken URL | `BROKEN_RUNTIME` | DEFECT | A2 §6.1, App. B.6 | L1 | V3-E07 |
 | **PF-14** | `/admin/audit` crashes (server/client boundary); `/admin/reports` is 404 | `BROKEN_RUNTIME` | DEFECT | A2 §5.6, App. B.5 | L0 | V3-E04 |
@@ -113,6 +114,7 @@ It is a Step-6 *credential/decision-required* stop condition for any story whose
 | **PF-55** | 50 spec files exist but **test/typecheck execution is blocked** by missing dependencies and generated artefacts; no CI evidence of pass | `BLOCKED_BY_DEPENDENCY` | VALIDATION | A2 §13 | L0 | V3-E02 |
 | **PF-56** | Optional observability only; no traces, SLOs, alert delivery or restore exercise; landing-page availability/security claims unvalidated | `BLOCKED_BY_DEPENDENCY` | VALIDATION | A2 §13, §4 | L0 | V3-E02 |
 | **PF-57** | Student portal has **no profile/settings** surface; help 404 | `NOT_IMPLEMENTED` | CAPABILITY | A2 §8 | L2 | V3-E06 |
+| **PF-61** | `risk-register.md` carried **two different risks under the id `R-17`** — the CI-billing risk (added alongside PF-59) and the market-decision risk that `open-decisions.md` D-04 and `roadmap.md` already referenced. Any cross-reference to "R-17" was therefore ambiguous, including the routine's own Step-1 read | `BROKEN_TRUTH` | VALIDATION | Discovered by the V3 run of 2026-08-02 | L0 | V3-E02 |
 | **PF-58** | The entire V3 substrate (4 audits, 17 planning docs, 40 evidence files) was authored **only as untracked files inside a throwaway git worktree** and never committed. `main` had none of it, so the routine's Step 1 — which reads `roadmap.md`, `traceability-matrix.md`, `dependency-map.md`, `risk-register.md`, `open-decisions.md` — could not execute at all. The in-repo routine copy had also drifted behind the installed `SKILL.md` | `BLOCKED_BY_DEPENDENCY` | ARCH_PREREQ | V3 run 2026-08-02 | L0 | V3-E02 |
 
 > **PF-58 is the class of failure the routine is least able to see.** The planning work was done well and lost anyway,
@@ -196,14 +198,15 @@ Sourced from A3 Appendix C and A1 §11. **V3's routine must fail a story that re
 | Bucket | Count |
 |---|---|
 | P0 defects/prerequisites | 12 |
-| P1 | 23 |
-| P2/P3 | 24 |
+| P1 | 24 |
+| P2/P3 | 25 |
 | Lakoli capability gaps | 29 |
 | Do-not-copy rules | 12 |
 | Validation obligations | 10 |
-| **Total tracked items** | **110** |
+| **Total tracked items** | **112** |
 
-Delta since the 2026-08-02 baseline: **+2** — `PF-58` (substrate not on `main`, see §3) and `PF-59`
-(Actions billing lock, see §1), both discovered by V3 runs on 2026-08-02.
+Delta since the 2026-08-02 baseline: **+4**, all discovered by V3 runs on 2026-08-02 —
+`PF-58` (substrate not on `main`, §3), `PF-59` (Actions billing lock, §1),
+`PF-60` (sprint workflow overrides story selection, §2) and `PF-61` (duplicate `R-17` id, §3).
 
 Every one of these appears in `traceability-matrix.md` with its epic, story, test and evidence slot.
