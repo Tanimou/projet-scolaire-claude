@@ -40,6 +40,18 @@ Read in this order the first time:
 | Routine | [`routine/daily-improvement-v3.md`](routine/daily-improvement-v3.md) | `~/.claude/scheduled-tasks/daily-improvement-v3/SKILL.md` |
 | Lock wrapper | [`routine/routine-lock.sh`](routine/routine-lock.sh) | `~/.claude/scheduled-tasks/daily-improvement-v3/routine-lock.sh` |
 
+**Checking the mirror for drift.** The in-repo copies are byte-identical to the installed artefacts, so drift is one
+command:
+
+```bash
+diff <(git show HEAD:docs/daily-improvement-v3/routine/daily-improvement-v3.md) ~/.claude/scheduled-tasks/daily-improvement-v3/SKILL.md
+```
+
+Compare the **blob** (`git show`), not the working-tree file. `.gitattributes` pins this directory to `eol=lf`, but a
+checkout made before that rule was added still has CRLF on disk and will report every line as changed. If you see a
+whole-file diff on Windows, re-checkout the mirror (`git rm --cached -r` + restore, or `git add --renormalize .`) before
+concluding the routine has drifted.
+
 **The lock is shared with V2 on purpose.** Both routines operate on the same main checkout, so V3's wrapper delegates to
 V2's `routine-lock.sh`. A second independent lock would defeat the single-writer guarantee the guard exists to provide.
 
