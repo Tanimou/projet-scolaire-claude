@@ -43,6 +43,20 @@ finding id; nothing is closed without evidence against the finding.
 | **PF-09** | An administrator can mint a role carrying permissions they do **not** themselves hold (privilege escalation) | `BROKEN_SECURITY` | DEFECT | A2 App. C.3, App. E | L0 | V3-E05 |
 | **PF-10** | Coefficient-matrix save accepts **foreign-tenant identifiers**, re-weighting another tenant's averages | `BROKEN_SECURITY` | DEFECT | A2 App. B.1, C.3 | L0 | V3-E05 |
 | **PF-11** | Notification fan-out **dedup query is not tenant-scoped** | `BROKEN_SECURITY` | DEFECT | A2 App. B.4, C.3 | L0 | V3-E05 |
+| **PF-59** | GitHub Actions is **account-locked for billing**, so no CI job starts on any branch. Every check reports `failure` in ~3 s having executed zero steps. V3's premise — gates *executed*, not asserted — has no runner to execute them on; `VAL-01` cannot be satisfied and every gate needing a test run degrades to `evidence: deferred` | `BROKEN_RUNTIME` | ARCH_PREREQ | Discovered by the V3 run of 2026-08-02 | L0 | V3-E02 |
+
+**PF-59 evidence.** The GitHub check-run annotation is explicit — no inference involved:
+
+```
+GET /repos/Tanimou/projet-scolaire-claude/check-runs/91540293327/annotations
+[{"annotation_level":"failure","path":".github",
+  "message":"The job was not started because your account is locked due to a billing issue."}]
+```
+
+Scope: repository-wide and content-independent. The unrelated Dependabot PR #169 (2026-07-28) fails identically,
+as does every `main` run since. Job logs return `BlobNotFound` because no job ever produced any.
+Resolution is an account/billing action by the owner — **not** a code change, so no story can close this.
+It is a Step-6 *credential/decision-required* stop condition for any story whose gate evidence depends on CI.
 
 ## 2. P1 — blocks trustworthy operation
 
@@ -166,7 +180,7 @@ Sourced from A3 Appendix C and A1 §11. **V3's routine must fail a story that re
 
 | ID | Obligation | Source | Owner lens | Gate |
 |---|---|---|---|---|
-| **VAL-01** | Clean dependency install + full CI run (lint, typecheck, unit, integration, Playwright, a11y) | A2 §13, §16 | Engineering | G1 |
+| **VAL-01** | Clean dependency install + full CI run (lint, typecheck, unit, integration, Playwright, a11y) — **blocked by `PF-59`** (no runner starts) | A2 §13, §16 | Engineering | G1 |
 | **VAL-02** | Two-tenant adversarial suite on every read/write/export/job | A2 §16, App. E | Security | G0 |
 | **VAL-03** | Migration upgrade/downgrade + backup/restore rehearsal, timed | A2 §16; A3 §8 Phase 0 | Operator | G1 |
 | **VAL-04** | Production Keycloak client/redirect/audience review | A2 §16 | Security | G0 |
@@ -181,14 +195,15 @@ Sourced from A3 Appendix C and A1 §11. **V3's routine must fail a story that re
 
 | Bucket | Count |
 |---|---|
-| P0 defects/prerequisites | 11 |
+| P0 defects/prerequisites | 12 |
 | P1 | 23 |
 | P2/P3 | 24 |
 | Lakoli capability gaps | 29 |
 | Do-not-copy rules | 12 |
 | Validation obligations | 10 |
-| **Total tracked items** | **109** |
+| **Total tracked items** | **110** |
 
-Delta since the 2026-08-02 baseline: **+1** (`PF-58`, discovered by the first V3 run — see §3).
+Delta since the 2026-08-02 baseline: **+2** — `PF-58` (substrate not on `main`, see §3) and `PF-59`
+(Actions billing lock, see §1), both discovered by V3 runs on 2026-08-02.
 
 Every one of these appears in `traceability-matrix.md` with its epic, story, test and evidence slot.
