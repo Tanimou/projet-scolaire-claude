@@ -7,6 +7,16 @@
     "paths": { "@/*": ["src/*"] },
     "removeComments": true,
     "sourceMap": true,
+    // PF-72. `@pilotage/tsconfig/base.json` sets `incremental: true`, and
+    // `nest-cli.json` sets `deleteOutDir: true`. Together they are silently
+    // destructive: the build deletes dist/, then asks a compiler holding a
+    // .tsbuildinfo that says "everything is already emitted" to emit — and it
+    // emits nothing, exiting 0. Measured: with the stale build-info present,
+    // `nest build` produced 0 files and exit 0; removing only the build-info and
+    // rerunning produced 53 files including main.js. turbo then caches the empty
+    // `dist/**` as a successful build output and replays it.
+    // apps/api carries the same override for the same reason.
+    "incremental": false,
     "types": ["node", "jest"]
   },
   "include": ["src/**/*"],
