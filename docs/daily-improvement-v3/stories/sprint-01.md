@@ -579,6 +579,81 @@ file sets one today (verified), but that gap is real.
 
 ---
 
+## S-E02-13 — The observability profile stops being a claim · ✅ `done` 2026-08-03
+
+| | |
+|---|---|
+| **Epic** | V3-E02 · **Finding** PF-56 *(observability third — advanced, not closed)*, PF-77, PF-78 *(both found here)* · **Gates** G-TENANT, G-DNC |
+| **blockedBy** | — · **requiresDecision** — · **Size** M |
+
+**Why.** A2 §13 recorded PF-56 as *"observability configuration is optional rather than proven active"*.
+`infra/docker-compose.yml` has declared an `obs` profile — Prometheus, Grafana, Loki — since it was written.
+
+> **Step 2 measured it, and it is worse than "optional": the profile cannot start.** All **three** of its bind-mount
+> sources — `./grafana/prometheus.yml`, `./grafana/dashboards`, `./grafana/provisioning` — **did not exist in the
+> repository**. Docker creates a *directory* for a missing bind-mount source, so Prometheus would have received a
+> directory where it expects its config file. And no application registered a single metric, so a working Prometheus
+> would have scraped nothing. 3 of the 8 relative bind-mount sources in that file were missing, and all 3 were this
+> profile.
+
+That is **R-26** — a declared invariant trusted because it is written down — for the sixth time in seven runs.
+
+**Design — why an HTTP histogram and not just process metrics.** PF-56 asks for **SLOs**. An SLO needs a latency
+distribution and an error rate; process CPU and heap produce neither. `collectDefaultMetrics` alone would have been the
+cheap answer that does not advance the finding.
+
+**Design — the cardinality rule is the security rule.** `/metrics` is unauthenticated by construction: Prometheus
+carries no token, and a shared secret in a read-only mounted config is the appearance of a control rather than one. Its
+access control is therefore the docker network. Two consequences, both enforced: series are labelled by the **matched
+route template** (`/api/v1/students/:id`) and never by the resolved URL — labelling by `req.originalUrl` would turn
+every student id into a time series, which is an unbounded cardinality explosion *and* a tenant-identifier leak onto an
+unauthenticated surface (G-TENANT) — and the gate fails if nginx ever publishes the path.
+
+**Design — why a middleware and not an interceptor.** An interceptor wraps the handler, putting measurement code
+between the client and the response. The middleware subscribes to the response's `finish` event, calls `next()`
+immediately, and swallows its own errors: a metrics failure degrades to a missing data point, never to a failed
+request.
+
+**Design — why the worker reuses one socket.** The worker already listens for exactly one reason (`S-E02-10`'s release
+manifest). A second port for the same reason would double the compose config, the nginx rule and the number of things
+that can diverge.
+
+**Acceptance criteria.**
+1. Every bind-mount source declared by a compose file exists. ✅ — executed; the pre-slice state (3 absent) **fails**.
+2. Both Nest applications expose a Prometheus endpoint. ✅ — the worker's is queried over a **real socket**; the API's
+   is asserted against the route table read off the **booted** container.
+3. No metric label can carry an identifier. ✅ — driven with a request carrying both the template and the resolved URL
+   with an id; the id does not appear in the exposition.
+4. Every scrape target names a real service on the port it really listens on. ✅ — both negative paths executed.
+5. Every scraped path is a route the application really boots. ✅ — compared against `scripts/boot-route-baseline.json`,
+   so a controller unmounted (PF-62's shape) breaks the scrape config too.
+6. Every dashboard query names a metric the applications really register. ✅ — read from the **built** registries via
+   `getMetricsAsJSON()`, not from source text (R-26 rule (a)).
+7. nginx does not publish `/metrics`. ✅ — asserted against the real config and against a synthetic one that does.
+8. An unreadable build output is a failure, not a skip. ✅ — three separate paths.
+9. Wired into `ci-gate.sh` **and** `ci.yml`, with a guard against drift. ✅ — S-E02-2 AC-4; exercised in the negative.
+10. No bypass flag. ✅ — DNC-10.
+
+**Out of scope, stated plainly.** This does **not** start Prometheus and watch a scrape succeed — that needs
+`docker compose --profile obs up`, which the routine forbids. So the profile is proven **coherent and complete**, not
+**ingesting**; the endpoints are proven to serve, but the hop between Prometheus and them is configuration this gate
+reads rather than traffic it observes. **Traces are not delivered**: `OTEL_EXPORTER_OTLP_ENDPOINT` and a `jaeger`
+service are declared in the compose file and no application emits a span — recorded as `PF-78` rather than built here.
+**Queue depth, failure rate and DLQ are not exposed**; that needs BullMQ processors instrumented one by one. **Alert
+rules and SLO thresholds are not defined** — that is a product decision about what "good" means, not a build.
+`apps/web` exposes no metrics. The restore third of PF-56 stays blocked on **D-01**.
+
+**One half of the exposure argument is enforced and the other is convention — say which.** The gate proves nginx does
+not publish `/metrics`. It cannot prove the API's own published port is loopback-bound, because that lives in
+`.env.prod` (`API_PORT`), outside the repository; `docker-compose.prod.yml`'s header states the convention
+(*"the 127.0.0.1-bound `*_PORT` values, so no infra port is exposed publicly"*) and the routine has no way to check it.
+So: reachable from the docker network by design, not routed publicly by the reverse proxy — verified — and not bound to
+`0.0.0.0` **provided the operator honours the documented convention** — not verified. What that leaks if the convention
+lapses is bounded by construction and tested: route templates, counts, latencies and process stats; no identifier, no
+connection string.
+
+---
+
 ## Sprint 01 exit criteria
 
 - `prisma migrate status` clean; no `db push` outside development; preflight blocks unapplied migrations.

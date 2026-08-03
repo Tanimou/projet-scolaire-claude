@@ -24,6 +24,7 @@
 | **S-E02-10** | The release gate stops judging one third of the deployment | ✅ done | 2026-08-03 | 27/27 jest (19 surface + 8 worker socket; 38/38 with the comparator); the **previous** gate measured at **exit 0** on both halves of the finding, the new one at **exit 1**; 7 scenarios executed end to end; run against the live local stack: **4/4 failed**, honestly — those containers predate their manifests |
 | **S-E02-11** | The web build enters a gate; the release manifest is held to being dynamic | ✅ done | 2026-08-03 | 12/12 jest (73/73 across `src/shared/quality`); the gap measured first — with `apps/web/.next` **deleted entirely**, `boot-check.js` returned **exit 0**; the new check exercised in **9 directions**, 1 pass and 8 distinct failures |
 | **S-E02-12** | The declared runtime stops blessing a Node the API cannot boot on | ✅ done | 2026-08-03 | 18/18 jest (91/91 across `src/shared/quality`); run against the **unfixed** repo: `FAIL`, exit 1, naming **35** contradicting dependencies where the finding named one; the finding's own one-line fix measured **wrong in both directions**; 12 negative paths driven through the pure evaluator |
+| **S-E02-13** | The observability profile stops being a claim | ✅ done | 2026-08-03 | 33/33 jest (124/124 across `src/shared/quality`) + 13/13 metrics + 6/6 on a **real worker socket**; the profile measured **unable to start** — all 3 of its bind-mount sources absent; the check run against that exact state **fails** naming all three |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -568,24 +569,136 @@ matrix, exactly as `PF-73` stated. What is executed is the arithmetic over decla
 *is*. The check also cannot see a Docker `build.arg` overriding `ARG NODE_VERSION` at build time; no compose file sets
 one today, and that was verified, but it is a gap the check does not cover.
 
+## S-E02-13 — done 2026-08-03 (run 15)
+
+The `obs` profile stops being a claim. Until this slice nothing had ever tried to start it, and it could not have
+started.
+
+**The gap, measured before anything was written.** `infra/docker-compose.yml` declares Prometheus, Grafana and Loki
+under `profiles: ["obs"]`, and A2 §13 recorded that as "configuration optional rather than proven active". Enumerating
+every relative bind-mount source in every compose file gave **8**, of which **3 did not exist**:
+
+| Bind-mount source | Mounted into | Present |
+|---|---|---|
+| `./grafana/prometheus.yml` | `prometheus:/etc/prometheus/prometheus.yml` | ❌ |
+| `./grafana/provisioning` | `grafana:/etc/grafana/provisioning` | ❌ |
+| `./grafana/dashboards` | `grafana:/var/lib/grafana/dashboards` | ❌ |
+
+All three belong to this profile, and they are the only three missing in the file. Docker creates a **directory** for a
+missing bind-mount source, so Prometheus would have received a directory where it expects its config file. And
+`grep -rniE 'prom-client|opentelemetry|/metrics' apps/*/src` found nothing: no application registered a metric, so even
+a working Prometheus would have scraped an empty set. The profile was not "optional" — it was inert, and nothing in the
+repository could tell you that.
+
+**What landed.**
+
+| Piece | Why it is that and not something cheaper |
+|---|---|
+| API `GET /metrics` — default process metrics **plus** an HTTP latency histogram and request counter | PF-56 asks for **SLOs**. An SLO needs a latency distribution and an error rate; CPU and heap produce neither, so `collectDefaultMetrics` alone would have looked like progress without being any |
+| Worker `/metrics` on its **existing** release-manifest socket | The worker already listens for exactly one reason. A second port for the same reason doubles the compose config, the nginx rule, and the number of things that can diverge |
+| The three missing config files, written for real | A scrape config targeting both apps, a provisioned datasource, and a 4-panel SLO dashboard whose queries name only metrics that exist |
+| `scripts/observability-check.js` as stage 9 | The general rule — *every relative bind-mount source in every compose file must exist* — rather than a fix for these three paths, so the class cannot reappear at a new address |
+
+**The cardinality rule is the security rule.** `/metrics` is unauthenticated by construction: Prometheus carries no
+token, and a shared secret in a read-only mounted config is the appearance of a control rather than one. Its access
+control is the docker network. So the payload has to be safe on its own terms — series are labelled by the **matched
+route template** (`/api/v1/students/:id`), never by `req.originalUrl`. Labelling by the resolved URL is one line away
+and would turn every student id into a time series: an unbounded cardinality explosion *and* a tenant-identifier leak
+onto an unauthenticated surface. A test drives the label function with a request carrying **both** and asserts the id
+does not reach the exposition; another asserts unmatched URLs collapse onto a single series, so a scanner inventing
+paths cannot exhaust memory. The gate holds the other half: it fails if any nginx `location` ever publishes the path.
+
+**The check caught its own first defect, which is the best evidence that it reads something real.** Merging services
+across compose files with `Object.assign` let `docker-compose.prod.yml`'s **partial** `api` override replace the base
+definition wholesale, losing its `environment` and `ports` — so the very first run reported "listening port cannot be
+determined" for both applications. It now merges one level into `environment`, the way compose itself layers.
+
+**Two probes were run against the real script, not only the evaluator**, because a pure function can be driven into any
+state and that is also its weakness — it never proves the *collector* reads the right things:
+
+| Probe on the real repository | Result |
+|---|---|
+| `infra/grafana` moved aside in its entirety — the exact pre-slice state | **exit 1, 6 problems**: all three mount sources named, plus "Prometheus configuration missing", "no datasource provisioned", "no dashboard found" |
+| an nginx `location = /metrics { proxy_pass … }` added | **exit 1**, naming the location and why the network is the control |
+| restored, clean | **exit 0** — 8/8 mount sources, 3 scrape jobs, 4 dashboard queries against 29 registered metrics |
+
+**Executed in both directions.** Beyond those, the evidence is the pure evaluator driven with input known to be wrong:
+
+| Probe | Result |
+|---|---|
+| the **pre-slice state** — obs profile declared, its 3 mount sources absent | **fails**, naming all three |
+| a scrape target naming a host that is not a compose service | **fails** |
+| a scrape target on a port the service does not listen on | **fails**, naming the real port |
+| a scrape job with no target at all | **fails** |
+| an empty `scrape_configs` | **fails** — an empty config is not a pass |
+| the API not serving the scraped path *(PF-62's shape)* | **fails**, and says why it is PF-62's shape |
+| the worker serving metrics on a different path | **fails** |
+| a dashboard panel querying a metric nothing registers | **fails** — "No data" for ever is indistinguishable from a quiet system |
+| a panel pointing at an unprovisioned datasource uid | **fails** |
+| a datasource step disagreeing with the scrape interval | **fails** |
+| a datasource url naming a non-service host | **fails** |
+| an nginx `location` publishing `/metrics` | **fails** |
+| build output / route baseline / worker path unreadable | **fails, three separate paths — never a skip** |
+
+The guard spec was exercised in the negative too, not merely written: replacing the stage with `true` in **both**
+`ci-gate.sh` and `ci.yml` makes it **2 failed / 31 passed**, one per disconnected file. Restored, `git diff` clean.
+
+**Metric names are read from the built registries** via `getMetricsAsJSON()`, not from a regex over the registry
+source — R-26 rule (a), and the reason run 10's JSONC-by-regex nearly passed vacuously.
+
+**Not claimed, and the residual is most of the finding.** This does **not** start Prometheus and watch a scrape
+succeed: that needs `docker compose --profile obs up`, which the routine forbids, and a running api and worker to
+scrape. The profile is therefore proven **coherent and complete**, not **ingesting** — the endpoints are proven to
+serve (the worker's over a real socket), but the hop between Prometheus and them is configuration this gate reads
+rather than traffic it observes. **Traces remain unimplemented**: `OTEL_EXPORTER_OTLP_ENDPOINT` and a `jaeger` service
+are declared and `grep -rniE 'opentelemetry|otel' apps/*/src` returns **0 hits** — recorded as `PF-78` rather than
+half-built. **Queue depth, failure rate and DLQ are not exposed.** **No alert rule or SLO threshold is defined**, which
+is deliberate: what counts as "good" is a product decision, and inventing thresholds would be the same failure as
+inventing policy text (R-13). `apps/web` exposes no metrics. The restore third stays blocked on **D-01**, so `PF-56` is
+`in-progress`, not `closed`.
+
+**And one half of the exposure argument is enforced while the other is convention — the distinction matters more than
+the conclusion.** The gate proves nginx does not publish `/metrics`. It cannot prove the API's own published port is
+loopback-bound: that lives in `.env.prod` (`API_PORT`), outside the repository. `docker-compose.prod.yml`'s header
+states the convention — *"the 127.0.0.1-bound `*_PORT` values, so no infra port is exposed publicly"* — and nothing
+reads it, which is `R-26`'s shape at an address this slice does **not** close. What would leak if the convention lapsed
+is bounded by construction and tested: route templates, request counts, latencies and process stats; no identifier, no
+connection string.
+
+**A routine-level defect was found by living through it — `PF-77` / `R-27`.** The `write.lock` acquired at the start of
+this run was reaped as stale by a **second V3 tick at 21:09**, because Step 4 asks for a heartbeat around the build and
+nothing asks for one during Step 3, which has run over an hour in every run since run 9. For half an hour this run was
+writing to the checkout holding no lock. Re-acquiring the gate to recover made it worse: the salvage path `git stash`ed
+every tracked modification and reset the branch to `origin/main`. The slice survived only because that salvage exists.
+
 ## Next slice
 
-Five blind spots this epic knew about are now closed: the lint gate executes, something boots the applications, the
-release gate covers the whole deployment, the web build is inspected, and the declared runtime is checked. What is
-left, in order:
+Six blind spots this epic knew about are now closed or advanced: the lint gate executes, something boots the
+applications, the release gate covers the whole deployment, the web build is inspected, the declared runtime is
+checked, and the observability profile can now start and is held to being coherent. What is left, in order:
 
 1. **`PF-63`/`PF-65`** — 12 of the 18 baselined failures sit on the analytics/snapshot path (`V3-E03`), which is the
    epic that owns `PF-04`'s cross-portal count contradiction. Those red tests are very likely *already describing*
    that bug. **Note the sequencing constraint:** `V3-E03` depends on `E01`, `E04` and `E05`, all open, so this is not
    selectable under the roadmap's layer rule until they close — it is listed here because the triage is cheap and
    would inform E03, not because it can be picked next.
-2. **`PF-56`** — observability/SLO/restore remain unproven; still needs a story. The restore third is blocked on
-   **D-01**; the observability third is not, and is now **the last genuinely unblocked item in this epic**. It is also
-   the one least suited to the pattern the last five runs used: there is no existing declaration to hold to account,
-   so it is a build rather than a gate, and it should be sliced before it is started.
+2. **`PF-78`** — tracing. The collector (`jaeger`) and the exporter endpoint are declared in the compose file and **no
+   application emits a span**. This is the trace third of `PF-56`, separated by `S-E02-13` rather than half-built,
+   because instrumenting three applications is its own slice. It is unblocked, and it is the natural continuation:
+   `S-E02-13` proved the profile can start, and a Jaeger with nothing in it is the same "configuration present,
+   nothing proven" state the metrics half just left.
+3. **`PF-56`'s remaining thirds** — queue depth / failure / DLQ metrics (needs BullMQ processors instrumented one by
+   one), alert rules and SLO thresholds (**a product decision, not a build** — what counts as "good" cannot be
+   invented by the routine any more than legal text can, R-13), and the restore drill, which stays blocked on
+   **D-01**.
 
-With that, `V3-E02`'s unblocked work is down to `PF-56`: `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
-operator or **D-01**. The next run should either slice `PF-56`'s observability third, or let the selection rule move to
-**`V3-E06`** (production hygiene — independent of everything, per `dependency-map.md` §3), whose first unblocked story
-is `S-E06-1` (`PF-17`/`PF-54`, Maildev and seed leakage plus hard-coded credentials). `S-E06-4`'s content half stays
-blocked on **D-08**.
+**A routine-level item that outranks all of the above, and is not this repository's to fix.** `PF-77` / `R-27`: the
+single-writer lock expires during Step 3 and a concurrent tick reaps it. It was observed causing a working-tree reset
+on run 15. Until the routine heartbeats during implementation, every long run is exposed, and the failure is silent
+until `heartbeat` prints `no lock held` — by which point another run may already have written. The fix lives in
+`~/.claude/scheduled-tasks/`, outside this checkout, so it is an operator action.
+
+With that, `V3-E02`'s unblocked code work is `PF-78`; `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
+operator or **D-01**. The alternative under the selection rule is to let it move to **`V3-E06`** (production hygiene —
+independent of everything, per `dependency-map.md` §3), whose first unblocked story is `S-E06-1` (`PF-17`/`PF-54`,
+Maildev and seed leakage plus hard-coded credentials). `S-E06-4`'s content half stays blocked on **D-08**.

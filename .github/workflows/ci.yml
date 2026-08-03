@@ -121,6 +121,16 @@ jobs:
       # dynamic rather than frozen at build time. Kept in step with
       # scripts/ci-gate.sh stage 8 — the two must not drift (S-E02-2 AC-4).
       - run: node scripts/web-artifact-check.js
+      # The `obs` compose profile (Prometheus/Grafana/Loki) has been declared
+      # since it was written and never once read: all three of its bind-mount
+      # sources were absent from the repository, and no application registered a
+      # single metric (PF-56). This step reads the profile — scrape targets must
+      # name real services on the ports they really listen on, scraped paths must
+      # be routes the applications really boot, dashboards must query metrics
+      # that really exist, and nginx must not publish /metrics. Reads dist/, so
+      # it belongs to the build job. Kept in step with scripts/ci-gate.sh
+      # stage 9 — the two must not drift (S-E02-2 AC-4).
+      - run: node scripts/observability-check.js
 
   test:
     name: Test

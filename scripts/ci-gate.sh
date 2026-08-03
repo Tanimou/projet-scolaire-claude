@@ -121,6 +121,26 @@ else
   echo "⏭  web artefact check skipped (--quick — it reads the build's .next/)"
 fi
 
+# Stage 9 — observability. `infra/docker-compose.yml` has declared an `obs`
+# profile (Prometheus/Grafana/Loki) since it was written, and A2 §13 recorded it
+# as "configuration optional rather than proven active" (PF-56). Measured before
+# this stage existed, it was worse than optional: all THREE of the profile's
+# bind-mount sources were absent from the repository, so Prometheus would have
+# received a directory where it expects its config file — and no application
+# registered a single metric, so a working Prometheus would have scraped
+# nothing. This stage reads the profile the way the other gates read their
+# declarations: scrape targets must name real services on the ports they really
+# listen on, scraped paths must be routes the applications really BOOT (checked
+# against the same booted route table as stage 7), dashboards must query metrics
+# the applications really register (read from the built registries), and nginx
+# must not publish /metrics. Reads dist/, so it runs after the build.
+if [ "${QUICK}" -eq 0 ]; then
+  run_stage "observability (profile + scrape coherence)" node scripts/observability-check.js
+else
+  echo ""
+  echo "⏭  observability check skipped (--quick — it reads the build's dist/)"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  CI GATE SUMMARY"

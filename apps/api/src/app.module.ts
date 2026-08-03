@@ -18,6 +18,7 @@ import { ImportsModule } from './modules/imports/imports.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { LessonsModule } from './modules/lessons/lessons.module';
 import { MessagingModule } from './modules/messaging/messaging.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ParentExportsModule } from './modules/parent-exports/parent-exports.module';
 import { RemediationModule } from './modules/remediation/remediation.module';
@@ -60,6 +61,9 @@ import { PrismaModule } from './shared/prisma/prisma.module';
     RemediationModule,
     StudentPortalModule,
     ChildClaimsModule,
+    // Instrumentation en dernier : le middleware qu'il installe s'applique à
+    // toutes les routes déclarées au-dessus (S-E02-13 / PF-56).
+    MetricsModule,
   ],
   controllers: [HealthController],
 })

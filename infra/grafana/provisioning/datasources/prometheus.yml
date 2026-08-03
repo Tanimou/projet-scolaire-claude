@@ -1,0 +1,27 @@
+# Datasource Grafana provisionnée (S-E02-13 / PF-56).
+#
+# `infra/docker-compose.yml` monte `./grafana/provisioning` dans Grafana depuis
+# la création du profil `obs` ; le répertoire n'existait pas. Une Grafana sans
+# datasource provisionnée démarre, affiche une interface vide, et donne
+# exactement l'impression d'observabilité que PF-56 décrit : de la configuration
+# présente, rien de prouvé actif.
+#
+# L'URL pointe le **nom de service compose**, pas localhost : Grafana et
+# Prometheus sont deux conteneurs distincts. `scripts/observability-check.js`
+# vérifie que ce nom et ce port correspondent au service Prometheus réellement
+# déclaré dans le compose — une divergence ici est silencieuse à l'exécution.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: pilotage-prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Doit rester égal au `scrape_interval` de prometheus.yml, sinon les
+      # graphes interpolent entre des points qui n'existent pas.
+      timeInterval: 15s
