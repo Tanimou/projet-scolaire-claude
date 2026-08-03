@@ -342,6 +342,74 @@ takes ~4–5 minutes. `scripts/` and `bmad/` remain unlinted.
 
 ---
 
+## S-E02-9 — Something starts the applications: module graph + booted route table · ✅ `done` 2026-08-03
+
+Authored and delivered in flight by run 11; its full record — including the `PF-72` empty-`dist/` defect the gate found
+on its first real run — is in `docs/spec/features/v3-e02/PROGRESS.md`. Closed `PF-67` and `PF-72`; mitigated `R-24`,
+opened `R-25`.
+
+---
+
+## S-E02-10 — The release gate stops judging one third of the deployment · ✅ `done` 2026-08-03
+
+| | |
+|---|---|
+| **Epic** | V3-E02 · **Finding** PF-68 *(closed)* · **Risk** R-05 · **Gates** G-MIGRATION, G-DNC |
+| **blockedBy** | — · **requiresDecision** — · **Size** M |
+
+**Why.** `S-E02-6` built a real, executed release gate — **for one artefact**. The deployment ships three (`api`,
+`worker`, `web`), built and deployed separately; all three already carried a `GIT_SHA` baked at build time and two of
+them had nothing that could read it. The gate also *printed* `schemaVersion` without ever comparing it, and never read
+`migrations.status` at all.
+
+> **Step 2 measured the residual instead of restating it.** `git show main:scripts/release-gate.sh` was run against
+> synthetic deployments and returned **exit 0** for (a) a deployment where only the API answers, and (b) an API at the
+> right commit sitting on a database that was **never baselined** — `PF-03`'s exact live state. Both now **exit 1**.
+
+**Design — one comparator, not three.** The obvious implementation copies the comparator into the worker and the web.
+Three copies drift, and a drifted copy turns green the third of the deployment it is not looking at — which is how this
+finding came to exist. It lives once, in `packages/contracts/src/release/`, the only package all three already depend
+on. *(A `@pilotage/contracts/release` subpath export was written first and reverted: this workspace compiles with
+`moduleResolution: Node`, which does not read the `exports` map — which is also why the pre-existing `./enums`,
+`./dto` and `./events` entries are imported by nothing.)*
+
+**Design — why the worker gets an HTTP socket.** It runs `createApplicationContext` and deliberately has no HTTP
+surface. But `docker inspect` reads the *image*, not the process, and R-05 materialised precisely because a running
+artefact matched no ref of the repository. A gate that can interrogate one artefact in three is an API gate. The socket
+serves one method, two paths, and a payload of a name, two short SHAs and a verdict; everything else is a 404, and it
+is published on loopback only.
+
+**Design — why the schema is compared to the checkout.** `migrations.status: clean` means only "every migration *this
+image* ships is applied", so an older image is clean about its own lag. The comparison opposes the applied migration to
+what **this checkout** ships, read off the filesystem — independent sources, as with the SHA.
+
+**Acceptance criteria.**
+1. Every deployed artefact publishes a manifest. ✅ — `GET /version` (api), `/version/worker`, `/version/web`; each
+   names itself, and the gate checks that name.
+2. The gate interrogates all three. ✅ — executed; a drifted worker and an absent web manifest each **exit 1**.
+3. An unreachable artefact is a failure, not a skip. ✅ — executed. The URL variables are addresses, not switches.
+4. A misrouted proxy is detected. ✅ — executed: the api manifest answered on the worker path → **exit 1**.
+5. The schema is compared, not printed. ✅ — executed: `unbaselined` → 1, and a database `clean` about its own older
+   migration → 1.
+6. The gate does not delegate its verdict. ✅ — an artefact **claiming** `match` at a foreign SHA → **exit 1**.
+7. No bypass flag. ✅ — DNC-10, locked by a test over six plausible flag names.
+8. A drifted worker refuses to start in production, as the api does. ✅ — same shared preflight.
+
+**Test.** `apps/api/src/shared/release/release-surface.spec.ts` — 19/19 (38/38 with the comparator spec);
+`apps/worker/src/shared/release/version-server.spec.ts` — 8/8, starting a **real** socket on an ephemeral port and
+querying it, including an assertion that the response leaks neither `DATABASE_URL` nor `REDIS_URL`.
+
+> **The ratchet caught this slice's own code.** `lint-ratchet.js` returned **exit 1** — `apps/api: 10 warnings exceeds
+> the ceiling of 9`, an `import/order` in the file this slice had just rewritten. Fixed at the source; raising the
+> ceiling is the move the ratchet exists to refuse.
+
+**Out of scope, stated.** The gate has **never run against the hosted deployment** — it would fail there today, which
+*is* the drift. Run against the local stack it fails **4/4**, honestly: those containers predate their manifests. It
+proves *which* artefact runs, not that it works. Keycloak, Postgres, Redis, MinIO and nginx are upstream images pinned
+by tag and outside this control.
+
+---
+
 ## S-E06-1 — Purge development artefacts from production builds
 
 | | |

@@ -135,12 +135,21 @@ seed_chain() {
 }
 
 release_gate() {
-  # Gate de release (S-E02-6) : relit le manifeste publié par l'API qui tourne
-  # vraiment. Volontairement APRÈS le healthcheck : un conteneur sain qui sert le
-  # mauvais artefact est exactement le mode de panne que R-05 décrit.
-  say "Release gate — le déploiement exécute-t-il le commit attendu ?"
-  bash "$ROOT/scripts/release-gate.sh" "http://localhost:${API_PORT:-4000}" "$EXPECTED_GIT_SHA" \
-    || die "Release gate en échec — l'artefact déployé n'est pas celui attendu. Voir docs/runbooks/release-gate.md."
+  # Gate de release (S-E02-6, élargie par S-E02-10) : relit les manifestes publiés
+  # par les artefacts qui tournent vraiment. Volontairement APRÈS le healthcheck :
+  # un conteneur sain qui sert le mauvais artefact est exactement le mode de panne
+  # que R-05 décrit.
+  #
+  # Les trois conteneurs publient chacun leur port sur l'hôte, il n'y a donc pas
+  # de base URL commune ici : chaque artefact est interrogé à son adresse. Ce sont
+  # des ADRESSES, pas des interrupteurs — un artefact injoignable fait échouer la
+  # gate, il n'est jamais sauté (DNC-08/DNC-10).
+  say "Release gate — api, worker, web et le schéma sont-ils au commit attendu ?"
+  RELEASE_GATE_API_URL="http://localhost:${API_PORT:-4000}" \
+  RELEASE_GATE_WORKER_URL="http://localhost:${WORKER_HTTP_PORT:-4001}" \
+  RELEASE_GATE_WEB_URL="http://localhost:${WEB_PORT:-3000}" \
+    bash "$ROOT/scripts/release-gate.sh" "http://localhost:${API_PORT:-4000}" "$EXPECTED_GIT_SHA" \
+    || die "Release gate en échec — le déploiement n'exécute pas ce qui est attendu. Voir docs/runbooks/release-gate.md."
 }
 
 if [ "$SEED_ONLY" = 1 ]; then

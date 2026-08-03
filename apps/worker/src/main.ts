@@ -4,14 +4,30 @@ import { writeFile } from 'node:fs/promises';
 
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { assertReleaseMatches } from '@pilotage/contracts';
 
 import { AppModule } from './app.module';
+import { startVersionServer } from './shared/release/version-server';
 
 async function bootstrap() {
   // eslint-disable-next-line no-console
   console.log('[Worker] Booting…');
+
+  // Preflight release AVANT toute connexion (S-E02-10 / PF-68, risque R-05) :
+  // un worker qui exécute le mauvais artefact consomme des files réelles et
+  // écrit des données réelles. Il doit refuser de démarrer exactement comme
+  // l'API refuse de servir. Même règle, même code partagé : sans EXPECTED_GIT_SHA
+  // le verdict est `unverified` et rien n'est bloqué (DNC-08/DNC-10).
+  const bootLogger = new Logger('Worker');
+  assertReleaseMatches(bootLogger, 'worker');
+
   const app = await NestFactory.createApplicationContext(AppModule);
   const logger = new Logger('Worker');
+
+  // Le worker n'a pas de surface HTTP métier — ce socket ne sert QUE le
+  // manifeste de release, pour que la gate puisse interroger les trois artefacts
+  // et pas seulement l'API. Voir shared/release/version-server.ts.
+  const versionServer = await startVersionServer(logger);
 
   logger.log('🛠  Worker started — exports processor + alerts cron armed');
 
@@ -26,6 +42,7 @@ async function bootstrap() {
   const shutdown = async (signal: string) => {
     logger.log(`Received ${signal}, shutting down…`);
     clearInterval(heartbeat);
+    await new Promise<void>((resolve) => versionServer.close(() => resolve()));
     await app.close();
     process.exit(0);
   };
@@ -34,7 +51,7 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-   
+
   console.error('Worker bootstrap failed', err);
   process.exit(1);
 });

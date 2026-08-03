@@ -8,7 +8,7 @@ import {
 
 import { readMigrationState } from '../../shared/migrations/migration-state';
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { readReleaseManifest } from '../../shared/release/release-manifest';
+import { buildManifestPayload } from '../../shared/release/release-manifest';
 
 @ApiTags('health')
 @Controller()
@@ -42,16 +42,13 @@ export class HealthController {
   @Get('version')
   async version() {
     const state = await readMigrationState(this.prisma);
-    const release = readReleaseManifest();
+    // `app: 'api'` (S-E02-10) : le worker et le web publient désormais le même
+    // manifeste sur leurs propres routes. Sans ce champ, un proxy mal routé qui
+    // renverrait CE manifeste sur /version/worker serait indiscernable d'un
+    // worker conforme — la gate vérifie donc l'identité de l'artefact qui répond.
     return {
-      buildSha: release.buildSha,
+      ...buildManifestPayload('api'),
       schemaVersion: state.schemaVersion,
-      release: {
-        verdict: release.verdict,
-        expectedSha: release.expectedSha,
-        dirty: release.dirty,
-        detail: release.detail,
-      },
       migrations: {
         status: state.status,
         applied: state.applied.length,

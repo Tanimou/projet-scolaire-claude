@@ -21,6 +21,7 @@
 | **S-E02-7** | The `lint` stage stops being fictional; `prisma/` enters both gates | ✅ done | 2026-08-03 | 26/26 jest; `pnpm lint --force` **13/13, 0 cached** (was 7 of 8 packages exiting 2); a deliberate error probe makes the stage exit 1 at package level *and* through turbo; `pnpm typecheck --force` 13/13 including `prisma/`; `pnpm build` exit 0 |
 | **S-E02-8** | Warning count becomes a ratchet; first cut taken only where it is safe | ✅ done | 2026-08-03 | 20/20 jest (46/46 with `lint-gate.spec.ts`); **996 → 44** warnings; ratchet exercised in four directions (increase → 1, back under → 0, ceiling left high → 1, package absent → 1); the DI-breaking autofix measured on emitted JS and refused; `pnpm build` exit 0 |
 | **S-E02-9** | Something starts the applications: module graph + booted route table | ✅ done | 2026-08-03 | 15/15 jest (61/61 across `src/shared/quality`); both apps construct (api 42 modules / 40 controllers / 228 routes, worker 23 modules); gate exits 1 on the R-24 DI break **and** on the PF-62 unmounted controller, naming all 13 lost routes; found and fixed `PF-72` (worker building to an empty `dist/` behind a green `pnpm build`) |
+| **S-E02-10** | The release gate stops judging one third of the deployment | ✅ done | 2026-08-03 | 27/27 jest (19 surface + 8 worker socket; 38/38 with the comparator); the **previous** gate measured at **exit 0** on both halves of the finding, the new one at **exit 1**; 7 scenarios executed end to end; run against the live local stack: **4/4 failed**, honestly — those containers predate their manifests |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -330,16 +331,86 @@ eight stages:
 The self-inflicted `FAIL` is left on the record beside the `PASS`. R-23 exists because runs 5–7 reported around a red
 stage; a run that quietly re-rolls its own red stage until it goes green is the same failure wearing a different hat.
 
+## S-E02-10 — done 2026-08-03 (run 12)
+
+The release gate was judging one artefact out of three, and printing a number it never compared.
+
+**The finding, measured rather than argued.** `PF-68`'s residual half was recorded as a note. Step 2 turned it into a
+measurement by running the **previous** gate (`git show main:scripts/release-gate.sh`) against synthetic deployments:
+
+| Deployment | gate on `main` | gate after this slice |
+|---|---|---|
+| only the API answers — worker and web never interrogated | **exit 0** | **exit 1** |
+| API at the right commit, database **never baselined** (`PF-03`'s live state) | **exit 0** | **exit 1** |
+
+The second row is the sharper one. The gate *read* `schemaVersion` — to print it on line 57 — and never read
+`migrations.status` at all. A deployment could be certified conforming while running against a schema of unknown
+origin, which is precisely the class of defect `S-E02-1` exists to prevent.
+
+**Why the comparator moved to `packages/contracts`.** Three artefacts are built and deployed separately, and all three
+already carried a `GIT_SHA` baked at build time since `S-E02-6` — two of them had nothing that could read it. The
+obvious implementation is to copy the comparator into the worker and the web. Three copies of a version comparator
+drift, and a drifted copy turns green the third of the deployment it is not looking at — which is how this finding came
+to exist in the first place. One copy, in the only package all three already depend on.
+
+*(A subpath export `@pilotage/contracts/release` was written first and reverted: this workspace compiles with
+`moduleResolution: Node`, which does not read the `exports` map. The pre-existing `./enums`, `./dto` and `./events`
+entries are declared and imported by nothing, for exactly that reason. Adding a fourth unusable entry would have been
+a trap; the root import is the idiom that actually works here.)*
+
+**What each artefact publishes.**
+
+| Artefact | Route | Notes |
+|---|---|---|
+| `api` | `GET /version` | now also carries `app: "api"` and, as before, the migration state |
+| `worker` | `GET /version/worker` | a ~60-line `node:http` server — the worker has no other HTTP surface |
+| `web` | `GET /version/web` | Next route handler, `force-dynamic` |
+
+The `app` field is not decoration: without it, a reverse-proxy answering the API manifest on `/version/worker` is
+indistinguishable from a conforming worker, and the gate would be green on an artefact it never reached. Executed as a
+probe — it fails.
+
+The worker also runs the **same production refusal** as the api. It writes real data from real queues; a drifted worker
+is not less dangerous than a drifted API, it is less visible.
+
+**Executed in seven directions,** because a gate that only ever passes proves nothing:
+
+| Scenario | Result |
+|---|---|
+| all three conforming, schema current | **exit 0** |
+| worker drifted | **exit 1**, worker named |
+| web manifest absent (an artefact predating the manifest) | **exit 1** — unreachable is a failure, never a skip |
+| proxy returns the api manifest on the worker path | **exit 1** — `a répondu le manifeste de 'api'` |
+| database never baselined | **exit 1** |
+| database `clean` about its **own**, older migration | **exit 1** — `status: clean` only means "this image's own migrations are applied" |
+| artefact **claiming** `match` at a foreign SHA | **exit 1** — the gate re-derives, it does not delegate |
+
+**Run against the stack actually running on this machine: 4/4 failed.** All three containers are two days old and
+predate their manifests. That is R-05 live locally, reported as-is rather than worked around — the same result run 7
+got for the API alone, now visible for the whole deployment.
+
+**The ratchet caught this slice's own code.** `lint-ratchet.js` returned **exit 1** — `apps/api: 10 warnings exceeds
+the ceiling of 9 (+1)`, an `import/order` in the file this slice had just rewritten. Fixed at the source; raising the
+ceiling would have been the exact move the ratchet exists to refuse. Back to 44/44.
+
+**Not claimed.** The gate has **never run against the hosted deployment** and cannot until a deploy carries these
+manifests — it would fail there today, which *is* the drift, not a false positive. It proves **which** artefact runs,
+not that it works: a container at the right SHA with a wrong connection string passes this gate and fails elsewhere.
+And Keycloak, Postgres, Redis, MinIO and nginx are upstream images pinned by tag, outside this control entirely.
+
 ## Next slice
 
-Both blind spots this epic knew about are now closed: the lint gate executes, and something boots the applications.
-What is left, in order:
+Three blind spots this epic knew about are now closed: the lint gate executes, something boots the applications, and
+the release gate covers the whole deployment. What is left, in order:
 
 1. **`PF-63`/`PF-65`** — 12 of the 18 baselined failures sit on the analytics/snapshot path (`V3-E03`), which is the
    epic that owns `PF-04`'s cross-portal count contradiction. Those red tests are very likely *already describing*
-   that bug. Triaging them may be the cheapest entry into E03 that exists, and it is now the highest-value item here.
-2. **`PF-68` residual** — worker and web carry a `GIT_SHA` but expose no HTTP manifest, so their drift is undetected;
-   `schemaVersion` is published without being compared to the checkout's latest shipped migration.
-3. **`R-25` residual** — the `web` (Next.js) build has no artefact assertion equivalent to the boot check. The same
-   "reports success, emits nothing" shape is unguarded there.
+   that bug. **Note the sequencing constraint:** `V3-E03` depends on `E01`, `E04` and `E05`, all open, so this is not
+   selectable under the roadmap's layer rule until they close — it is listed here because the triage is cheap and
+   would inform E03, not because it can be picked next.
+2. **`R-25` residual** — the `web` (Next.js) build has no artefact assertion equivalent to the boot check. The same
+   "reports success, emits nothing" shape is unguarded there, and `web` is now the one artefact whose manifest route
+   could silently fail to be emitted.
+3. **`PF-73`** — `engines.node >=20.0.0` blesses a Node version on which `AuthModule` cannot load (`jose@6` is
+   ESM-only). One line, but it belongs with a deliberate engines review.
 4. **`PF-56`** — observability/SLO/restore remain unproven; still needs a story.
