@@ -23,6 +23,7 @@
 | **S-E02-9** | Something starts the applications: module graph + booted route table | ✅ done | 2026-08-03 | 15/15 jest (61/61 across `src/shared/quality`); both apps construct (api 42 modules / 40 controllers / 228 routes, worker 23 modules); gate exits 1 on the R-24 DI break **and** on the PF-62 unmounted controller, naming all 13 lost routes; found and fixed `PF-72` (worker building to an empty `dist/` behind a green `pnpm build`) |
 | **S-E02-10** | The release gate stops judging one third of the deployment | ✅ done | 2026-08-03 | 27/27 jest (19 surface + 8 worker socket; 38/38 with the comparator); the **previous** gate measured at **exit 0** on both halves of the finding, the new one at **exit 1**; 7 scenarios executed end to end; run against the live local stack: **4/4 failed**, honestly — those containers predate their manifests |
 | **S-E02-11** | The web build enters a gate; the release manifest is held to being dynamic | ✅ done | 2026-08-03 | 12/12 jest (73/73 across `src/shared/quality`); the gap measured first — with `apps/web/.next` **deleted entirely**, `boot-check.js` returned **exit 0**; the new check exercised in **9 directions**, 1 pass and 8 distinct failures |
+| **S-E02-12** | The declared runtime stops blessing a Node the API cannot boot on | ✅ done | 2026-08-03 | 18/18 jest (91/91 across `src/shared/quality`); run against the **unfixed** repo: `FAIL`, exit 1, naming **35** contradicting dependencies where the finding named one; the finding's own one-line fix measured **wrong in both directions**; 12 negative paths driven through the pure evaluator |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -472,22 +473,119 @@ it does not prove that *removing* `force-dynamic` is what produces that state, b
 inherently dynamic, so there is no in-build control case to point at. The detection is measured; the trigger is
 inferred from Next 15's static-by-default handling of route handlers.
 
+## S-E02-12 — done 2026-08-03 (run 14)
+
+The runtime this repository claims to support is now checked instead of asserted — and the finding's own prescription
+was wrong, which is the run's most useful result.
+
+**Why this was not a one-line fix.** `PF-73` recorded *«Fix is one line (`>=22.12.0`)»*. Applying it would have
+replaced an unverified declaration with another unverified declaration, which is the exact failure mode this epic
+exists to end. So the declaration became arithmetic that runs: `scripts/runtime-engines-check.js` reads every installed
+package's own `engines.node` out of pnpm's virtual store — **671 of 1294 declare one** — and asserts with
+`semver.subset` that the root declaration blesses no Node version any of them refuses.
+
+**Executed against the unfixed repository before anything was changed:**
+
+```
+▶ declared runtime: node ">=20.0.0", pnpm ">=8.0.0"
+▶ dependency set   : 671 packages declare engines.node
+  ✗ engines.node ">=20.0.0" blesses Node versions that 35 installed dependencies refuse.
+  ✗ .nvmrc pins Node "22", which is not a concrete version.
+  ✗ .github/workflows/ci.yml NODE_VERSION pins Node "22", which is not a concrete version.
+  ✗ engines.pnpm ">=8.0.0" allows pnpm 8.0.0, a different major from the packageManager pin (9.12.3).
+RUNTIME ENGINES CHECK: FAIL (4 problem(s))
+```
+
+**35**, where the finding named one. And three problems it never mentioned at all.
+
+**The prescription is wrong in both directions.** Measured against the installed set:
+
+| Range | 20.19.x | 22.12.x | 22.13.x | 23.x | ≥24 |
+|---|---|---|---|---|---|
+| what every dependency accepts | ✅ | ❌ *(`eslint-visitor-keys`)* | ✅ | ❌ *(`eslint-visitor-keys`)* | ✅ |
+| PF-73's proposed `>=22.12.0` | **excluded — wrongly** | **blessed — wrongly** | ✅ | **blessed — wrongly** | ✅ |
+
+`require(esm)` was **backported to 20.19**, which the finding missed; `jwks-rsa@4.0.1` says so itself
+(`"^20.19.0 || ^22.12.0 || >= 23.0.0"`). And `eslint-visitor-keys@5.0.1` requires `^20.19.0 || ^22.13.0 || >=24`, which
+`>=22.12.0` violates twice over. Both corrections are locked as tests, so they survive the finding being re-read.
+
+**What is declared, and why it is narrower than what works.** `^22.13.1 || >=24.0.0`. The compatible set is
+20.19.x · 22.13.x · ≥24, but `engines` is a **support** statement, not a compatibility one: 22.13.1 is what the three
+Dockerfiles build and ship, ≥24 is what local development runs on, and 20.19 is compatible-but-untested. Declaring only
+what is exercised is the whole point of the epic.
+
+### Two defects PF-73 never mentioned, found by the check and fixed in the same run
+
+**`PF-75` — `engines.pnpm: ">=8.0.0"` beside `packageManager: pnpm@9.12.3`.** `pnpm-lock.yaml` is
+`lockfileVersion: '9.0'`; pnpm 8 writes 6.0. The repository declared support for a package manager that cannot have
+produced its own lockfile. Now `>=9.0.0`, with the rule checked rather than remembered — the floor of `engines.pnpm`
+must sit inside the `packageManager` pin's major, and `ci.yml`'s `PNPM_VERSION` must equal that pin.
+
+**`PF-76` — `.nvmrc: 22` and `ci.yml: NODE_VERSION: '22'`.** `PF-73` called itself latent because "everything runs 22".
+It was latent for a weaker reason than that: a bare major *declares* 22.0.0–22.99.x, which includes 22.0–22.11 — the
+window where the API cannot boot at all. It was safe only because nvm and `actions/setup-node` happen to resolve a bare
+major to the newest release. A statement that is true by accident is the same defect one level down. Both now pin
+**22.13.1**, equal to the three `ARG NODE_VERSION` defaults; the Dockerfiles are discovered from the filesystem rather
+than from a list, so a fourth one is covered without anyone remembering.
+
+### Executed in both directions
+
+Positive: `RUNTIME ENGINES CHECK: PASS`, exit 0 — *"is a subset of all 671 installed engines.node ranges"*,
+*"all 5 Node pins agree on 22.13.1"*, *"the running Node (25.7.0) satisfies engines.node"*.
+
+The script judges *this* repository, so a clean run can only ever show the current state is fine — it can never show
+the gate would catch a regression. The evaluation is therefore a **pure function** the spec drives with synthetic
+input, which is where the real evidence is:
+
+| Probe | Result |
+|---|---|
+| the exact declaration that shipped PF-73 (`>=20.0.0`) | **fails**, naming `jwks-rsa@4.0.1` |
+| the finding's own proposed fix (`>=22.12.0`) | **fails**, naming `eslint-visitor-keys@5.0.1` |
+| a future dependency raising its floor to `>=26` | **fails** — the forward-looking half |
+| `.nvmrc` back to a floating `22` | **fails** — "not a concrete version" |
+| one Dockerfile pinning a different version | **fails** — "2 different Node versions" |
+| a Dockerfile that stops declaring `ARG NODE_VERSION` | **fails** — silence is not a pass |
+| `engines.pnpm` back to `>=8.0.0` | **fails** — different major from the pin |
+| `ci.yml` `PNPM_VERSION` drifting from `packageManager` | **fails** |
+| the gate itself running on Node 20.11 | **fails** — everything downstream would be validated on an unsupported runtime |
+| `node_modules/.pnpm` absent | **fails, not skips** — with nothing to compare against, check (1) would pass vacuously |
+| an unparseable declaration (`lts/*`) | **fails**, rather than being ignored |
+
+**The guard spec was exercised in the negative too, not merely written.** Reverting `engines.node` to `>=20.0.0`,
+`.nvmrc` to `22`, and replacing the `ci-gate.sh` stage with `true` makes it **3 failed / 15 passed**, one failure per
+broken thing. Everything was restored and `git diff` confirmed clean.
+
+**A dependency was added deliberately.** `semver` becomes a root devDependency (3 lockfile lines, no other package
+moved). It was resolvable only transitively from pnpm's virtual store, and the alternative — hand-rolling version-range
+algebra inside a guard — is precisely how run 10's JSONC-by-regex nearly passed vacuously. A test asserts the direct
+dependency, so a future lockfile change cannot silently remove the thing the gate's arithmetic rests on.
+
+**Not claimed, and the limit is real.** This does **not** start Node 20 and watch the API fail. That needs a second
+runtime the gate does not have. The packaging was read directly — `jose@6.2.3` is `"type": "module"` with
+`main: ./dist/webapi/index.js` whose first line is `export {…}`, and `jwks-rsa/src/utils.js:1` is
+`const jose = require('jose')` — but the boot failure below 20.19 stays **inferred** from the require(ESM) support
+matrix, exactly as `PF-73` stated. What is executed is the arithmetic over declared ranges, which is what a declaration
+*is*. The check also cannot see a Docker `build.arg` overriding `ARG NODE_VERSION` at build time; no compose file sets
+one today, and that was verified, but it is a gap the check does not cover.
+
 ## Next slice
 
-Four blind spots this epic knew about are now closed: the lint gate executes, something boots the applications, the
-release gate covers the whole deployment, and the web build is inspected. What is left, in order:
+Five blind spots this epic knew about are now closed: the lint gate executes, something boots the applications, the
+release gate covers the whole deployment, the web build is inspected, and the declared runtime is checked. What is
+left, in order:
 
 1. **`PF-63`/`PF-65`** — 12 of the 18 baselined failures sit on the analytics/snapshot path (`V3-E03`), which is the
    epic that owns `PF-04`'s cross-portal count contradiction. Those red tests are very likely *already describing*
    that bug. **Note the sequencing constraint:** `V3-E03` depends on `E01`, `E04` and `E05`, all open, so this is not
    selectable under the roadmap's layer rule until they close — it is listed here because the triage is cheap and
    would inform E03, not because it can be picked next.
-2. **`PF-73`** — `engines.node >=20.0.0` blesses a Node version on which `AuthModule` cannot load (`jose@6` is
-   ESM-only). One line, but it belongs with a deliberate engines review.
-3. **`PF-56`** — observability/SLO/restore remain unproven; still needs a story. The restore third is blocked on
-   **D-01**; the observability third is not, and is the largest genuinely unblocked item left in this epic.
+2. **`PF-56`** — observability/SLO/restore remain unproven; still needs a story. The restore third is blocked on
+   **D-01**; the observability third is not, and is now **the last genuinely unblocked item in this epic**. It is also
+   the one least suited to the pattern the last five runs used: there is no existing declaration to hold to account,
+   so it is a build rather than a gate, and it should be sliced before it is started.
 
-With that, `V3-E02`'s unblocked work is nearly exhausted: `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
-operator or **D-01**. The next run should expect the selection rule to move to **`V3-E06`** (production hygiene —
-independent of everything, per `dependency-map.md` §3), whose first unblocked story is `S-E06-1` (`PF-17`/`PF-54`,
-Maildev and seed leakage plus hard-coded credentials). `S-E06-4`'s content half stays blocked on **D-08**.
+With that, `V3-E02`'s unblocked work is down to `PF-56`: `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
+operator or **D-01**. The next run should either slice `PF-56`'s observability third, or let the selection rule move to
+**`V3-E06`** (production hygiene — independent of everything, per `dependency-map.md` §3), whose first unblocked story
+is `S-E06-1` (`PF-17`/`PF-54`, Maildev and seed leakage plus hard-coded credentials). `S-E06-4`'s content half stays
+blocked on **D-08**.

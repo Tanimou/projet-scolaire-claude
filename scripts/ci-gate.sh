@@ -48,6 +48,18 @@ run_stage() {
   fi
 }
 
+# Stage 0 — the runtime everything below runs on. `engines.node` said `>=20.0.0`
+# while the API cannot start below Node 20.19/22.12 at all: `jose@6` is ESM-only
+# and `jwks-rsa@4` require()s it from CommonJS, on the boot path via AuthModule
+# (PF-73). Nothing ever checked that claim, and `.nvmrc`/`ci.yml` pinned a
+# floating `22`, whose declared meaning includes the window where boot is
+# impossible. Measured when this stage was written: **35** installed dependencies
+# contradicted the declared range, not the one the finding named. It runs first
+# and costs ~2 s, because a gate running on an unsupported runtime has validated
+# nothing below it. Kept in step with .github/workflows/ci.yml — the two must not
+# drift (S-E02-2 AC-4).
+run_stage "runtime engines" node scripts/runtime-engines-check.js
+
 # Stage 1 — Prisma client. Everything downstream (typecheck, tests, build) fails
 # with unresolvable types if the generated client is missing, which is precisely
 # how the audited worktree reported "tests cannot run".

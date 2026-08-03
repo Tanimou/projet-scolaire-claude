@@ -11,7 +11,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '22'
+  # Concrete, and equal to `.nvmrc` and the three `ARG NODE_VERSION` defaults.
+  # It was '22' — a floating major that resolves to the newest 22.x today, but
+  # whose declared meaning includes 22.0-22.11, the window in which the API
+  # cannot boot at all (jose@6 is ESM-only and jwks-rsa require()s it, PF-73).
+  # `scripts/runtime-engines-check.js` fails if these four ever disagree.
+  NODE_VERSION: '22.13.1'
   PNPM_VERSION: '9.12.3'
 
 jobs:
@@ -28,6 +33,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      # The runtime every other job runs on. `engines.node` claimed `>=20.0.0`
+      # while the API cannot start below 20.19/22.12 — jose@6 is ESM-only and
+      # jwks-rsa require()s it, on the boot path via AuthModule (PF-73). Nothing
+      # checked the claim; 35 installed dependencies contradicted it. This also
+      # holds NODE_VERSION / PNPM_VERSION above to `.nvmrc`, the Dockerfiles and
+      # `packageManager`. Kept in step with scripts/ci-gate.sh stage 0 — the two
+      # must not drift (S-E02-2 AC-4).
+      - run: node scripts/runtime-engines-check.js
 
   lint:
     name: Lint
