@@ -1,27 +1,10 @@
-/** Base ESLint config — TypeScript + Prettier */
-module.exports = {
-  root: false,
-  parser: '@typescript-eslint/parser',
-  parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
-  plugins: ['@typescript-eslint', 'import'],
-  extends: [
-    'eslint:recommended',
-    'plugin:@typescript-eslint/recommended',
-    'plugin:import/recommended',
-    'plugin:import/typescript',
-    'prettier',
-  ],
-  settings: {
-    'import/resolver': {
-      typescript: { alwaysTryTypes: true },
-      node: true,
-    },
-  },
-  rules: {
-    '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
-    '@typescript-eslint/consistent-type-imports': ['warn', { prefer: 'type-imports' }],
-    'import/order': ['warn', { 'newlines-between': 'always', alphabetize: { order: 'asc' } }],
-    'no-console': ['warn', { allow: ['warn', 'error', 'info'] }],
-  },
-  ignorePatterns: ['dist/**', '.next/**', 'build/**', 'node_modules/**', 'coverage/**'],
-};
+/**
+ * Default entrypoint — the flat base config.
+ *
+ * The eslintrc-format export that used to live here was unreadable by ESLint 9
+ * and is gone (PF-70). Pick the layer that matches the package:
+ *   `@pilotage/eslint-config/base`   — TypeScript + Prettier, no environment
+ *   `@pilotage/eslint-config/node`   — + Node globals, Jest spec relaxations
+ *   `@pilotage/eslint-config/react`  — + browser globals, React + hooks rules
+ */
+module.exports = require('./base');

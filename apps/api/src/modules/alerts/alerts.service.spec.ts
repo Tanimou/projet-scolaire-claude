@@ -311,6 +311,9 @@ describe('AlertsService.recordMeetingIntent (E1-S3 — MeetingRequest model + au
     // `err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'`;
     // jest cannot easily construct the real class, so we tag a plain Error and
     // patch the prototype chain for the instanceof check.
+    // The require is deliberate: the class must be resolved lazily, after the
+    // module mocks in this file are installed, so it cannot be a top-level import.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { Prisma } = require('@prisma/client');
     const err = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
       code: 'P2002',

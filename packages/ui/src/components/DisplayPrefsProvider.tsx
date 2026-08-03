@@ -12,7 +12,7 @@ import {
   type DisplayPreferences,
 } from '../lib/display-prefs';
 
-interface DisplayPrefsContextValue extends DisplayPreferences {}
+type DisplayPrefsContextValue = DisplayPreferences;
 
 const DisplayPrefsContext = createContext<DisplayPrefsContextValue>(DISPLAY_PREFS_DEFAULTS);
 

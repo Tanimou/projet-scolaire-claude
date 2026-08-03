@@ -220,6 +220,57 @@ worker/web HTTP manifests and schema-version comparison (`PF-68`).
 
 ---
 
+## S-E02-7 — The `lint` stage stops being fictional, and covers `prisma/` · ✅ `done` 2026-08-03
+
+| | |
+|---|---|
+| **Epic** | V3-E02 · **Finding** PF-70, PF-69 · **Risk** R-21 · **Gates** G-DNC |
+| **blockedBy** | — · **requiresDecision** — · **Size** M |
+
+**Why.** `scripts/ci-gate.sh` has six stages. Stage 2 had never once passed. ESLint was bumped to v9, which stopped
+reading `.eslintrc.*`, and **no package in the workspace had a flat `eslint.config.js`** — the three apps carried v8-format
+`.eslintrc` files and the five shared packages had no config at all. Turbo replayed pre-bump cache entries as ✓ for
+some tasks, and `apps/web` genuinely exited 0 only because `next lint` silently forces eslintrc mode. Runs 5, 6 and 7
+each declared their change green while citing typecheck, the ratchet and the build, and never naming stage 2.
+
+> **Step 2 found it wider than PF-70 recorded.** PF-70 was written from one observed cache-miss failure and inferred
+> the rest. Executed package by package, **7 of the 8 lintable packages exited 2**; only `apps/web` exited 0, and only
+> via the deprecated path. So the lint gate was not "partly cached-green" — it was linting **nothing but web**.
+
+**Design — why flat, and why one format only.** ESLint 9 can be forced back into eslintrc mode with
+`ESLINT_USE_FLAT_CONFIG=false`. That would have made the stage pass today and broken on the next major, and it is
+exactly the shape of fix V3 exists to refuse: it makes the *report* green without making the *check* real. Both
+formats coexisting would be worse still — a package could carry a `.eslintrc` that never loads and believe it is
+governed by rules that do not apply. The migration is therefore total: every `.eslintrc*` is deleted, every lintable
+package gets an `eslint.config.js`, and a guard asserts that neither condition can silently revert.
+
+**PF-69 folds in.** `apps/api/prisma/` — ~2 900 lines including the seed chain behind `PF-17` — sat outside the lint
+glob (`{src,test}/**/*.ts`) *and* outside the typecheck include (`src/**/*`). It is the one directory that writes the
+entire demo dataset and the one directory no gate looked at. Both gates now cover it.
+
+**Acceptance criteria.**
+1. `pnpm lint` executes in every lintable package and exits 0. ✅ — **13/13 turbo tasks, 0 cached**, executed with
+   `--force` so no task could report a stale ✓.
+2. A genuine lint error fails the stage. ✅ — probe executed: `no-useless-escape` in `@pilotage/i18n` → **exit 1** at
+   package level *and* through turbo. Probe deleted; the stage returns to 0.
+3. No package is linted through `next lint`. ✅ — `apps/web` moved to the ESLint CLI with `FlatCompat` over
+   `next/core-web-vitals`.
+4. `apps/api/prisma/` is inside both gates. ✅ — `eslint .`; `tsc --noEmit -p prisma/tsconfig.json` added to the api
+   typecheck script and the two `TS2571` casts fixed. `pnpm typecheck` **13/13, 0 cached**.
+5. No gate is weakened to achieve this. ✅ — the six real errors were **fixed**, not disabled; the single
+   `eslint-disable-next-line` added is on a deliberate lazy `require()` in a spec and carries its reason.
+
+**Test.** `apps/api/src/shared/quality/lint-gate.spec.ts` — 26/26. Asserts every lintable package has a flat config,
+no `.eslintrc*` survives anywhere, no script uses `next lint`, the shared config exports arrays, `ci-gate.sh` still
+runs the stage, and the api's `prisma/` coverage. Both negative directions executed: a reintroduced `.eslintrc.js` and
+a removed `eslint.config.js` each fail the guard.
+
+**Out of scope, stated.** The **996 warnings** the working gate now surfaces are recorded as `PF-71`, not silenced:
+warnings do not fail the build, so this story turns the light on without also demanding the room be tidied in one run.
+Linting `scripts/` and `bmad/` (neither is a workspace package) is likewise left open.
+
+---
+
 ## S-E06-1 — Purge development artefacts from production builds
 
 | | |

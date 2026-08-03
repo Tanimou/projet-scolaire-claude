@@ -18,6 +18,7 @@
 | **S-E02-4** | Seed cannot run in production | ✅ done | 2026-08-03 | 34/34 jest; the guard was **executed** — all **7** seed scripts exit 1 `[refused-production]` under a production target *with the correct token*, and the allowed demo path crosses the guard and fails on the DB connection instead; `nest build` exit 0 |
 | **S-E02-5** | Reconcile source ↔ hosted schema drift | ⬜ todo | — | *(implied by S-E02-1; needs hosted access)* |
 | **S-E02-6** | Release manifest made real; deploy gate compares it | ✅ done | 2026-08-03 | 19/19 jest; the gate was **executed** — exit 1 against the live drifted API, exit 0 on a conforming manifest, exit 1 on all four bad verdicts *and* on a manifest lying `match`; `nest build` exit 0 |
+| **S-E02-7** | The `lint` stage stops being fictional; `prisma/` enters both gates | ✅ done | 2026-08-03 | 26/26 jest; `pnpm lint --force` **13/13, 0 cached** (was 7 of 8 packages exiting 2); a deliberate error probe makes the stage exit 1 at package level *and* through turbo; `pnpm typecheck --force` 13/13 including `prisma/`; `pnpm build` exit 0 |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -118,16 +119,49 @@ resolving to `DEPLOY_ENV: production`, `ALLOW_SEED: ""` — closed by default.
 **Not claimed:** demo rows already written to the hosted database stay there. Removing them is a destructive action on
 hosted data (routine STOP condition #3) and belongs to the operator — runbook §6.
 
+## S-E02-7 — done 2026-08-03 (run 9)
+
+The `lint` stage of `ci-gate.sh` runs for the first time since it was written, and `prisma/` stops being invisible to
+both gates.
+
+**What was actually wrong**, wider than `PF-70` recorded. The finding inferred "four tasks green from turbo cache, one
+red". Measured package by package, **7 of the 8 lintable packages exited 2** — ESLint 9 stopped reading `.eslintrc.*`
+and no package had a flat config. The one package that exited 0, `apps/web`, passed only because `next lint` silently
+forces eslintrc mode; that command is deprecated in Next 15 and removed in Next 16. So the gate was not partly
+cached-green — **it was linting nothing but web**, and would have stopped doing even that on the next Next upgrade.
+
+**The fix that was refused.** `ESLINT_USE_FLAT_CONFIG=false` would have turned the stage green in one line. That is
+exactly the shape V3 exists to refuse: it makes the *report* green without making the *check* real, and it defers the
+break onto a maintainer who will not have this context. Keeping both formats alive would be worse still — a package
+could carry an `.eslintrc` that never loads while believing it is governed by rules that do not apply.
+
+**What landed.** `packages/eslint-config` rewritten as flat arrays (`base` / `node` / `react`; the unused `next` preset
+deleted); an `eslint.config.js` in each of the 8 lintable packages; all three `.eslintrc*` files removed; `apps/web`
+moved to the ESLint CLI with `FlatCompat` over `next/core-web-vitals`; `apps/api` linting `.` rather than
+`{src,test}/**/*.ts` and typechecking `prisma/tsconfig.json` alongside `src` (`PF-69`).
+
+**Executed in both directions.** `pnpm lint --force` → **13/13 tasks, 0 cached** — the `--force` is the whole point,
+since a stale cached ✓ is what hid this for three runs. A `no-useless-escape` probe in `@pilotage/i18n` makes the stage
+exit **1**, at package level and through turbo alike; probe deleted, stage back to 0. `pnpm typecheck --force` →
+13/13, 0 cached, now including the ~2 900 lines under `prisma/` that write the entire demo dataset.
+
+**Six real errors fixed, none disabled.** Two `no-useless-escape` inside regex character classes, one
+empty-extending interface, one `eslint-disable` directive naming a rule not loaded in that package (itself an error),
+and one `require()` in a spec — that last one kept as a single documented disable, because resolving the class lazily
+after the module mocks install is deliberate.
+
+**Not claimed.** The working gate surfaces **996 warnings** (web 597, api 321, worker 49, ui 24, imports-core 5),
+recorded as `PF-71` and left in place: warnings do not fail a build, and silencing them to make a number look good is
+the failure mode this story just closed. `scripts/` and `bmad/` remain unlinted — neither is a workspace package.
+
 ## Next slice
 
-Run 8 added two findings, one of which changes how this epic should read its own past reports:
+The lint blind spot is closed. What is left in this epic, in order:
 
-0. **`PF-70` — `ci-gate.sh`'s `lint` stage has never passed.** ESLint v9 requires a flat config that **no** package
-   has; four lint tasks report green only from turbo cache predating the version bump, and `@pilotage/i18n`, the one
-   that actually executes, fails. Runs 5, 6 and 7 each declared their change green while citing typecheck/ratchet/build
-   and never naming stage 2. **This is the highest-value next fix in the epic:** until it is repaired, the gate that
-   `PF-59` promoted to *the* gate returns a partly fictional verdict, and every later run inherits the blind spot.
-   Repo-wide flat-config migration; `PF-69` (the `prisma/` directory escaping both typecheck and lint) folds into it.
+0. **`PF-71` — ratchet the 996 warnings down.** The pattern already exists in this repo: `scripts/test-ratchet.js`
+   tolerates a baselined set and blocks any increase. A `--max-warnings` ceiling per package that only ever decreases
+   would do the same for lint. **952 of the 996 are `--fix`-able**, so the first cut is nearly free — but it touches a
+   very large number of files, which is why it is its own slice and not a tail on `S-E02-7`.
 
 Two follow-ons from run 5 remain, both still open:
 
