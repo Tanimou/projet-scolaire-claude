@@ -49,6 +49,13 @@ WORKDIR /app
 
 COPY --from=build --chown=app:app /prod/worker ./
 
+# Identité de l'artefact (S-E02-6 / VAL-10) — voir Dockerfile.api. Le worker
+# n'expose pas de manifeste HTTP, mais l'image doit rester identifiable
+# (`docker inspect`) : un worker qui dérive du reste de la release est le même
+# risque R-05 sans la route pour le voir.
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
+
 ENV NODE_ENV=production \
     NODE_OPTIONS="--enable-source-maps"
 

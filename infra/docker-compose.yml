@@ -249,12 +249,20 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile.api
+      args:
+        # Grave DANS l'image le commit dont elle est issue (S-E02-6 / VAL-10, R-05).
+        GIT_SHA: ${GIT_SHA:-}
     container_name: pilotage_api
     profiles: ["app"]
     restart: unless-stopped
     environment:
       <<: *app-env
       PORT: "4000"
+      # Ce que l'opérateur CROIT déployer, injecté au démarrage et comparé au
+      # GIT_SHA gravé au build. Non renseigné ⇒ verdict `unverified` : rien n'est
+      # bloqué, mais `GET /version` le dit au lieu de laisser croire à une
+      # vérification qui n'a pas eu lieu (DNC-08).
+      EXPECTED_GIT_SHA: ${EXPECTED_GIT_SHA:-}
       # jwks-rsa@4 imports the ESM-only jose@6 via require(); Node enables
       # require(ESM) by default from 22.12, so enable it explicitly to stay
       # compatible if the base image ever lags behind. Harmless on newer Node.
@@ -285,6 +293,8 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile.worker
+      args:
+        GIT_SHA: ${GIT_SHA:-}
     container_name: pilotage_worker
     profiles: ["app"]
     restart: unless-stopped
@@ -319,6 +329,7 @@ services:
         # Browser-facing: KC login redirects must hit the host-published port.
         NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
         NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
+        GIT_SHA: ${GIT_SHA:-}
     container_name: pilotage_web
     profiles: ["app"]
     restart: unless-stopped

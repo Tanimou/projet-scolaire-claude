@@ -56,6 +56,33 @@ if [ "$DOWN" = 1 ]; then
   say "Stopping prod stack (volumes kept)…"; "${SEED[@]}" down; exit 0
 fi
 
+# --- Identité de la release (S-E02-6 / VAL-10, risque R-05) -----------------
+# GIT_SHA est gravé DANS les images au build ; EXPECTED_GIT_SHA est injecté dans
+# le conteneur api au démarrage. L'API compare les deux au boot, et l'étape 7
+# relit le manifeste publié. R-05 s'est déjà matérialisé : une image construite
+# depuis un arbre non commité a servi des 404 en production pendant sept semaines
+# (PF-62) sans que rien ne le détecte — ni les tests, ni le build, qui regardent
+# tous la source et jamais l'artefact. Un build sale est donc estampillé `-dirty`
+# et refusé par la gate : il n'est reproductible depuis aucune ref du dépôt.
+GIT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+[ -n "$GIT_SHA" ] || die "Impossible de lire le commit courant — déployez depuis un checkout git."
+EXPECTED_GIT_SHA="$GIT_SHA"
+
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  if [ "${ALLOW_DIRTY_BUILD:-0}" = 1 ]; then
+    GIT_SHA="${GIT_SHA}-dirty"
+    warn "Arbre de travail SALE — image estampillée ${GIT_SHA}."
+    warn "La release gate refusera cet artefact : il ne correspond à aucun commit."
+  else
+    git status --short --untracked-files=no
+    die "Arbre de travail sale : l'image ne correspondrait à aucun commit — c'est la cause
+  exacte de R-05/PF-62. Commitez, ou relancez avec ALLOW_DIRTY_BUILD=1 pour produire un
+  artefact explicitement marqué -dirty (que la gate signalera)."
+  fi
+fi
+export GIT_SHA EXPECTED_GIT_SHA
+ok "Release: build ${GIT_SHA} · attendu ${EXPECTED_GIT_SHA:0:12}"
+
 # --- wait until a compose service reports docker-healthy ---------------------
 wait_healthy() {
   local svc="$1" timeout="${2:-180}" deadline cid status
@@ -93,6 +120,15 @@ seed_chain() {
   run_seed "announcements feed"    pnpm --filter @pilotage/api run prisma:seed:demo:enrich
 }
 
+release_gate() {
+  # Gate de release (S-E02-6) : relit le manifeste publié par l'API qui tourne
+  # vraiment. Volontairement APRÈS le healthcheck : un conteneur sain qui sert le
+  # mauvais artefact est exactement le mode de panne que R-05 décrit.
+  say "Release gate — le déploiement exécute-t-il le commit attendu ?"
+  bash "$ROOT/scripts/release-gate.sh" "http://localhost:${API_PORT:-4000}" "$EXPECTED_GIT_SHA" \
+    || die "Release gate en échec — l'artefact déployé n'est pas celui attendu. Voir docs/runbooks/release-gate.md."
+}
+
 if [ "$SEED_ONLY" = 1 ]; then
   wait_healthy api 120
   seed_chain
@@ -122,6 +158,9 @@ for i in $(seq 1 60); do
 done
 wait_healthy api 240        # implies migrator (migrate deploy) completed_successfully
 wait_healthy web 180
+
+# --- 3bis. Release gate — sain ≠ correct ------------------------------------
+release_gate
 
 # Keycloak readiness: poll the realm discovery under /auth from inside the network
 # (definitive — the management health port is separate and not what we depend on).
@@ -153,6 +192,9 @@ cat <<EOF
   Admin      ${PUBLIC_BASE_URL}/admin/login   mme.dupont@voltaire.fr / Demo!2024Pilotage
   Teacher    ${PUBLIC_BASE_URL}/teacher/login teacher.demo@voltaire.fr / Demo!2024Pilotage
   Parent     ${PUBLIC_BASE_URL}/parent/login  parent.demo@voltaire.fr / Demo!2024Pilotage
+
+  Release    build ${GIT_SHA} — manifeste: ${PUBLIC_BASE_URL}/version
+  Recheck    bash scripts/release-gate.sh ${PUBLIC_BASE_URL}
 
   Logs:    docker compose --env-file .env.prod -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app --profile prod logs -f <svc>
   Reseed:  bash scripts/deploy-prod.sh --seed-only

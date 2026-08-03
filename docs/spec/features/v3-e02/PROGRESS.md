@@ -17,6 +17,43 @@
 | **S-E02-3** | Timed backup → restore rehearsal | ⛔ blocked | — | blocked by decision **D-01** |
 | **S-E02-4** | Seed cannot run in production | ⬜ todo | — | unblocked once S-E02-1's hosted half is signed off |
 | **S-E02-5** | Reconcile source ↔ hosted schema drift | ⬜ todo | — | *(implied by S-E02-1; needs hosted access)* |
+| **S-E02-6** | Release manifest made real; deploy gate compares it | ✅ done | 2026-08-03 | 19/19 jest; the gate was **executed** — exit 1 against the live drifted API, exit 0 on a conforming manifest, exit 1 on all four bad verdicts *and* on a manifest lying `match`; `nest build` exit 0 |
+
+## S-E02-6 — the manifest was inert; now the comparison is real
+
+`S-E02-1` shipped `GET /version`. Step 2 of the 2026-08-03 run found it could not gate anything, for two **independent**
+reasons — neither visible without looking outside the API source:
+
+1. **Nothing set the SHA.** `buildSha()` read `GIT_SHA`/`BUILD_SHA`, and no Dockerfile, compose file or deploy script
+   in the repository ever set either. The manifest returned `"unknown"` in every environment, always.
+2. **`/version` was unroutable.** It is deliberately excluded from Nest's global `api/v1` prefix, and nginx proxies only
+   `/api/` — so it fell through to `location /` and was answered by **Next.js**. Probing the hosted host returned the
+   *web app's* 404, not the API's manifest.
+
+Recorded as `PF-68`. Both are fixed; the design point is that the gate compares **two independent sources**:
+
+| Value | Origin | Means |
+|---|---|---|
+| `GIT_SHA` | `ARG`→`ENV`, baked into the image **at build time** | what the artefact **is** |
+| `EXPECTED_GIT_SHA` | injected into the container **at deploy time** | what the operator **believes** they run |
+
+Producing both from the same step would have proved nothing. Their independence is the control.
+
+**Executed evidence, both directions.** Run against the API actually running on this machine (up 43 h), the gate
+**failed with exit 1** — that container predates `/version`, i.e. it is a genuinely drifted artefact, which is R-05
+still live locally. Against a synthetic manifest: `match`→0; `drift`, `dirty`, `unverified`, `unstamped` and a
+missing `verdict` field→1. The sharpest case: a manifest **claiming `match`** against a foreign SHA is still rejected,
+because `release-gate.sh` re-derives the expectation from the checkout instead of trusting the artefact it is judging.
+
+**`unverified` fails the gate but does not block boot.** Not comparing is reported honestly rather than as success
+(`DNC-08`), while every pre-existing deployment keeps starting. There is **no bypass flag** (`DNC-10`) — not declaring
+an expectation *is* the switch, and it is visible in the manifest. A test asserts three plausible flag names have no
+effect in production.
+
+**What it does not cover.** Worker and web carry `GIT_SHA` but expose no HTTP manifest, so their drift is undetected;
+`schemaVersion` is published but not compared against the checkout's latest shipped migration. Both are the open half
+of `PF-68`. And the gate has **never run against the hosted deployment** — it cannot, until a deploy carrying
+`/version` reaches it.
 
 ## S-E02-2 — what "done" means here, and what it does not
 
