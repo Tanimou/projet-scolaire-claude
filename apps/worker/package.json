@@ -35,6 +35,7 @@
   "devDependencies": {
     "@nestjs/cli": "^10.4.8",
     "@nestjs/schematics": "^10.2.3",
+    "@nestjs/testing": "^10.4.13",
     "@pilotage/eslint-config": "workspace:*",
     "@pilotage/tsconfig": "workspace:*",
     "@types/jest": "^29.5.14",

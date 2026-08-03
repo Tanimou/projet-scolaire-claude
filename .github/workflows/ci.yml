@@ -92,6 +92,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @pilotage/api prisma generate
       - run: pnpm build
+      # Every stage before this one proves the code compiles; not one of them
+      # starts the application. PF-62 (a controller silently unmounted — 404 in
+      # production for seven weeks) and R-24 (`import type` erasing the emitted
+      # design:paramtypes, breaking DI while `tsc --noEmit` returns 0) both live
+      # in that gap. It runs in the build job because it reads dist/. Kept in
+      # step with scripts/ci-gate.sh stage 7 — the two must not drift
+      # (S-E02-2 AC-4).
+      - run: node scripts/boot-check.js
 
   test:
     name: Test

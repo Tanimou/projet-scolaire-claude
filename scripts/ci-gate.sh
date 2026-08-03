@@ -78,6 +78,21 @@ else
   echo "⏭  build skipped (--quick)"
 fi
 
+# Stage 7 — boot. Every stage above proves the code *compiles*; not one of them
+# starts the application. That gap shipped a seven-week production 404 (PF-62 — a
+# controller silently unmounted) and very nearly shipped a DI break that
+# typecheck, build and ESLint all called green (R-24 — `import type` erasing the
+# emitted `design:paramtypes`). This stage constructs the real module graph from
+# the built artefact and compares the booted route table against a reviewed
+# baseline. It runs AFTER the build, and is skipped with it, because it reads
+# dist/. See scripts/boot-check.js.
+if [ "${QUICK}" -eq 0 ]; then
+  run_stage "boot (module graph + route table)" node scripts/boot-check.js
+else
+  echo ""
+  echo "⏭  boot check skipped (--quick — it reads the build's dist/)"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  CI GATE SUMMARY"

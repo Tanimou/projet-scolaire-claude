@@ -1,0 +1,235 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+/**
+ * PF-67 / R-24 guard — the boot check must stay wired, and must keep covering
+ * every Nest application.
+ *
+ * WHAT PF-67 ACTUALLY IS
+ * ----------------------
+ * Not "the module-wiring guards read source text". That was the first symptom.
+ * The finding was widened twice, and its real shape is: **nothing in this
+ * repository starts either application.** A change can be type-correct, build
+ * cleanly, satisfy ESLint and pass every wiring spec while making the app
+ * impossible to construct — that is R-24, measured on emitted
+ * `design:paramtypes`, and no amount of reading source can catch it.
+ *
+ * `scripts/boot-check.js` closes that by constructing the real module graph from
+ * the built artefact. This file guards the *wiring* of that script, in the same
+ * spirit as `lint-gate.spec.ts`: it cannot itself boot Nest (see below), so it
+ * asserts the gate cannot silently stop running or silently stop covering an
+ * application.
+ *
+ * WHY THIS SPEC DOES NOT SIMPLY BOOT THE APP ITSELF
+ * -------------------------------------------------
+ * It cannot, and the reason is worth recording so nobody "simplifies" it back:
+ * importing `AppModule` under jest pulls
+ * `AlertsModule → AuthModule → JwtStrategy → jwks-rsa → jose`, and `jose@6` is
+ * ESM-only. ts-jest's CommonJS runtime fails to parse it and the suite dies
+ * before the first assertion. Verified by probe during S-E02-9. The boot check
+ * runs outside jest, under plain Node, which loads `jose` natively.
+ *
+ * So the division of labour is explicit:
+ *   • `scripts/boot-check.js` — executes the boot. Its exit code is the gate.
+ *   • this file               — proves the gate is still connected to CI.
+ * Neither is a substitute for the other, and this file never claims the app
+ * boots.
+ */
+
+const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
+const SCRIPT_PATH = join(REPO_ROOT, 'scripts', 'boot-check.js');
+const BASELINE_PATH = join(REPO_ROOT, 'scripts', 'boot-route-baseline.json');
+const GATE_PATH = join(REPO_ROOT, 'scripts', 'ci-gate.sh');
+const WORKFLOW_PATH = join(REPO_ROOT, '.github', 'workflows', 'ci.yml');
+
+interface Baseline {
+  $comment?: string;
+  apps: Record<string, { routes: string[] }>;
+}
+
+/** Filesystem discovery, mirroring `discoverNestApps()` in the script. */
+function discoverNestApps(): string[] {
+  const appsDir = join(REPO_ROOT, 'apps');
+  return readdirSync(appsDir)
+    .filter((name) => existsSync(join(appsDir, name, 'src', 'app.module.ts')))
+    .map((name) => `apps/${name}`)
+    .sort();
+}
+
+const nestApps = discoverNestApps();
+const baseline = existsSync(BASELINE_PATH)
+  ? (JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as Baseline)
+  : null;
+
+describe('boot gate (PF-67, R-24)', () => {
+  it('finds the Nest applications at all', () => {
+    // Guards the guard. A broken REPO_ROOT would make every assertion below
+    // pass vacuously over an empty list — the exact bug that made the first
+    // draft of lint-ratchet.spec.ts report zero decorator-metadata packages.
+    expect(nestApps).toContain('apps/api');
+    expect(nestApps).toContain('apps/worker');
+  });
+
+  it('the boot check script exists', () => {
+    expect(existsSync(SCRIPT_PATH)).toBe(true);
+  });
+
+  it('the route baseline exists and is not trivially small', () => {
+    expect(baseline).not.toBeNull();
+    const api = baseline?.apps['apps/api'];
+    expect(api).toBeDefined();
+    // 228 routes were measured when the baseline was created. A baseline that
+    // collapsed to a handful would pass a naive "file exists" check while
+    // covering almost nothing.
+    expect(api?.routes.length ?? 0).toBeGreaterThanOrEqual(200);
+  });
+
+  it.each(nestApps)('%s has a baseline entry — no escape by omission', (app) => {
+    // The script enforces this at runtime; asserting it here means a
+    // hand-edited baseline that drops an application fails the test suite too,
+    // rather than only failing the slower gate stage.
+    expect(baseline?.apps[app]).toBeDefined();
+  });
+
+  it.each(nestApps)('%s can resolve @nestjs/testing, or the check cannot run', (app) => {
+    // apps/worker did not depend on @nestjs/testing until S-E02-9 added it.
+    // Removing it again would turn the boot check into an unconditional failure
+    // — or, worse, invite someone to "fix" that by skipping the app.
+    const manifest = JSON.parse(
+      readFileSync(join(REPO_ROOT, app, 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const deps = { ...manifest.dependencies, ...manifest.devDependencies };
+    expect(deps['@nestjs/testing']).toBeDefined();
+  });
+
+  it('the baseline still contains the routes PF-62 lost', () => {
+    // These three are not decoration. `GradesModule` lost its `controllers:`
+    // line on 2026-06-01 and these returned 404 in production for seven weeks
+    // while every gate stayed green. If they ever disappear from the booted
+    // route table again, the boot check fails and names them — and if someone
+    // regenerates the baseline to make that failure go away, this test fails.
+    const routes = baseline?.apps['apps/api']?.routes ?? [];
+    expect(routes.length).toBeGreaterThan(0);
+    for (const route of [
+      'GET /assessments',
+      'POST /assessments',
+      'GET /grades/gradebook/:teachingAssignmentId',
+      'POST /grades/batch',
+    ]) {
+      expect(routes).toContain(route);
+    }
+  });
+
+  it('ci-gate.sh runs the boot check, after the build stage', () => {
+    const gate = readFileSync(GATE_PATH, 'utf8');
+    expect(gate).toMatch(/node\s+scripts\/boot-check\.js/);
+    // Ordering is a correctness requirement, not style: the check reads
+    // `dist/`, so running it before the build would either test a stale
+    // artefact or fail on a missing one.
+    const buildAt = gate.indexOf('run_stage "build"');
+    const bootAt = gate.indexOf('scripts/boot-check.js');
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(bootAt).toBeGreaterThan(buildAt);
+  });
+
+  it('ci.yml runs the boot check too, so the two gates cannot drift', () => {
+    // S-E02-2 AC-4: scripts/ci-gate.sh and .github/workflows/ci.yml must stay
+    // the same command list. A stage that exists only locally is a stage that
+    // stops existing the moment PF-59 is resolved and CI becomes the gate again.
+    const workflow = readFileSync(WORKFLOW_PATH, 'utf8');
+    expect(workflow).toMatch(/node\s+scripts\/boot-check\.js/);
+    const buildAt = workflow.indexOf('pnpm build');
+    const bootAt = workflow.indexOf('scripts/boot-check.js');
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(bootAt).toBeGreaterThan(buildAt);
+  });
+
+  it('has no bypass flag (DNC-10)', () => {
+    const source = readFileSync(SCRIPT_PATH, 'utf8');
+    // A gate with an env-var escape hatch is a gate that is off in exactly the
+    // situation it was written for. `--update` is not a bypass: it rewrites the
+    // reviewed inventory and shows up in the diff.
+    for (const flag of ['SKIP_BOOT_CHECK', 'ALLOW_BOOT_FAILURE', 'BOOT_CHECK_SKIP']) {
+      expect(source).not.toContain(flag);
+    }
+    expect(source).not.toMatch(/process\.env\.[A-Z_]*(SKIP|BYPASS|FORCE)[A-Z_]*/);
+  });
+
+  it('refuses to write a baseline from a partial run', () => {
+    // Found while building this story: the first `--update` recorded apps/api
+    // and silently dropped apps/worker, which had failed to boot. That baseline
+    // would then have passed the gate forever with one application
+    // unrepresented — escape by omission, reintroduced through the update path.
+    const source = readFileSync(SCRIPT_PATH, 'utf8');
+    expect(source).toMatch(/refusing to write the baseline/);
+  });
+});
+
+describe('a build that deletes its output directory must not be incremental (PF-72)', () => {
+  /**
+   * The defect this exists to prevent, measured during S-E02-9:
+   *
+   *   `nest-cli.json` sets `deleteOutDir: true`, and `apps/worker` inherited
+   *   `incremental: true` from `@pilotage/tsconfig/base.json`. The build deletes
+   *   `dist/`, then asks a compiler holding a `.tsbuildinfo` that says
+   *   "everything is already emitted" to emit. It emits **nothing** and exits
+   *   **0**.
+   *
+   *   Observed: with the stale build-info present, `nest build` produced 0 files
+   *   and exit 0. Removing only the build-info and rerunning produced 53 files
+   *   including `main.js`. Nothing in the repository noticed — `pnpm build`
+   *   reported success, and turbo cached the empty `dist/**` as that build's
+   *   output, so the emptiness replayed on every later cache hit.
+   *
+   * `apps/api` already carried `incremental: false`, which is why only the
+   * worker was affected and why the API kept building correctly. That made the
+   * override look like a stylistic difference between two app configs rather
+   * than the load-bearing setting it is — so it is asserted here.
+   *
+   * Read through `tsc --showConfig` deliberately: the value is inherited, so a
+   * hand-rolled parse of the app's own tsconfig would miss it, and JSONC
+   * parsing by regex is how the previous story's guard nearly passed vacuously.
+   */
+  const appsDir = join(REPO_ROOT, 'apps');
+  const nestApps = readdirSync(appsDir)
+    .filter((name) => existsSync(join(appsDir, name, 'src', 'app.module.ts')))
+    .map((name) => ({ id: `apps/${name}`, dir: join(appsDir, name) }));
+
+  const deleting = nestApps.filter((app) => {
+    const cliPath = join(app.dir, 'nest-cli.json');
+    if (!existsSync(cliPath)) return false;
+    const cli = JSON.parse(readFileSync(cliPath, 'utf8')) as {
+      compilerOptions?: { deleteOutDir?: boolean };
+    };
+    return cli.compilerOptions?.deleteOutDir === true;
+  });
+
+  it('finds applications that delete their output directory', () => {
+    // Guards the guard: if this list is empty, every assertion below is vacuous.
+    expect(deleting.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each(deleting.map((a) => [a.id, a] as const))(
+    '%s resolves incremental:false in the config nest build uses',
+    (_id, app) => {
+      const project = existsSync(join(app.dir, 'tsconfig.build.json'))
+        ? 'tsconfig.build.json'
+        : 'tsconfig.json';
+      // Spawn the compiler directly rather than through `pnpm exec` in a shell:
+      // a shell invocation needs `shell: true` on Windows, which Node deprecates
+      // (DEP0190) precisely because the arguments stop being escaped.
+      const tsc = require.resolve('typescript/bin/tsc', { paths: [app.dir] });
+      const res = spawnSync(process.execPath, [tsc, '--showConfig', '-p', project], {
+        cwd: app.dir,
+        encoding: 'utf8',
+      });
+      expect(res.status).toBe(0);
+      const config = JSON.parse(res.stdout) as {
+        compilerOptions?: { incremental?: boolean };
+      };
+      expect(config.compilerOptions?.incremental).not.toBe(true);
+    },
+    120_000,
+  );
+});

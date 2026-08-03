@@ -20,6 +20,7 @@
 | **S-E02-6** | Release manifest made real; deploy gate compares it | ✅ done | 2026-08-03 | 19/19 jest; the gate was **executed** — exit 1 against the live drifted API, exit 0 on a conforming manifest, exit 1 on all four bad verdicts *and* on a manifest lying `match`; `nest build` exit 0 |
 | **S-E02-7** | The `lint` stage stops being fictional; `prisma/` enters both gates | ✅ done | 2026-08-03 | 26/26 jest; `pnpm lint --force` **13/13, 0 cached** (was 7 of 8 packages exiting 2); a deliberate error probe makes the stage exit 1 at package level *and* through turbo; `pnpm typecheck --force` 13/13 including `prisma/`; `pnpm build` exit 0 |
 | **S-E02-8** | Warning count becomes a ratchet; first cut taken only where it is safe | ✅ done | 2026-08-03 | 20/20 jest (46/46 with `lint-gate.spec.ts`); **996 → 44** warnings; ratchet exercised in four directions (increase → 1, back under → 0, ceiling left high → 1, package absent → 1); the DI-breaking autofix measured on emitted JS and refused; `pnpm build` exit 0 |
+| **S-E02-9** | Something starts the applications: module graph + booted route table | ✅ done | 2026-08-03 | 15/15 jest (61/61 across `src/shared/quality`); both apps construct (api 42 modules / 40 controllers / 228 routes, worker 23 modules); gate exits 1 on the R-24 DI break **and** on the PF-62 unmounted controller, naming all 13 lost routes; found and fixed `PF-72` (worker building to an empty `dist/` behind a green `pnpm build`) |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -220,20 +221,125 @@ cost in the gate. `scripts/` and `bmad/` remain unlinted — neither is a worksp
 **Adjacent cleanup.** `apps/worker` still linted `src/**/*.ts` where `S-E02-7` moved api and web to `eslint .`;
 normalised, at a cost of 0 warnings.
 
+## S-E02-9 — done 2026-08-03 (run 11)
+
+Something in this repository now starts the applications. Until this slice, nothing ever did.
+
+**The finding, in its final form.** `PF-67` was raised as "the module-wiring guards read module source", widened by
+run 10 to "a type-correct change can break DI and pass every gate", and its real shape is simply: **no gate boots the
+app.** Confirmed before writing anything — grepping both applications' sources for `createTestingModule` returned
+**zero** call sites.
+
+**The stated blocker is real, and was verified rather than assumed.** A throwaway probe spec importing `AppModule`
+under ts-jest dies before its first assertion:
+
+```
+AppModule → AlertsModule → AuthModule → JwtStrategy → jwks-rsa → jose@6.2.3
+SyntaxError: Unexpected token 'export'   (jose/dist/webapi/index.js:1)
+```
+
+**What was built, and why it is not a jest spec.** `scripts/boot-check.js` runs outside jest, under plain Node, which
+loads `jose` through its own require(ESM) support — so the ESM problem is *sidestepped*, not papered over with a mock
+of the very dependency we want to prove loads. It runs against `dist/` for a second and more important reason: **R-24
+is a defect in emitted metadata.** The TypeScript is valid either way; only the compiler's output differs. Re-compiling
+the source through ts-jest would judge a different build than the one deployed.
+
+It does two things, and they catch different defects:
+
+| Check | Catches | Proven by |
+|---|---|---|
+| `Test.createTestingModule({imports:[AppModule]}).compile()` per app | a provider that cannot be constructed (**R-24**) | patching `analytics.service.js`'s emitted `design:paramtypes` to `[Object, Object, Object]` → **exit 1**, *"Nest can't resolve dependencies of the AnalyticsService (?, Object, Object)"* |
+| route table read off the **booted container** vs a reviewed baseline | a controller that stopped being reachable (**PF-62**) | emptying `grades.module.js`'s `controllers:` array → **exit 1**, naming all **13** routes that were 404 in production for seven weeks |
+
+The second probe is the one that justifies having both halves: with the controllers removed the app still **booted
+cleanly** (42 modules, 38 controllers). The compile check alone would have called that green.
+
+**Executed in every direction that matters.**
+
+| Probe | Result |
+|---|---|
+| clean run | **exit 0** — api 42 modules / 40 controllers / 228 routes; worker 23 modules |
+| DI break in emitted metadata (R-24) | **exit 1**, dependency named |
+| controllers unmounted (PF-62) | **exit 1**, 13 routes named |
+| an app deleted from the baseline | **exit 1** — no escape by omission |
+| `dist/` missing | **failure, not a skip** |
+| `--update` run while an app is broken | **refused** — see below |
+
+`.compile()` is called, never `.init()`. That distinction is the entire reason this can run in a gate with no Postgres
+or Redis — and it is also the honest limit: it proves the application **can be constructed**, not that it can serve
+traffic. There is no bypass flag (DNC-10), locked by a test.
+
+**The guard caught this slice's own code, twice.** First, the initial `--update` recorded `apps/api` and silently
+dropped `apps/worker`, which had failed to boot — a baseline that would then have passed the gate forever with one
+application unrepresented. That is escape-by-omission reintroduced through the update path, so `--update` now refuses
+to write from a partial run. Second, `boot-gate.spec.ts` went red on `apps/worker has a baseline entry` before the
+worker could boot — the rule firing on a real gap rather than a hypothetical one.
+
+### PF-72 — the worker was building to an empty `dist/`, and `pnpm build` said fine
+
+Turning the gate on immediately found a live defect, which is the pattern `PF-62` established: the check finds the
+thing it was written for on its first real run.
+
+`apps/worker/nest-cli.json` sets `deleteOutDir: true`; the worker inherited `incremental: true` from
+`@pilotage/tsconfig/base.json`. The build **deletes `dist/`**, then asks a compiler holding a `.tsbuildinfo` that says
+every file is already emitted to emit — and it emits nothing, exiting 0:
+
+| Run | Result |
+|---|---|
+| stale `tsconfig.build.tsbuildinfo` present | `nest build` → **exit 0, 0 files** |
+| identical, build-info removed first | `nest build` → **exit 0, 53 files incl. `main.js`** |
+| after the fix, twice in a row | **53 files both times** — the second run is exactly the case that used to emit nothing |
+
+`apps/api` was never affected, because it already carried an explicit `incremental: false`. That is precisely what made
+the setting invisible: it looked like a stylistic difference between two app configs rather than the load-bearing flag
+it is.
+
+**Why nothing noticed.** `pnpm build` exits 0, and turbo's `build` task declares `outputs: ["dist/**", …]` — so the
+*empty* dist was cached as a successful build output and replayed on later cache hits. `.tsbuildinfo` is gitignored, so
+a clean clone reproduces this as soon as anything builds twice. Recorded as **`PF-72`** and **`R-25`**, fixed by
+pinning `incremental: false` in the worker, with a guard asserting that *every* app whose `nest-cli.json` deletes its
+outDir resolves `incremental: false` — read through `tsc --showConfig`, because the value is **inherited** and because
+regex-parsing JSONC is how run 10's guard nearly passed vacuously. Negative path executed: restoring `incremental:
+true` turns the guard red, restoring `false` turns it green.
+
+**Not claimed.** A hosted deploy was probably never hit, since Docker builds from a fresh checkout with no build-info
+— but nothing in the repository *guaranteed* that, and a warm cache or a reused workspace would have shipped a worker
+image with no `main.js`.
+
+**Cost.** The boot stage adds ~35 s to the gate (api ~20 s, worker ~10 s). `apps/worker` gained a
+`@nestjs/testing` devDependency at the existing v10 pin (`^10.4.13`, resolving to `10.4.22` against the installed
+`@nestjs/common`/`core` — three lockfile lines, no other package moved).
+
+**Gate verdict, reported in full per R-23 — including the run I broke myself.** The first `ci-gate.sh` run returned
+**`GATE: FAIL (1 stage)`** on `build`, and the cause was **me**: I twice terminated `pnpm build` believing turbo had
+hung after the web build finished, because it had no task children and near-zero CPU. That reading was wrong.
+`@pilotage/web#build` genuinely runs **>9 minutes** — a `timeout 540` wrapper killed it still executing (exit 143) —
+and turbo then spends further minutes writing the large `.next` cache artefact at near-zero CPU, which is what looked
+like a stall. The tempting follow-on inference, "web never hits the turbo cache", is **also** unsupported: both
+observed misses followed a run I had killed, and a killed run writes no cache entry, which explains them completely.
+No finding is raised for it.
+
+Re-run uninterrupted: `pnpm build` → **8 successful, 8 total, 11m52s, exit 0**. Gate re-run → **`GATE: PASS`** on all
+eight stages:
+
+```
+✓ prisma generate   ✓ lint   ✓ lint:warnings (ratchet)   ✓ typecheck
+✓ test:api (ratchet)   ✓ test:worker (ratchet)   ✓ build   ✓ boot (module graph + route table)
+```
+
+The self-inflicted `FAIL` is left on the record beside the `PASS`. R-23 exists because runs 5–7 reported around a red
+stage; a run that quietly re-rolls its own red stage until it goes green is the same failure wearing a different hat.
+
 ## Next slice
 
-The lint blind spot is closed and the count is bounded. What is left in this epic, in order:
-
-0. **`PF-67` — boot the applications in a test.** This run gave the finding a second, independent trigger and showed
-   the class is wider than module wiring: a type-correct change can break DI and pass typecheck, build, lint *and* the
-   wiring guards. `Test.createTestingModule({imports: [AppModule]}).compile()` — or a route-table snapshot — would
-   close it, and the blocker is known: importing `AuthModule` pulls `jose` (pure ESM) into a CommonJS ts-jest runtime,
-   so it needs an ESM-capable jest project rather than new assertions.
-
-Two follow-ons from run 5 remain, both still open:
+Both blind spots this epic knew about are now closed: the lint gate executes, and something boots the applications.
+What is left, in order:
 
 1. **`PF-63`/`PF-65`** — 12 of the 18 baselined failures sit on the analytics/snapshot path (`V3-E03`), which is the
    epic that owns `PF-04`'s cross-portal count contradiction. Those red tests are very likely *already describing*
-   that bug. Triaging them may be the cheapest entry into E03 that exists.
-2. **`PF-67`** — module-wiring guards assert on source text, so they cannot catch a controller that is registered but
-   fails DI at boot. `PF-62` was caught only because the deletion was textual.
+   that bug. Triaging them may be the cheapest entry into E03 that exists, and it is now the highest-value item here.
+2. **`PF-68` residual** — worker and web carry a `GIT_SHA` but expose no HTTP manifest, so their drift is undetected;
+   `schemaVersion` is published without being compared to the checkout's latest shipped migration.
+3. **`R-25` residual** — the `web` (Next.js) build has no artefact assertion equivalent to the boot check. The same
+   "reports success, emits nothing" shape is unguarded there.
+4. **`PF-56`** — observability/SLO/restore remain unproven; still needs a story.
