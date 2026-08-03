@@ -17,6 +17,9 @@ importers:
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      semver:
+        specifier: ^7.8.0
+        version: 7.8.0
       turbo:
         specifier: ^2.3.0
         version: 2.9.14

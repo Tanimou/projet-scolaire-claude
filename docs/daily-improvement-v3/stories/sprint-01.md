@@ -518,6 +518,67 @@ is chosen, not assumed · re-running produces no duplicates · the action writes
 
 ---
 
+## S-E02-11 — The web build enters a gate · ✅ `done` 2026-08-03
+
+*No contract was written for this slice before it shipped; its full record — design, nine executed probes and stated
+limits — is `docs/spec/features/v3-e02/PROGRESS.md` § S-E02-11. Noted here rather than back-filled, because a contract
+written after the fact describes the implementation instead of constraining it.*
+
+---
+
+## S-E02-12 — The declared runtime stops blessing a Node the API cannot boot on · ✅ `done` 2026-08-03
+
+| | |
+|---|---|
+| **Epic** | V3-E02 · **Finding** PF-73 *(closed)*, PF-75, PF-76 *(both found and closed here)* · **Gates** G-DNC |
+| **blockedBy** | — · **requiresDecision** — · **Size** S |
+
+**Why.** `engines.node` said `>=20.0.0`, and on Node 20.0–20.18 the API cannot start at all: `jwt.strategy.ts` imports
+`jwks-rsa` at module top level, `jwks-rsa@4` `require()`s `jose` from CommonJS, and `jose@6` is ESM-only. `AuthModule`
+is on the boot path via `AlertsModule`. Nothing in the repository ever checked that claim — the same shape as `PF-69`
+(a directory in no gate), `PF-70` (a stage that never ran), `PF-72` (a build that emitted nothing) and `PF-74` (an
+artefact nothing inspected).
+
+> **Step 2 contradicted the finding, and that is this slice's main result.** `PF-73` prescribed a one-line fix,
+> `>=22.12.0`. Measured against all **671** installed packages that declare `engines.node`, that fix is wrong in
+> **both** directions: it excludes 20.19.x, which every dependency accepts (`require(esm)` was backported there —
+> `jwks-rsa@4.0.1` says so itself), and blesses 22.12.x and 23.x, which `eslint-visitor-keys@5.0.1` refuses. Run against
+> the unfixed repository, the new check named **35** contradicting dependencies where the finding named one.
+
+**Design — why this is not a one-line fix.** Applying the prescription would have replaced an unverified declaration
+with another unverified declaration. The declaration therefore becomes arithmetic that runs:
+`scripts/runtime-engines-check.js` asserts with `semver.subset` that the root range blesses no Node version any
+installed dependency refuses — which catches the *next* bump that raises a floor, not only this one.
+
+**Design — why the declared range is narrower than what works.** The compatible set is 20.19.x · 22.13.x · ≥24; the
+declaration is `^22.13.1 || >=24.0.0`. `engines` is a **support** statement, not a compatibility one: 22.13.1 is what
+the three Dockerfiles ship, ≥24 is what local development runs on, and 20.19 is compatible-but-untested.
+
+**Design — why `semver` becomes a real dependency.** It was reachable only transitively from pnpm's virtual store. The
+alternative is hand-rolling version-range algebra inside a guard, which is how run 10's JSONC-by-regex nearly passed
+vacuously. Three lockfile lines; a test asserts the dependency is direct, so a future lockfile change cannot silently
+remove what the arithmetic rests on.
+
+**Acceptance criteria.**
+1. The declared range excludes every Node on which the API cannot boot. ✅ — executed: the old range **exit 1**, the new
+   one **exit 0**, against 671 dependency ranges.
+2. The check fails on a dependency that outgrows the declaration. ✅ — probed with a synthetic `>=26.0.0` dependency.
+3. Every Node pin is concrete, in range, and agrees with the others. ✅ — `.nvmrc`, three `ARG NODE_VERSION` defaults
+   and `ci.yml` all pin `22.13.1`; Dockerfiles are discovered from the filesystem, not listed.
+4. A floating pin fails. ✅ — `PF-76`; executed.
+5. `engines.pnpm` cannot bless a major that never produced this lockfile. ✅ — `PF-75`; executed.
+6. The gate refuses to run on an unsupported runtime. ✅ — probed at Node 20.11.
+7. An uninstalled dependency set is a failure, not a skip. ✅ — otherwise check (1) passes vacuously.
+8. Wired into `ci-gate.sh` **and** `ci.yml`, with a guard against drift. ✅ — S-E02-2 AC-4.
+9. No bypass flag and no `--update`. ✅ — DNC-10; the reviewed record is `engines` itself, so widening shows in the diff.
+
+**Out of scope, stated.** The boot failure below 20.19 is **not executed against a Node 20 runtime** — that needs a
+second runtime the gate does not have, so it stays inferred from the require(ESM) support matrix, exactly as `PF-73`
+already said. The check also cannot see a Docker `build.arg` overriding `ARG NODE_VERSION` at build time; no compose
+file sets one today (verified), but that gap is real.
+
+---
+
 ## Sprint 01 exit criteria
 
 - `prisma migrate status` clean; no `db push` outside development; preflight blocks unapplied migrations.
