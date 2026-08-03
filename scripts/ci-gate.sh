@@ -93,6 +93,22 @@ else
   echo "⏭  boot check skipped (--quick — it reads the build's dist/)"
 fi
 
+# Stage 8 — web artefact. The boot check covers the two Nest applications; it
+# cannot cover apps/web, which has no module graph to construct, so the third
+# artefact of a three-artefact deployment had no build-output assertion at all.
+# Measured before this stage existed: with apps/web/.next deleted in its
+# entirety, `node scripts/boot-check.js` still returned exit 0, and no other
+# stage above reads .next. That is R-25 — "a build reports success while emitting
+# nothing" — at the one address the R-25 mitigation did not reach. It also holds
+# the release gate's web third to being dynamic (S-E02-10 / R-05). Reads the
+# build's .next/, so it runs after the build and is skipped with it.
+if [ "${QUICK}" -eq 0 ]; then
+  run_stage "web artefact (build output + route inventory)" node scripts/web-artifact-check.js
+else
+  echo ""
+  echo "⏭  web artefact check skipped (--quick — it reads the build's .next/)"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  CI GATE SUMMARY"

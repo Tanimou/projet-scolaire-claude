@@ -100,6 +100,14 @@ jobs:
       # step with scripts/ci-gate.sh stage 7 — the two must not drift
       # (S-E02-2 AC-4).
       - run: node scripts/boot-check.js
+      # The boot check cannot cover apps/web — Next.js has no module graph to
+      # construct — so the third artefact of a three-artefact deployment had no
+      # build-output assertion at all. Measured: with apps/web/.next deleted
+      # entirely, boot-check.js still returned exit 0. That is R-25 at the web
+      # address. Also holds the release gate's web third (/version/web) to being
+      # dynamic rather than frozen at build time. Kept in step with
+      # scripts/ci-gate.sh stage 8 — the two must not drift (S-E02-2 AC-4).
+      - run: node scripts/web-artifact-check.js
 
   test:
     name: Test

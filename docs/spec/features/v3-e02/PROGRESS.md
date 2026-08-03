@@ -22,6 +22,7 @@
 | **S-E02-8** | Warning count becomes a ratchet; first cut taken only where it is safe | ✅ done | 2026-08-03 | 20/20 jest (46/46 with `lint-gate.spec.ts`); **996 → 44** warnings; ratchet exercised in four directions (increase → 1, back under → 0, ceiling left high → 1, package absent → 1); the DI-breaking autofix measured on emitted JS and refused; `pnpm build` exit 0 |
 | **S-E02-9** | Something starts the applications: module graph + booted route table | ✅ done | 2026-08-03 | 15/15 jest (61/61 across `src/shared/quality`); both apps construct (api 42 modules / 40 controllers / 228 routes, worker 23 modules); gate exits 1 on the R-24 DI break **and** on the PF-62 unmounted controller, naming all 13 lost routes; found and fixed `PF-72` (worker building to an empty `dist/` behind a green `pnpm build`) |
 | **S-E02-10** | The release gate stops judging one third of the deployment | ✅ done | 2026-08-03 | 27/27 jest (19 surface + 8 worker socket; 38/38 with the comparator); the **previous** gate measured at **exit 0** on both halves of the finding, the new one at **exit 1**; 7 scenarios executed end to end; run against the live local stack: **4/4 failed**, honestly — those containers predate their manifests |
+| **S-E02-11** | The web build enters a gate; the release manifest is held to being dynamic | ✅ done | 2026-08-03 | 12/12 jest (73/73 across `src/shared/quality`); the gap measured first — with `apps/web/.next` **deleted entirely**, `boot-check.js` returned **exit 0**; the new check exercised in **9 directions**, 1 pass and 8 distinct failures |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -398,19 +399,95 @@ manifests — it would fail there today, which *is* the drift, not a false posit
 not that it works: a container at the right SHA with a wrong connection string passes this gate and fails elsewhere.
 And Keycloak, Postgres, Redis, MinIO and nginx are upstream images pinned by tag, outside this control entirely.
 
+## S-E02-11 — done 2026-08-03 (run 13)
+
+The third artefact enters a gate. Until this slice, `apps/web` had **no build-output assertion of any kind**.
+
+**The gap, measured before anything was written.** `apps/web/.next` was moved aside in its entirety and
+`node scripts/boot-check.js` re-run: **`BOOT CHECK: PASS`, exit 0**. `grep -rn '\.next' scripts/` returned nothing —
+no stage of `ci-gate.sh` read the directory at all. The whole web build could vanish and the gate stayed green.
+
+That is `R-25` — *"a build reports success while emitting nothing"* — at the one address its mitigation did not reach.
+It was not hypothetical when it was found: `PF-72` had the worker emitting **0 files at exit 0**, and turbo's `build`
+task declares `outputs: ["dist/**", ".next/**", …]`, so the same caching rule that replayed an empty `dist/` applies to
+`.next/` verbatim. `boot-check.js` cannot cover web — its discovery is `apps/*` containing `src/app.module.ts`, and
+Next.js has no module graph to construct.
+
+**What the check asserts, and which defect each one is for.**
+
+| # | Assertion | The defect it catches |
+|---|---|---|
+| 1 | `.next/BUILD_ID` present and non-empty | the build emitted nothing at all |
+| 2 | route inventory matches `scripts/web-route-baseline.json` | a page or handler that stopped being emitted — PF-62's shape at the web address |
+| 3 | every manifest route has its emitted server file on disk | the per-route form of "promises a route, wrote nothing" |
+| 4 | `.next/static` non-empty | `Dockerfile.web` copies it; without it every page is unstyled and scriptless |
+| 5 | `.next/standalone/apps/web/server.js` when the resolved config says `output: 'standalone'` | the image's `CMD` target — absent, it has no entrypoint |
+| 6 | routes listed `mustBeDynamic` are **not** prerendered | see below |
+
+**Assertion 6 is the one that was silently load-bearing.** `apps/web/src/app/version/web/route.ts` is the web third of
+the release gate (`S-E02-10`, `R-05`), and its own header states the invariant: *« `force-dynamic` est obligatoire :
+pré-rendu au build, le manifeste figerait le SHA du build de page au lieu de lire l'environnement du conteneur »*.
+Nothing enforced it. Deleting one line of that file leaves the route present, the build green and `release-gate.sh`
+still answering 200 — with a constant. A release gate that can be turned into a constant is worse than none, because it
+reports confidence. The check reads the **emitted** `prerender-manifest.json`, not the source directive, for the same
+reason `boot-check.js` reads `dist/`: the defect is in the output, and the source is not the artefact that ships. The
+spec asserts the source directive too, because that fails on the diff rather than on the next build.
+
+**`output: 'standalone'` is read from `.next/required-server-files.json`** — Next's own record of the config it ran
+with. Same reasoning as reading `incremental` through `tsc --showConfig` in `boot-gate.spec.ts`: regex-parsing
+`next.config.mjs` would be guessing at a value the build has already written down, and JSONC-by-regex is how run 10's
+guard nearly passed vacuously.
+
+**Executed in nine directions** — one pass, eight distinct failures:
+
+| Probe | Result |
+|---|---|
+| clean artefact | **exit 0** — 108 routes, BUILD_ID, static and standalone present |
+| entire `.next` deleted *(the state where `boot-check.js` returns 0)* | **exit 1** — missing build is a failure, never a skip |
+| a page dropped from the emitted manifest | **exit 1**, route named |
+| a manifest route whose `route.js` was never written | **exit 1**, expected path named |
+| `/version/web` marked prerendered | **exit 1**, with why it matters for R-05 |
+| `.next/standalone/.../server.js` absent | **exit 1**, naming `Dockerfile.web`'s CMD |
+| `.next/static` absent | **exit 1** |
+| `apps/web` deleted from the baseline | **exit 1** — no escape by omission |
+| `--update` run against a broken artefact | **refused** — a broken build cannot be frozen into the inventory |
+
+The guard spec was exercised in the negative too, not just written: emptying `mustBeDynamic` **and** deleting the
+`force-dynamic` line makes it **2 failed / 10 passed**; replacing the stage with `true` in *both* `ci-gate.sh` and
+`ci.yml` makes it **2 failed / 10 passed** again. Everything was restored and `git diff` confirmed clean.
+
+**G-PORTAL, by enumeration rather than assertion (R-14).** The inventory is not a web-wide blob: it covers
+**admin 50 · teacher 22 · parent 24 · student 6 · shared 6 = 108** routes. A page disappearing from *any* of the four
+portals now fails the gate and is named in the failure — including the student portal, which has the fewest routes and
+is therefore the one whose loss would be easiest to miss by eye.
+
+**Not claimed, and the limit is real.** This does not start Next.js. Booting it needs a listening port and, behind most
+of those 108 routes, a database and a Keycloak session — the same cost the `.compile()`-not-`.init()` decision avoids
+in `boot-check.js`. So the web artefact is proven **produced and complete**, not **correct**: the two Nest apps are
+constructed, the web app is only inspected. That asymmetry is the honest state of the gate.
+
+**One causal step is inferred rather than executed.** Probe 5 proves the check *detects* a prerendered `/version/web`;
+it does not prove that *removing* `force-dynamic` is what produces that state, because confirming it needs a second
+`next build` and the run has one build slot. All four route handlers in this build carry `force-dynamic` or are
+inherently dynamic, so there is no in-build control case to point at. The detection is measured; the trigger is
+inferred from Next 15's static-by-default handling of route handlers.
+
 ## Next slice
 
-Three blind spots this epic knew about are now closed: the lint gate executes, something boots the applications, and
-the release gate covers the whole deployment. What is left, in order:
+Four blind spots this epic knew about are now closed: the lint gate executes, something boots the applications, the
+release gate covers the whole deployment, and the web build is inspected. What is left, in order:
 
 1. **`PF-63`/`PF-65`** — 12 of the 18 baselined failures sit on the analytics/snapshot path (`V3-E03`), which is the
    epic that owns `PF-04`'s cross-portal count contradiction. Those red tests are very likely *already describing*
    that bug. **Note the sequencing constraint:** `V3-E03` depends on `E01`, `E04` and `E05`, all open, so this is not
    selectable under the roadmap's layer rule until they close — it is listed here because the triage is cheap and
    would inform E03, not because it can be picked next.
-2. **`R-25` residual** — the `web` (Next.js) build has no artefact assertion equivalent to the boot check. The same
-   "reports success, emits nothing" shape is unguarded there, and `web` is now the one artefact whose manifest route
-   could silently fail to be emitted.
-3. **`PF-73`** — `engines.node >=20.0.0` blesses a Node version on which `AuthModule` cannot load (`jose@6` is
+2. **`PF-73`** — `engines.node >=20.0.0` blesses a Node version on which `AuthModule` cannot load (`jose@6` is
    ESM-only). One line, but it belongs with a deliberate engines review.
-4. **`PF-56`** — observability/SLO/restore remain unproven; still needs a story.
+3. **`PF-56`** — observability/SLO/restore remain unproven; still needs a story. The restore third is blocked on
+   **D-01**; the observability third is not, and is the largest genuinely unblocked item left in this epic.
+
+With that, `V3-E02`'s unblocked work is nearly exhausted: `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
+operator or **D-01**. The next run should expect the selection rule to move to **`V3-E06`** (production hygiene —
+independent of everything, per `dependency-map.md` §3), whose first unblocked story is `S-E06-1` (`PF-17`/`PF-54`,
+Maildev and seed leakage plus hard-coded credentials). `S-E06-4`'s content half stays blocked on **D-08**.
