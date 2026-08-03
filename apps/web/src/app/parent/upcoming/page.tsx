@@ -1,4 +1,13 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  StatusBadge,
+  SubjectChip,
+  formatDateShort,
+  formatInDays,
+} from '@pilotage/ui';
+import {
   AlertTriangle,
   BookOpenText,
   CalendarClock,
@@ -15,18 +24,6 @@ import {
 } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import type { IcsEvent } from '@/lib/ics';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  StatusBadge,
-  SubjectChip,
-  formatDateShort,
-  formatInDays,
-} from '@pilotage/ui';
 
 import { ChildSelector } from '../_components/ChildSelector';
 
@@ -46,6 +43,10 @@ import type {
   UpcomingHorizon,
   UpcomingItem,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+import type { IcsEvent } from '@/lib/ics';
 
 export const metadata: Metadata = { title: 'Évaluations à venir' };
 export const dynamic = 'force-dynamic';

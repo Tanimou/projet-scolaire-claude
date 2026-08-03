@@ -2,9 +2,10 @@
 
 import { revalidatePath } from 'next/cache';
 
+import type { OneRosterBundleInput, RosterSourceDto, RosterSourceKind, SyncResultDto } from './types';
+
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
 
-import type { OneRosterBundleInput, RosterSourceDto, RosterSourceKind, SyncResultDto } from './types';
 
 /**
  * E11-S3 — OneRoster integration server actions ("/admin/integrations").

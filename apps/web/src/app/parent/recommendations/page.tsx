@@ -1,3 +1,13 @@
+
+import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  StatusBadge,
+  SubjectChip,
+  formatDateLong,
+  formatInDays,
+} from '@pilotage/ui';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -10,18 +20,6 @@ import {
   UserX,
 } from 'lucide-react';
 import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  StatusBadge,
-  SubjectChip,
-  formatDateLong,
-  formatInDays,
-} from '@pilotage/ui';
 
 import { ChildSelector } from '../_components/ChildSelector';
 
@@ -37,6 +35,9 @@ import type {
   SeverityFilter,
   SubjectOption,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Recommandations' };
 export const dynamic = 'force-dynamic';

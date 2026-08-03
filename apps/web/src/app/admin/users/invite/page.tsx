@@ -2,10 +2,11 @@ import { ArrowLeft } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { InviteForm } from './InviteForm';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
 
-import { InviteForm } from './InviteForm';
 
 export const metadata: Metadata = { title: 'Inviter un utilisateur' };
 export const dynamic = 'force-dynamic';

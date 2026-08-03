@@ -1,11 +1,12 @@
+import { KpiCard, PageHeader } from '@pilotage/ui';
 import { Building2, Calendar, CalendarRange, GraduationCap, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { AcademicYearsManager } from './AcademicYearsManager';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { KpiCard, PageHeader } from '@pilotage/ui';
 
-import { AcademicYearsManager } from './AcademicYearsManager';
 
 export const metadata: Metadata = { title: 'Années académiques' };
 export const dynamic = 'force-dynamic';

@@ -1,11 +1,11 @@
 'use client';
 
+import { GradePill, formatGrade, subjectColor } from '@pilotage/ui';
 import { ArrowRight, Check, ChevronDown, Loader2, Save } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 
-import { GradePill, formatGrade, subjectColor } from '@pilotage/ui';
 
 import { saveGrades } from '../../classes/[id]/grades/actions';
 

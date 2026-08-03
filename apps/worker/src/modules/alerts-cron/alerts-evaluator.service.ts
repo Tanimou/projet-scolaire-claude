@@ -5,16 +5,15 @@ import { Queue } from 'bullmq';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_NOTIFICATIONS_EMAIL } from '../../shared/queue/queue.module';
-import type { NotificationEmailJob } from '../notifications-email/notification-email.types';
-
 import { evaluateHighAbsence } from '../alerts-rules/high-absence.rule';
+import { evaluateImprovement } from '../alerts-rules/improvement.rule';
 import { evaluateLowSubjectAvg } from '../alerts-rules/low-subject-avg.rule';
 import { evaluateMissingAssessment } from '../alerts-rules/missing-assessment.rule';
-import { evaluateImprovement } from '../alerts-rules/improvement.rule';
 import { evaluateNegativeTrend } from '../alerts-rules/negative-trend.rule';
 import { evaluateRepeatedFailure } from '../alerts-rules/repeated-failure.rule';
-import { evaluateTeacherCommentFlag } from '../alerts-rules/teacher-comment-flag.rule';
 import type { DetectedAlert, RuleContext } from '../alerts-rules/rule-context';
+import { evaluateTeacherCommentFlag } from '../alerts-rules/teacher-comment-flag.rule';
+import type { NotificationEmailJob } from '../notifications-email/notification-email.types';
 
 /**
  * Worker-side evaluator. Mirrors AlertsService.evaluateAll on the API side

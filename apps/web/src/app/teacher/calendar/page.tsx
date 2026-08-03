@@ -1,3 +1,4 @@
+import { PageHeader } from '@pilotage/ui';
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
@@ -6,7 +7,6 @@ import {
   type PortalCalendarEvent,
 } from '@/components/calendar/PortalCalendarView';
 import { api, ApiError } from '@/lib/api-client';
-import { PageHeader } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Calendrier scolaire' };
 export const dynamic = 'force-dynamic';

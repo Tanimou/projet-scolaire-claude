@@ -1,4 +1,14 @@
 import {
+  KpiCard,
+  PageHeader,
+  PreferredDate,
+  StatusBadge,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@pilotage/ui';
+import {
   AtSign,
   BookOpen,
   Briefcase,
@@ -14,20 +24,11 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { TeacherAssignmentsPanel } from './TeacherAssignmentsPanel';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import {
-  KpiCard,
-  PageHeader,
-  PreferredDate,
-  StatusBadge,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@pilotage/ui';
 
-import { TeacherAssignmentsPanel } from './TeacherAssignmentsPanel';
 
 export const metadata: Metadata = { title: 'Fiche enseignant' };
 export const dynamic = 'force-dynamic';

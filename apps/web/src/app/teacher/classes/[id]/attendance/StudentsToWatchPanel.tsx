@@ -1,6 +1,6 @@
+import { AvatarNameCell, EmptyState, ProgressBar } from '@pilotage/ui';
 import { CheckCircle2, Clock, ShieldAlert, UserMinus, X } from 'lucide-react';
 
-import { AvatarNameCell, EmptyState, ProgressBar } from '@pilotage/ui';
 
 import type { AttendanceStudentRow } from './types';
 

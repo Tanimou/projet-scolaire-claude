@@ -1,10 +1,10 @@
 'use client';
 
+import { Tabs } from '@pilotage/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { useTransition } from 'react';
 
-import { Tabs } from '@pilotage/ui';
 
 import type { AlertsTabKey } from './types';
 

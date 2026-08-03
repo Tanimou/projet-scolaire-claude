@@ -7,7 +7,6 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import type {
   AlertContextDto,
   ConversationDto,
@@ -20,10 +19,11 @@ import type {
   ConversationStatus,
   EligibleTeacherDto,
 } from '@pilotage/contracts';
+import { Prisma } from '@prisma/client';
 
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StudentAccessService } from '../students/student-access.service';
 
 /** The authenticated caller, as resolved by UserSyncService.ensureUser. */

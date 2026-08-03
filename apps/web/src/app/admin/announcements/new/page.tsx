@@ -1,10 +1,11 @@
 import { Megaphone } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { AnnouncementComposer } from './AnnouncementComposer';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
 
-import { AnnouncementComposer } from './AnnouncementComposer';
 
 export const metadata: Metadata = { title: 'Nouvelle annonce' };
 export const dynamic = 'force-dynamic';

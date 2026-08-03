@@ -1,7 +1,8 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
-import { StudentPortalService } from './student-portal.service';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
+
+import { StudentPortalService } from './student-portal.service';
 
 const TENANT = 't1';
 const SCHOOL = 'school-1';

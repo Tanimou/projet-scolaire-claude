@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 
+import { ParentRegisterForm } from './ParentRegisterForm';
+
 import { AuthSplitLayout } from '@/components/AuthSplitLayout';
 
-import { ParentRegisterForm } from './ParentRegisterForm';
 
 export const metadata: Metadata = { title: 'Créer un compte famille' };
 

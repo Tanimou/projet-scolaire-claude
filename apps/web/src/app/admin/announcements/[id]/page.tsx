@@ -1,4 +1,15 @@
 import {
+  Avatar,
+  DonutChart,
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  ProgressBar,
+  StatusBadge,
+  formatDateLong,
+  formatRelativeTime,
+} from '@pilotage/ui';
+import {
   AlertTriangle,
   Calendar,
   CheckCircle2,
@@ -15,19 +26,6 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  Avatar,
-  DonutChart,
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  ProgressBar,
-  StatusBadge,
-  formatDateLong,
-  formatRelativeTime,
-} from '@pilotage/ui';
 
 import { DetailActions } from './DetailActions';
 import { RecipientsFilters } from './RecipientsFilters';
@@ -40,6 +38,9 @@ import type {
   AnnouncementStatus,
   RecipientReadFilter,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Annonce — détail' };
 export const dynamic = 'force-dynamic';

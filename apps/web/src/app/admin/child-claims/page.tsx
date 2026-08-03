@@ -1,12 +1,13 @@
-import type { Metadata } from 'next';
-import { Inbox } from 'lucide-react';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, isNextNavigationSignal } from '@/lib/api-client';
 import { KpiCard, PageHeader } from '@pilotage/ui';
+import { Inbox } from 'lucide-react';
+import type { Metadata } from 'next';
 
 import { ChildClaimsQueue } from './ChildClaimsQueue';
 import type { AdminChildClaimQueueResponse } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, isNextNavigationSignal } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Demandes de rattachement' };
 export const dynamic = 'force-dynamic';

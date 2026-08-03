@@ -1,4 +1,13 @@
 import {
+  Avatar,
+  EmptyState,
+  PageHeader,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@pilotage/ui';
+import {
   BookOpen,
   Clock,
   ExternalLink,
@@ -16,28 +25,20 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { fetchMe, type MeResponse } from '@/lib/me';
-import {
-  Avatar,
-  EmptyState,
-  PageHeader,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@pilotage/ui';
-
 import { DisplayPreferencesPanel } from '../../admin/settings/DisplayPreferencesPanel';
-import {
-  DISPLAY_PREFS_DEFAULTS,
-  type DisplayPreferences,
-} from '../../admin/settings/display-prefs-types';
 import {
   PreferencesPanel,
   type PreferenceRow,
 } from '../../admin/settings/PreferencesPanel';
+import {
+  DISPLAY_PREFS_DEFAULTS,
+  type DisplayPreferences,
+} from '../../admin/settings/display-prefs-types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+import { fetchMe, type MeResponse } from '@/lib/me';
+
 
 export const metadata: Metadata = { title: 'Paramètres' };
 export const dynamic = 'force-dynamic';

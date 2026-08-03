@@ -1,6 +1,6 @@
+import { EmptyState } from '@pilotage/ui';
 import { UserRoundCheck } from 'lucide-react';
 
-import { EmptyState } from '@pilotage/ui';
 
 /**
  * StudentActivationGate — the calm full-page state shown across the whole

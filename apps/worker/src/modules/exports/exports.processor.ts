@@ -4,8 +4,8 @@ import type { ExportStatus } from '@prisma/client';
 import type { Job } from 'bullmq';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { S3Service } from '../../shared/storage/s3.service';
 import { QUEUE_EXPORTS } from '../../shared/queue/queue.module';
+import { S3Service } from '../../shared/storage/s3.service';
 
 import { generateAttendanceXlsx } from './generators/attendance-xlsx.generator';
 import { generateAuditCsv } from './generators/audit-csv.generator';

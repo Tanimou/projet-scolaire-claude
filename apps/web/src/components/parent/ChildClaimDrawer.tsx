@@ -1,5 +1,6 @@
 'use client';
 
+import { FormDrawer, Input, Label } from '@pilotage/ui';
 import { AlertCircle, ArrowRight, MailCheck, ShieldCheck, UserPlus } from 'lucide-react';
 import Link from 'next/link';
 import { useId, useMemo, useState, useTransition } from 'react';
@@ -9,7 +10,6 @@ import {
   CHILD_CLAIM_RELATIONSHIP,
   type ChildClaimRelationship,
 } from '@/app/parent/children/claim-types';
-import { FormDrawer, Input, Label } from '@pilotage/ui';
 
 /** FR labels for the relationship select (mirrors the contract enum order). */
 const RELATIONSHIP_LABEL: Record<ChildClaimRelationship, string> = {

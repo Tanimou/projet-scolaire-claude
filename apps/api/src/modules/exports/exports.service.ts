@@ -3,9 +3,9 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { ExportJob, ExportKind, ExportStatus, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 
+import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_EXPORTS } from '../../shared/queue/queue.module';
 import { S3Service } from '../../shared/storage/s3.service';
-import { PrismaService } from '../../shared/prisma/prisma.service';
 
 import {
   CreateExportDto,

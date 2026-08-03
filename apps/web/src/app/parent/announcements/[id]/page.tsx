@@ -1,3 +1,4 @@
+import { PageHeader, StatusBadge, formatDateLong } from '@pilotage/ui';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -15,7 +16,6 @@ import { notFound } from 'next/navigation';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { PageHeader, StatusBadge, formatDateLong } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Annonce' };
 export const dynamic = 'force-dynamic';

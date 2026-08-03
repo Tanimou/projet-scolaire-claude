@@ -1,12 +1,13 @@
+import { KpiCard, PageHeader } from '@pilotage/ui';
 import { BarChart3, Target, TrendingUp, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { FreshnessChip } from '@/components/freshness/FreshnessChip';
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { KpiCard, PageHeader } from '@pilotage/ui';
-
 import { PerformanceDrilldown, type DrilldownResponse } from './PerformanceDrilldown';
+
+import { PortalShell } from '@/components/PortalShell';
+import { FreshnessChip } from '@/components/freshness/FreshnessChip';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Analytique — Performances' };
 export const dynamic = 'force-dynamic';

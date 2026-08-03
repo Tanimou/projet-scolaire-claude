@@ -1,9 +1,9 @@
 'use client';
 
+import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 
 import type { Portal } from './NotificationCenter';
 

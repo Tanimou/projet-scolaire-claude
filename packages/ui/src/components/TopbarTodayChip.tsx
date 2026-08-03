@@ -2,8 +2,9 @@
 
 import { CalendarDays } from 'lucide-react';
 
-import { useDisplayDateFormat } from './DisplayPrefsProvider';
 import { formatPreferredDate } from '../lib/display-prefs';
+
+import { useDisplayDateFormat } from './DisplayPrefsProvider';
 
 /**
  * Small "today" chip rendered in the topbar.

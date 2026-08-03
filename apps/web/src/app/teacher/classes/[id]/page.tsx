@@ -1,3 +1,4 @@
+import { KpiCard, PageHeader, ProgressBar } from '@pilotage/ui';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -25,7 +26,6 @@ import { redirect } from 'next/navigation';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { KpiCard, PageHeader, ProgressBar } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Ma classe' };
 export const dynamic = 'force-dynamic';

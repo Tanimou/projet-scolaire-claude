@@ -1,0 +1,56 @@
+{
+  "$schema": "lint-warning-baseline",
+  "packages": {
+    "apps/api": {
+      "maxWarnings": 9,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 9
+      },
+      "note": "9 unused vars/params in src/. Real dead code, not autofixable — each needs a judgement call about whether the binding or its use site is wrong. Owned by PF-71."
+    },
+    "apps/web": {
+      "maxWarnings": 34,
+      "rules": {
+        "import/no-anonymous-default-export": 1,
+        "@typescript-eslint/no-unused-vars": 26,
+        "react-hooks/exhaustive-deps": 2,
+        "import/no-named-as-default": 3,
+        "@typescript-eslint/consistent-type-imports": 2
+      },
+      "note": "26 unused vars, 3 import/no-named-as-default, 2 react-hooks/exhaustive-deps, 2 consistent-type-imports, 1 anonymous default export. The two exhaustive-deps are the only ones that can change runtime behaviour if \"fixed\" carelessly. Owned by PF-71."
+    },
+    "apps/worker": {
+      "maxWarnings": 0,
+      "rules": {},
+      "note": "clean"
+    },
+    "packages/contracts": {
+      "maxWarnings": 0,
+      "rules": {},
+      "note": "clean"
+    },
+    "packages/design-tokens": {
+      "maxWarnings": 0,
+      "rules": {},
+      "note": "clean"
+    },
+    "packages/i18n": {
+      "maxWarnings": 0,
+      "rules": {},
+      "note": "clean"
+    },
+    "packages/imports-core": {
+      "maxWarnings": 0,
+      "rules": {},
+      "note": "clean"
+    },
+    "packages/ui": {
+      "maxWarnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      },
+      "note": "1 unused var. Owned by PF-71."
+    }
+  },
+  "$comment": "Per-package ESLint warning ceilings, enforced by scripts/lint-ratchet.js. Established 2026-08-03 by S-E02-8 after the first cut took 996 warnings down to 44. maxWarnings is enforced in BOTH directions: exceeding it fails, and sitting below it fails too, so a ceiling can only ever be lowered. `rules` is informational and is refreshed on every --update. Every non-zero entry is debt with a named owner below."
+}

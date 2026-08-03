@@ -1,9 +1,9 @@
 'use server';
 
+import type { TeacherAvailabilityDto, TeacherBookingDto } from '@pilotage/contracts';
 import { revalidatePath } from 'next/cache';
 
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
-import type { TeacherAvailabilityDto, TeacherBookingDto } from '@pilotage/contracts';
 
 /**
  * Teacher remediation server actions (E7-S4 — "Mes créneaux de soutien").

@@ -2,9 +2,10 @@
 
 import { revalidatePath } from 'next/cache';
 
+import type { MeetingRequestPortal } from './types';
+
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
 
-import type { MeetingRequestPortal } from './types';
 
 /**
  * Teacher/admin meeting-request triage server action (E1-S3).

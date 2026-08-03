@@ -23,13 +23,13 @@ import {
   UpdateAlertRuleDto,
 } from './alerts.types';
 import { evaluateHighAbsence } from './rules/high-absence.rule';
+import { evaluateImprovement } from './rules/improvement.rule';
 import { evaluateLowSubjectAvg } from './rules/low-subject-avg.rule';
 import { evaluateMissingAssessment } from './rules/missing-assessment.rule';
-import { evaluateImprovement } from './rules/improvement.rule';
 import { evaluateNegativeTrend } from './rules/negative-trend.rule';
 import { evaluateRepeatedFailure } from './rules/repeated-failure.rule';
-import { evaluateTeacherCommentFlag } from './rules/teacher-comment-flag.rule';
 import type { DetectedAlert, RuleContext } from './rules/rule-context';
+import { evaluateTeacherCommentFlag } from './rules/teacher-comment-flag.rule';
 
 const DEDUP_WINDOW_DAYS = 7;
 

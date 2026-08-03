@@ -1,4 +1,11 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  Pagination,
+  formatDateLong,
+} from '@pilotage/ui';
+import {
   CalendarDays,
   FileArchive,
   FolderOpen,
@@ -23,13 +30,6 @@ import {
   resolveLabel,
 } from '@/components/documents/utils';
 import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  Pagination,
-  formatDateLong,
-} from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Ressources' };
 export const dynamic = 'force-dynamic';

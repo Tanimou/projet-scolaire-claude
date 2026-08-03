@@ -19,6 +19,7 @@
 | **S-E02-5** | Reconcile source ↔ hosted schema drift | ⬜ todo | — | *(implied by S-E02-1; needs hosted access)* |
 | **S-E02-6** | Release manifest made real; deploy gate compares it | ✅ done | 2026-08-03 | 19/19 jest; the gate was **executed** — exit 1 against the live drifted API, exit 0 on a conforming manifest, exit 1 on all four bad verdicts *and* on a manifest lying `match`; `nest build` exit 0 |
 | **S-E02-7** | The `lint` stage stops being fictional; `prisma/` enters both gates | ✅ done | 2026-08-03 | 26/26 jest; `pnpm lint --force` **13/13, 0 cached** (was 7 of 8 packages exiting 2); a deliberate error probe makes the stage exit 1 at package level *and* through turbo; `pnpm typecheck --force` 13/13 including `prisma/`; `pnpm build` exit 0 |
+| **S-E02-8** | Warning count becomes a ratchet; first cut taken only where it is safe | ✅ done | 2026-08-03 | 20/20 jest (46/46 with `lint-gate.spec.ts`); **996 → 44** warnings; ratchet exercised in four directions (increase → 1, back under → 0, ceiling left high → 1, package absent → 1); the DI-breaking autofix measured on emitted JS and refused; `pnpm build` exit 0 |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -154,14 +155,80 @@ after the module mocks install is deliberate.
 recorded as `PF-71` and left in place: warnings do not fail a build, and silencing them to make a number look good is
 the failure mode this story just closed. `scripts/` and `bmad/` remain unlinted — neither is a workspace package.
 
+## S-E02-8 — done 2026-08-03 (run 10)
+
+The warning count is now bounded, and the story's own premise turned out to be wrong in a way that mattered.
+
+**What the finding claimed.** `PF-71` recorded "952 of the 996 are `--fix`-able, so the first cut is nearly free".
+The obvious reading — run `pnpm lint --fix` across the workspace — would have shipped a production outage.
+
+**What was actually true.** 243 of those 952 are `@typescript-eslint/consistent-type-imports` in `apps/api` (218) and
+`apps/worker` (25). Those are the only two packages extending `@pilotage/tsconfig/node.json`, the only shared tsconfig
+that sets `emitDecoratorMetadata`. NestJS resolves constructor dependencies from the `design:paramtypes` metadata
+TypeScript emits for a decorated class, and that emit requires the parameter's type to be a **value** import. The
+rule's autofix rewrites it to `import type`.
+
+Measured on `apps/api/src/modules/analytics/analytics.service.ts`, compiled before and after one `eslint --fix`:
+
+| | `design:paramtypes` | relative `require()` calls |
+|---|---|---|
+| before | `[PrismaService, GradesService, RemediationService]` | 3 |
+| after | `[Object, Object, Object]` | 0 |
+
+Nest cannot resolve `AnalyticsService` from that. **And no gate in this repository sees it:** `tsc --noEmit -p
+tsconfig.json` was executed on the broken file and returned **exit 0**, `nest build` succeeds, ESLint is *satisfied*
+because it produced the change, and the module-wiring guards read module source and never look at a constructor
+(`PF-67`, which this widens — the class is not "the guards are textual", it is "**nothing boots the app**").
+
+**The cut that was actually taken.** 694 `import/order` autofixed, 10 dead `eslint-disable` directives removed, 5
+`consistent-type-imports` fixed where it is safe (`apps/web`, `packages/imports-core` — neither emits decorator
+metadata), and the remaining **243 are not "fixed": the rule is turned off** where it is incorrect, via
+`packages/eslint-config/decorator-metadata.js`, which carries the measurement above in its header. The rule is `warn`,
+so it never gated anything; leaving it on is the dangerous option, because it advertises 243 fixable findings whose
+obvious remedy breaks boot invisibly. **996 → 44.**
+
+**Executed in four directions,** because a ratchet that only ever passes proves nothing:
+
+| Probe | Result |
+|---|---|
+| unused-var added to `@pilotage/i18n` (ceiling 0) | **exit 1**, naming the rule and the delta |
+| probe removed | exit 0 |
+| a ceiling left above the measured count | **exit 1** — "the ratchet only turns one way" |
+| a lintable package deleted from the baseline | **exit 1** — no escape by omission |
+
+That last rule is the one that matters most: `PF-69` and `PF-70` were both "a thing no gate looked at". A ceiling list
+a new package can quietly omit itself from would reproduce them at a new address.
+
+**The gate caught this slice's own code twice, which is the best evidence in the run.** First, the guard caught
+itself: `lint-ratchet.spec.ts` reported *zero* packages emitting decorator metadata, because its JSONC comment
+stripper was eating `"@/*"` inside `paths` as a block-comment opener — every assertion in that describe block would
+have passed vacuously. Replaced with a string-aware scanner, and each describe now asserts discovery found something
+before asserting anything about it. Second, the full gate returned **`GATE: FAIL (1 stage)`** — `typecheck`, on
+`lint-ratchet.spec.ts:170`, where `expect(entry).toBeDefined()` does not narrow the type for `tsc`. Jest had passed
+the same file. Fixed with optional chaining that keeps both assertions failing correctly on a missing entry, and the
+gate re-run returned **`GATE: PASS`** on all seven stages.
+
+**Two checks run because their absence would have been invisible.** After the workspace `--fix`, `apps/api` and
+`apps/worker` contain **0** new `import type` conversions — every added line has an identical removed line, i.e. pure
+`import/order` reordering — and the probe file still holds its value imports.
+
+**Not claimed.** 44 warnings remain (api 9, web 34, ui 1), each named and owned in
+`scripts/lint-warning-baseline.json`; a test rejects a non-zero ceiling whose note is still a `TODO`. They are debt
+under a ceiling, not debt that is gone. A full ratchet pass lints all 8 packages and takes ~4–5 minutes, which is real
+cost in the gate. `scripts/` and `bmad/` remain unlinted — neither is a workspace package.
+
+**Adjacent cleanup.** `apps/worker` still linted `src/**/*.ts` where `S-E02-7` moved api and web to `eslint .`;
+normalised, at a cost of 0 warnings.
+
 ## Next slice
 
-The lint blind spot is closed. What is left in this epic, in order:
+The lint blind spot is closed and the count is bounded. What is left in this epic, in order:
 
-0. **`PF-71` — ratchet the 996 warnings down.** The pattern already exists in this repo: `scripts/test-ratchet.js`
-   tolerates a baselined set and blocks any increase. A `--max-warnings` ceiling per package that only ever decreases
-   would do the same for lint. **952 of the 996 are `--fix`-able**, so the first cut is nearly free — but it touches a
-   very large number of files, which is why it is its own slice and not a tail on `S-E02-7`.
+0. **`PF-67` — boot the applications in a test.** This run gave the finding a second, independent trigger and showed
+   the class is wider than module wiring: a type-correct change can break DI and pass typecheck, build, lint *and* the
+   wiring guards. `Test.createTestingModule({imports: [AppModule]}).compile()` — or a route-table snapshot — would
+   close it, and the blocker is known: importing `AuthModule` pulls `jose` (pure ESM) into a CommonJS ts-jest runtime,
+   so it needs an ESM-capable jest project rather than new assertions.
 
 Two follow-ons from run 5 remain, both still open:
 

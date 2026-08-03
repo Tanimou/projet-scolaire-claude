@@ -1,4 +1,12 @@
 import {
+  AvatarNameCell,
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  Pagination,
+  formatGrade,
+} from '@pilotage/ui';
+import {
   Activity,
   AlertTriangle,
   CheckCircle2,
@@ -10,20 +18,13 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  AvatarNameCell,
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  Pagination,
-  formatGrade,
-} from '@pilotage/ui';
-
-import { AT_RISK_GRADE_20, isAtRisk, pctToGrade20 } from './at-risk';
 import { ExportStudentsButton } from './ExportStudentsButton';
 import { StudentsFilters, type StudentsActivity, type StudentsSort } from './StudentsFilters';
+import { AT_RISK_GRADE_20, isAtRisk, pctToGrade20 } from './at-risk';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Mes élèves' };
 export const dynamic = 'force-dynamic';

@@ -1,3 +1,4 @@
+import { KpiCard, PreferredDate, StatusBadge } from '@pilotage/ui';
 import {
   ArrowLeft,
   BarChart3,
@@ -15,11 +16,11 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { ClassInfoEditor } from '../ClassInfoEditor';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
-import { KpiCard, PreferredDate, StatusBadge } from '@pilotage/ui';
 
-import { ClassInfoEditor } from '../ClassInfoEditor';
 
 export const metadata: Metadata = { title: 'Détail classe' };
 export const dynamic = 'force-dynamic';

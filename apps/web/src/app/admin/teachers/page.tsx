@@ -1,9 +1,3 @@
-import { BookOpen, GraduationCap, Plus, UserCheck, Users } from 'lucide-react';
-import type { Metadata } from 'next';
-import Link from 'next/link';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   AvatarNameCell,
   EmptyState,
@@ -14,8 +8,15 @@ import {
   StatusBadge,
   SubjectChip,
 } from '@pilotage/ui';
+import { BookOpen, GraduationCap, Plus, UserCheck, Users } from 'lucide-react';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { TeachersPageFilters } from './TeachersPageFilters';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Enseignants' };
 export const dynamic = 'force-dynamic';

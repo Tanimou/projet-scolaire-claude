@@ -1,8 +1,3 @@
-import { ClipboardCheck, FileEdit, FilePlus, PenTool } from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   AvatarNameCell,
   EmptyState,
@@ -14,6 +9,11 @@ import {
   SubjectChip,
   formatDateShort,
 } from '@pilotage/ui';
+import { ClipboardCheck, FileEdit, FilePlus, PenTool } from 'lucide-react';
+import type { Metadata } from 'next';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Notes & Évaluations' };
 export const dynamic = 'force-dynamic';

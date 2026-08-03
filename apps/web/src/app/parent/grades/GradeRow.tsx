@@ -1,5 +1,3 @@
-import { CalendarDays, FileEdit, MessageSquareQuote } from 'lucide-react';
-
 import {
   SubjectChip,
   formatDateShort,
@@ -7,6 +5,8 @@ import {
   gradeBucket,
   gradeVerdict,
 } from '@pilotage/ui';
+import { CalendarDays, FileEdit, MessageSquareQuote } from 'lucide-react';
+
 
 import { kindLabel as resolveKindLabel } from './types';
 import type { GradeRow as GradeRowType } from './types';

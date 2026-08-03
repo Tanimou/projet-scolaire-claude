@@ -1,20 +1,21 @@
-import { AlertTriangle, ArrowLeft, Check, CheckCheck, ChevronRight } from 'lucide-react';
-import type { Metadata } from 'next';
-import Link from 'next/link';
-import { notFound } from 'next/navigation';
-
-import { PortalShell } from '@/components/PortalShell';
-import { ReportThreadDialog } from '@/components/messaging/ReportThreadDialog';
-import { api, ApiError } from '@/lib/api-client';
 import type {
   ConversationDto,
   ConversationMessageDto,
   ConversationMessagePage,
 } from '@pilotage/contracts';
 import { formatDateLong, PageHeader } from '@pilotage/ui';
+import { AlertTriangle, ArrowLeft, Check, CheckCheck, ChevronRight } from 'lucide-react';
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
 
-import { reportThreadAction } from '../conversation-actions';
 import { TeacherThreadReply } from '../TeacherThreadReply';
+import { reportThreadAction } from '../conversation-actions';
+
+import { PortalShell } from '@/components/PortalShell';
+import { ReportThreadDialog } from '@/components/messaging/ReportThreadDialog';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Conversation' };
 export const dynamic = 'force-dynamic';

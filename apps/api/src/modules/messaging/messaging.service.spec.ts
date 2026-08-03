@@ -1,9 +1,10 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
-import { MessagingService } from './messaging.service';
-import { StudentAccessService } from '../students/student-access.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StudentAccessService } from '../students/student-access.service';
+
+import { MessagingService } from './messaging.service';
 
 /** Mirror of the service-private participant role union (not exported). */
 type ParticipantRole = 'parent' | 'teacher';

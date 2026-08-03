@@ -1,4 +1,5 @@
-import { ImportType, Prisma, ReconciliationClass } from '@prisma/client';
+import type { ImportType, Prisma} from '@prisma/client';
+import { ReconciliationClass } from '@prisma/client';
 
 export { ReconciliationClass };
 

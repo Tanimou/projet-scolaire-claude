@@ -1,12 +1,13 @@
+import { KpiCard, PageHeader } from '@pilotage/ui';
 import { Plus, ShieldCheck, ShieldQuestion, Sparkles, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { DeleteRoleButton } from './DeleteRoleButton';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
-import { KpiCard, PageHeader } from '@pilotage/ui';
 
-import { DeleteRoleButton } from './DeleteRoleButton';
 
 export const metadata: Metadata = { title: 'Rôles & permissions' };
 export const dynamic = 'force-dynamic';

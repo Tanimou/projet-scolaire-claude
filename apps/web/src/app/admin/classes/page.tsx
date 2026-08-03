@@ -1,9 +1,3 @@
-import { BookOpen, Plus, Sparkles, Users, UserSquare2 } from 'lucide-react';
-import type { Metadata } from 'next';
-import Link from 'next/link';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   AvatarNameCell,
   CapacityBar,
@@ -14,9 +8,16 @@ import {
   RowActions,
   StatusBadge,
 } from '@pilotage/ui';
+import { BookOpen, Plus, Sparkles, Users, UserSquare2 } from 'lucide-react';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { ClassInfoEditor } from './ClassInfoEditor';
 import { ClassesPageFilters } from './ClassesPageFilters';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Gestion des classes' };
 export const dynamic = 'force-dynamic';

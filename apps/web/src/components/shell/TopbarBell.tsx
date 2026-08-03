@@ -1,8 +1,8 @@
 'use client';
 
+import { NotificationBell, type NotificationItem } from '@pilotage/ui';
 import { useEffect, useState } from 'react';
 
-import { NotificationBell, type NotificationItem } from '@pilotage/ui';
 
 export interface TopbarBellProps {
   portal: 'admin' | 'teacher' | 'parent';

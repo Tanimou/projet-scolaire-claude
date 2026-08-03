@@ -1,5 +1,6 @@
-import { StudentAccessService } from './student-access.service';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
+
+import { StudentAccessService } from './student-access.service';
 
 const TENANT = 't1';
 const SCHOOL = 'school-1';

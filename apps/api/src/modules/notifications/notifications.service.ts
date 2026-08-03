@@ -10,6 +10,7 @@ import { Queue } from 'bullmq';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_NOTIFICATIONS_EMAIL } from '../../shared/queue/queue.module';
+
 import type { NotificationEmailJob } from './notification-email.types';
 import { NotificationPreferencesService } from './preferences.service';
 

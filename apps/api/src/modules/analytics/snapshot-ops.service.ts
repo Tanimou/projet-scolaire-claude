@@ -1,11 +1,11 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
 import {
   type RebuildSnapshotsRequest,
   type RebuildSnapshotsResponse,
   type SnapshotRecomputeStatusResponse,
   snapshotCoalesceKey,
 } from '@pilotage/contracts';
+import type { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 

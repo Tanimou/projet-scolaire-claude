@@ -1,5 +1,6 @@
 'use client';
 
+import { ConfirmDialog, StatusBadge } from '@pilotage/ui';
 import {
   CheckCircle2,
   Loader2,
@@ -10,7 +11,6 @@ import {
 } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
-import { ConfirmDialog, StatusBadge } from '@pilotage/ui';
 
 import { closePlanAction, reopenPlanAction } from './remediation-actions';
 

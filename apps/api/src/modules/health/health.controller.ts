@@ -1,10 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import {
   HealthCheck,
   HealthCheckService,
   PrismaHealthIndicator,
 } from '@nestjs/terminus';
-import { ApiTags } from '@nestjs/swagger';
 
 import { readMigrationState } from '../../shared/migrations/migration-state';
 import { PrismaService } from '../../shared/prisma/prisma.service';

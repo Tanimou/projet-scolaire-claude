@@ -1,3 +1,4 @@
+import { KpiCard, PageHeader } from '@pilotage/ui';
 import { BookOpen, ClipboardCheck, GraduationCap, UserX } from 'lucide-react';
 import type { Metadata } from 'next';
 
@@ -10,7 +11,6 @@ import {
 } from '@/app/admin/teaching-assignments/AssignmentsManager';
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { KpiCard, PageHeader } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Affectations' };
 export const dynamic = 'force-dynamic';

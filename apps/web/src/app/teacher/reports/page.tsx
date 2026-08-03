@@ -1,4 +1,12 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  SectionHeader,
+  SubjectChip,
+  subjectColor,
+} from '@pilotage/ui';
+import {
   Activity,
   AlertTriangle,
   Award,
@@ -17,21 +25,9 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { FreshnessChip } from '@/components/freshness/FreshnessChip';
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  SectionHeader,
-  SubjectChip,
-  subjectColor,
-} from '@pilotage/ui';
-
+import { ReportsFilters } from './ReportsFilters';
 import { ClassReportRow } from './_components/ClassReportRow';
 import { ExportReportButton } from './_components/ExportReportButton';
-import { ReportsFilters } from './ReportsFilters';
 import type {
   BandFilter,
   ClassReportRowData,
@@ -41,6 +37,11 @@ import type {
   SortKey,
   SubjectOption,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { FreshnessChip } from '@/components/freshness/FreshnessChip';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Rapports' };
 export const dynamic = 'force-dynamic';

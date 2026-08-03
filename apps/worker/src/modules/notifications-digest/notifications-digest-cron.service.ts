@@ -4,9 +4,9 @@ import type { Notification, NotificationKind } from '@prisma/client';
 import { MailerService } from '../../shared/mail/mailer.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
-import { dailyDigestMarkerId, dayKey, dayLabel, dayStart } from './daily-key';
-import type { DailyDigestRenderInput, DigestKindGroup } from './daily-digest.types';
 import { fallbackLinkFor, renderDailyDigestEmail } from './daily-digest-email.template';
+import type { DailyDigestRenderInput, DigestKindGroup } from './daily-digest.types';
+import { dailyDigestMarkerId, dayKey, dayLabel, dayStart } from './daily-key';
 
 /** How often the cron checks whether it's the configured send hour. */
 const CHECK_INTERVAL_MS = Number(

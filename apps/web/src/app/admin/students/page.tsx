@@ -1,9 +1,3 @@
-import { Plus, UserCheck, UserPlus, Users } from 'lucide-react';
-import type { Metadata } from 'next';
-import Link from 'next/link';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   AvatarNameCell,
   DonutChart,
@@ -17,8 +11,15 @@ import {
   StatusBadge,
   type DonutSegment,
 } from '@pilotage/ui';
+import { Plus, UserCheck, UserPlus, Users } from 'lucide-react';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { StudentsPageFilters } from './StudentsPageFilters';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Élèves' };
 export const dynamic = 'force-dynamic';

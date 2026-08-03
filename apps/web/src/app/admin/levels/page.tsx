@@ -1,10 +1,10 @@
+import { KpiCard, PageHeader } from '@pilotage/ui';
 import { GraduationCap, Layers, ListChecks, Sparkles } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { CyclesManager } from '@/app/admin/cycles/CyclesManager';
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { KpiCard, PageHeader } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Cycles & niveaux' };
 export const dynamic = 'force-dynamic';

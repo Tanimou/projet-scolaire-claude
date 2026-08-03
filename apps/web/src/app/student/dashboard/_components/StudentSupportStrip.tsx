@@ -1,3 +1,5 @@
+import type { RemediationProgressDto } from '@pilotage/contracts';
+import { Badge, SectionHeader, SubjectChip, cn, formatGrade } from '@pilotage/ui';
 import {
   CalendarClock,
   Clock,
@@ -8,8 +10,6 @@ import {
   TrendingUp,
 } from 'lucide-react';
 
-import { Badge, SectionHeader, SubjectChip, cn, formatGrade } from '@pilotage/ui';
-import type { RemediationProgressDto } from '@pilotage/contracts';
 
 /**
  * StudentSupportStrip — E8-S3 "Ton soutien" (the E7 remediation progress, in the

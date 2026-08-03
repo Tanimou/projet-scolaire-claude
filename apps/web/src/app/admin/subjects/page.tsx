@@ -1,11 +1,12 @@
+import { KpiCard, PageHeader } from '@pilotage/ui';
 import { BookOpen, GraduationCap, Layers, UserX } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { SubjectsManager } from './SubjectsManager';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { KpiCard, PageHeader } from '@pilotage/ui';
 
-import { SubjectsManager } from './SubjectsManager';
 
 export const metadata: Metadata = { title: 'Matières & coefficients' };
 export const dynamic = 'force-dynamic';

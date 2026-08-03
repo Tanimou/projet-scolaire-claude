@@ -1,9 +1,9 @@
 'use client';
 
+import { FormDrawer, Input, Label } from '@pilotage/ui';
 import { AlertCircle, Lock, SlidersHorizontal } from 'lucide-react';
 import { useId, useMemo, useState, useTransition } from 'react';
 
-import { FormDrawer, Input, Label } from '@pilotage/ui';
 
 import { updateRuleConfigAction } from './actions';
 import {

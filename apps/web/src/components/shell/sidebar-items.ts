@@ -1,3 +1,4 @@
+import type { SidebarGroup, SidebarItemDef } from '@pilotage/ui';
 import {
   BarChart3,
   Bell,
@@ -40,7 +41,6 @@ import {
   UserX,
   Users,
 } from 'lucide-react';
-import type { SidebarGroup, SidebarItemDef } from '@pilotage/ui';
 
 export type PortalKey = 'admin' | 'teacher' | 'parent' | 'student';
 

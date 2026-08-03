@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { evaluateTeacherCommentFlag } from './teacher-comment-flag.rule';
 import type { RuleContext } from './rule-context';
+import { evaluateTeacherCommentFlag } from './teacher-comment-flag.rule';
 
 /**
  * TEACHER_COMMENT_FLAG (E3-S1). Covers the pre-mortem failure modes that became

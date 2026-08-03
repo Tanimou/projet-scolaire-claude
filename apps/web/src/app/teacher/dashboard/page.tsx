@@ -1,4 +1,17 @@
 import {
+  ActivityTimeline,
+  EmptyState,
+  QuickActionsList,
+  SectionHeader,
+  Stagger,
+  StaggerItem,
+  SubjectKpiCard,
+  WelcomeBanner,
+  subjectColor,
+  type ActivityEntry,
+  type QuickAction,
+} from '@pilotage/ui';
+import {
   Atom,
   BarChart3,
   BookOpen,
@@ -15,22 +28,6 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, isNextNavigationSignal } from '@/lib/api-client';
-import { fetchMe } from '@/lib/me';
-import {
-  ActivityTimeline,
-  EmptyState,
-  QuickActionsList,
-  SectionHeader,
-  Stagger,
-  StaggerItem,
-  SubjectKpiCard,
-  WelcomeBanner,
-  subjectColor,
-  type ActivityEntry,
-  type QuickAction,
-} from '@pilotage/ui';
 
 import { CalendarPanel, type UpcomingItem } from './_components/CalendarPanel';
 import { DistributionPanel } from './_components/DistributionPanel';
@@ -39,9 +36,13 @@ import {
   type AssignmentOption,
   type GradebookData,
 } from './_components/InlineGradebook';
-import { TeacherActionCenter, type TeacherActionData } from './_components/TeacherActionCenter';
 import { SchoolEventsPanel } from './_components/SchoolEventsPanel';
+import { TeacherActionCenter, type TeacherActionData } from './_components/TeacherActionCenter';
+
+import { PortalShell } from '@/components/PortalShell';
 import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
+import { api, isNextNavigationSignal } from '@/lib/api-client';
+import { fetchMe } from '@/lib/me';
 
 export const metadata: Metadata = { title: 'Tableau de bord professeur' };
 export const dynamic = 'force-dynamic';

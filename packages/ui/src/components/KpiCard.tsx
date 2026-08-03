@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from 'react';
 
 import { cn } from '../lib/cn';
 import { deltaTone } from '../lib/format';
+
 import { AnimatedNumber } from './Motion';
 import { Sparkline, type SparklinePoint } from './Sparkline';
 

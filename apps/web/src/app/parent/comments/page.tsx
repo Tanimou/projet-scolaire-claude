@@ -1,15 +1,4 @@
 import {
-  AlertTriangle,
-  MessageCircle,
-  Quote,
-  Sparkles,
-  ThumbsUp,
-} from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
   EmptyState,
   KpiCard,
   PageHeader,
@@ -18,6 +7,15 @@ import {
   formatDateLong,
   formatGrade,
 } from '@pilotage/ui';
+import {
+  AlertTriangle,
+  MessageCircle,
+  Quote,
+  Sparkles,
+  ThumbsUp,
+} from 'lucide-react';
+import type { Metadata } from 'next';
+
 
 import { ChildSelector } from '../_components/ChildSelector';
 
@@ -31,6 +29,9 @@ import type {
   TermOption,
   TierFilter,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Commentaires' };
 export const dynamic = 'force-dynamic';

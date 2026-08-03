@@ -1,3 +1,4 @@
+import { KpiCard, ProgressBar } from '@pilotage/ui';
 import {
   Activity,
   AlertTriangle,
@@ -16,7 +17,6 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-import { KpiCard, ProgressBar } from '@pilotage/ui';
 
 import { computeDispersionStats, getHomogeneity, type StatTone } from './dispersion';
 import type { GradebookData } from './page';

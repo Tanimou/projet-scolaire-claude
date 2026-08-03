@@ -1,4 +1,4 @@
-import { snapshotCoalesceKey } from './snapshot-keys';
+import { SnapshotDrainCronService } from './snapshot-drain-cron.service';
 import {
   competitionRank,
   distribution,
@@ -9,7 +9,7 @@ import {
   trendDelta,
   weightedGlobal,
 } from './snapshot-formula';
-import { SnapshotDrainCronService } from './snapshot-drain-cron.service';
+import { snapshotCoalesceKey } from './snapshot-keys';
 import { SnapshotRecomputeService } from './snapshot-recompute.service';
 
 type Mock = ReturnType<typeof jest.fn>;

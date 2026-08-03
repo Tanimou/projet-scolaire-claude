@@ -1,12 +1,4 @@
-import { AlertTriangle, Sparkles, TrendingDown, UserX, Users } from 'lucide-react';
-import type { Metadata } from 'next';
 
-import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
-import { PortalShell } from '@/components/PortalShell';
-import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
-import { FreshnessChip } from '@/components/freshness/FreshnessChip';
-import { api, isNextNavigationSignal } from '@/lib/api-client';
-import { fetchMe } from '@/lib/me';
 import {
   AlertCard,
   ChildProfileHero,
@@ -29,6 +21,8 @@ import {
   type LineSeries,
   type SubjectMetric,
 } from '@pilotage/ui';
+import { AlertTriangle, Sparkles, TrendingDown, UserX, Users } from 'lucide-react';
+import type { Metadata } from 'next';
 
 import {
   FamilyOverviewSwimlane,
@@ -47,6 +41,13 @@ import {
 import { SchoolEventsPanel } from './_components/SchoolEventsPanel';
 import { SupportStrip } from './_components/SupportStrip';
 import { UpcomingPanel, type UpcomingItem } from './_components/UpcomingPanel';
+
+import { PortalShell } from '@/components/PortalShell';
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
+import { FreshnessChip } from '@/components/freshness/FreshnessChip';
+import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
+import { api, isNextNavigationSignal } from '@/lib/api-client';
+import { fetchMe } from '@/lib/me';
 
 const FAMILY_OVERVIEW_MAX = 8;
 

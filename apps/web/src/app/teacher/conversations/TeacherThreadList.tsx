@@ -1,8 +1,8 @@
+import type { ConversationDto } from '@pilotage/contracts';
+import { formatRelativeTime } from '@pilotage/ui';
 import { AlertTriangle, ChevronRight, Lock } from 'lucide-react';
 import Link from 'next/link';
 
-import type { ConversationDto } from '@pilotage/contracts';
-import { formatRelativeTime } from '@pilotage/ui';
 
 /**
  * TeacherThreadList — the E2-S3 teacher inbox rows. A pure, server-renderable

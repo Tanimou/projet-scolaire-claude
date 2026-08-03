@@ -179,9 +179,9 @@ export function assertSeedAllowed(scriptName: string, env: NodeJS.ProcessEnv = p
   const permission = evaluateSeedPermission(env);
   if (permission.allowed) return;
 
-  /* eslint-disable no-console */
+   
   console.error(`\n✖ ${scriptName} : seed refusé [${permission.verdict}]`);
   console.error(`  ${permission.detail}\n`);
-  /* eslint-enable no-console */
+   
   process.exit(1);
 }

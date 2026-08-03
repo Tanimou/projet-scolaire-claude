@@ -1,10 +1,10 @@
 'use client';
 
+import type { TeachableSubjectDto } from '@pilotage/contracts';
+import { FormDrawer } from '@pilotage/ui';
 import { CalendarPlus, Loader2 } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
-import { FormDrawer } from '@pilotage/ui';
-import type { TeachableSubjectDto } from '@pilotage/contracts';
 
 import { publishSlotAction, type PublishSlotInput } from './remediation-actions';
 

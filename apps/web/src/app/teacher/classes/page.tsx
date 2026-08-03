@@ -1,11 +1,12 @@
+import { EmptyState, KpiCard, PageHeader } from '@pilotage/ui';
 import { BookOpen, GraduationCap, Layers, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { TeacherClassesGrid, type ClassCardData } from './TeacherClassesGrid';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { EmptyState, KpiCard, PageHeader } from '@pilotage/ui';
 
-import { TeacherClassesGrid, type ClassCardData } from './TeacherClassesGrid';
 
 export const metadata: Metadata = { title: 'Mes classes' };
 export const dynamic = 'force-dynamic';

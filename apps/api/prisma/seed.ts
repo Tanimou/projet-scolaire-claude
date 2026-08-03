@@ -1,6 +1,7 @@
-import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
+
 import { PrismaClient, Portal } from '@prisma/client';
+import { config as loadEnv } from 'dotenv';
 
 import { assertSeedAllowed } from './seed-guard';
 

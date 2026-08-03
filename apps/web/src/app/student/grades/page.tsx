@@ -1,8 +1,5 @@
-import { BookOpen } from 'lucide-react';
-import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import type { StudentGradeRow, StudentGradesResponse } from '@pilotage/contracts';
 import {
   EmptyState,
   ErrorState,
@@ -12,12 +9,17 @@ import {
   formatGrade,
   gradeVerdict,
 } from '@pilotage/ui';
-import type { StudentGradeRow, StudentGradesResponse } from '@pilotage/contracts';
+import { BookOpen } from 'lucide-react';
+import type { Metadata } from 'next';
 
 import { StudentActivationGate } from '../_components/StudentActivationGate';
 import { fetchStudentMe } from '../_lib/student-me';
+
 import { StudentGradeCard } from './StudentGradeCard';
 import { StudentTermFilter } from './StudentTermFilter';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Mes notes' };
 export const dynamic = 'force-dynamic';

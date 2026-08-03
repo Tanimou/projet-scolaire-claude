@@ -1,11 +1,11 @@
 'use client';
 
+import type { ConversationReportDto } from '@pilotage/contracts';
+import { Button } from '@pilotage/ui';
 import { Flag, Loader2, ShieldCheck, X } from 'lucide-react';
 import { useId, useState, useTransition } from 'react';
 
 import type { ApiResult } from '@/lib/api-client';
-import type { ConversationReportDto } from '@pilotage/contracts';
-import { Button } from '@pilotage/ui';
 
 const MAX_REASON = 1000;
 

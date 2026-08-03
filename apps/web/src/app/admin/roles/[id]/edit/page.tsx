@@ -3,10 +3,11 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { RoleBuilderForm } from '../../RoleBuilderForm';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
 
-import { RoleBuilderForm } from '../../RoleBuilderForm';
 
 export const metadata: Metadata = { title: 'Éditer un rôle' };
 export const dynamic = 'force-dynamic';

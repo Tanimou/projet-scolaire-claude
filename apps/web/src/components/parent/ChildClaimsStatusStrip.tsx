@@ -1,6 +1,14 @@
 'use client';
 
 import {
+  ConfirmDialog,
+  EmptyState,
+  SectionHeader,
+  StatusBadge,
+  formatDateShort,
+  type StatusTone,
+} from '@pilotage/ui';
+import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
@@ -11,21 +19,14 @@ import {
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 
+import { ChildClaimDrawer } from './ChildClaimDrawer';
+
 import { withdrawChildClaimAction } from '@/app/parent/children/claim-actions';
 import type {
   ChildClaimStatus,
   ChildClaimStatusRow,
 } from '@/app/parent/children/claim-types';
-import {
-  ConfirmDialog,
-  EmptyState,
-  SectionHeader,
-  StatusBadge,
-  formatDateShort,
-  type StatusTone,
-} from '@pilotage/ui';
 
-import { ChildClaimDrawer } from './ChildClaimDrawer';
 
 /**
  * Maps a claim status to its parent-facing chip (text + icon, never colour

@@ -1,12 +1,13 @@
+import { PageHeader } from '@pilotage/ui';
 import { Plug, ShieldCheck } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { PageHeader } from '@pilotage/ui';
-
 import { IntegrationsManager } from './IntegrationsManager';
 import type { RosterSourceDto } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Intégrations · OneRoster' };
 export const dynamic = 'force-dynamic';

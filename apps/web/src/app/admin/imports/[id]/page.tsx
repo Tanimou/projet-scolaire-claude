@@ -1,4 +1,16 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  Pagination,
+  ProgressBar,
+  SectionHeader,
+  StatusBadge,
+  type StatusTone,
+  Timeline,
+  type TimelineEntry,
+} from '@pilotage/ui';
+import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
@@ -21,20 +33,6 @@ import type { LucideIcon } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  Pagination,
-  ProgressBar,
-  SectionHeader,
-  StatusBadge,
-  type StatusTone,
-  Timeline,
-  type TimelineEntry,
-} from '@pilotage/ui';
 
 import { ApplyControls, RollbackButtonClient } from './ApplyControls';
 import { ConflictResolver } from './ConflictResolver';
@@ -53,6 +51,9 @@ import type {
   RowStatus,
   RowStatusFilter,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Détail import' };
 export const dynamic = 'force-dynamic';

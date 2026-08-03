@@ -1,3 +1,4 @@
+import { Tabs, TabsContent, TabsList, TabsTrigger, PageHeader } from '@pilotage/ui';
 import {
   Bell,
   Database,
@@ -11,12 +12,12 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { PreferencesPanel, type PreferenceRow } from './PreferencesPanel';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
 import { fetchMe } from '@/lib/me';
-import { Tabs, TabsContent, TabsList, TabsTrigger, PageHeader } from '@pilotage/ui';
 
-import { PreferencesPanel, type PreferenceRow } from './PreferencesPanel';
 
 export const metadata: Metadata = { title: 'Paramètres' };
 export const dynamic = 'force-dynamic';

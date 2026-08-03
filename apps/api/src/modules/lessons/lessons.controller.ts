@@ -136,7 +136,7 @@ export class LessonsController {
         await this.notifications.createMany(items);
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.warn('[lessons] notification fan-out failed', err);
     }
   }

@@ -1,9 +1,9 @@
 'use client';
 
+import { UserMenu, type UserMenuItem } from '@pilotage/ui';
 import { LifeBuoy, LogOut, Settings as SettingsIcon, UserRound } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 
-import { UserMenu, type UserMenuItem } from '@pilotage/ui';
 
 export interface TopbarUserMenuProps {
   portal: 'admin' | 'teacher' | 'parent' | 'student';

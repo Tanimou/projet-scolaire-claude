@@ -1,6 +1,6 @@
+import { EmptyState, ProgressBar } from '@pilotage/ui';
 import { CalendarCheck2, CalendarX, Check, Clock, ShieldAlert, X } from 'lucide-react';
 
-import { EmptyState, ProgressBar } from '@pilotage/ui';
 
 import type { AttendanceSession } from './types';
 

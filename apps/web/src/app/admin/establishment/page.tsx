@@ -1,4 +1,12 @@
 import {
+  KpiCard,
+  PageHeader,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@pilotage/ui';
+import {
   BookOpen,
   Building2,
   Calendar,
@@ -20,14 +28,6 @@ import { BrandingForm } from '@/app/admin/school/branding/BrandingForm';
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
 import { fetchBranding, fetchMe } from '@/lib/me';
-import {
-  KpiCard,
-  PageHeader,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@pilotage/ui';
 
 export const metadata: Metadata = { title: "Établissement" };
 export const dynamic = 'force-dynamic';

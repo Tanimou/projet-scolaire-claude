@@ -12,8 +12,6 @@
  * Every primitive honours `prefers-reduced-motion` via `useReducedMotion()`.
  */
 
-import { usePathname } from 'next/navigation';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   animate,
   motion,
@@ -21,6 +19,8 @@ import {
   useReducedMotion,
   type Variants,
 } from 'framer-motion';
+import { usePathname } from 'next/navigation';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import { cn } from '../lib/cn';
 

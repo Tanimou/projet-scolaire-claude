@@ -1,6 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
-import { ImportStatus, type ImportMode } from '@prisma/client';
 import {
   applyBatchRows,
   buildImportCaches,
@@ -9,10 +8,12 @@ import {
   type EngineRow,
   type ImportJobPayload,
 } from '@pilotage/imports-core';
+import { ImportStatus, type ImportMode } from '@prisma/client';
 import type { Job } from 'bullmq';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
+
 import { decideClaim } from './import-claim';
 
 /**

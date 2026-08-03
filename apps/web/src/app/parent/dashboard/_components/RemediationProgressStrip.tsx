@@ -1,3 +1,4 @@
+import { Badge, SectionHeader, SubjectChip, cn, formatGrade } from '@pilotage/ui';
 import {
   CalendarClock,
   Clock,
@@ -10,7 +11,6 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-import { Badge, SectionHeader, SubjectChip, cn, formatGrade } from '@pilotage/ui';
 
 /**
  * RemediationProgressStrip — E7-S3 (the measured-improvement payoff).

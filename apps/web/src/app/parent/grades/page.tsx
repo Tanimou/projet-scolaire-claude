@@ -1,8 +1,4 @@
-import { Award, GraduationCap, Sparkles, TrendingUp } from 'lucide-react';
-import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   EmptyState,
   KpiCard,
@@ -11,13 +7,16 @@ import {
   formatGrade,
   gradeBucket,
 } from '@pilotage/ui';
+import { Award, GraduationCap, Sparkles, TrendingUp } from 'lucide-react';
+import type { Metadata } from 'next';
 
 import { ChildSelector } from '../_components/ChildSelector';
-import { buildGradesAnalytics, gradeValueOn20 } from './analytics';
+
 import { GradeRow } from './GradeRow';
 import { GradesExport, type GradeExportRow } from './GradesExport';
 import { GradesFilters } from './GradesFilters';
 import { GradesOverview } from './GradesOverview';
+import { buildGradesAnalytics, gradeValueOn20 } from './analytics';
 import { kindLabel } from './types';
 import type {
   GradeRow as GradeRowType,
@@ -26,6 +25,9 @@ import type {
   SubjectOption,
   TermOption,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Notes' };
 export const dynamic = 'force-dynamic';

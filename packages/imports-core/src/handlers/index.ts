@@ -1,4 +1,6 @@
-import { ImportType } from '@prisma/client';
+import type { ImportType } from '@prisma/client';
+
+import { type ImportHandler } from '../handler.types';
 
 import { classesHandler } from './classes.handler';
 import { enrollmentsHandler } from './enrollments.handler';
@@ -6,7 +8,6 @@ import { guardiansHandler } from './guardians.handler';
 import { studentsHandler } from './students.handler';
 import { subjectsHandler } from './subjects.handler';
 
-import { type ImportHandler } from '../handler.types';
 
 /**
  * Add a new entity type to bulk imports by exporting a new handler here.

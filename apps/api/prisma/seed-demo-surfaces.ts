@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+ 
 /**
  * Throwaway demo helper — populate the NEW v4 feature surfaces with realistic,
  * consistent data so they are visible in the UI (the routine ships the features

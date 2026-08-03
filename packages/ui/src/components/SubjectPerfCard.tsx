@@ -5,6 +5,7 @@ import { cn } from '../lib/cn';
 import { deltaTone, formatGrade } from '../lib/format';
 import { gradeVerdict } from '../lib/grade-bucket';
 import { subjectColor } from '../lib/subject-color';
+
 import { ProgressBar } from './ProgressBar';
 
 export interface SubjectMetric {

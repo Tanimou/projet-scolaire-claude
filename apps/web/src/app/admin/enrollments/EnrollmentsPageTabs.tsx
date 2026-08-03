@@ -1,9 +1,9 @@
 'use client';
 
+import { Tabs, TabsList, TabsTrigger, cn } from '@pilotage/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { Tabs, TabsList, TabsTrigger, cn } from '@pilotage/ui';
 
 export interface EnrollmentsPageTabsProps {
   activeTab: 'all' | 'pending' | 'to_verify' | 'approved' | 'rejected';

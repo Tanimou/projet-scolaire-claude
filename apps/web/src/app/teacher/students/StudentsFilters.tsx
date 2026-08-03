@@ -1,9 +1,9 @@
 'use client';
 
+import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 
 import { AT_RISK_GRADE_20 } from './at-risk';
 

@@ -1,8 +1,9 @@
 import 'reflect-metadata';
 
+import { writeFile } from 'node:fs/promises';
+
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { writeFile } from 'node:fs/promises';
 
 import { AppModule } from './app.module';
 
@@ -33,7 +34,7 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  // eslint-disable-next-line no-console
+   
   console.error('Worker bootstrap failed', err);
   process.exit(1);
 });

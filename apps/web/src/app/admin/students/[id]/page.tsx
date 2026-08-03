@@ -1,13 +1,14 @@
+import { Avatar, PreferredDate } from '@pilotage/ui';
 import { ArrowLeft, GraduationCap, HeartHandshake, IdCard } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { Avatar, PreferredDate } from '@pilotage/ui';
-
 import type { StudentAcademicSnapshot } from './StudentAcademicTab';
 import { StudentDetailTabs } from './StudentDetailTabs';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 /** Shape returned by the analytics parent-dashboard endpoint (admin-accessible). */
 interface AcademicDashboardResponse {

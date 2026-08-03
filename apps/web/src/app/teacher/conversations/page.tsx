@@ -1,12 +1,13 @@
+import type { ConversationDto, ConversationInboxResponse } from '@pilotage/contracts';
+import { EmptyState, KpiCard, PageHeader } from '@pilotage/ui';
 import { Inbox, MailOpen, MessagesSquare } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { TeacherThreadList } from './TeacherThreadList';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import type { ConversationDto, ConversationInboxResponse } from '@pilotage/contracts';
-import { EmptyState, KpiCard, PageHeader } from '@pilotage/ui';
 
-import { TeacherThreadList } from './TeacherThreadList';
 
 export const metadata: Metadata = { title: 'Conversations parents' };
 export const dynamic = 'force-dynamic';

@@ -1,3 +1,4 @@
+import { EmptyState, PageHeader } from '@pilotage/ui';
 import { CalendarRange, GraduationCap, PartyPopper, School, Sun, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
@@ -7,7 +8,6 @@ import {
   type PortalCalendarEvent,
 } from '@/components/calendar/PortalCalendarView';
 import { api, ApiError } from '@/lib/api-client';
-import { EmptyState, PageHeader } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Calendrier scolaire' };
 export const dynamic = 'force-dynamic';

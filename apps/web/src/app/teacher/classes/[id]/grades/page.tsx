@@ -1,14 +1,15 @@
+import { PageHeader } from '@pilotage/ui';
 import { AlertCircle, ArrowLeft, BookOpen } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { PageHeader } from '@pilotage/ui';
-
+import { GradeGridExportButton } from './GradeGridExportButton';
 import { Gradebook } from './Gradebook';
 import { GradebookInsights } from './GradebookInsights';
-import { GradeGridExportButton } from './GradeGridExportButton';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Notes' };
 export const dynamic = 'force-dynamic';

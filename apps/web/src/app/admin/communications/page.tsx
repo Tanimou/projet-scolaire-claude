@@ -1,4 +1,14 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  Pagination,
+  RowActions,
+  StatusBadge,
+  formatDateLong,
+  formatDateShort,
+} from '@pilotage/ui';
+import {
   AlertTriangle,
   Eye,
   FileEdit,
@@ -11,19 +21,6 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  Pagination,
-  RowActions,
-  StatusBadge,
-  formatDateLong,
-  formatDateShort,
-} from '@pilotage/ui';
-
 import { CommunicationsFilters } from './CommunicationsFilters';
 import type {
   AnnouncementItem,
@@ -35,6 +32,10 @@ import type {
   ScopeFilter,
   StatusFilter,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Communications' };
 export const dynamic = 'force-dynamic';

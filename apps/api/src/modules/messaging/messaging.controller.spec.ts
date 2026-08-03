@@ -1,11 +1,12 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import type { Response } from 'express';
 
-import { MessagingController } from './messaging.controller';
-import type { MessagingService } from './messaging.service';
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
 import type { SchoolContextService } from '../school-structure/school-context.service';
+
+import { MessagingController } from './messaging.controller';
+import type { MessagingService } from './messaging.service';
 
 // Closes the verify-panel (Murat) merge condition for E2-S1: the controller's
 // create path holds the **parent-only** gate (PM-2) — the one auth-critical

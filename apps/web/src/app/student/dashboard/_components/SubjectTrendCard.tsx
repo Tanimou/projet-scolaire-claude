@@ -1,8 +1,8 @@
+import type { StudentDashboardSubject } from '@pilotage/contracts';
+import { SubjectChip, cn, formatGrade } from '@pilotage/ui';
 import { Minus, Sparkles, TrendingUp } from 'lucide-react';
 import type { ComponentType } from 'react';
 
-import { SubjectChip, cn, formatGrade } from '@pilotage/ui';
-import type { StudentDashboardSubject } from '@pilotage/contracts';
 
 /**
  * SubjectTrendCard — E8-S3 Block A "Mon évolution par matière".

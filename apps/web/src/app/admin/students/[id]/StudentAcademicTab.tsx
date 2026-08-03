@@ -1,16 +1,4 @@
 import {
-  Award,
-  GaugeCircle,
-  History,
-  LineChart as LineChartIcon,
-  Lightbulb,
-  TrendingDown,
-  TrendingUp,
-  UserRound,
-  Users,
-} from 'lucide-react';
-
-import {
   EmptyState,
   LineChart,
   PreferredDate,
@@ -24,6 +12,18 @@ import {
   type LineSeries,
   type SubjectMetric,
 } from '@pilotage/ui';
+import {
+  Award,
+  GaugeCircle,
+  History,
+  LineChart as LineChartIcon,
+  Lightbulb,
+  TrendingDown,
+  TrendingUp,
+  UserRound,
+  Users,
+} from 'lucide-react';
+
 
 export interface StudentAcademicSnapshot {
   globalPerformance: {

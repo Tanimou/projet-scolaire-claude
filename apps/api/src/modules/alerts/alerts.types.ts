@@ -1,6 +1,6 @@
+import type { AlertRuleCode, AlertSeverity, AlertStatus } from '@prisma/client';
 import { IsEnum, IsObject, IsOptional, IsUUID } from 'class-validator';
 
-import type { AlertRuleCode, AlertSeverity, AlertStatus } from '@prisma/client';
 
 export const RULE_CODES: ReadonlyArray<AlertRuleCode> = [
   'LOW_SUBJECT_AVG',

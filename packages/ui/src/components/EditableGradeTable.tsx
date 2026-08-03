@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { cn } from '../lib/cn';
 import { formatGrade } from '../lib/format';
+
 import { GradePill } from './GradePill';
 
 export interface AssessmentColumn {

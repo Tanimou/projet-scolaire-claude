@@ -1,8 +1,9 @@
+import { formatInDays } from '@pilotage/ui';
 import { CalendarDays, ChevronRight, School } from 'lucide-react';
 import Link from 'next/link';
 
-import { formatInDays } from '@pilotage/ui';
 
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 import {
   CALENDAR_TYPE_ICON,
   CALENDAR_TYPE_LABEL,
@@ -10,7 +11,6 @@ import {
   CALENDAR_TYPE_TONE,
   calendarScopeLabel,
 } from '@/components/calendar/event-display';
-import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 

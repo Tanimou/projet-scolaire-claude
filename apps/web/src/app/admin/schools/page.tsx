@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 
+import { SchoolsManager } from './SchoolsManager';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
 import { fetchMe } from '@/lib/me';
 
-import { SchoolsManager } from './SchoolsManager';
 
 export const metadata: Metadata = { title: 'Écoles' };
 export const dynamic = 'force-dynamic';

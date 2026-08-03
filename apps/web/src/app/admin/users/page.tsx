@@ -1,12 +1,13 @@
+import { KpiCard, PageHeader } from '@pilotage/ui';
 import { Mail, ShieldCheck, UserCog, UserX } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { UsersTable } from './UsersTable';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
-import { KpiCard, PageHeader } from '@pilotage/ui';
 
-import { UsersTable } from './UsersTable';
 
 export const metadata: Metadata = { title: 'Utilisateurs' };
 export const dynamic = 'force-dynamic';

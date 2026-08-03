@@ -1,7 +1,8 @@
 'use client';
 
-import { BarChart, type BarSeries } from './BarChart';
 import { cn } from '../lib/cn';
+
+import { BarChart, type BarSeries } from './BarChart';
 
 export interface GroupedBarChartProps<T extends Record<string, unknown>> {
   data: T[];

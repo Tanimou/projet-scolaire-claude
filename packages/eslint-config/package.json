@@ -4,7 +4,7 @@
   "private": true,
   "license": "UNLICENSED",
   "main": "index.js",
-  "files": ["index.js", "base.js", "node.js", "react.js"],
+  "files": ["index.js", "base.js", "node.js", "react.js", "decorator-metadata.js"],
   "dependencies": {
     "@eslint/js": "^9.15.0",
     "@typescript-eslint/eslint-plugin": "^8.15.0",

@@ -1,13 +1,14 @@
+import type { ConversationDto, ConversationInboxResponse } from '@pilotage/contracts';
+import { buttonVariants, EmptyState, PageHeader } from '@pilotage/ui';
 import { MessageSquarePlus, MessagesSquare, UserRoundX } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { ThreadList } from './ThreadList';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import type { ConversationDto, ConversationInboxResponse } from '@pilotage/contracts';
-import { buttonVariants, EmptyState, PageHeader } from '@pilotage/ui';
 
-import { ThreadList } from './ThreadList';
 
 export const metadata: Metadata = { title: 'Messages' };
 export const dynamic = 'force-dynamic';

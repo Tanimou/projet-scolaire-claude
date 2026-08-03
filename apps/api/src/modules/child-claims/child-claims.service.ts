@@ -6,7 +6,6 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import type {
   AdminChildClaimQueueResponse,
   AdminChildClaimRow,
@@ -18,6 +17,7 @@ import type {
   GuardianRelationship,
   GuardianshipClaimStatus,
 } from '@pilotage/contracts';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
