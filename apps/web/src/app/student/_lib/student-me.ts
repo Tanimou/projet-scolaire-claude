@@ -1,5 +1,6 @@
-import { api, ApiError } from '@/lib/api-client';
 import type { StudentMeResponse } from '@pilotage/contracts';
+
+import { api, ApiError } from '@/lib/api-client';
 
 /**
  * Fetch the learner's activation state + own header (E8-S1).

@@ -1,8 +1,4 @@
-import { CalendarClock, CalendarDays } from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import type { StudentUpcomingResponse, StudentUpcomingRow } from '@pilotage/contracts';
 import {
   EmptyState,
   ErrorState,
@@ -10,11 +6,16 @@ import {
   SubjectChip,
   formatDateLong,
 } from '@pilotage/ui';
-import type { StudentUpcomingResponse, StudentUpcomingRow } from '@pilotage/contracts';
+import { CalendarClock, CalendarDays } from 'lucide-react';
+import type { Metadata } from 'next';
+
 
 import { StudentActivationGate } from '../_components/StudentActivationGate';
 import { fetchStudentMe } from '../_lib/student-me';
 import { kindLabel } from '../grades/kinds';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'À venir' };
 export const dynamic = 'force-dynamic';

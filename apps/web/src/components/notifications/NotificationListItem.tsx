@@ -1,13 +1,13 @@
 'use client';
 
+import { StatusBadge } from '@pilotage/ui';
 import { Bell, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 
-import { StatusBadge } from '@pilotage/ui';
 
-import { markReadAction } from './actions';
 import { KIND_ICON, type NotificationKind, type NotificationSeverity } from './NotificationCenter';
+import { markReadAction } from './actions';
 
 const SEVERITY_BG: Record<NotificationSeverity, string> = {
   info: 'bg-sky-50 text-sky-700',

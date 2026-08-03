@@ -350,7 +350,7 @@ export class AssessmentsController {
       }
     } catch (err) {
       // Notification fan-out is best-effort — never fails the publish.
-      // eslint-disable-next-line no-console
+       
       console.warn('[assessments.publish] notification fan-out failed', err);
     }
 
@@ -399,7 +399,7 @@ export class AssessmentsController {
     } catch (err) {
       // Recompute enqueue is best-effort — a missed enqueue degrades only cache
       // freshness (the safety-net sweep + live fallback cover it), NEVER the publish.
-      // eslint-disable-next-line no-console
+       
       console.warn('[assessments.publish] snapshot recompute enqueue failed', err);
     }
 

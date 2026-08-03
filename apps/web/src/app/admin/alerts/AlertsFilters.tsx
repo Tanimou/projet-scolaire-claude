@@ -1,10 +1,10 @@
 'use client';
 
+import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 import { RotateCcw, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 
 import type { AlertsTabKey } from './types';
 

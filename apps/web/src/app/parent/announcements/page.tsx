@@ -1,17 +1,18 @@
-import { AlertTriangle, BellRing, Inbox, Megaphone, Pin } from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   EmptyState,
   KpiCard,
   PageHeader,
   Pagination,
 } from '@pilotage/ui';
+import { AlertTriangle, BellRing, Inbox, Megaphone, Pin } from 'lucide-react';
+import type { Metadata } from 'next';
 
 import { AnnouncementCard } from './AnnouncementCard';
 import { AnnouncementsFilters } from './AnnouncementsFilters';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Annonces' };
 export const dynamic = 'force-dynamic';

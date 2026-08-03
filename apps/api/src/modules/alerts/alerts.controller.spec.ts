@@ -1,9 +1,10 @@
-import { AlertsController } from './alerts.controller';
-import type { AlertsService } from './alerts.service';
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
 import type { SchoolContextService } from '../school-structure/school-context.service';
 import type { StudentAccessService } from '../students/student-access.service';
+
+import { AlertsController } from './alerts.controller';
+import type { AlertsService } from './alerts.service';
 
 // Closes the verify-panel merge condition: the controller -> service seam that
 // derives audit provenance from the live JWT (via deriveAlertActorProvenance)

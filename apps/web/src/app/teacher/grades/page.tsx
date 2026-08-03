@@ -1,17 +1,4 @@
 import {
-  AlertTriangle,
-  BookOpen,
-  CheckCircle2,
-  FileEdit,
-  PenTool,
-  Sparkles,
-  TrendingUp,
-} from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
   AvatarNameCell,
   EmptyState,
   KpiCard,
@@ -23,6 +10,16 @@ import {
   formatDateShort,
   formatGrade,
 } from '@pilotage/ui';
+import {
+  AlertTriangle,
+  BookOpen,
+  CheckCircle2,
+  FileEdit,
+  PenTool,
+  Sparkles,
+  TrendingUp,
+} from 'lucide-react';
+import type { Metadata } from 'next';
 
 import { TeacherGradesFilters } from './TeacherGradesFilters';
 import type {
@@ -32,6 +29,10 @@ import type {
   SubjectOption,
   TermOption,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Notes' };
 export const dynamic = 'force-dynamic';

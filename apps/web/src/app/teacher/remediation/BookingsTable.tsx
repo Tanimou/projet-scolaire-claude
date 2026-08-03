@@ -1,5 +1,7 @@
 'use client';
 
+import type { TeacherBookingDto } from '@pilotage/contracts';
+import { Badge, FormDrawer, StatusBadge } from '@pilotage/ui';
 import {
   CalendarClock,
   CalendarPlus,
@@ -15,8 +17,6 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
-import { Badge, FormDrawer, StatusBadge } from '@pilotage/ui';
-import type { TeacherBookingDto } from '@pilotage/contracts';
 
 import { transitionBookingAction } from './remediation-actions';
 import { bookingStatusMeta, formatSessionAt } from './slot-format';

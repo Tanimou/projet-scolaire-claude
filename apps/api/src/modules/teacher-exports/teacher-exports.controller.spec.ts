@@ -1,11 +1,12 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
-import { TeacherExportsController } from './teacher-exports.controller';
-import type { ExportsService } from '../exports/exports.service';
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
 import type { PrismaService } from '../../shared/prisma/prisma.service';
+import type { ExportsService } from '../exports/exports.service';
 import type { TeacherProfileService } from '../teaching/teacher-profile.service';
+
+import { TeacherExportsController } from './teacher-exports.controller';
 
 // Load-bearing seams for E4-S3 (children's-data export, P1 [auth]):
 //   1. enqueue is gated by teaching-assignment ABAC: the caller must CURRENTLY

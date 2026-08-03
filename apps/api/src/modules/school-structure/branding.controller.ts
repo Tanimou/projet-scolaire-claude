@@ -8,8 +8,8 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 
-import { BrandingService } from './branding.service';
 import { UpdateBrandingDto } from './branding.dto';
+import { BrandingService } from './branding.service';
 
 @ApiTags('branding')
 @ApiBearerAuth()

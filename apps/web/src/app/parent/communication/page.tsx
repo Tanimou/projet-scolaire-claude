@@ -1,4 +1,13 @@
 import {
+  Avatar,
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  StatusBadge,
+  formatDateLong,
+  formatRelativeTime,
+} from '@pilotage/ui';
+import {
   AlertOctagon,
   BellRing,
   Building2,
@@ -9,20 +18,8 @@ import {
   Pin,
   Users,
 } from 'lucide-react';
-import Link from 'next/link';
 import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  Avatar,
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  StatusBadge,
-  formatDateLong,
-  formatRelativeTime,
-} from '@pilotage/ui';
+import Link from 'next/link';
 
 import { CommunicationFilters } from './CommunicationFilters';
 import type {
@@ -32,6 +29,10 @@ import type {
   SourceFilter,
   StatusFilter,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Communication' };
 export const dynamic = 'force-dynamic';

@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../lib/cn';
-import { formatGrade } from '../lib/format';
 import { formatPreferredGrade } from '../lib/display-prefs';
-import { useDisplayGradeFormat } from './DisplayPrefsProvider';
+import { formatGrade } from '../lib/format';
 import { gradeBucket } from '../lib/grade-bucket';
+
+import { useDisplayGradeFormat } from './DisplayPrefsProvider';
+
 
 export interface GradePillProps {
   /** Numeric value 0..max */

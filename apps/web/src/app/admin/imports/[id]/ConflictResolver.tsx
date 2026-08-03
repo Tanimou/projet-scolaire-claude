@@ -1,12 +1,13 @@
 'use client';
 
+import { FormDrawer } from '@pilotage/ui';
 import { AlertTriangle, ArrowLeftRight, ArrowRight, Check, Loader2, ShieldCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useId, useRef, useState, useTransition } from 'react';
 
-import { FormDrawer } from '@pilotage/ui';
 
 import { resolveImportConflict } from '../actions';
+
 import type { BatchRow, ConflictField } from './types';
 
 type Decision = 'keep_current' | 'take_source';

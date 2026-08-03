@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
 
+import { CalendarManager } from './CalendarManager';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
 
-import { CalendarManager } from './CalendarManager';
 
 export const metadata: Metadata = { title: 'Calendrier scolaire' };
 export const dynamic = 'force-dynamic';

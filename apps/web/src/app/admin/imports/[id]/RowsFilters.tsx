@@ -1,10 +1,10 @@
 'use client';
 
+import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 import { RotateCcw } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { FilterBar, SearchInput, SelectFilter, type SelectOption } from '@pilotage/ui';
 
 import type {
   ErrorFieldFacet,

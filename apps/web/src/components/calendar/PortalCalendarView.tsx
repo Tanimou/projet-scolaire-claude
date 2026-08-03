@@ -1,6 +1,14 @@
 'use client';
 
 import {
+  DetailDrawer,
+  EmptyState,
+  KpiCard,
+  StatusBadge,
+  formatDateLong,
+  formatInDays,
+} from '@pilotage/ui';
+import {
   Calendar as CalendarIcon,
   CalendarCheck2,
   CalendarClock,
@@ -19,18 +27,11 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import {
-  DetailDrawer,
-  EmptyState,
-  KpiCard,
-  StatusBadge,
-  formatDateLong,
-  formatInDays,
-} from '@pilotage/ui';
+
+import { CalendarExportButton } from './CalendarExportButton';
 
 import type { IcsEvent } from '@/lib/ics';
 
-import { CalendarExportButton } from './CalendarExportButton';
 
 export type CalendarEventType =
   | 'vacation_break'

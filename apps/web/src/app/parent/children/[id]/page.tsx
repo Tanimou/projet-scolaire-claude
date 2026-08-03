@@ -1,4 +1,22 @@
 import {
+  AlertCard,
+  ChildProfileHero,
+  DonutChart,
+  EmptyState,
+  KpiCard,
+  LineChart,
+  PageHeader,
+  SectionHeader,
+  StatusBadge,
+  SubjectPerfCard,
+  formatGrade,
+  formatPercent,
+  gradeVerdict,
+  trendOfDelta,
+  type LineSeries,
+  type SubjectMetric,
+} from '@pilotage/ui';
+import {
   AlertTriangle,
   ArrowLeft,
   BookOpen,
@@ -18,32 +36,15 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  AlertCard,
-  ChildProfileHero,
-  DonutChart,
-  EmptyState,
-  KpiCard,
-  LineChart,
-  PageHeader,
-  SectionHeader,
-  StatusBadge,
-  SubjectPerfCard,
-  formatGrade,
-  formatPercent,
-  gradeVerdict,
-  trendOfDelta,
-  type LineSeries,
-  type SubjectMetric,
-} from '@pilotage/ui';
-
-import { UpcomingPanel, type UpcomingItem } from '../../dashboard/_components/UpcomingPanel';
 import {
   RecentGradesTable,
   type GradeRow,
 } from '../../dashboard/_components/RecentGradesTable';
+import { UpcomingPanel, type UpcomingItem } from '../../dashboard/_components/UpcomingPanel';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Profil de mon enfant' };
 export const dynamic = 'force-dynamic';

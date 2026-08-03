@@ -1,15 +1,16 @@
 import { Info, MessageSquarePlus } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-
 import {
   TeacherMessageComposer,
   type TeachableClass,
   type TeachableCycle,
   type TeachableLevel,
 } from './TeacherMessageComposer';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Nouveau message' };
 export const dynamic = 'force-dynamic';

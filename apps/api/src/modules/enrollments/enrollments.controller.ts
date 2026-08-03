@@ -107,7 +107,7 @@ export class EnrollmentsController {
         })),
       );
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.warn('[enrollments] notification fan-out failed', err);
     }
   }

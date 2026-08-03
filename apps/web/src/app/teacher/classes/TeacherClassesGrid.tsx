@@ -1,9 +1,5 @@
 'use client';
 
-import { Layers, SearchX } from 'lucide-react';
-import Link from 'next/link';
-import { useMemo, useState } from 'react';
-
 import {
   CapacityBar,
   EmptyState,
@@ -14,6 +10,10 @@ import {
   formatGrade,
   type SelectOption,
 } from '@pilotage/ui';
+import { Layers, SearchX } from 'lucide-react';
+import Link from 'next/link';
+import { useMemo, useState } from 'react';
+
 
 export interface ClassCardData {
   classSectionId: string;

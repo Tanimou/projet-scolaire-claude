@@ -1,3 +1,4 @@
+import { EmptyState, KpiCard } from '@pilotage/ui';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -13,9 +14,6 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api } from '@/lib/api-client';
-import { EmptyState, KpiCard } from '@pilotage/ui';
 
 import { LessonsFilters } from './LessonsFilters';
 import { LessonsManager } from './LessonsManager';
@@ -26,6 +24,9 @@ import type {
   SortKey,
   StatusFilter,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Cahier de texte' };
 export const dynamic = 'force-dynamic';

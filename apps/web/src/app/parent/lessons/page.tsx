@@ -1,14 +1,16 @@
+
+import { EmptyState, KpiCard, PageHeader, Pagination, formatDateLong } from '@pilotage/ui';
 import { AlarmClock, BookOpen, ClipboardList, NotebookPen, Sparkles } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { EmptyState, KpiCard, PageHeader, Pagination, formatDateLong } from '@pilotage/ui';
-
 import { ChildSelector } from '../_components/ChildSelector';
+
 import { LessonCard } from './LessonCard';
 import { LessonsFilters } from './LessonsFilters';
 import type { LessonRow, LessonsPeriod, SubjectOption } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Cahier de texte' };
 export const dynamic = 'force-dynamic';

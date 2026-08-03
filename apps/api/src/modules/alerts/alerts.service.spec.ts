@@ -1,5 +1,6 @@
-import { AlertsService } from './alerts.service';
 import type { NotificationsService } from '../notifications/notifications.service';
+
+import { AlertsService } from './alerts.service';
 
 const TENANT = 't1';
 const ALERT_ID = 'alert-1';

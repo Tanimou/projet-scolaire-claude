@@ -1,5 +1,6 @@
 'use client';
 
+import { StatusBadge, formatDateLong, formatRelativeTime } from '@pilotage/ui';
 import {
   ChevronRight,
   CircleSlash,
@@ -21,7 +22,6 @@ import {
 } from 'lucide-react';
 import { useState, type ComponentType } from 'react';
 
-import { StatusBadge, formatDateLong, formatRelativeTime } from '@pilotage/ui';
 
 import { AuditDetailDrawer, type AuditEntry } from './AuditDetailDrawer';
 import { humanizePortal, humanizeResourceType } from './AuditPageFilters';

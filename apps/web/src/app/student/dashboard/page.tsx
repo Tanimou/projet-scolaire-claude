@@ -1,9 +1,5 @@
-import { CalendarClock, Compass, Target } from 'lucide-react';
-import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { FreshnessChip } from '@/components/freshness/FreshnessChip';
-import { api, ApiError } from '@/lib/api-client';
+import type { StudentDashboardResponse } from '@pilotage/contracts';
 import {
   EmptyState,
   PageHeader,
@@ -11,13 +7,19 @@ import {
   SubjectChip,
   formatDateLong,
 } from '@pilotage/ui';
-import type { StudentDashboardResponse } from '@pilotage/contracts';
+import { CalendarClock, Compass, Target } from 'lucide-react';
+import type { Metadata } from 'next';
 
 import { StudentActivationGate } from '../_components/StudentActivationGate';
 import { fetchStudentMe } from '../_lib/student-me';
 import { kindLabel } from '../grades/kinds';
+
 import { StudentSupportStrip } from './_components/StudentSupportStrip';
 import { SubjectTrendCard } from './_components/SubjectTrendCard';
+
+import { PortalShell } from '@/components/PortalShell';
+import { FreshnessChip } from '@/components/freshness/FreshnessChip';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Mon objectif' };
 export const dynamic = 'force-dynamic';

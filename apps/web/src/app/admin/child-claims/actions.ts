@@ -2,9 +2,10 @@
 
 import { revalidatePath } from 'next/cache';
 
+import type { ApproveChildClaimResponse } from './types';
+
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
 
-import type { ApproveChildClaimResponse } from './types';
 
 /**
  * Admin child-claim decision server actions (E9-S2).

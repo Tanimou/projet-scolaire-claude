@@ -1,10 +1,10 @@
 'use client';
 
+import { EmptyState, SubjectChip } from '@pilotage/ui';
 import { Crown, Loader2, Plus, Star, Trash2, Users } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 
-import { EmptyState, SubjectChip } from '@pilotage/ui';
 
 import {
   createAssignment,

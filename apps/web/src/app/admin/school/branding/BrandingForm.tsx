@@ -4,9 +4,10 @@ import { Check, Loader2, Palette, Pipette, RefreshCw, RotateCcw, X } from 'lucid
 import { useRouter } from 'next/navigation';
 import { useId, useState } from 'react';
 
+import { saveBranding } from './actions';
+
 import { type BrandingResponse } from '@/lib/me';
 
-import { saveBranding } from './actions';
 
 const DEFAULT_PRIMARY = 'oklch(0.62 0.18 250)';
 /** Hex equivalent of DEFAULT_PRIMARY — the fallback the native picker opens on. */

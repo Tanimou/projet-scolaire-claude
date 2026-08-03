@@ -1,9 +1,3 @@
-import { headers } from 'next/headers';
-import { redirect } from 'next/navigation';
-import type { ReactNode } from 'react';
-
-import { auth } from '@/auth';
-import { fetchBranding, fetchMe, type BrandingResponse, type MeResponse } from '@/lib/me';
 import {
   AppShell,
   DISPLAY_PREFS_DEFAULTS,
@@ -17,9 +11,15 @@ import {
   type SidebarGroup,
   type SidebarItemDef,
 } from '@pilotage/ui';
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
+import type { ReactNode } from 'react';
+
 
 import { MobileSidebarToggle } from './MobileSidebarToggle';
 import { PortalBrand } from './PortalBrand';
+import { TopbarBell } from './TopbarBell';
+import { TopbarUserMenu } from './TopbarUserMenu';
 import {
   adminSidebar,
   resolveActive,
@@ -27,8 +27,9 @@ import {
   type PortalKey,
   type SidebarItemConfig,
 } from './sidebar-items';
-import { TopbarBell } from './TopbarBell';
-import { TopbarUserMenu } from './TopbarUserMenu';
+
+import { auth } from '@/auth';
+import { fetchBranding, fetchMe, type BrandingResponse, type MeResponse } from '@/lib/me';
 
 export interface AppShellRootProps {
   portal: PortalKey;

@@ -1,8 +1,5 @@
 'use client';
 
-import { Calendar } from 'lucide-react';
-import Link from 'next/link';
-
 import {
   MiniCalendar,
   PreferredDate,
@@ -10,6 +7,9 @@ import {
   subjectColor,
   type CalendarEventDot,
 } from '@pilotage/ui';
+import { Calendar } from 'lucide-react';
+import Link from 'next/link';
+
 
 export interface UpcomingItem {
   id: string;

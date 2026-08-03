@@ -1,9 +1,9 @@
 'use client';
 
+import { FilterBar, SelectFilter, type SelectOption } from '@pilotage/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { FilterBar, SelectFilter, type SelectOption } from '@pilotage/ui';
 
 export interface ClassesPageFiltersProps {
   initialGradeLevelId: string;

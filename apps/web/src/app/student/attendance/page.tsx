@@ -1,9 +1,8 @@
-import { CalendarCheck, CheckCircle2, Clock, LogOut, MinusCircle } from 'lucide-react';
-import type { Metadata } from 'next';
-import type { ComponentType } from 'react';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import type {
+  StudentAttendanceRecord,
+  StudentAttendanceResponse,
+  StudentAttendanceSummary,
+} from '@pilotage/contracts';
 import {
   Badge,
   EmptyState,
@@ -12,14 +11,16 @@ import {
   SubjectChip,
   formatDateShort,
 } from '@pilotage/ui';
-import type {
-  StudentAttendanceRecord,
-  StudentAttendanceResponse,
-  StudentAttendanceSummary,
-} from '@pilotage/contracts';
+import { CalendarCheck, CheckCircle2, Clock, LogOut, MinusCircle } from 'lucide-react';
+import type { Metadata } from 'next';
+import type { ComponentType } from 'react';
 
 import { StudentActivationGate } from '../_components/StudentActivationGate';
 import { fetchStudentMe } from '../_lib/student-me';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Mon assiduité' };
 export const dynamic = 'force-dynamic';

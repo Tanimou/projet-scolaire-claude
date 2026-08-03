@@ -2,10 +2,11 @@ import { ArrowLeft } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { RoleBuilderForm } from '../RoleBuilderForm';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
 
-import { RoleBuilderForm } from '../RoleBuilderForm';
 
 export const metadata: Metadata = { title: 'Créer un rôle' };
 export const dynamic = 'force-dynamic';

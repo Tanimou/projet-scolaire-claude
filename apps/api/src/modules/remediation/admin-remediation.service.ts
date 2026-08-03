@@ -3,7 +3,6 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import {
   CreateAdminTutorDtoSchema,
   type AdminRemediationOverviewDto,
@@ -11,6 +10,7 @@ import {
   type AdminTutorDto,
   type UpdateAdminTutorDto,
 } from '@pilotage/contracts';
+import { Prisma } from '@prisma/client';
 import type { z } from 'zod';
 
 /**

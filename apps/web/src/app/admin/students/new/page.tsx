@@ -2,9 +2,10 @@ import { ArrowLeft } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { StudentForm } from './StudentForm';
+
 import { PortalShell } from '@/components/PortalShell';
 
-import { StudentForm } from './StudentForm';
 
 export const metadata: Metadata = { title: 'Nouvel élève' };
 export const dynamic = 'force-dynamic';

@@ -1,6 +1,6 @@
+import { SubjectChip, formatDateLong, formatDateShort, formatInDays } from '@pilotage/ui';
 import { CalendarDays, ClipboardList, NotebookPen, Sparkles, User } from 'lucide-react';
 
-import { SubjectChip, formatDateLong, formatDateShort, formatInDays } from '@pilotage/ui';
 
 import type { LessonRow } from './types';
 

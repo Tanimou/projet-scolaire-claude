@@ -1,10 +1,10 @@
 'use client';
 
+import { Avatar } from '@pilotage/ui';
 import { Loader2, Save } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-import { Avatar } from '@pilotage/ui';
 
 import { createStudent } from '../actions';
 

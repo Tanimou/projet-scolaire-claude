@@ -1,9 +1,9 @@
 'use client';
 
+import { SearchInput, SelectFilter } from '@pilotage/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { SearchInput, SelectFilter } from '@pilotage/ui';
 
 import type { KindFilter, SourceFilter } from './types';
 

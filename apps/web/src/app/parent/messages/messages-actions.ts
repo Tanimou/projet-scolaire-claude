@@ -1,9 +1,9 @@
 'use server';
 
+import type { ConversationMessageDto, ConversationReportDto } from '@pilotage/contracts';
 import { revalidatePath } from 'next/cache';
 
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
-import type { ConversationMessageDto, ConversationReportDto } from '@pilotage/contracts';
 
 /**
  * Parent messaging thread-view server actions (E2-S2 — inbox + thread surface).

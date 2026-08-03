@@ -45,6 +45,10 @@ jobs:
       # `@prisma/client` types rather than on a lint rule.
       - run: pnpm --filter @pilotage/api prisma generate
       - run: pnpm lint
+      # `pnpm lint` fails on errors only. The ratchet is what makes the warning
+      # count binding, in both directions. Kept in step with scripts/ci-gate.sh
+      # stage 2 — the two must not drift (S-E02-2 AC-4).
+      - run: node scripts/lint-ratchet.js
 
   typecheck:
     name: Typecheck

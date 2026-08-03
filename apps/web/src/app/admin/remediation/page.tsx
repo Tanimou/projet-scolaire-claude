@@ -1,3 +1,8 @@
+import type {
+  AdminRemediationCatalogueDto,
+  AdminRemediationOverviewDto,
+} from '@pilotage/contracts';
+import { Card, CardContent, EmptyState, KpiCard, PageHeader, StatusBadge, SubjectChip } from '@pilotage/ui';
 import {
   CalendarCheck,
   Clock,
@@ -7,15 +12,11 @@ import {
 } from 'lucide-react';
 import type { Metadata } from 'next';
 
+import { RemediationCatalogueManager } from './RemediationCatalogueManager';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import type {
-  AdminRemediationCatalogueDto,
-  AdminRemediationOverviewDto,
-} from '@pilotage/contracts';
-import { Card, CardContent, EmptyState, KpiCard, PageHeader, StatusBadge, SubjectChip } from '@pilotage/ui';
 
-import { RemediationCatalogueManager } from './RemediationCatalogueManager';
 
 export const metadata: Metadata = { title: 'Soutien scolaire' };
 export const dynamic = 'force-dynamic';

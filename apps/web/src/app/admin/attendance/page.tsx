@@ -1,8 +1,3 @@
-import { CheckSquare, Clock, FileWarning, UserX } from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   AvatarNameCell,
   EmptyState,
@@ -13,6 +8,11 @@ import {
   StatusBadge,
   formatDateShort,
 } from '@pilotage/ui';
+import { CheckSquare, Clock, FileWarning, UserX } from 'lucide-react';
+import type { Metadata } from 'next';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Présences' };
 export const dynamic = 'force-dynamic';

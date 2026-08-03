@@ -1,10 +1,10 @@
 'use client';
 
+import { Button } from '@pilotage/ui';
 import { AlertTriangle, ArrowLeft, RotateCw } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect } from 'react';
 
-import { Button } from '@pilotage/ui';
 
 type Portal = 'admin' | 'teacher' | 'parent';
 

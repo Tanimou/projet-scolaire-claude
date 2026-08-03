@@ -1,8 +1,8 @@
+import type { ImportJobPayload } from '@pilotage/imports-core';
 import { ImportStatus } from '@prisma/client';
 import type { Job } from 'bullmq';
 
 import type { PrismaService } from '../../shared/prisma/prisma.service';
-import type { ImportJobPayload } from '@pilotage/imports-core';
 
 import { ImportsProcessor } from './imports.processor';
 

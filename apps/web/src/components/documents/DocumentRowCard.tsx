@@ -1,7 +1,7 @@
+import { formatDateShort, StatusBadge } from '@pilotage/ui';
 import { Download, ExternalLink, FileText, Megaphone, NotebookPen, Users } from 'lucide-react';
 import Link from 'next/link';
 
-import { formatDateShort, StatusBadge } from '@pilotage/ui';
 
 import type { DocumentRow } from './types';
 import {

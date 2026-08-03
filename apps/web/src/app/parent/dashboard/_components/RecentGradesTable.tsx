@@ -1,10 +1,10 @@
 'use client';
 
+import { formatGrade, PreferredDate, subjectColor } from '@pilotage/ui';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 
-import { formatGrade, PreferredDate, subjectColor } from '@pilotage/ui';
 
 export interface GradeRow {
   id: string;

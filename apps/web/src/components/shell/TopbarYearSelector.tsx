@@ -1,9 +1,9 @@
 'use client';
 
+import { YearSelector, type YearOption } from '@pilotage/ui';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
-import { YearSelector, type YearOption } from '@pilotage/ui';
 
 export interface TopbarYearSelectorProps {
   options: YearOption[];

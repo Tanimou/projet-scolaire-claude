@@ -1,8 +1,3 @@
-import { Flag, MessageSquareWarning, ShieldCheck, UserRound } from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, isNextNavigationSignal } from '@/lib/api-client';
 import type { ConversationReportDto, ConversationReportsResponse } from '@pilotage/contracts';
 import {
   EmptyState,
@@ -12,6 +7,11 @@ import {
   formatDateLong,
   type StatusTone,
 } from '@pilotage/ui';
+import { Flag, MessageSquareWarning, ShieldCheck, UserRound } from 'lucide-react';
+import type { Metadata } from 'next';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, isNextNavigationSignal } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Modération messagerie' };
 export const dynamic = 'force-dynamic';

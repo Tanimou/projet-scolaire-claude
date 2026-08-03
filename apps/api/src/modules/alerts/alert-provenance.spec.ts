@@ -1,5 +1,6 @@
-import { deriveAlertActorProvenance } from './alert-provenance';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
+
+import { deriveAlertActorProvenance } from './alert-provenance';
 
 function jwtWith(roles: string[] | undefined): KeycloakJwtPayload {
   return {

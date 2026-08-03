@@ -1,9 +1,3 @@
-import { Check, Clock, FileSearch, UserPlus, X } from 'lucide-react';
-import type { Metadata } from 'next';
-import Link from 'next/link';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   AvatarNameCell,
   EmptyState,
@@ -14,9 +8,16 @@ import {
   StatusBadge,
   formatDateShort,
 } from '@pilotage/ui';
+import { Check, Clock, FileSearch, UserPlus, X } from 'lucide-react';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { EnrollmentsExportButton } from './EnrollmentsExportButton';
 import { EnrollmentsPageTabs } from './EnrollmentsPageTabs';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Inscriptions' };
 export const dynamic = 'force-dynamic';

@@ -1,4 +1,4 @@
-import { GuardianRelationship } from '@prisma/client';
+import type { GuardianRelationship } from '@prisma/client';
 
 import {
   type AppliedEntity,

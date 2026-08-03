@@ -1,9 +1,9 @@
 'use client';
 
+import { Badge, cn, formatRelativeTime } from '@pilotage/ui';
 import { CheckCircle2, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import { Badge, cn, formatRelativeTime } from '@pilotage/ui';
 
 /**
  * FreshnessChip — E6-S4 (the visionary trust signal).

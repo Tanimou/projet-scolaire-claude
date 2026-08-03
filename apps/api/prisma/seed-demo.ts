@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+ 
 /**
  * Seed démo — Pilotage scolaire (admin dashboard production-quality).
  *
@@ -19,8 +19,8 @@
  * Run with:
  *   pnpm prisma:seed:demo
  */
-import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
+
 import {
   AssessmentKind,
   CalendarEventScope,
@@ -35,6 +35,7 @@ import {
   PrismaClient,
   StudentStatus,
 } from '@prisma/client';
+import { config as loadEnv } from 'dotenv';
 
 import { assertSeedAllowed } from './seed-guard';
 

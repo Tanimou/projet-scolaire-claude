@@ -1,4 +1,11 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  StatusBadge,
+  formatDateShort,
+} from '@pilotage/ui';
+import {
   ArrowRight,
   Cake,
   Calendar,
@@ -9,19 +16,13 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import type { ChildClaimListResponse, ChildClaimStatusRow } from './claim-types';
+
+import { PortalShell } from '@/components/PortalShell';
 import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
 import { ChildClaimsStatusStrip } from '@/components/parent/ChildClaimsStatusStrip';
-import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  StatusBadge,
-  formatDateShort,
-} from '@pilotage/ui';
 
-import type { ChildClaimListResponse, ChildClaimStatusRow } from './claim-types';
 
 export const metadata: Metadata = { title: 'Mes enfants' };
 export const dynamic = 'force-dynamic';

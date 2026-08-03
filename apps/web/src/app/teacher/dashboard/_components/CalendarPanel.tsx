@@ -1,8 +1,8 @@
 'use client';
 
+import { DateCard, MiniCalendar, subjectColor, type CalendarEventDot } from '@pilotage/ui';
 import Link from 'next/link';
 
-import { DateCard, MiniCalendar, subjectColor, type CalendarEventDot } from '@pilotage/ui';
 
 export interface UpcomingItem {
   id: string;

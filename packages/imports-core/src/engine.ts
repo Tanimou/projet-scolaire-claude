@@ -1,4 +1,5 @@
-import { ImportMode, ImportRowStatus, Prisma, ReconciliationClass } from '@prisma/client';
+import type { ImportMode, Prisma} from '@prisma/client';
+import { ImportRowStatus, ReconciliationClass } from '@prisma/client';
 
 import {
   type ConflictDecision,

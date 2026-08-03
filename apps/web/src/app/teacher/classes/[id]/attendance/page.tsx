@@ -1,3 +1,5 @@
+
+import { EmptyState, KpiCard, PageHeader } from '@pilotage/ui';
 import {
   AlertTriangle,
   CalendarCheck2,
@@ -7,14 +9,13 @@ import {
 } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { EmptyState, KpiCard, PageHeader } from '@pilotage/ui';
-
 import { AttendanceManager } from './AttendanceManager';
 import { HistoricSessionsPanel } from './HistoricSessionsPanel';
 import { StudentsToWatchPanel } from './StudentsToWatchPanel';
 import type { AttendanceWorkspaceData } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Présences' };
 export const dynamic = 'force-dynamic';

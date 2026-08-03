@@ -1,5 +1,3 @@
-import { Activity, Minus, PieChart, TrendingDown, TrendingUp } from 'lucide-react';
-
 import {
   DonutChart,
   LineChart,
@@ -7,6 +5,8 @@ import {
   formatGrade,
   gradeVerdict,
 } from '@pilotage/ui';
+import { Activity, Minus, PieChart, TrendingDown, TrendingUp } from 'lucide-react';
+
 
 import type { GradesAnalytics, RegularityTone } from './analytics';
 

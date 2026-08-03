@@ -1,9 +1,3 @@
-import { Check, Clock, HeartHandshake, Mail, ShieldQuestion, Users, X } from 'lucide-react';
-import type { Metadata } from 'next';
-import Link from 'next/link';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   AvatarNameCell,
   EmptyState,
@@ -13,9 +7,16 @@ import {
   RowActions,
   StatusBadge,
 } from '@pilotage/ui';
+import { Check, Clock, HeartHandshake, Mail, ShieldQuestion, Users, X } from 'lucide-react';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { GuardiansExportButton } from './GuardiansExportButton';
 import { GuardiansPageFilters } from './GuardiansPageFilters';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Parents / Tuteurs' };
 export const dynamic = 'force-dynamic';

@@ -1,11 +1,12 @@
 'use client';
 
-import { useDisplayGradeFormat } from './DisplayPrefsProvider';
 import {
   formatPreferredGrade,
   type DisplayGradeFormat,
   type FormatPreferredGradeOptions,
 } from '../lib/display-prefs';
+
+import { useDisplayGradeFormat } from './DisplayPrefsProvider';
 
 export interface PreferredGradeProps extends FormatPreferredGradeOptions {
   value: number | null | undefined;

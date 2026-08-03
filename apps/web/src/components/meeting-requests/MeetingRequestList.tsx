@@ -1,4 +1,13 @@
 import {
+  EmptyState,
+  KpiCard,
+  StatusBadge,
+  SubjectChip,
+  formatDateLong,
+  formatInDays,
+  type StatusTone,
+} from '@pilotage/ui';
+import {
   AlertTriangle,
   CheckCircle2,
   MessageSquare,
@@ -10,15 +19,6 @@ import {
   UserX,
 } from 'lucide-react';
 
-import {
-  EmptyState,
-  KpiCard,
-  StatusBadge,
-  SubjectChip,
-  formatDateLong,
-  formatInDays,
-  type StatusTone,
-} from '@pilotage/ui';
 
 import { MeetingRequestActions } from './MeetingRequestActions';
 import {

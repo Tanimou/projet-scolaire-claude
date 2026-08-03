@@ -1,17 +1,19 @@
-import { Megaphone } from 'lucide-react';
-import type { Metadata } from 'next';
-
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import { EmptyState, ErrorState, PageHeader } from '@pilotage/ui';
 import type {
   StudentAnnouncementRow,
   StudentAnnouncementsResponse,
 } from '@pilotage/contracts';
+import { EmptyState, ErrorState, PageHeader } from '@pilotage/ui';
+import { Megaphone } from 'lucide-react';
+import type { Metadata } from 'next';
+
 
 import { StudentActivationGate } from '../_components/StudentActivationGate';
 import { fetchStudentMe } from '../_lib/student-me';
+
 import { StudentAnnouncementCard } from './StudentAnnouncementCard';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Annonces' };
 export const dynamic = 'force-dynamic';

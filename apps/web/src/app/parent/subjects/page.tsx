@@ -1,4 +1,13 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  SubjectPerfCard,
+  formatGrade,
+  gradeVerdict,
+  trendOfDelta,
+} from '@pilotage/ui';
+import {
   AlertTriangle,
   BookOpen,
   Sparkles,
@@ -8,17 +17,6 @@ import {
 } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  SubjectPerfCard,
-  formatGrade,
-  gradeVerdict,
-  trendOfDelta,
-} from '@pilotage/ui';
 
 import { ChildSelector } from '../_components/ChildSelector';
 
@@ -30,6 +28,9 @@ import type {
   StatusFilter,
   SubjectPerfItem,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Suivi des matières' };
 export const dynamic = 'force-dynamic';

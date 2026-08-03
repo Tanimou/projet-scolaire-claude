@@ -1,7 +1,8 @@
 'use client';
 
-import { useDisplayDateFormat } from './DisplayPrefsProvider';
 import { formatPreferredDate, type DisplayDateFormat } from '../lib/display-prefs';
+
+import { useDisplayDateFormat } from './DisplayPrefsProvider';
 
 export interface PreferredDateProps {
   value: string | Date | number | null | undefined;

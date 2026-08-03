@@ -1,4 +1,9 @@
 import {
+  formatGrade,
+  formatPercent,
+  gradeVerdict,
+} from '@pilotage/ui';
+import {
   CalendarCheck2,
   CheckCircle2,
   Clock,
@@ -9,14 +14,10 @@ import {
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
-import { api, ApiError } from '@/lib/api-client';
-import {
-  formatGrade,
-  formatPercent,
-  gradeVerdict,
-} from '@pilotage/ui';
-
 import { ReportToolbar } from './ReportToolbar';
+
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Bilan de suivi' };
 export const dynamic = 'force-dynamic';

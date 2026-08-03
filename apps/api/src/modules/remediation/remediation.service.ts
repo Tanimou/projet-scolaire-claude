@@ -4,7 +4,6 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import type {
   CatalogueSlotDto,
   CatalogueTutorDto,
@@ -13,6 +12,7 @@ import type {
   RemediationProgressDto,
 } from '@pilotage/contracts';
 import { IMPROVEMENT_DELTA_THRESHOLD } from '@pilotage/contracts';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 

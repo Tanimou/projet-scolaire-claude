@@ -1,9 +1,9 @@
 'use server';
 
+import type { ConversationMessageDto, ConversationReportDto } from '@pilotage/contracts';
 import { revalidatePath } from 'next/cache';
 
 import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
-import type { ConversationMessageDto, ConversationReportDto } from '@pilotage/contracts';
 
 /**
  * Teacher conversation thread-view server actions (E2-S3 — teacher inbox + reply).

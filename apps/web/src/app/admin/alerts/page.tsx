@@ -1,3 +1,15 @@
+
+import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  StatusBadge,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  formatDateLong,
+  type SelectOption,
+} from '@pilotage/ui';
 import {
   AlertTriangle,
   Bell,
@@ -10,28 +22,14 @@ import {
 } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  StatusBadge,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  formatDateLong,
-  type SelectOption,
-} from '@pilotage/ui';
-
 import { AlertInstanceActions } from './AlertInstanceActions';
 import { AlertRuleToggle } from './AlertRuleToggle';
 import { AlertsExportButton, type AlertsExportButtonProps } from './AlertsExportButton';
 import { AlertsFilters } from './AlertsFilters';
 import { AlertsTabsRouter } from './AlertsTabsRouter';
-import type { AlertRuleCode } from './actions';
 import { EvaluateNowButton } from './EvaluateNowButton';
 import { RuleConfigEditor } from './RuleConfigEditor';
+import type { AlertRuleCode } from './actions';
 import {
   parseTab,
   RULE_LABEL,
@@ -46,6 +44,9 @@ import {
   type AlertStatus,
   type AlertsTabKey,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Alertes' };
 export const dynamic = 'force-dynamic';

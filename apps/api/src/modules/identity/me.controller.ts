@@ -2,13 +2,13 @@ import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsOptional } from 'class-validator';
 
-import { PrismaService } from '../../shared/prisma/prisma.service';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
+import { PrismaService } from '../../shared/prisma/prisma.service';
 
 const DISPLAY_DENSITIES = ['compact', 'cozy', 'spacious'] as const;
 const DISPLAY_ACCENTS = ['default', 'blue', 'violet', 'emerald', 'rose', 'amber'] as const;

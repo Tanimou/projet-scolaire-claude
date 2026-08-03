@@ -9,9 +9,10 @@
  * Run AFTER seed-demo.ts (needs the demo school + an admin UserProfile).
  *   pnpm --filter @pilotage/api run prisma:seed:demo:enrich
  */
-import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
+
 import { PrismaClient, AnnouncementScope, AnnouncementPriority } from '@prisma/client';
+import { config as loadEnv } from 'dotenv';
 
 import { assertSeedAllowed } from './seed-guard';
 

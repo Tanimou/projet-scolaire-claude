@@ -1,7 +1,7 @@
+import type { StudentGradeRow } from '@pilotage/contracts';
+import { formatDateShort, formatGrade, gradeBucket, gradeVerdict } from '@pilotage/ui';
 import { CalendarDays, FileEdit, MessageSquareQuote } from 'lucide-react';
 
-import { formatDateShort, formatGrade, gradeBucket, gradeVerdict } from '@pilotage/ui';
-import type { StudentGradeRow } from '@pilotage/contracts';
 
 import { kindLabel } from './kinds';
 

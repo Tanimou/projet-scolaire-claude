@@ -2,12 +2,13 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
-
 import type {
   DisplayPreferences,
   UpdateDisplayPreferencesPatch,
 } from './display-prefs-types';
+
+import { api, apiResultFromError, type ApiResult } from '@/lib/api-client';
+
 
 export async function updateDisplayPreferencesAction(
   patch: UpdateDisplayPreferencesPatch,

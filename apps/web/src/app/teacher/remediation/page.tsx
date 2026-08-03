@@ -1,3 +1,6 @@
+
+import type { TeacherRemediationDto } from '@pilotage/contracts';
+import { Badge, Card, CardContent, EmptyState, KpiCard, PageHeader, StatusBadge } from '@pilotage/ui';
 import {
   CalendarClock,
   CalendarDays,
@@ -7,14 +10,12 @@ import {
 } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import type { TeacherRemediationDto } from '@pilotage/contracts';
-import { Badge, Card, CardContent, EmptyState, KpiCard, PageHeader, StatusBadge } from '@pilotage/ui';
-
 import { BookingsTable } from './BookingsTable';
 import { PublishSlotDrawer } from './PublishSlotDrawer';
 import { formatSlotLabel } from './slot-format';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Mes créneaux de soutien' };
 export const dynamic = 'force-dynamic';

@@ -1,12 +1,13 @@
+import { EmptyState, PageHeader } from '@pilotage/ui';
 import { ArrowLeft, UserRoundX } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { ComposeForm, type ComposeChild } from '../ComposeForm';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import { EmptyState, PageHeader } from '@pilotage/ui';
 
-import { ComposeForm, type ComposeChild } from '../ComposeForm';
 
 export const metadata: Metadata = { title: 'Nouveau message' };
 export const dynamic = 'force-dynamic';

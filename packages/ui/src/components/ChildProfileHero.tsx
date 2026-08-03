@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { cn } from '../lib/cn';
+
 import { Avatar } from './Avatar';
 
 export interface HeroMeta {

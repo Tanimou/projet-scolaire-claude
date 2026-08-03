@@ -17,30 +17,30 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Prisma } from '@prisma/client';
 
-import { deriveAlertActorProvenance } from '../alerts/alert-provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PermissionsGuard } from '../../shared/auth/permissions.guard';
-import { PrismaService } from '../../shared/prisma/prisma.service';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
+import { PrismaService } from '../../shared/prisma/prisma.service';
+import { deriveAlertActorProvenance } from '../alerts/alert-provenance';
+import { NotificationsService } from '../notifications/notifications.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
 
 import { AdminRemediationService } from './admin-remediation.service';
-import { AdminUpsertAvailabilityDto } from './dto/admin-upsert-availability.dto';
 import { BookingService } from './booking.service';
+import { AdminUpsertAvailabilityDto } from './dto/admin-upsert-availability.dto';
 import { CloseRemediationPlanDto } from './dto/close-remediation-plan.dto';
 import { CreateAdminTutorDto } from './dto/create-admin-tutor.dto';
 import { CreateBookingDto } from './dto/create-booking.dto';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PromoteRemediationPlanDto } from './dto/promote-remediation-plan.dto';
-import { RemediationService } from './remediation.service';
-import { TeacherRemediationService } from './teacher-remediation.service';
 import { TransitionBookingDto } from './dto/transition-booking.dto';
 import { UpdateAdminTutorDto } from './dto/update-admin-tutor.dto';
 import { UpsertTeacherAvailabilityDto } from './dto/upsert-teacher-availability.dto';
+import { RemediationService } from './remediation.service';
+import { TeacherRemediationService } from './teacher-remediation.service';
 
 /**
  * E7-S1 — parent-facing remediation surface.

@@ -9,7 +9,7 @@
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
-    "lint": "eslint \"src/**/*.ts\"",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "clean": "rimraf dist .turbo"

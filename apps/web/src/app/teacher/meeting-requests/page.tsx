@@ -1,10 +1,10 @@
+import { PageHeader } from '@pilotage/ui';
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
 import { MeetingRequestList } from '@/components/meeting-requests/MeetingRequestList';
 import type { MeetingRequest } from '@/components/meeting-requests/types';
 import { api, isNextNavigationSignal } from '@/lib/api-client';
-import { PageHeader } from '@pilotage/ui';
 
 export const metadata: Metadata = { title: 'Demandes de rendez-vous' };
 export const dynamic = 'force-dynamic';

@@ -1,6 +1,7 @@
+import { join } from 'node:path';
+
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { join } from 'node:path';
 
 import { AlertsCronModule } from './modules/alerts-cron/alerts-cron.module';
 import { AnalyticsSnapshotsModule } from './modules/analytics-snapshots/analytics-snapshots.module';

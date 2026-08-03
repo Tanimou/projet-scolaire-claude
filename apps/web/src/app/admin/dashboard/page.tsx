@@ -1,4 +1,16 @@
 import {
+  DonutChart,
+  EmptyState,
+  KpiCard,
+  SectionHeader,
+  Stagger,
+  StaggerItem,
+  StatusBadge,
+  WelcomeBanner,
+  formatDateLong,
+  type DonutSegment,
+} from '@pilotage/ui';
+import {
   AlertTriangle,
   Bell,
   BookOpen,
@@ -14,23 +26,12 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { AdminActionCenter, type ActionCenterData } from './AdminActionCenter';
+
 import { PortalShell } from '@/components/PortalShell';
 import { TopbarYearSelector } from '@/components/shell/TopbarYearSelector';
 import { api, isNextNavigationSignal } from '@/lib/api-client';
-import {
-  DonutChart,
-  EmptyState,
-  KpiCard,
-  SectionHeader,
-  Stagger,
-  StaggerItem,
-  StatusBadge,
-  WelcomeBanner,
-  formatDateLong,
-  type DonutSegment,
-} from '@pilotage/ui';
 
-import { AdminActionCenter, type ActionCenterData } from './AdminActionCenter';
 
 export const metadata: Metadata = { title: 'Tableau de bord administrateur' };
 export const dynamic = 'force-dynamic';

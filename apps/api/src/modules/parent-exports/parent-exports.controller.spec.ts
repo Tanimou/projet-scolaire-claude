@@ -1,11 +1,12 @@
 import { ForbiddenException } from '@nestjs/common';
 
-import { ParentExportsController } from './parent-exports.controller';
-import type { ExportsService } from '../exports/exports.service';
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
+import type { ExportsService } from '../exports/exports.service';
 import type { SchoolContextService } from '../school-structure/school-context.service';
 import type { StudentAccessService } from '../students/student-access.service';
+
+import { ParentExportsController } from './parent-exports.controller';
 
 // Load-bearing seams for E4-S2 (children's-data export, P1 [auth]):
 //   1. enqueue is gated by guardianship ABAC (403 for a non-guardianed child),

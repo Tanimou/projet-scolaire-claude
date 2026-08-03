@@ -2,10 +2,11 @@ import { ArrowLeft } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { ImportWizard } from './ImportWizard';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
 
-import { ImportWizard } from './ImportWizard';
 
 export const metadata: Metadata = { title: 'Nouvel import' };
 export const dynamic = 'force-dynamic';

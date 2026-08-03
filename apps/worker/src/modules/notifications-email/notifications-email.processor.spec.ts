@@ -2,9 +2,9 @@ import type { Job } from 'bullmq';
 
 import type { MailerService } from '../../shared/mail/mailer.service';
 
-import { NotificationsEmailProcessor } from './notifications-email.processor';
 import { renderNotificationEmail } from './notification-email.template';
 import type { NotificationEmailJob } from './notification-email.types';
+import { NotificationsEmailProcessor } from './notifications-email.processor';
 
 /**
  * E5-S1 — the worker consumer of the `notifications-email` queue had ZERO

@@ -1,6 +1,6 @@
+import { Sparkline, SubjectChip, subjectColor } from '@pilotage/ui';
 import { Minus, TrendingDown, TrendingUp } from 'lucide-react';
 
-import { Sparkline, SubjectChip, subjectColor } from '@pilotage/ui';
 
 export interface ClassReportRowProps {
   row: {

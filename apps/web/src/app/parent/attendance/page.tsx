@@ -1,16 +1,4 @@
-import {
-  AlertTriangle,
-  CalendarCheck2,
-  CheckCircle2,
-  Clock,
-  FileWarning,
-  Sparkles,
-  UserX,
-} from 'lucide-react';
-import type { Metadata } from 'next';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
 import {
   EmptyState,
   KpiCard,
@@ -22,8 +10,19 @@ import {
   formatDateLong,
   formatPercent,
 } from '@pilotage/ui';
+import {
+  AlertTriangle,
+  CalendarCheck2,
+  CheckCircle2,
+  Clock,
+  FileWarning,
+  Sparkles,
+  UserX,
+} from 'lucide-react';
+import type { Metadata } from 'next';
 
 import { ChildSelector } from '../_components/ChildSelector';
+
 import { AttendanceCalendar, type CalendarRecord } from './AttendanceCalendar';
 import { AttendanceExport, type AttendanceExportRow } from './AttendanceExport';
 import { AttendanceFilters } from './AttendanceFilters';
@@ -35,6 +34,9 @@ import type {
   AttendanceStatusFilter,
   SubjectOption,
 } from './types';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Absences et retards' };
 export const dynamic = 'force-dynamic';

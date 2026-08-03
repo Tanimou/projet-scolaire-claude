@@ -1,9 +1,9 @@
 'use client';
 
+import { SelectFilter } from '@pilotage/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { SelectFilter } from '@pilotage/ui';
 
 import type { LessonsPeriod, SubjectOption } from './types';
 

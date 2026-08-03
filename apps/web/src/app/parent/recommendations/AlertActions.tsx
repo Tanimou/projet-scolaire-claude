@@ -1,9 +1,9 @@
 'use client';
 
+import { Button } from '@pilotage/ui';
 import { CheckCheck, CircleCheckBig, Loader2, X } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
-import { Button } from '@pilotage/ui';
 
 import {
   acknowledgeAlertAction,

@@ -1,4 +1,12 @@
 import {
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  Pagination,
+  StatusBadge,
+  formatDateShort,
+} from '@pilotage/ui';
+import {
   FileEdit,
   Inbox,
   Megaphone,
@@ -10,18 +18,11 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { MessageRowActions } from './MessageRowActions';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
-import {
-  EmptyState,
-  KpiCard,
-  PageHeader,
-  Pagination,
-  StatusBadge,
-  formatDateShort,
-} from '@pilotage/ui';
 
-import { MessageRowActions } from './MessageRowActions';
 
 export const metadata: Metadata = { title: 'Messagerie' };
 export const dynamic = 'force-dynamic';

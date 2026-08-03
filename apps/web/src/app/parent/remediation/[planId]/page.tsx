@@ -1,4 +1,14 @@
 import {
+  Badge,
+  Card,
+  CardContent,
+  EmptyState,
+  PageHeader,
+  StatusBadge,
+  SubjectChip,
+  formatDateLong,
+} from '@pilotage/ui';
+import {
   CalendarClock,
   GraduationCap,
   HeartHandshake,
@@ -10,21 +20,12 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
-import {
-  Badge,
-  Card,
-  CardContent,
-  EmptyState,
-  PageHeader,
-  StatusBadge,
-  SubjectChip,
-  formatDateLong,
-} from '@pilotage/ui';
-
 import { PlanCompletion } from './PlanCompletion';
 import { formatSlotLabel, slotAvailabilityMeta, type CatalogueSlotShape } from './slot-format';
+
+import { PortalShell } from '@/components/PortalShell';
+import { api, ApiError } from '@/lib/api-client';
+
 
 export const metadata: Metadata = { title: 'Soutien scolaire' };
 export const dynamic = 'force-dynamic';

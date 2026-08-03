@@ -1,3 +1,4 @@
+import { Avatar, formatGrade, formatPercent, SectionHeader } from '@pilotage/ui';
 import {
   AlertTriangle,
   ArrowRight,
@@ -11,7 +12,6 @@ import {
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 
-import { Avatar, formatGrade, formatPercent, SectionHeader } from '@pilotage/ui';
 
 export interface FamilyChildOverview {
   id: string;

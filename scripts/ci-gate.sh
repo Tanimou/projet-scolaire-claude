@@ -53,8 +53,13 @@ run_stage() {
 # how the audited worktree reported "tests cannot run".
 run_stage "prisma generate" pnpm --filter @pilotage/api prisma generate
 
-# Stage 2 — lint
+# Stage 2 — lint. `pnpm lint` fails on ESLint *errors* only; warnings never fail a
+# build, which is exactly how 996 of them accumulated unseen once the stage was
+# finally able to run (PF-71). The ratchet is what makes the warning count
+# binding — it fails on any increase, and equally on a ceiling left too high
+# after a fix, so the number can only ever go down. See scripts/lint-ratchet.js.
 run_stage "lint" pnpm lint
+run_stage "lint:warnings (ratchet)" node scripts/lint-ratchet.js
 
 # Stage 3 — typecheck (all workspaces, via turbo)
 run_stage "typecheck" pnpm typecheck

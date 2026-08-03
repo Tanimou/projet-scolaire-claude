@@ -1,9 +1,9 @@
 'use client';
 
+import { DetailDrawer, StatusBadge, formatDateLong } from '@pilotage/ui';
 import { Globe2, ShieldCheck, User2 } from 'lucide-react';
 import { useState } from 'react';
 
-import { DetailDrawer, StatusBadge, formatDateLong } from '@pilotage/ui';
 
 import { humanizePortal, humanizeResourceType } from './AuditPageFilters';
 

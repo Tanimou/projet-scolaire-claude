@@ -1,9 +1,9 @@
 'use client';
 
+import { Button } from '@pilotage/ui';
 import { Lock, Send, Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, useTransition } from 'react';
 
-import { Button } from '@pilotage/ui';
 
 import { markThreadReadAction, replyToThreadAction } from './conversation-actions';
 

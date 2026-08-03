@@ -1,6 +1,6 @@
-import { ParentDigestCronService } from './parent-digest-cron.service';
-import { digestMarkerId, isoWeekKey } from './iso-week';
 import type { ChildDigest } from './digest-email.types';
+import { digestMarkerId, isoWeekKey } from './iso-week';
+import { ParentDigestCronService } from './parent-digest-cron.service';
 
 type Mock = ReturnType<typeof jest.fn>;
 

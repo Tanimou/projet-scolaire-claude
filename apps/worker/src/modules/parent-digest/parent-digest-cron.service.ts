@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 
-import { PrismaService } from '../../shared/prisma/prisma.service';
 import { MailerService } from '../../shared/mail/mailer.service';
+import { PrismaService } from '../../shared/prisma/prisma.service';
 
 import { DigestAggregateService } from './digest-aggregate.service';
 import { renderDigestEmail } from './digest-email.template';

@@ -1,9 +1,9 @@
 'use client';
 
+import { SelectFilter } from '@pilotage/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
-import { SelectFilter } from '@pilotage/ui';
 
 /**
  * URL-driven term filter for /student/grades. A pure read filter — never a
