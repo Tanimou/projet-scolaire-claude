@@ -4,17 +4,22 @@
 # -----------------------------------------------------------------------------
 # One command, end to end:
 #   build images → start full stack → apply migrations (migrate deploy) → align the
-#   Keycloak redirect URLs → seed a coherent cross-portal demo → wait healthy.
+#   Keycloak redirect URLs → wait healthy → release gate.
+#   Le seed de démonstration n'en fait PAS partie : il est opt-in (--seed, S-E02-4).
 #
 # Layers infra/docker-compose.yml + infra/docker-compose.prod.yml and reads
 # .env.prod (public origin + 127.0.0.1-bound infra ports + secrets). Our nginx
 # joins the host's `root_web` Traefik network → TLS + Host routing for free.
 #
 # Usage (from repo root, on the server):
-#   bash scripts/deploy-prod.sh              # full: build + up + migrate + seed
+#   bash scripts/deploy-prod.sh              # build + up + migrate (PAS de seed)
 #   bash scripts/deploy-prod.sh --rebuild    # clean --no-cache image rebuild
-#   bash scripts/deploy-prod.sh --no-seed    # skip the demo seed chain
+#   bash scripts/deploy-prod.sh --seed       # + chaîne de seed de démonstration
 #   bash scripts/deploy-prod.sh --seed-only  # just (re)run the seed chain
+#
+# S-E02-4 : le seed est un opt-in. Il exige en plus, dans .env.prod,
+#   DEPLOY_ENV=demo  et  ALLOW_SEED=provision-demo-data
+# faute de quoi chaque script refuse et sort en 1 (prisma/seed-guard.ts).
 #   bash scripts/deploy-prod.sh --down       # stop the stack (keeps volumes)
 # =============================================================================
 set -euo pipefail
@@ -43,10 +48,19 @@ COMPOSE=(docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml -f in
 # seed/migrate one-offs additionally need the `seed` profile active.
 SEED=(docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app --profile prod --profile seed)
 
-REBUILD=0; NO_SEED=0; SEED_ONLY=0; DOWN=0
+# S-E02-4 / PF-03 « moitié seed », risque R-12 — le seed est un OPT-IN.
+# Il était l'inverse : la chaîne de sept seeds de démonstration partait par défaut
+# à chaque déploiement de production, et `--no-seed` était le geste à faire pour
+# l'éviter. C'est le mécanisme qui a rempli le déploiement hébergé de données de
+# démonstration (PF-17). Le défaut est désormais « ne rien écrire ».
+# `--no-seed` reste accepté sans effet, pour ne pas casser un runbook ou un alias.
+# NB : `SEED` est déjà le tableau de commande compose défini plus haut — le
+# drapeau s'appelle donc `RUN_SEED`.
+REBUILD=0; RUN_SEED=0; SEED_ONLY=0; DOWN=0
 for a in "$@"; do case "$a" in
   --rebuild)   REBUILD=1 ;;
-  --no-seed)   NO_SEED=1 ;;
+  --seed)      RUN_SEED=1 ;;
+  --no-seed)   RUN_SEED=0 ;;   # rétro-compatible : c'est déjà le défaut
   --seed-only) SEED_ONLY=1 ;;
   --down)      DOWN=1 ;;
   *) die "Unknown option: $a" ;;
@@ -177,8 +191,12 @@ say "Aligning Keycloak portal redirect URLs → $PUBLIC_BASE_URL"
 "${SEED[@]}" run --rm -e PUBLIC_BASE_URL="$PUBLIC_BASE_URL" seed node /app/infra/kc-prod-redirects.mjs \
   || warn "Redirect alignment failed (ROPC login still works; SSO/reset may not)."
 
-# --- 5. Seed the coherent cross-portal demo ---------------------------------
-if [ "$NO_SEED" = 0 ]; then seed_chain; else warn "Skipping seed (--no-seed)."; fi
+# --- 5. Seed the coherent cross-portal demo (OPT-IN — S-E02-4) --------------
+if [ "$RUN_SEED" = 1 ]; then
+  seed_chain
+else
+  warn "Seed non exécuté (défaut). Pour provisionner la démo : --seed, avec DEPLOY_ENV=demo et ALLOW_SEED=provision-demo-data dans $ENV_FILE."
+fi
 
 # --- 6. Recap ---------------------------------------------------------------
 say "Deployment complete."

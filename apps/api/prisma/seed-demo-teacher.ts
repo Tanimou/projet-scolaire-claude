@@ -20,6 +20,11 @@
 
 import { PrismaClient } from '@prisma/client';
 
+import { assertSeedAllowed } from './seed-guard';
+
+// S-E02-4 : refuser avant toute connexion BDD ou appel Keycloak.
+assertSeedAllowed('seed-demo-teacher');
+
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL ?? 'http://localhost:8180';
 const KEYCLOAK_REALM = process.env.KEYCLOAK_REALM ?? 'pilotage-scolaire';
 const KEYCLOAK_ADMIN = process.env.KEYCLOAK_ADMIN_USER ?? 'admin';

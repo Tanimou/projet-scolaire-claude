@@ -15,6 +15,11 @@
  */
 import { PrismaClient } from '@prisma/client';
 
+import { assertSeedAllowed } from './seed-guard';
+
+// S-E02-4 : refuser avant toute connexion BDD.
+assertSeedAllowed('seed-demo-surfaces');
+
 const prisma = new PrismaClient();
 
 async function main() {

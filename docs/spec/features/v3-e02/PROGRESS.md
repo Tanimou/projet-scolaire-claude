@@ -15,7 +15,7 @@
 | **S-E02-1** | Baseline migration; stop `db push`; preflight; schema manifest | 🟡 partial | 2026-08-02 | baseline applied to scratch DB, `migrate diff --exit-code` = 0, `migrate status` clean, entrypoint refusal exercised, 10/10 jest |
 | **S-E02-2** | Make CI actually run | 🟢 done *(local gate)* | 2026-08-02 | suites executed for the first time — **568/588 passing**; 18 failures all baselined with owning finding ids; ratchet proven to block in **both** directions; **surfaced and fixed a live production P0 (`PF-62`)** |
 | **S-E02-3** | Timed backup → restore rehearsal | ⛔ blocked | — | blocked by decision **D-01** |
-| **S-E02-4** | Seed cannot run in production | ⬜ todo | — | unblocked once S-E02-1's hosted half is signed off |
+| **S-E02-4** | Seed cannot run in production | ✅ done | 2026-08-03 | 34/34 jest; the guard was **executed** — all **7** seed scripts exit 1 `[refused-production]` under a production target *with the correct token*, and the allowed demo path crosses the guard and fails on the DB connection instead; `nest build` exit 0 |
 | **S-E02-5** | Reconcile source ↔ hosted schema drift | ⬜ todo | — | *(implied by S-E02-1; needs hosted access)* |
 | **S-E02-6** | Release manifest made real; deploy gate compares it | ✅ done | 2026-08-03 | 19/19 jest; the gate was **executed** — exit 1 against the live drifted API, exit 0 on a conforming manifest, exit 1 on all four bad verdicts *and* on a manifest lying `match`; `nest build` exit 0 |
 
@@ -94,11 +94,42 @@ and an operator:
 Until step 3 runs, the hosted migrator will **refuse to deploy** — deliberately. That refusal is the fix working, not
 a regression: it is what stops an unreviewed schema mutation.
 
+## S-E02-4 — done 2026-08-03 (run 8)
+
+The seed can no longer run against a production target, and the demo survives as a deliberate act rather than a side
+effect.
+
+**What was actually wrong**, wider than the story said: **one of seven** seed scripts carried a guard;
+`docker-compose.prod.yml` disabled that one by forcing `NODE_ENV: development` on the only service in the file not
+given `production`, with a comment explaining the bypass; and `deploy-prod.sh` ran all seven **by default**
+(`--no-seed` was the opt-out). `ALLOW_SEED` existed nowhere in the repository. This chain is the mechanism behind
+`PF-17`'s seed residue on the hosted deployment.
+
+**What landed:** `apps/api/prisma/seed-guard.ts` — a pure `evaluateSeedPermission()` deciding on two independent
+signals (`NODE_ENV`, set per service; `DEPLOY_ENV`, set once per stack), wired into all seven scripts ahead of any
+`PrismaClient` or network call; the compose override deleted; `deploy-prod.sh --seed` made opt-in;
+`docs/runbooks/provision-demo-tenant.md` written so R-12's demo stays reproducible.
+
+**Executed in both directions.** 7/7 scripts exit 1 under a production target *even with the correct token* — so the
+token is an opt-in, not a bypass (DNC-10). The allowed demo path crosses the guard and fails on the DB connection
+instead, which is what proves the guard is not a blanket refusal. `docker compose config` shows the hosted stack
+resolving to `DEPLOY_ENV: production`, `ALLOW_SEED: ""` — closed by default.
+
+**Not claimed:** demo rows already written to the hosted database stay there. Removing them is a destructive action on
+hosted data (routine STOP condition #3) and belongs to the operator — runbook §6.
+
 ## Next slice
 
-**S-E02-4** (seed hardening) — the only E02 story that is neither blocked by an external decision nor by PF-59.
+Run 8 added two findings, one of which changes how this epic should read its own past reports:
 
-Two follow-ons now compete with it, both raised by this run and both arguably ahead of it:
+0. **`PF-70` — `ci-gate.sh`'s `lint` stage has never passed.** ESLint v9 requires a flat config that **no** package
+   has; four lint tasks report green only from turbo cache predating the version bump, and `@pilotage/i18n`, the one
+   that actually executes, fails. Runs 5, 6 and 7 each declared their change green while citing typecheck/ratchet/build
+   and never naming stage 2. **This is the highest-value next fix in the epic:** until it is repaired, the gate that
+   `PF-59` promoted to *the* gate returns a partly fictional verdict, and every later run inherits the blind spot.
+   Repo-wide flat-config migration; `PF-69` (the `prisma/` directory escaping both typecheck and lint) folds into it.
+
+Two follow-ons from run 5 remain, both still open:
 
 1. **`PF-63`/`PF-65`** — 12 of the 18 baselined failures sit on the analytics/snapshot path (`V3-E03`), which is the
    epic that owns `PF-04`'s cross-portal count contradiction. Those red tests are very likely *already describing*
