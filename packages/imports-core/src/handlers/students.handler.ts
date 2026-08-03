@@ -36,7 +36,7 @@ function normalizeDate(raw: string | undefined): string | undefined {
   // ISO YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
   // French DD/MM/YYYY
-  const fr = trimmed.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+  const fr = trimmed.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
   if (fr) {
     const [, d, m, y] = fr;
     return `${y}-${m!.padStart(2, '0')}-${d!.padStart(2, '0')}`;

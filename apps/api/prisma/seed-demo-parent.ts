@@ -50,7 +50,8 @@ async function adminToken(): Promise<string> {
     }),
   });
   if (!res.ok) throw new Error(`Keycloak admin login failed: ${res.status} ${await res.text()}`);
-  return (await res.json()).access_token as string;
+  const json = (await res.json()) as { access_token: string };
+  return json.access_token;
 }
 
 async function kc(method: string, path: string, body?: unknown) {

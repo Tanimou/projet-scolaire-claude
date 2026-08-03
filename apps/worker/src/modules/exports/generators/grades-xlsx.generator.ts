@@ -158,5 +158,5 @@ function round2(n: number): number {
 
 function safeSheetName(name: string): string {
   // Excel sheet names: max 31 chars, no  / \ * ? : [ ]
-  return name.replace(/[\\/?*:\[\]]/g, '_').slice(0, 31);
+  return name.replace(/[\\/?*:[\]]/g, '_').slice(0, 31);
 }

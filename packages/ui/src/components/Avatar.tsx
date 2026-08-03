@@ -87,8 +87,10 @@ export function Avatar({
           className,
         )}
       >
-        {/* Plain <img> intentionally — works in server components and storybook */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {/* Plain <img> intentionally — works in server components and storybook.
+            No @next/next disable directive: this package is not linted with the
+            Next plugin, and a directive naming an unloaded rule is itself an
+            ESLint error. */}
         <img src={src} alt={composedAlt} className="h-full w-full object-cover" />
       </span>
     );

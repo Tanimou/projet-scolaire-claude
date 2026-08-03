@@ -22,6 +22,7 @@ finding id; nothing is closed without evidence against the finding.
 | `BLOCKED_BY_DEPENDENCY` | Needs a record, provider, credential or installed dependency |
 | `MISSING_CAPABILITY` | Competitor-proven capability we do not have |
 | `DO_NOT_COPY` | Lakoli behaviour we must consciously *not* reproduce |
+| `TECH_DEBT` | Working code carrying quantified, tracked debt — added 2026-08-03 for `PF-71`, whose 996 lint warnings are neither a runtime failure nor a security hole, but must not be silenced or forgotten |
 
 **Work-type vocabulary** — drives which V3 layer a finding lands in:
 `DEFECT` · `ARCH_PREREQ` (architectural prerequisite) · `CAPABILITY` (net-new) · `VALIDATION` (evidence, not code).
@@ -95,6 +96,7 @@ It is a Step-6 *credential/decision-required* stop condition for any story whose
 | **PF-68** | **The VAL-10 release manifest shipped inert**, for two independent reasons: (a) **nothing anywhere set `GIT_SHA`/`BUILD_SHA`** — no Dockerfile `ARG`, no compose `build.args`, no deploy export — so `buildSha()` returned `"unknown"` in every environment; (b) **`/version` was unroutable**: nginx proxies `/api/`, but `/version` is excluded from Nest's global `api/v1` prefix, so it fell through to `location /` → Next.js and an external caller got the *web app's* 404. Verified against the hosted deployment. Both fixed by `S-E02-6`; the **residual** open half is that worker/web carry a `GIT_SHA` but expose no HTTP manifest (a worker/web drift is undetected), and the gate publishes `schemaVersion` without comparing it to the checkout's latest shipped migration | `BROKEN_RUNTIME` | DEFECT | Discovered by the V3 run of 2026-08-03 | L0 | V3-E02 |
 | **PF-69** | **`apps/api/prisma/` is a fourth TypeScript project that neither passes typecheck nor is gated by one.** The api's own `tsconfig.json` sets `include: ["src/**/*"]`, so `pnpm typecheck` — the gate `PF-55` declared green — never looks at the 7 seed scripts (~2 900 lines) that write the demo dataset. Running their own `prisma/tsconfig.json` fails: `seed-demo-parent.ts:53` and `seed-demo-teacher.ts:49` both do `(await res.json()).access_token` on a `unknown`-typed body (TS2571). **Verified pre-existing**, byte-identical to `HEAD`, not introduced by `S-E02-4`. The same directory is invisible to **lint** as well: the api's script is `eslint "{src,test}/**/*.ts"`, which excludes `prisma/`. Three halves: fix the two casts, add `prisma/tsconfig.json` to `ci-gate.sh`'s typecheck stage, and widen the api lint glob — so the directory that writes the entire demo dataset stops being invisible to both gates | `BROKEN_RUNTIME` | DEFECT | Discovered by the V3 run of 2026-08-03 | L0 | V3-E02 |
 | **PF-70** | **The `lint` stage of `scripts/ci-gate.sh` is fictional, and has never passed.** ESLint was upgraded to **v9**, which requires a flat `eslint.config.js`, but **no package has one**: the repo ships `apps/*/.eslintrc*` (v8 format) and five workspace packages whose lint script is a bare `eslint .` with no config at all. Executed: `@pilotage/i18n` is a turbo **cache miss**, actually runs, and fails with *"ESLint couldn't find an eslint.config.(js\|mjs\|cjs) file"* — this is what makes `ci-gate.sh` print `GATE: FAIL`. `@pilotage/contracts` reported ✓ in the same run purely as a **cache hit**; running its `eslint .` directly reproduces the identical failure. So four of the lint tasks are green only from turbo cache predating the v9 bump, and the one that truly executes is red. **Consequence:** runs 5, 6 and 7 each declared their change green while citing typecheck/ratchet/build and never reporting that gate stage 2 was failing — the R-21 failure mode in a new shape, a gate stage that is *executed but permanently red* and quietly reported around. Fixing it is a repo-wide flat-config migration, deliberately **not** attempted inside `S-E02-4` | `BROKEN_RUNTIME` | ARCH_PREREQ | Discovered by the V3 run of 2026-08-03 | L0 | V3-E02 |
+| **PF-71** | **996 lint warnings became visible the moment the lint gate started running** (`S-E02-7`, closing PF-70). Measured per package once every package exited 0: web 597, api 321, worker 49, ui 24, imports-core 5; contracts, design-tokens and i18n are clean. They are dominated by three rules — `import/order`, `@typescript-eslint/consistent-type-imports` and `@typescript-eslint/no-explicit-any` — and **952 of the 996 are auto-fixable** (`eslint --fix`). This is not new debt; it is debt that was never measurable because no package could load a config. Warnings do not fail a build, so the gate is genuinely green: this finding exists so the number is tracked and can be ratcheted down deliberately (a `--max-warnings` ceiling that only ever decreases) rather than discovered again later as a surprise | `TECH_DEBT` | DEFECT | Discovered by the V3 run of 2026-08-03 (run 9) | L0 | V3-E02 |
 | **PF-12** | Parent child/enrollment state contradicts itself: dashboard/detail say active; children list, "My family" and claim panel say none | `BROKEN_TRUTH` | DEFECT | A2 §7, App. B.7 | L0 | V3-E03 |
 | **PF-13** | Class gradebook links pass a **class-section id** where the page expects a **teaching-assignment id**; dashboard "create assessment" shares the broken URL | `BROKEN_RUNTIME` | DEFECT | A2 §6.1, App. B.6 | L1 | V3-E07 |
 | **PF-14** | `/admin/audit` crashes (server/client boundary); `/admin/reports` is 404 | `BROKEN_RUNTIME` | DEFECT | A2 §5.6, App. B.5 | L0 | V3-E04 |
@@ -231,14 +233,16 @@ Sourced from A3 Appendix C and A1 §11. **V3's routine must fail a story that re
 |---|---|
 | P0 defects/prerequisites | 12 |
 | P1 | 24 |
-| P2/P3 | 25 |
+| P2/P3 | 26 *(+`PF-71`)* |
 | Lakoli capability gaps | 29 |
 | Do-not-copy rules | 12 |
 | Validation obligations | 10 |
-| **Total tracked items** | **112** |
+| **Total tracked items** | **113** |
 
-Delta since the 2026-08-02 baseline: **+4**, all discovered by V3 runs on 2026-08-02 —
+Delta since the 2026-08-02 baseline: **+5**. Four were discovered by V3 runs on 2026-08-02 —
 `PF-58` (substrate not on `main`, §3), `PF-59` (Actions billing lock, §1),
 `PF-60` (sprint workflow overrides story selection, §2) and `PF-61` (duplicate `R-17` id, §3).
+The fifth, `PF-71`, was discovered on 2026-08-03 (run 9) by the act of making the lint gate executable: the 996
+warnings it counts had existed all along and were simply unmeasurable while no package could load a config.
 
 Every one of these appears in `traceability-matrix.md` with its epic, story, test and evidence slot.
