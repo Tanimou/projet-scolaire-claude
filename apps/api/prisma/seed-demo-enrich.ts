@@ -13,7 +13,13 @@ import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
 import { PrismaClient, AnnouncementScope, AnnouncementPriority } from '@prisma/client';
 
+import { assertSeedAllowed } from './seed-guard';
+
 loadEnv({ path: resolve(__dirname, '..', '.env') });
+
+// S-E02-4 : après .env, avant toute connexion — un refus ne doit rien ouvrir.
+assertSeedAllowed('seed-demo-enrich');
+
 const prisma = new PrismaClient();
 
 const SEED_TAG = 'seed-enrich';

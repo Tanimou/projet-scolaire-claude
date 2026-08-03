@@ -36,13 +36,15 @@ import {
   StudentStatus,
 } from '@prisma/client';
 
+import { assertSeedAllowed } from './seed-guard';
+
 loadEnv({ path: resolve(__dirname, '..', '.env') });
 
-if (process.env.NODE_ENV === 'production') {
-  // eslint-disable-next-line no-console
-  console.error('seed-demo is FORBIDDEN in production. Aborting.');
-  process.exit(1);
-}
+// S-E02-4 : remplace le contrôle NODE_ENV isolé qui vivait ici. Il était le seul
+// des sept scripts à en porter un, et docker-compose.prod.yml le neutralisait en
+// forçant `NODE_ENV: development` sur le seul service `seed`. La garde partagée
+// lit deux signaux indépendants : une ligne de compose ne suffit plus.
+assertSeedAllowed('seed-demo');
 
 const prisma = new PrismaClient();
 

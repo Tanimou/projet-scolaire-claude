@@ -132,7 +132,7 @@ checksum/row-count manifest · the duration is recorded as a baseline SLO · sig
 
 ---
 
-## S-E02-4 — Seed cannot run in production; demo tenant becomes explicit
+## S-E02-4 — Seed cannot run in production; demo tenant becomes explicit · ✅ `done` 2026-08-03
 
 | | |
 |---|---|
@@ -142,14 +142,37 @@ checksum/row-count manifest · the duration is recorded as a baseline SLO · sig
 **Why.** Production compose deliberately runs demo seed logic outside `NODE_ENV=production`, and the hosted deployment
 visibly contains seed records and internal author labels (A2 §12; PF-17).
 
+> **Step 2 found the defect wider than written.** Not "the compose runs seed outside production" but three compounding
+> facts: (1) **one of seven** seed scripts carried any guard at all; (2) `docker-compose.prod.yml` neutralised that one
+> by forcing `NODE_ENV: development` on the **only** service in the file not given `production`, with a comment stating
+> the reason; (3) `deploy-prod.sh` ran all seven **by default** — `--no-seed` was the opt-out. `ALLOW_SEED` existed
+> nowhere in the repository. The seed chain firing on every production deploy is the mechanism behind `PF-17`.
+
+**Design — why two signals.** A guard reading only `NODE_ENV` is disabled by one line of compose, which is exactly what
+happened. `prisma/seed-guard.ts` therefore decides on `NODE_ENV` (per-service, what the *process* claims) **and**
+`DEPLOY_ENV` (stack-level, what the *deployment is*), applying the `S-E02-6` lesson. A disagreement is not resolved in
+favour of the permissive value — it is its own refusal verdict, because that disagreement is the historical signature.
+`ALLOW_SEED` never lifts a production refusal, so it is an opt-in, not a bypass (DNC-10).
+
 **Implementation notes.** Seed becomes a separately-invoked command that **refuses to run** unless an explicit
 `ALLOW_SEED` flag and a non-production profile are both present. Keep a deliberately-labelled demo tenant provisionable
 on demand (R-12: stakeholders rely on the demo — do not simply delete it).
 
-**Acceptance criteria.** An attempted seed under the production profile **refuses and exits non-zero** · the hosted
-demo remains reproducible via the explicit command · no seed author label is reachable from a production build.
+**Acceptance criteria.**
+1. An attempted seed under the production profile **refuses and exits non-zero**. ✅ — all **7** scripts executed under
+   `DEPLOY_ENV=production` *with the correct token*: exit 1, `[refused-production]`, no DB connection opened.
+2. The hosted demo remains reproducible via the explicit command. ✅ — `DEPLOY_ENV=demo` + token, executed: the script
+   **crosses** the guard and fails downstream on `PrismaClientInitializationError`, proving the guard is not a blanket
+   refusal. Runbook: `docs/runbooks/provision-demo-tenant.md`.
+3. No seed author label is reachable from a production build. ⛔ **not claimed** — this run stops the seed from *running*;
+   removing labels already written to the hosted database, and the UI-visible author strings, is `S-E06-1` plus an
+   operator cleanup (destructive action on hosted data → routine STOP condition #3).
 
-**Test.** Invoke seed with the production profile and assert refusal.
+**Test.** `apps/api/prisma/seed-guard.spec.ts` — 34/34, covering the decision table, that all seven scripts invoke the
+guard *before* `new PrismaClient()`, and that neither the compose override nor the deploy opt-out can return.
+
+**Out of scope.** Removing demo data already present in production (operator); seed author labels (`S-E06-1`);
+the ESLint flat-config migration (`PF-70`) and the `prisma/` gate gap (`PF-69`) surfaced while running the gate.
 
 ---
 

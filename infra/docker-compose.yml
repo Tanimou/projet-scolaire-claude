@@ -370,6 +370,11 @@ services:
   # -------------------------------------------------------------------------
   # Seed (one-shot, dev only)
   # -------------------------------------------------------------------------
+  # S-E02-4 : `prisma/seed-guard.ts` exige un opt-in explicite. Ici il est fourni
+  # par défaut — activer le profil `seed` EST déjà le geste délibéré, et cette
+  # stack est non-production par construction. `docker-compose.prod.yml` écrase
+  # cette valeur par une chaîne vide : sur la stack hébergée, l'opt-in doit être
+  # déclaré à la main dans .env.prod.
   seed:
     build:
       context: ..
@@ -379,6 +384,7 @@ services:
     profiles: ["seed"]
     environment:
       <<: *app-env
+      ALLOW_SEED: ${ALLOW_SEED:-provision-demo-data}
     # No `prisma.seed` key in package.json — run the tsx seed script directly.
     command: ["pnpm", "--filter", "@pilotage/api", "run", "prisma:seed"]
     depends_on:

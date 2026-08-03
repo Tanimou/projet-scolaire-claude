@@ -104,13 +104,29 @@ services:
     environment:
       NODE_ENV: production
 
-  # ---- Seed (one-shot demo provisioning) ----
-  # MUST run as non-production (seed-demo.ts hard-aborts when NODE_ENV=production).
+  # ---- Seed (provisionnement de démonstration, one-shot) ----
+  # S-E02-4 / PF-03 « moitié seed », risque R-12.
+  #
+  # Ce bloc portait `NODE_ENV: development` — le SEUL service de ce fichier à ne
+  # pas recevoir `production` — avec un commentaire disant explicitement pourquoi :
+  # « MUST run as non-production (seed-demo.ts hard-aborts when NODE_ENV=production) ».
+  # C'était un contournement documenté du seul garde-fou existant. Il est supprimé.
+  #
+  # Le service hérite désormais de `NODE_ENV` de la stack et lit `DEPLOY_ENV`.
+  # `prisma/seed-guard.ts` refuse dès qu'un des deux signaux désigne la production,
+  # et refuse aussi leur désaccord — donc rétablir la ligne ci-dessus ne rouvrirait
+  # pas la porte, elle produirait `refused-conflicting-signals`.
+  #
+  # Pour provisionner la démo hébergée (R-12 : les parties prenantes en dépendent),
+  # déclarer dans .env.prod :  DEPLOY_ENV=demo  et  ALLOW_SEED=provision-demo-data
+  # puis `bash scripts/deploy-prod.sh --seed`. Voir docs/runbooks/provision-demo-tenant.md.
+  #
   # Talks to Keycloak admin under /auth; covers BOTH admin-cred env spellings the
   # different seed scripts read (KEYCLOAK_ADMIN/_PASS vs _USER/_PASSWORD).
   seed:
     environment:
-      NODE_ENV: development
+      DEPLOY_ENV: ${DEPLOY_ENV:-production}
+      ALLOW_SEED: ${ALLOW_SEED:-}
       KEYCLOAK_URL: http://keycloak:8080/auth
       KEYCLOAK_REALM: pilotage-scolaire
       KEYCLOAK_ADMIN: admin

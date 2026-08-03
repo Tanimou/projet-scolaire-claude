@@ -27,7 +27,13 @@ import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 
+import { assertSeedAllowed } from './seed-guard';
+
 loadEnv({ path: resolve(__dirname, '..', '.env') });
+
+// S-E02-4 : ce script provisionne des comptes Keycloak avec un mot de passe de
+// démonstration connu. Refuser avant tout appel réseau, pas seulement avant la BDD.
+assertSeedAllowed('seed-keycloak-users');
 
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL ?? 'http://localhost:8180';
 const KEYCLOAK_REALM = process.env.KEYCLOAK_REALM ?? 'pilotage-scolaire';
