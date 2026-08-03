@@ -1,0 +1,20 @@
+# Fournisseur de tableaux de bord (S-E02-13 / PF-56).
+#
+# Le compose monte `./grafana/dashboards` en lecture seule ; sans ce fichier de
+# provisioning, Grafana ne regarde jamais ce répertoire et les tableaux de bord
+# montés restent invisibles. Les deux montages ne sont utiles qu'ensemble.
+
+apiVersion: 1
+
+providers:
+  - name: pilotage
+    orgId: 1
+    type: file
+    disableDeletion: true
+    # Les tableaux de bord sont versionnés dans le dépôt : autoriser l'édition
+    # dans l'interface produirait une divergence qu'aucun diff ne montre.
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

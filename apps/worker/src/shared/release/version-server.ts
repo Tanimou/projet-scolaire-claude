@@ -2,6 +2,11 @@ import { createServer, type Server } from 'node:http';
 
 import { buildManifestPayload, type ReleaseLogger } from '@pilotage/contracts';
 
+import {
+  registry as metricsRegistry,
+  PROMETHEUS_CONTENT_TYPE,
+} from '../observability/metrics.registry';
+
 /**
  * Manifeste de release du worker (S-E02-10 / PF-68, risque R-05).
  *
@@ -22,9 +27,12 @@ import { buildManifestPayload, type ReleaseLogger } from '@pilotage/contracts';
  * ---------------------------------------------------------------------------
  * SURFACE
  * ---------------------------------------------------------------------------
- * Une seule méthode (`GET`), deux chemins, une charge utile plate : un nom
- * d'application, des SHA courts, un verdict. Aucune donnée de tenant, aucune
- * chaîne de connexion, aucune information sur les files BullMQ. Le socket n'est
+ * Une seule méthode (`GET`), et depuis `S-E02-13` trois chemins : deux pour le
+ * manifeste, un pour l'exposition Prometheus (`METRICS_PATH`). La charge utile
+ * du manifeste reste plate : un nom d'application, des SHA courts, un verdict.
+ * Aucune donnée de tenant, aucune chaîne de connexion, aucune information sur
+ * les files BullMQ, et les métriques ne portent aucune étiquette dérivée de
+ * données — voir `../observability/metrics.registry.ts`. Le socket n'est
  * publié qu'en loopback sur l'hôte (voir infra/docker-compose.yml) et n'est
  * exposé publiquement qu'à travers `location = /version/worker` de nginx, qui est
  * rate-limité.
@@ -39,8 +47,21 @@ import { buildManifestPayload, type ReleaseLogger } from '@pilotage/contracts';
 /** Port du manifeste. Loopback côté hôte ; joignable par nginx sur le réseau docker. */
 export const DEFAULT_VERSION_PORT = 4001;
 
-/** Les deux chemins qui servent le manifeste. Tout le reste est un 404. */
+/** Les deux chemins qui servent le manifeste. */
 export const VERSION_PATHS = ['/version', '/version/worker'] as const;
+
+/**
+ * Exposition Prometheus du worker (S-E02-13 / PF-56).
+ *
+ * Servie par **ce** socket plutôt que par un second : le worker n'a qu'une
+ * raison d'écouter — être interrogeable de l'extérieur — et ouvrir un deuxième
+ * port pour la même raison doublerait la surface, la configuration compose, la
+ * règle nginx et le nombre de choses qui peuvent diverger. Le manifeste et les
+ * métriques répondent tous deux « quel process tourne ici, et comment va-t-il ».
+ *
+ * Tout ce qui n'est ni ce chemin ni un chemin de manifeste reste un 404.
+ */
+export const METRICS_PATH = '/metrics';
 
 export function resolveVersionPort(env: NodeJS.ProcessEnv = process.env): number {
   const raw = (env.WORKER_HTTP_PORT ?? '').trim();
@@ -59,6 +80,26 @@ export function createVersionServer(): Server {
   return createServer((req, res) => {
     const path = (req.url ?? '').split('?')[0] ?? '';
     const known = (VERSION_PATHS as readonly string[]).includes(path);
+
+    if (req.method === 'GET' && path === METRICS_PATH) {
+      // `registry.metrics()` est asynchrone : un rejet non capturé ici tuerait
+      // le process du worker, ce qui ferait de l'instrumentation une cause de
+      // panne. Une exposition en échec doit être un 500, pas un arrêt.
+      metricsRegistry
+        .metrics()
+        .then((body) => {
+          res.writeHead(200, {
+            'content-type': PROMETHEUS_CONTENT_TYPE,
+            'cache-control': 'no-store',
+          });
+          res.end(body);
+        })
+        .catch(() => {
+          res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('metrics collection failed\n');
+        });
+      return;
+    }
 
     if (req.method !== 'GET' || !known) {
       res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
@@ -86,7 +127,10 @@ export function startVersionServer(
     server.once('error', reject);
     server.listen(port, () => {
       server.removeListener('error', reject);
-      logger.log?.(`Manifeste de release du worker sur :${port}/version/worker`, 'ReleaseManifest');
+      logger.log?.(
+        `Manifeste de release du worker sur :${port}/version/worker — métriques sur :${port}${METRICS_PATH}`,
+        'ReleaseManifest',
+      );
       resolve(server);
     });
   });

@@ -1,0 +1,51 @@
+# Configuration de scrape Prometheus — profil `obs` (S-E02-13 / PF-56).
+#
+# CE FICHIER MANQUAIT.
+# ---------------------------------------------------------------------------
+# `infra/docker-compose.yml` monte ce chemin en lecture seule dans le conteneur
+# Prometheus depuis que le profil `obs` existe. Mesuré au run 15 : ni ce
+# fichier, ni `./grafana/dashboards`, ni `./grafana/provisioning` n'existaient
+# dans le dépôt. Docker crée un **répertoire** pour une source de bind-mount
+# absente, donc Prometheus recevait un répertoire à la place de son fichier de
+# configuration et ne pouvait pas démarrer. Le profil d'observabilité était une
+# déclaration que rien ne lisait — R-26.
+#
+# `scripts/observability-check.js` échoue désormais si une source de bind-mount
+# d'un fichier compose n'existe pas, et si une cible de scrape ci-dessous ne
+# correspond pas à une route que l'application **boote** réellement.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  # Étiquette portée par toute série issue de cette instance. Sert à distinguer
+  # deux déploiements dont les métriques atterriraient dans le même stockage.
+  external_labels:
+    deployment: pilotage
+
+scrape_configs:
+  # Les cibles sont des **noms de service compose**, pas des adresses : elles ne
+  # sont résolvables que depuis le réseau `pilotage`, ce qui est précisément le
+  # contrôle d'accès de `/metrics` (aucun des deux chemins n'est publié par
+  # nginx, et la gate échoue s'ils le deviennent).
+  - job_name: pilotage-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:4000']
+        labels:
+          app: api
+
+  - job_name: pilotage-worker
+    metrics_path: /metrics
+    static_configs:
+      # Même socket que le manifeste de release (S-E02-10) : le worker n'a
+      # qu'une raison d'écouter, et un second port doublerait ce qui peut
+      # diverger. Voir apps/worker/src/shared/release/version-server.ts.
+      - targets: ['worker:4001']
+        labels:
+          app: worker
+
+  - job_name: prometheus
+    # Prometheus se scrape lui-même : sans cela, une panne d'ingestion est
+    # indiscernable d'une absence de trafic.
+    static_configs:
+      - targets: ['localhost:9090']

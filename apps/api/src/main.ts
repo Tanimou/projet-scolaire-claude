@@ -25,7 +25,11 @@ async function bootstrap() {
   assertReleaseMatches(logger);
 
   app.use(helmet({ contentSecurityPolicy: false }));
-  app.setGlobalPrefix('api/v1', { exclude: ['healthz', 'readyz', 'version', '/'] });
+  // `metrics` rejoint les surfaces d'exploitation hors préfixe versionné
+  // (S-E02-13 / PF-56) : Prometheus scrape un chemin fixe, et le faire migrer
+  // avec la version de l'API métier casserait la configuration de scrape à
+  // chaque montée de version.
+  app.setGlobalPrefix('api/v1', { exclude: ['healthz', 'readyz', 'version', 'metrics', '/'] });
   app.enableCors({
     origin: (process.env.CORS_ORIGINS ?? 'http://localhost:3000').split(','),
     credentials: true,
