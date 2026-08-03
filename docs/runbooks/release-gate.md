@@ -1,6 +1,7 @@
 # Runbook — Release gate : prouver que le code déployé est le code attendu
 
-> **Finding** VAL-10 · **Risque** R-05 (`materialised`) · **Story** S-E02-6 · **Epic** V3-E02 · **Gate** G-MIGRATION
+> **Findings** VAL-10, PF-68 · **Risque** R-05 · **Stories** S-E02-6 puis **S-E02-10** · **Epic** V3-E02 ·
+> **Gate** G-MIGRATION
 
 ## 1. Pourquoi cette gate existe
 
@@ -23,9 +24,36 @@ La gate compare deux sources **indépendantes** :
 
 Les faire produire par la même étape n'aurait rien prouvé. C'est leur indépendance qui fait le contrôle.
 
+## 1bis. Ce que la gate contrôle (S-E02-10)
+
+La première version n'interrogeait que l'**API**. Le déploiement compte trois artefacts construits et déployés
+séparément, et deux d'entre eux n'étaient comparés à rien — dont le worker, qui **écrit** des données réelles. Elle
+lisait par ailleurs `schemaVersion`… pour l'afficher, sans jamais le comparer.
+
+| Contrôle | Manifeste | Ce qui est comparé |
+|---|---|---|
+| `api` | `GET /version` | `GIT_SHA` gravé dans l'image ↔ `HEAD` du checkout qui lance la gate |
+| `worker` | `GET /version/worker` | idem |
+| `web` | `GET /version/web` | idem |
+| `schéma` | `GET /version` | dernière migration **appliquée** en base ↔ dernière migration **livrée** par le checkout |
+
+Chaque manifeste porte un champ `app`, et la gate le vérifie : sans lui, un reverse-proxy mal routé qui renverrait le
+manifeste de l'API sur `/version/worker` serait indiscernable d'un worker conforme — la gate serait verte sur un
+artefact qu'elle n'a jamais atteint.
+
+**Un artefact injoignable est un ÉCHEC, jamais un saut.** Les variables `RELEASE_GATE_API_URL`,
+`RELEASE_GATE_WORKER_URL` et `RELEASE_GATE_WEB_URL` sont des **adresses**, pas des interrupteurs : aucune valeur ne
+retire un artefact du contrôle (`DNC-08`/`DNC-10`).
+
+### Pourquoi le schéma est comparé au checkout et pas au manifeste
+
+`migrations.status: clean` ne signifie **que** « toutes les migrations que *cette image* embarque sont appliquées ».
+Une image plus ancienne est donc « clean » à propos de son propre retard. La comparaison utile oppose la base à ce que
+**ce checkout** livre (`apps/api/prisma/migrations/`, lu sur le disque) — deux sources indépendantes, comme pour le SHA.
+
 ## 2. Les cinq verdicts
 
-`GET /version` publie `release.verdict` :
+Chaque manifeste publie `release.verdict` :
 
 | Verdict | Sens | API démarre ? | Gate |
 |---|---|---|---|
@@ -73,7 +101,20 @@ servir, il faut commiter — ce qui est le comportement voulu.
 bash scripts/release-gate.sh https://pilotage.srv861861.hstgr.cloud
 ```
 
-Sans argument : `http://localhost:4000`, attendu = `HEAD` du checkout courant.
+Une seule base suffit derrière nginx : les trois manifestes y sont routés (`location = /version`,
+`= /version/worker`, `= /version/web`).
+
+Quand les conteneurs sont interrogés directement — chacun publiant son propre port, ce que fait `deploy-prod.sh` —
+donner une adresse par artefact :
+
+```bash
+RELEASE_GATE_API_URL=http://localhost:4000 \
+RELEASE_GATE_WORKER_URL=http://localhost:4001 \
+RELEASE_GATE_WEB_URL=http://localhost:3000 \
+  bash scripts/release-gate.sh
+```
+
+Sans argument : `http://localhost:4000` pour les trois, attendu = `HEAD` du checkout courant.
 
 ## 5. Diagnostic
 
@@ -88,15 +129,26 @@ Sans argument : `http://localhost:4000`, attendu = `HEAD` du checkout courant.
 
 ## 6. Portée délibérément limitée
 
-Le manifeste n'expose qu'un **nom de migration** et des **SHA courts** — aucune donnée de tenant, aucune chaîne de
-connexion, même niveau de confiance que la route `/` déjà publique. `/version` est exposé par une règle nginx en
-correspondance **exacte** (`location = /version`), pas par un préfixe, et hérite de la limite de débit `api_zone`.
+Les trois manifestes n'exposent qu'un **nom d'application**, des **SHA courts**, un **verdict** et — pour l'API — un
+**nom de migration**. Aucune donnée de tenant, aucune chaîne de connexion, aucune information sur les files du worker ;
+même niveau de confiance que la route `/` déjà publique. Un test du worker vérifie explicitement que la réponse ne
+contient ni `DATABASE_URL` ni `REDIS_URL`.
+
+Chacun est exposé par une règle nginx en correspondance **exacte** (`location = /version`, `= /version/worker`,
+`= /version/web`), jamais par un préfixe, et hérite de la limite de débit `api_zone`.
+
+Le worker n'a **aucune surface HTTP métier** : son socket ne sert que ce manifeste, sur une seule méthode (`GET`) et
+deux chemins ; tout le reste est un `404`. Côté hôte, il n'est publié qu'en **loopback**
+(`127.0.0.1:${WORKER_HTTP_PORT:-4001}`), la gate tournant sur l'hôte.
 
 ## 7. Ce que cette gate ne couvre pas
 
-- Le **worker** et le **web** portent leur `GIT_SHA` (lisible via `docker inspect`) mais n'exposent pas de manifeste
-  HTTP : une dérive worker/web n'est pas détectée automatiquement. Suivi en `PF-68`.
-- La comparaison **schéma attendu vs schéma appliqué** n'est pas faite ici : `schemaVersion` est publié, mais la gate
-  ne le compare pas à la dernière migration livrée par le checkout. Suivi en `PF-68`.
+- Elle n'a **jamais été exécutée contre le déploiement hébergé**. Celui-ci est antérieur aux manifestes, donc elle y
+  échouerait aujourd'hui — ce qui **est** la dérive R-05, pas un faux positif. Elle ne devient probante qu'après un
+  déploiement portant ce commit.
+- Elle prouve **quel** artefact tourne, pas qu'il fonctionne : un conteneur au bon SHA avec une mauvaise chaîne de
+  connexion passe la gate et échoue ailleurs. C'est le rôle du healthcheck et du boot check (`scripts/boot-check.js`).
 - Le dépôt n'a **pas de runner CI** (`PF-59`, facturation Actions) : cette gate s'exécute au déploiement et à la
   demande, pas sur chaque PR.
+- **Keycloak, Postgres, Redis, MinIO et nginx** ne sont pas versionnés par ce contrôle : ce sont des images amont
+  épinglées par tag, pas des artefacts construits depuis ce dépôt.

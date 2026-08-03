@@ -300,8 +300,17 @@ services:
     restart: unless-stopped
     environment:
       <<: *app-env
+      # Même attente que l'API (S-E02-10 / PF-68) : le worker portait déjà un
+      # GIT_SHA gravé au build, mais rien ne lui donnait à quoi le comparer, donc
+      # une dérive du worker — qui écrit des données réelles — était invisible.
+      EXPECTED_GIT_SHA: ${EXPECTED_GIT_SHA:-}
+      WORKER_HTTP_PORT: "4001"
       # See api note — jwks-rsa@4 / jose@6 require(ESM) compatibility.
       NODE_OPTIONS: "--enable-source-maps --experimental-require-module"
+    ports:
+      # Manifeste de release uniquement (GET /version/worker). Publié en LOOPBACK :
+      # la gate tourne sur l'hôte, personne d'autre n'a besoin de ce socket.
+      - "127.0.0.1:${WORKER_HTTP_PORT:-4001}:4001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -336,6 +345,10 @@ services:
     environment:
       <<: *app-env
       PORT: "3000"
+      # Même attente que l'API (S-E02-10 / PF-68). Le web est l'artefact que les
+      # utilisateurs voient : c'est sur lui qu'une dérive est le plus coûteuse, et
+      # c'était l'un des deux tiers du déploiement que la gate n'interrogeait pas.
+      EXPECTED_GIT_SHA: ${EXPECTED_GIT_SHA:-}
       # Server-side only: the Next server (proxy route + server components) reaches
       # the API over the internal docker network. Client bundles never use this —
       # the browser calls the same-origin /api/proxy route, which fans out here.
