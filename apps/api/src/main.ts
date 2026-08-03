@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { assertMigrationsClean } from './shared/migrations/migration-preflight';
 import { PrismaService } from './shared/prisma/prisma.service';
+import { assertReleaseMatches } from './shared/release/release-preflight';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -17,6 +18,11 @@ async function bootstrap() {
   // schéma inconnu. Lève et fait sortir le process en cas de migration absente,
   // en attente ou échouée — c'est volontairement bruyant (DNC-08).
   await assertMigrationsClean(app.get(PrismaService), logger);
+
+  // Preflight release (S-E02-6 / VAL-10, R-05) : ne jamais servir un artefact
+  // dont on ne peut pas prouver l'origine. Sans EXPECTED_GIT_SHA déclaré, le
+  // verdict est `unverified` et rien n'est bloqué — l'attente est l'interrupteur.
+  assertReleaseMatches(logger);
 
   app.use(helmet({ contentSecurityPolicy: false }));
   app.setGlobalPrefix('api/v1', { exclude: ['healthz', 'readyz', 'version', '/'] });

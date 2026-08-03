@@ -53,6 +53,11 @@ RUN apk add --no-cache libc6-compat curl tini && \
     addgroup -S app && adduser -S app -G app
 WORKDIR /app
 
+# Identité de l'artefact (S-E02-6 / VAL-10) — voir Dockerfile.api. Le web est
+# construit séparément de l'API : c'est justement la paire qui peut dériver.
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
+
 ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \

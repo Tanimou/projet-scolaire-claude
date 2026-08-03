@@ -63,6 +63,14 @@ WORKDIR /app
 COPY --from=build --chown=app:app /prod/api ./
 COPY --from=build --chown=app:app /app/apps/api/prisma ./prisma
 
+# Identité de l'artefact (S-E02-6 / VAL-10, risque R-05) : le commit à partir
+# duquel CETTE image a été construite, gravé au build. C'est la moitié « ce que
+# l'artefact est » ; la moitié « ce que l'opérateur attend » est EXPECTED_GIT_SHA,
+# injecté au démarrage. Les faire diverger est précisément ce qui a produit
+# sept semaines de 404 en production (PF-62).
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
+
 ENV NODE_ENV=production \
     PORT=4000 \
     NODE_OPTIONS="--enable-source-maps"

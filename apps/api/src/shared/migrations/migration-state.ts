@@ -148,8 +148,8 @@ export async function readMigrationState(prisma: PrismaClient): Promise<Migratio
   return { status: 'clean', shipped, applied, pending, failed, schemaVersion, detail: null };
 }
 
-/** SHA du build (VAL-10). Aucune donnée sensible : un nom de commit court. */
-export function buildSha(): string {
-  const raw = process.env.GIT_SHA ?? process.env.BUILD_SHA ?? '';
-  return raw ? raw.slice(0, 12) : 'unknown';
-}
+/*
+ * Le SHA du build a déménagé dans `shared/release/release-manifest.ts` (S-E02-6) :
+ * il n'a de sens qu'associé au SHA attendu, et une seule source de vérité évite que
+ * les deux lectures divergent.
+ */

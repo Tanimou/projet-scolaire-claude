@@ -153,6 +153,50 @@ demo remains reproducible via the explicit command · no seed author label is re
 
 ---
 
+## S-E02-6 — The release manifest becomes real, and the deploy gate compares it · ✅ `done` 2026-08-03
+
+| | |
+|---|---|
+| **Epic** | V3-E02 · **Finding** VAL-10 (second half), PF-68 · **Risk** R-05 · **Gates** G-MIGRATION |
+| **blockedBy** | — · **requiresDecision** — · **Size** M |
+
+**Why.** `S-E02-1` delivered the *exposure* half of VAL-10: `GET /version` returns `buildSha` and `schemaVersion`.
+R-05's mitigation asks for more — *"deploy gate compares them"* — and that half did not exist. Step 2 of this run found
+the exposure half was itself **inert**, for two independent reasons:
+
+1. **Nothing ever set `GIT_SHA`/`BUILD_SHA`.** No Dockerfile `ARG`, no compose `build.args`, no deploy-script export.
+   `buildSha()` therefore returned `"unknown"` in every environment, always.
+2. **`/version` was unroutable.** nginx proxies `/api/` to the API, but `/version` is *excluded* from Nest's global
+   `api/v1` prefix, so it fell through to `location /` → Next.js. An external caller got the web app's 404. Confirmed
+   against the hosted deployment during Step 2.
+
+A manifest that always says `unknown` and cannot be read from outside cannot gate anything.
+
+**Implementation notes.**
+1. Two **independent** sources, or the comparison proves nothing: `GIT_SHA` baked into the image at build time
+   (`ARG` → `ENV`, all three Dockerfiles), `EXPECTED_GIT_SHA` injected into the container at deploy time.
+2. Pure `evaluateRelease()` decision function so the verdict table is unit-testable.
+3. Boot preflight refuses a non-servable verdict **in production**, mirroring `assertMigrationsClean`.
+4. `location = /version` in nginx (exact match, rate-limited) so the manifest is readable.
+5. `scripts/release-gate.sh` re-checks **independently** rather than trusting the verdict the artefact reports about
+   itself; `deploy-prod.sh` runs it after `healthy` and fails the deploy on a bad verdict.
+6. `deploy-prod.sh` refuses a dirty working tree — the exact root cause of R-05/PF-62.
+
+**Acceptance criteria.**
+1. The running artefact's commit is comparable to the expected commit from outside the container. ✅
+2. A drifted, dirty or unstamped artefact **fails the deploy**, and refuses to serve in production. ✅
+3. Not comparing is reported as `unverified`, never as success (DNC-08). ✅
+4. No bypass flag exists (DNC-10). ✅ — locked by a test that tries three plausible flag names.
+5. The manifest exposes no tenant data and no connection string. ✅
+
+**Test.** `apps/api/src/shared/release/release-manifest.spec.ts` — 19/19. Plus the script executed against a live API
+(fails on the real drifted artefact) and against a synthetic manifest for all five verdicts.
+
+**Out of scope.** Baselining the hosted database (operator, `S-E02-1`); source-vs-hosted schema drift (`S-E02-5`);
+worker/web HTTP manifests and schema-version comparison (`PF-68`).
+
+---
+
 ## S-E06-1 — Purge development artefacts from production builds
 
 | | |
