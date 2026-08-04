@@ -64,6 +64,18 @@ services:
       KEYCLOAK_PUBLIC_URL: ${PUBLIC_BASE_URL}/auth      # expected token issuer base
       WEB_PUBLIC_URL: ${PUBLIC_BASE_URL}
       CORS_ORIGINS: ${PUBLIC_BASE_URL}
+      # S-E06-1 / PF-54 — l'API n'a plus de défaut `?? 'admin'` pour ces deux
+      # valeurs. La forme `${VAR:?…}` est délibérée : compose REFUSE la commande
+      # de déploiement, en nommant la clé, au lieu de démarrer un conteneur qui
+      # bouclerait sur un crash sur le serveur. L'échec se produit dans le
+      # terminal de l'opérateur, pas dans les logs à 2 h du matin.
+      #
+      # Aucun identifiant n'est tourné ici : sur la stack hébergée actuelle ces
+      # valeurs sont `admin`/`admin`, à déclarer dans `.env.prod`. La rotation
+      # (côté Keycloak PUIS côté .env.prod) est une action opérateur, tracée et
+      # non exécutée par cette story.
+      KEYCLOAK_ADMIN_USER: ${KEYCLOAK_ADMIN_USER:?requis depuis S-E06-1 — declarez-le dans .env.prod}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?requis depuis S-E06-1 — declarez-le dans .env.prod}
 
   # ---- Worker: same issuer wiring + public web origin for email deep-links ----
   worker:

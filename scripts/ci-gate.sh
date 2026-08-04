@@ -60,6 +60,22 @@ run_stage() {
 # drift (S-E02-2 AC-4).
 run_stage "runtime engines" node scripts/runtime-engines-check.js
 
+# Stage 0b — production artefacts (string scan). Four surfaces of the hosted
+# deployment told real users to look for their activation email in
+# `http://localhost:1080` — a Maildev container that exists only in a
+# developer's compose stack (PF-17) — and the Keycloak admin client resolved its
+# credentials with `?? 'admin'` while compose declared neither variable, so the
+# hosted API really did authenticate as admin/admin (PF-54). Both were found by
+# reading; nothing executed. This stage is what turns "someone noticed" into
+# "the gate refuses".
+#
+# It runs HERE, second, on purpose: it reads source only, so it needs no
+# install, no generated Prisma client and no build — it costs ~1 s and fails on
+# the diff rather than ten minutes later. That also makes it the one late-added
+# stage that still runs under `--quick`. Kept in step with
+# .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
+run_stage "production artefacts (string scan)" node scripts/production-artefact-check.js
+
 # Stage 1 — Prisma client. Everything downstream (typecheck, tests, build) fails
 # with unresolvable types if the generated client is missing, which is precisely
 # how the audited worktree reported "tests cannot run".

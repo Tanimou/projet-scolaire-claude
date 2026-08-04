@@ -4,6 +4,8 @@ import { PassportStrategy } from '@nestjs/passport';
 import { passportJwtSecret } from 'jwks-rsa';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
+import { MissingConfigError } from '../config/config-preflight';
+
 export interface KeycloakJwtPayload {
   sub: string;
   email?: string;
@@ -22,7 +24,15 @@ export interface KeycloakJwtPayload {
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'keycloak-jwt') {
   constructor(config: ConfigService) {
-    const keycloakUrl = config.get<string>('KEYCLOAK_URL') ?? 'http://127.0.0.1:8180';
+    // `KEYCLOAK_URL` n'a plus de défaut (S-E06-1 / PF-54) : sur le chemin
+    // d'authentification, une URL devinée fait chercher les JWKS ailleurs que
+    // là où les jetons sont signés — donc 401 partout, sans indice. La variable
+    // est exigée au démarrage par `assertRequiredConfig` (main.ts) ; ici on
+    // constate seulement qu'elle est là.
+    const keycloakUrl = config.get<string>('KEYCLOAK_URL');
+    if (keycloakUrl === undefined || keycloakUrl.trim() === '') {
+      throw new MissingConfigError(['KEYCLOAK_URL']);
+    }
     // Browser-facing issuer (Keycloak KC_HOSTNAME). Tokens carry this in `iss`
     // whether minted via the internal host (ROPC) or the browser host (OIDC).
     // JWKS are still fetched over the internal URL the api can actually reach.

@@ -1,6 +1,8 @@
 import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { MissingConfigError } from '../config/config-preflight';
+
 interface TokenResponse {
   access_token: string;
   expires_in: number;
@@ -34,16 +36,48 @@ export class KeycloakAdminService {
   private readonly logger = new Logger(KeycloakAdminService.name);
   private cachedToken: { value: string; expiresAt: number } | null = null;
 
-  private readonly baseUrl: string;
+  private readonly config: ConfigService;
+
+  /**
+   * `KEYCLOAK_REALM` garde son défaut : ce n'est pas une valeur de
+   * développement mais une constante produit — ADR-004 fixe « 1 realm / 3
+   * clients » et ce realm s'appelle `pilotage-scolaire` partout.
+   */
   private readonly realm: string;
-  private readonly masterUser: string;
-  private readonly masterPassword: string;
 
   constructor(config: ConfigService) {
-    this.baseUrl = config.get<string>('KEYCLOAK_URL') ?? 'http://localhost:8180';
+    this.config = config;
     this.realm = config.get<string>('KEYCLOAK_REALM') ?? 'pilotage-scolaire';
-    this.masterUser = config.get<string>('KEYCLOAK_ADMIN_USER') ?? 'admin';
-    this.masterPassword = config.get<string>('KEYCLOAK_ADMIN_PASSWORD') ?? 'admin';
+  }
+
+  /**
+   * Résolution AU POINT D'USAGE des valeurs devenues obligatoires
+   * (S-E06-1 / PF-54).
+   *
+   * Les `?? 'admin'` / `?? 'http://localhost:8180'` d'origine faisaient tourner
+   * un client d'administration privilégié sur le compte d'amorçage de Keycloak
+   * sans qu'une seule ligne ne le dise. Ils sont supprimés.
+   *
+   * Le jet est ici et NON dans le constructeur, délibérément :
+   * `KeycloakModule` est `@Global()` et injecte ce service dans son propre
+   * constructeur, donc `scripts/boot-check.js` — qui compile le graphe complet
+   * depuis `dist/app.module.js` — l'instancie à chaque exécution. Un jet en
+   * constructeur ferait échouer les étapes 7/9/10 de la gate sur un checkout
+   * sans `.env`, c'est-à-dire punirait la gate plutôt que le défaut. Le refus
+   * bruyant au démarrage est porté par `assertRequiredConfig` dans `main.ts` ;
+   * ceci en est le filet, sur le chemin d'appel.
+   */
+  private requireEnv(name: string): string {
+    const value = this.config.get<string>(name);
+    if (value === undefined || value.trim() === '') {
+      throw new MissingConfigError([name]);
+    }
+    return value.trim();
+  }
+
+  /** Base de l'API d'administration — requise, jamais devinée. */
+  private get baseUrl(): string {
+    return this.requireEnv('KEYCLOAK_URL');
   }
 
   private async getToken(): Promise<string> {
@@ -56,8 +90,8 @@ export class KeycloakAdminService {
       body: new URLSearchParams({
         grant_type: 'password',
         client_id: 'admin-cli',
-        username: this.masterUser,
-        password: this.masterPassword,
+        username: this.requireEnv('KEYCLOAK_ADMIN_USER'),
+        password: this.requireEnv('KEYCLOAK_ADMIN_PASSWORD'),
       }),
     });
     if (!res.ok) {

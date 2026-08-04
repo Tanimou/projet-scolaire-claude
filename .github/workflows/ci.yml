@@ -53,6 +53,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '${{ env.NODE_VERSION }}', cache: 'pnpm' }
       - run: pnpm install --frozen-lockfile
+      # Production artefacts (S-E06-1 / PF-17, PF-54). Four surfaces of the
+      # hosted deployment told real users to look for their activation email in
+      # `http://localhost:1080` — a Maildev container that exists only in a
+      # developer's compose stack — and the Keycloak admin client resolved its
+      # credentials with `?? 'admin'` while compose declared neither variable.
+      # Both were found by reading; nothing executed. This step reads source
+      # only, so it needs no Prisma client and no build: it belongs early, where
+      # it fails on the diff rather than ten minutes later. Kept in step with
+      # scripts/ci-gate.sh stage 0b — the two must not drift (S-E02-2 AC-4).
+      - run: node scripts/production-artefact-check.js
       # `lint` dependsOn `^build` in turbo.json, and the API build needs the
       # generated Prisma client — without this the lint job dies on unresolvable
       # `@prisma/client` types rather than on a lint rule.
@@ -96,6 +106,21 @@ jobs:
           --health-retries=10
     env:
       DATABASE_URL: postgresql://pilotage:pilotage@localhost:5432/pilotage?schema=public
+      # S-E06-1 / PF-54 — `KEYCLOAK_URL` and the two admin credentials no longer
+      # have `??` defaults, and `JwtStrategy` is constructed by
+      # `scripts/boot-check.js` when it compiles the real module graph. The
+      # values that satisfy this locally live in `apps/api/.env`, which is
+      # gitignored, so a fresh checkout has nothing: without these three lines
+      # the boot, observability and tracing steps below would go red on a slice
+      # that shipped no bug.
+      #
+      # Placeholders are honest here rather than a bypass — nothing in
+      # boot-check.js, observability-check.js or tracing-check.js opens a
+      # connection to Keycloak. They are deliberately NOT `admin`/`admin`, so
+      # this block can never be mistaken for a working credential.
+      KEYCLOAK_URL: http://keycloak.invalid:8080
+      KEYCLOAK_ADMIN_USER: ci-not-a-real-account
+      KEYCLOAK_ADMIN_PASSWORD: ci-not-a-real-secret
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

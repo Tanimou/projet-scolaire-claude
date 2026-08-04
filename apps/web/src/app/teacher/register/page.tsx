@@ -1,8 +1,9 @@
-import { ArrowRight, Mail, ShieldCheck } from 'lucide-react';
+import { ArrowRight, ShieldCheck } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { AuthSplitLayout } from '@/components/AuthSplitLayout';
+import { ActivationHint } from '@/components/auth/ActivationHint';
 
 export const metadata: Metadata = { title: 'Demande d\'invitation professeur' };
 
@@ -37,10 +38,7 @@ export default function TeacherRegisterPage() {
           Cliquez sur le lien dans l&apos;email pour activer votre compte. Une fois actif, connectez-vous via la page
           de connexion professeur.
         </p>
-        <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          <Mail className="h-3.5 w-3.5 text-slate-500" />
-          Dev: les emails arrivent dans Maildev → <a href="http://localhost:1080" target="_blank" rel="noreferrer" className="font-semibold text-teal-700 hover:underline">localhost:1080</a>
-        </div>
+        <ActivationHint portal="teacher" variant="awaiting" />
       </div>
 
       <Link
