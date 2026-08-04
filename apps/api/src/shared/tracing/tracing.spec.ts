@@ -81,11 +81,22 @@ describe('S-E02-14 · tracing', () => {
       ).toBe(0.25);
     });
 
-    it('names exactly the two services that emit — the other three were the finding', () => {
+    it('names exactly the services that emit — migrator and seed never can', () => {
       // `OTEL_EXPORTER_OTLP_ENDPOINT` vivait sur l'ancre partagée du compose et
       // était distribué à migrator, api, worker, web et seed. Trois d'entre eux
       // ne pouvaient rien émettre. La gate compare cette liste au compose.
-      expect([...TRACED_SERVICES]).toEqual(['api', 'worker']);
+      //
+      // S-E02-15 (PF-79) fait passer la liste de deux à TROIS : `web` émet
+      // désormais pour de vrai, par le hook `register()` de Next 15. Élargir
+      // cette liste n'est légitime que dans ce sens-là — parce que la capacité
+      // d'émettre a été AJOUTÉE, et qu'elle est prouvée ailleurs par exécution :
+      // `scripts/tracing-check.js` exige une sonde `web` qui produit au moins un
+      // span, et échoue dans les DEUX sens si cette liste et le compose
+      // divergent. Ce test-ci n'en est que la relecture lisible.
+      //
+      // `migrator` et `seed` restent dehors et doivent le rester : ce sont des
+      // jobs one-shot, c'est-à-dire PF-78 lui-même.
+      expect([...TRACED_SERVICES]).toEqual(['api', 'worker', 'web']);
     });
   });
 

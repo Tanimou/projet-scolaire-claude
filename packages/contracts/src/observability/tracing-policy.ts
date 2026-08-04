@@ -27,12 +27,12 @@
  * -------------------------------------------------------------------------- */
 
 /** Nom logique d'un service émetteur. Fermé volontairement : voir `TRACED_SERVICES`. */
-export type TracedService = 'api' | 'worker';
+export type TracedService = 'api' | 'worker' | 'web';
 
 /**
  * Les services qui émettent réellement des spans.
  *
- * **C'est la moitié la plus importante de la fiche PF-78.** Avant cette slice,
+ * **C'est la moitié la plus importante de la fiche PF-78.** Avant `S-E02-14`,
  * `OTEL_EXPORTER_OTLP_ENDPOINT` était posé sur l'ancre d'environnement
  * partagée de `infra/docker-compose.yml`, donc distribué à **cinq** services :
  * `migrator`, `api`, `worker`, `web` et `seed`. Trois d'entre eux ne pouvaient
@@ -41,11 +41,21 @@ export type TracedService = 'api' | 'worker';
  * mécanisme. Déclarer un collecteur à un service qui ne l'utilisera jamais,
  * c'est exactement PF-78 en miniature, répété trois fois.
  *
- * `scripts/observability-check.js` compare cette liste aux services qui
- * reçoivent la variable dans le compose : toute divergence échoue la gate,
- * dans les deux sens.
+ * **`'web'` revient ici en `S-E02-15` (PF-79), et cette fois le mécanisme
+ * existe.** `S-E02-14` avait *retiré* la variable du service `web` plutôt que
+ * de laisser une fausse déclaration ; la remettre n'est légitime que parce que
+ * `apps/web/src/instrumentation.ts` démarre désormais un vrai fournisseur de
+ * traces via le hook `register()` de Next 15. La liste n'est donc jamais une
+ * intention : c'est la liste des artefacts qui, mesure faite, émettent.
+ *
+ * `resolveTracingConfig(env, 'web')` en dérive `serviceName: 'pilotage-web'`
+ * sans un mot de plus — c'est tout le bénéfice d'avoir une seule liste.
+ *
+ * `scripts/observability-check.js` et `scripts/tracing-check.js` comparent
+ * cette liste aux services qui reçoivent la variable dans le compose : toute
+ * divergence échoue la gate, dans les deux sens.
  */
-export const TRACED_SERVICES: readonly TracedService[] = ['api', 'worker'];
+export const TRACED_SERVICES: readonly TracedService[] = ['api', 'worker', 'web'];
 
 export interface TracingEnv {
   OTEL_EXPORTER_OTLP_ENDPOINT?: string | undefined;

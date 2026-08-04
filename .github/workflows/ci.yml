@@ -130,6 +130,14 @@ jobs:
       # that really exist, and nginx must not publish /metrics. Reads dist/, so
       # it belongs to the build job. Kept in step with scripts/ci-gate.sh
       # stage 9 — the two must not drift (S-E02-2 AC-4).
+      #
+      # S-E02-15 (PF-79) widened this step from two artefacts to THREE. apps/web
+      # was covered by nothing and this step exited 0 on that exact state. It now
+      # reads apps/web's registry too, compares the scraped path against the path
+      # its dedicated socket really serves, and asserts that path is NOT in the
+      # Next route inventory — nginx `location /` would publish it the day it
+      # became a route, and the nginx rule above would not notice. No new step
+      # was added, deliberately: widening keeps the two files in step.
       - run: node scripts/observability-check.js
 
       # Tracing (S-E02-14 / PF-78) — the traces half of PF-56. A `jaeger`
@@ -141,6 +149,16 @@ jobs:
       # request and fails if no span comes out. Reads dist/, so it belongs to
       # the build job. Kept in step with scripts/ci-gate.sh stage 10 — the two
       # must not drift (S-E02-2 AC-4).
+      #
+      # S-E02-15 (PF-79) made this step cover THREE artefacts. TRACED_SERVICES
+      # now names web, so a second probe — scripts/web-observability-probe.js —
+      # is spawned for it. Web's proof is deliberately a different shape: Next
+      # has no main.js and guarantees register() runs before it serves, so a
+      # byte-order assertion would be asserting rather than executing. Checked
+      # instead: the hook was EMITTED and carries the registered metric names,
+      # and a real span yields a histogram SAMPLE labelled by route template —
+      # prom-client emits `# TYPE` for a histogram that was never observed, so
+      # "registered" is not "measured".
       - run: node scripts/tracing-check.js
 
   test:

@@ -36,19 +36,39 @@
  *         the shared env anchor and reached **five** services — migrator, api,
  *         worker, web, seed — of which three cannot emit anything. Checked in
  *         both directions: a traced service that stops declaring it fails too
- *  2. the tracing bootstrap is required **before** the application module in
- *     the emitted `main.js`
- *       → the sharp one. OpenTelemetry's auto-instrumentation patches modules
- *         as they are loaded. A SDK started after `require('./app.module')`
- *         finds `http`, `express` and `@nestjs/core` already resolved: it
- *         patches nothing, throws nothing, and the application boots looking
- *         instrumented while emitting no request spans. Read off the **emitted**
- *         file, because import order is exactly what a refactor reorders
+ *  2. the SDK really ships **inside the emitted artefact**
+ *       → the sharp one, in two shapes. For api/worker: the tracing bootstrap
+ *         must be required BEFORE the application module in the emitted
+ *         `main.js`, because OpenTelemetry's auto-instrumentation patches
+ *         modules as they are loaded — a SDK started after
+ *         `require('./app.module')` finds `http`, `express` and `@nestjs/core`
+ *         already resolved, patches nothing, throws nothing, and the
+ *         application boots looking instrumented while emitting no request
+ *         spans. For web (S-E02-15): Next has no `main.js` and guarantees the
+ *         hook runs before it serves, so a byte-order assertion there would be
+ *         asserting instead of executing; what is checked instead is that
+ *         `.next/server/instrumentation.js` (or `.next/server/src/…`) was
+ *         emitted at all and that the registered metric names are carried by
+ *         that entry **or by the async chunks emitted beside it** — because the
+ *         hook reaches its implementation through `await import()`, which
+ *         webpack code-splits into `.next/server/chunks/<id>.js` by
+ *         construction (see the note on `APP_ARTEFACTS.web`)
  *  3. a real request produces real spans, and those spans carry no identifier
- *       → the finding itself. Executed in a child process under plain Node
+ *       → the finding itself. Executed in a child process under plain Node.
+ *         For web the same probe additionally re-scrapes its own Prometheus
+ *         socket and the gate asserts a histogram SAMPLE exists, labelled by
+ *         route template — because prom-client emits `# TYPE` for a histogram
+ *         that has never been observed, so "registered" is not "measured"
  *  4. the jaeger service can receive what is sent to it
  *       → the collector must exist, enable OTLP, and expose the port the
  *         endpoint names — the same class as check 3 of `observability-check.js`
+ *
+ * THREE ARTEFACTS SINCE S-E02-15 (PF-79)
+ * --------------------------------------
+ * `TRACED_SERVICES` gained `'web'`, so `APP_ARTEFACTS` had to gain a web entry
+ * or `collect()` throws its own "knows no artefact" error. That throw is
+ * deliberate and was kept: a traced service with no artefact entry must be a
+ * loud failure, never a silent pass.
  *
  * WHY THE EMISSION PROOF IS NOT A JEST TEST — measured, not assumed
  * ----------------------------------------------------------------
@@ -71,12 +91,18 @@
  * proves are HTTP spans — no official BullMQ instrumentation exists, so job
  * processing is not traced.
  *
+ * For web specifically: it does not boot Next (which needs a database and a
+ * Keycloak session). It proves the module measures, serves and redacts, and
+ * that Next compiled the hook carrying that module. That **Next itself emits**
+ * those spans is inferred from its built-in OpenTelemetry support, not
+ * executed. Written here rather than implied.
+ *
  * Usage:  node scripts/tracing-check.js
  * Exit code is non-zero if any check fails. There is no bypass flag (DNC-10).
  */
 
 const { spawnSync } = require('node:child_process');
-const { existsSync, readFileSync } = require('node:fs');
+const { existsSync, readFileSync, readdirSync } = require('node:fs');
 const { join, resolve } = require('node:path');
 
 const { collectFromRepo } = require('./observability-check');
@@ -96,18 +122,84 @@ const OTLP_ENV = 'OTEL_EXPORTER_OTLP_ENDPOINT';
  */
 const APP_ARTEFACTS = {
   api: {
+    proof: 'requireOrder',
     main: 'apps/api/dist/main.js',
     tracing: 'apps/api/dist/shared/tracing/tracing.js',
     bootstrapMarker: 'shared/tracing/tracing.bootstrap',
     appModuleMarker: './app.module',
+    probe: 'trace-emission-probe.js',
   },
   worker: {
+    proof: 'requireOrder',
     main: 'apps/worker/dist/main.js',
     tracing: 'apps/worker/dist/shared/tracing/tracing.js',
     bootstrapMarker: 'shared/tracing/tracing.bootstrap',
     appModuleMarker: './app.module',
+    probe: 'trace-emission-probe.js',
+  },
+  /**
+   * `apps/web` (S-E02-15 / PF-79) — le troisième artefact, avec une preuve de
+   * forme différente, et il faut dire pourquoi.
+   *
+   * Les deux applications Nest sont jugées sur l'ORDRE des `require` dans le
+   * `main.js` émis, parce que l'instrumentation automatique patche les modules
+   * au chargement : démarrer le SDK trop tard ne patche rien et ne dit rien.
+   * **Next n'a pas de `main.js`**, et surtout Next *garantit* que `register()`
+   * s'exécute avant qu'une requête soit servie — recopier une assertion
+   * d'ordre d'octets ici serait affirmer au lieu d'exécuter, précisément le
+   * défaut que cette épique existe pour finir.
+   *
+   * La preuve utile pour web est donc l'ARTEFACT ÉMIS : le hook a-t-il été
+   * compilé, et le bundle porte-t-il bien le registre qu'on prétend qu'il
+   * porte ? Les deux chemins candidats sont cherchés — cette application a un
+   * répertoire `src/`, ce qui est la raison pour laquelle son middleware émis
+   * atterrit dans `.next/server/src/middleware.js` — et aucun n'est codé en
+   * dur seul.
+   *
+   * ET LE FRAGMENT ASYNCHRONE, qui a failli rendre cette gate rouge sur un
+   * artefact correct. `instrumentation.ts` atteint son implémentation par
+   * `await import('./observability/web-observability.js')` — obligatoire : un
+   * import statique serait RÉSOLU pour le runtime edge, où ni `node:http` ni
+   * `prom-client` n'existent. Or webpack émet un import dynamique dans un
+   * **chunk asynchrone séparé** : le compilateur serveur de Next écrit l'entrée
+   * en `.next/server/instrumentation.js` et l'implémentation en
+   * `.next/server/chunks/<id>.js`, et son `splitChunks` de production ne
+   * refusionne jamais un chunk asynchrone dans l'entrée. Chercher les marqueurs
+   * dans la seule entrée reviendrait donc à exiger de Next l'inverse de ce
+   * qu'il fait, et mettrait la règle « import dynamique » et la règle
+   * « marqueurs présents » en contradiction directe. Ce qui est lu, c'est donc
+   * l'entrée **plus les fragments émis à côté d'elle** (`related`), l'entrée
+   * restant seule responsable des contrôles « émise » et « non vide ».
+   *
+   * CE QUE ÇA PROUVE : Next a compilé le hook, et le hook embarque les métriques
+   * annoncées, donc l'artefact qui ship correspond au module que la gate a lu.
+   * CE QUE ÇA NE PROUVE PAS : que Next émette lui-même des spans — il faudrait
+   * un Next booté avec une base de données et une session Keycloak. Cette
+   * moitié est déduite du support OpenTelemetry intégré de Next, et c'est écrit
+   * ici plutôt que sous-entendu.
+   */
+  web: {
+    proof: 'bundleContains',
+    bundleCandidates: [
+      'apps/web/.next/server/instrumentation.js',
+      'apps/web/.next/server/src/instrumentation.js',
+    ],
+    requiredMarkers: ['pilotage_http_request_duration_seconds', 'pilotage_http_requests_total'],
+    module: 'apps/web/src/observability/web-observability.js',
+    probe: 'web-observability-probe.js',
   },
 };
+
+/**
+ * Les valeurs que `web-observability-probe.js` tente délibérément de faire
+ * fuir, et le gabarit sous lequel elles doivent réapparaître.
+ *
+ * Écrites des deux côtés plutôt que transmises par la sonde : une assertion qui
+ * lit sa propre attente dans la charge utile qu'elle juge ne juge rien. Même
+ * posture que le `'clx1234567890abcdefghij'` en dur du contrôle 3.
+ */
+const WEB_PROBE_ROUTE_TEMPLATE = '/parent/students/[id]/grades';
+const WEB_DURATION_METRIC = 'pilotage_http_request_duration_seconds';
 
 /* ------------------------------------------------------------------ *
  * Pure evaluation
@@ -118,11 +210,16 @@ const APP_ARTEFACTS = {
  * more. The spec drives this with configurations known to be wrong.
  * ------------------------------------------------------------------ */
 
+/** `[` et `]` d'un gabarit de route Next sont des méta-caractères d'expression régulière. */
+function escapeForRegExp(raw) {
+  return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * @param {{
  *   tracedServices: string[],
  *   composeServices: Record<string, { file: string, environment: Record<string, unknown>, ports: string[], profiles: string[] }>,
- *   mains: Record<string, { file: string, source: string | null }>,
+ *   mains: Record<string, { file: string, source: string | null, related?: Array<{ file: string, source: string }> }>,
  *   emission: Record<string, { spans: number, serialised: string, error?: string } | null>,
  * }} input
  */
@@ -146,7 +243,13 @@ function evaluateTracing(input) {
       `service "${name}" is handed ${OTLP_ENV} but is not in TRACED_SERVICES, so nothing in it ` +
         'starts an OpenTelemetry SDK. Declaring a collector to a service that will never use it ' +
         'is PF-78 in miniature — it is exactly how the finding came to exist, on the shared ' +
-        'environment anchor, for five services at once.',
+        'environment anchor, for five services at once. ' +
+        // PM-18 : distinguer les deux causes, parce que le remède est opposé.
+        'BEFORE removing it from the compose file, check the other possibility: TRACED_SERVICES ' +
+        'is read from packages/contracts/**dist**, so a source that already names this service ' +
+        'and a dist that predates it produce this exact message. If ' +
+        `packages/contracts/src/observability/tracing-policy.ts already lists "${name}", the fix ` +
+        'is to rebuild the contracts package, not to un-declare the collector.',
     );
   }
   for (const name of missing) {
@@ -160,19 +263,70 @@ function evaluateTracing(input) {
     notes.push(`${OTLP_ENV} is declared for exactly [${traced.join(', ')}] — and nothing else`);
   }
 
-  /* -- 2. the bootstrap is required before the application module ------ */
+  /* -- 2. the SDK really ships inside the artefact --------------------- */
   for (const app of traced) {
+    const artefact = APP_ARTEFACTS[app];
+    if (artefact === undefined) {
+      problems.push(
+        `TRACED_SERVICES names "${app}", for which this gate knows no artefact. Add it to ` +
+          'APP_ARTEFACTS rather than letting it go unchecked.',
+      );
+      continue;
+    }
+
     const main = input.mains[app];
     if (main === undefined || main.source === null) {
       problems.push(
-        `${app}: ${main ? main.file : `dist main for ${app}`} is absent, so the load order that ` +
+        `${app}: ${main ? main.file : `build output for ${app}`} is absent, so the load order that ` +
           'makes instrumentation work cannot be verified. That is a failure, not a skip — with ' +
           'nothing to read, this check would pass vacuously.',
       );
       continue;
     }
 
-    const artefact = APP_ARTEFACTS[app];
+    // Next n'a pas de `main.js` et garantit lui-même l'ordre : la preuve utile
+    // est que le hook ait été COMPILÉ et qu'il embarque le registre annoncé.
+    // Voir la note sur `APP_ARTEFACTS.web`.
+    if (artefact.proof === 'bundleContains') {
+      if (main.source.trim() === '') {
+        problems.push(
+          `${app}: ${main.file} is empty. An emitted-but-empty instrumentation bundle is the same ` +
+            'defect as an absent one — Next would call a `register()` that does nothing — and it ' +
+            'is a failure, never a skip.',
+        );
+        continue;
+      }
+      // Le hook charge son implémentation par `await import()`, que webpack
+      // code-splitte dans un chunk asynchrone : l'entrée émise ne porte alors
+      // qu'un `require("./chunks/<id>.js")`. Les fragments émis à côté d'elle
+      // font donc partie de l'artefact lu. Voir la note sur `APP_ARTEFACTS.web`.
+      const related = main.related ?? [];
+      const emitted = [main.source, ...related.map((chunk) => chunk.source)].join('\n');
+
+      const missing = (artefact.requiredMarkers ?? []).filter(
+        (marker) => !emitted.includes(marker),
+      );
+      if (missing.length > 0) {
+        const where =
+          related.length === 0
+            ? main.file
+            : `${main.file} (nor any of the ${related.length} chunk(s) emitted beside it)`;
+        problems.push(
+          `${app}: ${where} was emitted but does not contain [${missing.join(', ')}]. The hook ` +
+            'compiled without the metric registry it is supposed to carry, so the artefact that ' +
+            'ships is not the module this gate read — which is the whole point of reading the ' +
+            'emitted output rather than the source (R-26 rule (a)).',
+        );
+        continue;
+      }
+      notes.push(
+        `${app}: the emitted instrumentation bundle (${main.file}${
+          related.length === 0 ? '' : ` + ${related.length} emitted chunk(s)`
+        }) carries the registered metric names`,
+      );
+      continue;
+    }
+
     const bootIndex = main.source.indexOf(artefact.bootstrapMarker);
     const appIndex = main.source.indexOf(artefact.appModuleMarker);
 
@@ -239,6 +393,52 @@ function evaluateTracing(input) {
       }
     }
     notes.push(`${app}: a real request produced ${emission.spans} span(s), carrying no identifier`);
+  }
+
+  /* -- 3b. web: the Prometheus measurement is FED, not merely declared -- */
+
+  // prom-client emits a `# HELP`/`# TYPE` pair for a labelled histogram that
+  // has NEVER been observed. So `observability-check.js` — which reads `# TYPE`
+  // lines — would accept a web SLO panel that renders "No data" for ever, which
+  // is indistinguishable from a system at rest. That is the exact defect this
+  // epic keeps finding, and it would have reappeared at this address. Only a
+  // probe that pushes a span and re-scrapes can tell the difference.
+  for (const app of traced) {
+    const emission = input.emission[app];
+    if (!emission || typeof emission.exposition !== 'string') continue;
+
+    const exposition = emission.exposition;
+    const sample = new RegExp(
+      `^${WEB_DURATION_METRIC}_bucket\\{[^}]*route="${escapeForRegExp(WEB_PROBE_ROUTE_TEMPLATE)}"`,
+      'm',
+    );
+
+    if (!sample.test(exposition)) {
+      problems.push(
+        `${app}: after a real span, the exposition carries no ${WEB_DURATION_METRIC}_bucket sample ` +
+          `labelled route="${WEB_PROBE_ROUTE_TEMPLATE}". A histogram that is registered but never ` +
+          'observed passes every check that reads `# TYPE` lines and renders "No data" for ever — ' +
+          'which reads exactly like a system at rest. Either the span→metric processor is not on ' +
+          'the provider, or the route label is not derived from the template.',
+      );
+    }
+
+    // G-TENANT sur la SECONDE surface non authentifiée. Le processeur de spans
+    // voit les attributs AVANT le caviardage de l'exportateur : ce qui devient
+    // une étiquette part vers Prometheus tel quel. Le caviardage protège les
+    // traces, pas les métriques — la règle doit tenir ici aussi.
+    for (const secret of ['clx1234567890abcdefghij', 'tenantId']) {
+      if (exposition.includes(secret)) {
+        problems.push(
+          `${app}: the Prometheus exposition contains "${secret}". A resolved URL in a label is ` +
+            'both an unbounded-cardinality explosion any scanner can trigger and a tenant ' +
+            'identifier on an endpoint that carries no token. Label by route template only — see ' +
+            'routeLabelFromSpan in apps/web/src/observability/web-observability.js.',
+        );
+      }
+    }
+
+    notes.push(`${app}: the exposition carries a route-template-labelled histogram sample`);
   }
 
   /* -- 4. the collector can receive what is sent to it ----------------- */
@@ -361,16 +561,34 @@ function readTracedServices() {
  */
 function runEmissionProbe(app) {
   const artefact = APP_ARTEFACTS[app];
-  const tracingModule = join(REPO_ROOT, artefact.tracing);
-  if (!existsSync(tracingModule)) {
-    return { spans: 0, serialised: '', error: `${artefact.tracing} is absent (build output missing)` };
-  }
+  const probe = join(__dirname, artefact.probe);
+  const args = [];
 
-  const probe = join(__dirname, 'trace-emission-probe.js');
-  const result = spawnSync(process.execPath, [probe, tracingModule], {
+  // api/worker : la sonde reçoit le module de traçage **construit**. web : elle
+  // require le module CommonJS qui ship verbatim (apps/web n'a pas de `dist/`).
+  // Dans les deux cas, une entrée absente est une ERREUR, jamais un skip.
+  const required = artefact.tracing ?? artefact.module;
+  const requiredPath = join(REPO_ROOT, required);
+  if (!existsSync(requiredPath)) {
+    return { spans: 0, serialised: '', error: `${required} is absent (build output missing)` };
+  }
+  if (artefact.tracing !== undefined) args.push(requiredPath);
+
+  const result = spawnSync(process.execPath, [probe, ...args], {
     encoding: 'utf8',
     timeout: 60_000,
   });
+
+  // Un enfant tué par le timeout rend `status === null` et porte `error`. Le
+  // dire explicitement, sinon un blocage se lit « probe exited null » et
+  // ressemble à un bug de la gate plutôt qu'à une sonde qui pend.
+  if (result.error !== undefined && result.error !== null) {
+    return {
+      spans: 0,
+      serialised: '',
+      error: `probe did not complete (${result.error.code ?? result.error.message}) — a hung probe is a failure, not a skip`,
+    };
+  }
 
   if (result.status !== 0) {
     return {
@@ -387,10 +605,91 @@ function runEmissionProbe(app) {
 
   try {
     const payload = JSON.parse(line.slice('PROBE_RESULT '.length));
-    return { spans: payload.spans, serialised: JSON.stringify(payload.data) };
+    const emission = { spans: payload.spans, serialised: JSON.stringify(payload.data) };
+    // Seule la sonde web rapporte une exposition Prometheus ; sa présence est
+    // ce qui déclenche le contrôle 3b.
+    if (typeof payload.exposition === 'string') emission.exposition = payload.exposition;
+    return emission;
   } catch (error) {
     return { spans: 0, serialised: '', error: `probe result unparseable: ${String(error)}` };
   }
+}
+
+/**
+ * Le fichier émis qui porte la preuve, pour un artefact donné.
+ *
+ * Pour api/worker c'est `dist/main.js`. Pour web, le hook `register()` est émis
+ * sous `.next/server/instrumentation.js` **ou** `.next/server/src/instrumentation.js`
+ * selon que l'application a un répertoire `src/` — celle-ci en a un, ce qui est
+ * la raison pour laquelle son middleware atterrit sous `src/`. Les deux sont
+ * cherchés ; aucun n'est codé en dur seul, parce que le jour où Next change
+ * d'avis, une gate qui n'en connaît qu'un devient une gate qui échoue pour la
+ * mauvaise raison.
+ */
+function readArtefactProof(artefact) {
+  if (artefact.proof === 'bundleContains') {
+    for (const candidate of artefact.bundleCandidates) {
+      const path = join(REPO_ROOT, candidate);
+      if (existsSync(path)) {
+        return {
+          file: candidate,
+          source: readFileSync(path, 'utf8'),
+          related: readEmittedChunks(candidate),
+        };
+      }
+    }
+    return { file: artefact.bundleCandidates.join(' or '), source: null, related: [] };
+  }
+
+  const path = join(REPO_ROOT, artefact.main);
+  return {
+    file: artefact.main,
+    source: existsSync(path) ? readFileSync(path, 'utf8') : null,
+  };
+}
+
+/**
+ * Les fragments asynchrones émis à côté d'une entrée `bundleContains`.
+ *
+ * POURQUOI CE N'EST PAS DE LA COMPLAISANCE. Le hook `register()` charge son
+ * implémentation par `await import()`, et cet import est OBLIGATOIRE sous cette
+ * forme : un import statique serait résolu pour le runtime edge, où `node:http`
+ * et `prom-client` n'existent pas. Webpack, lui, sort tout import dynamique
+ * dans un chunk séparé — le compilateur serveur de Next écrit l'entrée à la
+ * racine de `.next/server` et les fragments sous `.next/server/chunks/`. Les
+ * marqueurs vivent donc, par construction, dans un fragment. Ne lire que
+ * l'entrée ferait échouer la gate sur un artefact parfaitement correct, ce qui
+ * est le pire des deux sens : une gate qui crie faux finit désactivée.
+ *
+ * Ce qui reste porté par l'entrée seule — et n'est PAS élargi ici — c'est
+ * qu'elle ait été émise et qu'elle ne soit pas vide. Un `register()` absent ou
+ * creux reste une panne, quels que soient les fragments à côté.
+ */
+function readEmittedChunks(entryCandidate) {
+  const marker = '.next/server';
+  const cut = entryCandidate.indexOf(marker);
+  if (cut === -1) return [];
+
+  const serverRoot = entryCandidate.slice(0, cut + marker.length);
+  const chunksRelative = `${serverRoot}/chunks`;
+  const chunksRoot = join(REPO_ROOT, chunksRelative);
+  if (!existsSync(chunksRoot)) return [];
+
+  const chunks = [];
+  const walk = (absolute, relative) => {
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      const nextAbsolute = join(absolute, entry.name);
+      const nextRelative = `${relative}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(nextAbsolute, nextRelative);
+      } else if (entry.name.endsWith('.js')) {
+        chunks.push({ file: nextRelative, source: readFileSync(nextAbsolute, 'utf8') });
+      }
+    }
+  };
+  walk(chunksRoot, chunksRelative);
+
+  return chunks;
 }
 
 async function collect() {
@@ -414,11 +713,7 @@ async function collect() {
           'APP_ARTEFACTS rather than letting it go unchecked.',
       );
     }
-    const mainPath = join(REPO_ROOT, artefact.main);
-    mains[app] = {
-      file: artefact.main,
-      source: existsSync(mainPath) ? readFileSync(mainPath, 'utf8') : null,
-    };
+    mains[app] = readArtefactProof(artefact);
     emission[app] = runEmissionProbe(app);
   }
 
@@ -452,7 +747,17 @@ async function main() {
   console.log('TRACING CHECK: PASS');
 }
 
-module.exports = { evaluateTracing, collectComposeServices, normaliseEnv, OTLP_ENV };
+module.exports = {
+  evaluateTracing,
+  collectComposeServices,
+  normaliseEnv,
+  escapeForRegExp,
+  readEmittedChunks,
+  APP_ARTEFACTS,
+  OTLP_ENV,
+  WEB_PROBE_ROUTE_TEMPLATE,
+  WEB_DURATION_METRIC,
+};
 
 if (require.main === module) {
   main().catch((error) => {

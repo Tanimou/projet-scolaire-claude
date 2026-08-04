@@ -36,11 +36,17 @@ x-app-env: &app-env
   WEB_PUBLIC_URL: http://localhost:3000
   # OTEL_EXPORTER_OTLP_ENDPOINT n'est DÉLIBÉRÉMENT plus ici (S-E02-14 / PF-78).
   # Posé sur cette ancre partagée, il était distribué à cinq services —
-  # migrator, api, worker, web et seed — dont trois ne peuvent rien émettre :
-  # deux sont des jobs one-shot, le troisième est une application Next.js dont
-  # l'instrumentation passe par un tout autre mécanisme. Déclarer un collecteur
-  # à un service qui ne l'utilisera jamais, c'est PF-78 en miniature, répété
-  # trois fois. Il est désormais posé explicitement sur `api` et `worker`, et
+  # migrator, api, worker, web et seed — dont trois ne pouvaient rien émettre :
+  # deux sont des jobs one-shot, le troisième était une application Next.js sans
+  # la moindre instrumentation. Déclarer un collecteur à un service qui ne
+  # l'utilisera jamais, c'est PF-78 en miniature, répété trois fois.
+  #
+  # Il est désormais posé EXPLICITEMENT sur `api`, `worker` et — depuis
+  # S-E02-15 / PF-79 — `web`, qui émet à travers son propre mécanisme
+  # (`apps/web/src/instrumentation.ts`, le hook `register()` de Next 15).
+  # Le remettre ici le redistribuerait à `migrator` et `seed` et recréerait
+  # PF-78 pour les deux jobs one-shot : ne pas le faire.
+  #
   # `scripts/tracing-check.js` échoue si cette liste et `TRACED_SERVICES`
   # divergent — dans les deux sens.
   LOG_LEVEL: debug
@@ -392,6 +398,25 @@ services:
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:-change-me-portal-admin}
       KEYCLOAK_TEACHER_CLIENT_SECRET: ${KEYCLOAK_TEACHER_CLIENT_SECRET:-change-me-portal-teacher}
       KEYCLOAK_PARENT_CLIENT_SECRET: ${KEYCLOAK_PARENT_CLIENT_SECRET:-change-me-portal-parent}
+      # Observabilité web (S-E02-15 / PF-79) — `web` est le TROISIÈME artefact
+      # observé, et le dernier à l'avoir été : une page lente était invisible de
+      # Prometheus comme de Jaeger pendant que api et worker étaient visibles
+      # des deux.
+      #
+      # Socket de métriques DÉDIÉ, volontairement pas une route Next : le
+      # `location /` de infra/nginx/conf.d/pilotage.conf relaie tout ce qui
+      # n'est pas apparié vers cet upstream, donc une route `/metrics` serait
+      # publique le jour de son ajout. Et AUCUN mapping `ports:` ci-dessous pour
+      # lui — contrairement à celui du worker, que la gate de release doit
+      # joindre depuis l'hôte : Prometheus l'atteint par nom de service sur le
+      # réseau `pilotage`, et le 3001 de l'hôte est déjà pris par `grafana`.
+      WEB_METRICS_PORT: "3001"
+      # Posé ici et PAS sur l'ancre `x-app-env` — voir la note en tête de
+      # fichier : sur l'ancre, il retomberait sur `migrator` et `seed`, qui ne
+      # peuvent rien émettre. Vide par défaut ⇒ aucun exportateur n'est ajouté,
+      # mais le fournisseur de traces et la mesure Prometheus démarrent quand
+      # même (le SDK est aussi l'appareil de mesure ici).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:

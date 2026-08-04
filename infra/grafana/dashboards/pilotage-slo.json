@@ -1,5 +1,5 @@
 {
-  "__comment": "Tableau de bord SLO Pilotage (S-E02-13 / PF-56). Les quatre panneaux sont les quatre signaux dont un SLO a besoin — taux de requêtes, taux d'erreur, latence p95, et vivacité des trois artefacts. Les requêtes n'utilisent que des métriques que l'API et le worker exposent réellement (voir apps/api/src/modules/metrics/metrics.registry.ts) ; un panneau sur une métrique inexistante afficherait 'No data' et se lirait comme un système au repos.",
+  "__comment": "Tableau de bord SLO Pilotage (S-E02-13 / PF-56, étendu au troisième artefact par S-E02-15 / PF-79). Les quatre panneaux sont les quatre signaux dont un SLO a besoin — débit, taux d'erreur, latence p95, vivacité. TOUT regroupement HTTP porte désormais la dimension `app`, et ce n'est pas cosmétique : les trois registres (api, worker, web) publient DÉLIBÉRÉMENT les mêmes noms de métriques — une seule famille de noms, une étiquette qui distingue, sinon chaque panneau devrait être forké — mais sans `by (app, …)` les séries de l'API et celles du rendu SSR de Next se seraient confondues en une seule ligne et le taux de 5xx aurait moyenné deux artefacts. Vert, silencieux, faux : exactement la panne que cette épique passe son temps à trouver, à une adresse de plus. Les expressions ne citent que des métriques réellement enregistrées (apps/api/src/modules/metrics/metrics.registry.ts, apps/worker/src/shared/observability/metrics.registry.ts, apps/web/src/observability/web-observability.js) ; scripts/observability-check.js échoue sur toute métrique qu'aucun des trois registres ne déclare.",
   "uid": "pilotage-slo",
   "title": "Pilotage — SLO",
   "tags": ["pilotage", "slo"],
@@ -12,14 +12,14 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "Débit — requêtes/s par gabarit de route",
+      "title": "Débit — requêtes/s par artefact et gabarit de route",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (route) (rate(pilotage_http_requests_total[5m]))",
-          "legendFormat": "{{route}}"
+          "expr": "sum by (app, route) (rate(pilotage_http_requests_total[5m]))",
+          "legendFormat": "{{app}} · {{route}}"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
@@ -27,15 +27,15 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Taux d'erreur — part des réponses 5xx",
-      "description": "Le dénominateur est le total des requêtes, pas les seules erreurs : un taux calculé sur les erreurs seules vaut toujours 1.",
+      "title": "Taux d'erreur — part des réponses 5xx, par artefact",
+      "description": "Le dénominateur est le total des requêtes, pas les seules erreurs : un taux calculé sur les erreurs seules vaut toujours 1. Le ratio est calculé PAR artefact : un taux global mélangerait les 5xx de l'API et ceux du rendu SSR de Next, qui n'ont ni la même cause ni le même remède.",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(pilotage_http_requests_total{status_code=~\"5..\"}[5m])) / clamp_min(sum(rate(pilotage_http_requests_total[5m])), 0.001)",
-          "legendFormat": "5xx"
+          "expr": "sum by (app) (rate(pilotage_http_requests_total{status_code=~\"5..\"}[5m])) / clamp_min(sum by (app) (rate(pilotage_http_requests_total[5m])), 0.001)",
+          "legendFormat": "{{app}} · 5xx"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] }
@@ -43,14 +43,15 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Latence p95 par gabarit de route",
+      "title": "Latence p95 par artefact et gabarit de route",
+      "description": "Pour `app=\"web\"` la mesure est la durée du span serveur de Next — donc le rendu SSR, pas seulement le temps réseau. C'est ce qui permet de répondre en incident à la seule question utile : est-ce la page ou l'API qui est lente ?",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(pilotage_http_request_duration_seconds_bucket[5m])))",
-          "legendFormat": "{{route}}"
+          "expr": "histogram_quantile(0.95, sum by (le, app, route) (rate(pilotage_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{app}} · {{route}}"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
@@ -58,8 +59,8 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Retard de boucle d'événements p99 — api et worker",
-      "description": "Pour le worker c'est le signal principal : il monte quand un job synchrone bloque la boucle et fait prendre du retard à toutes les files, bien avant que quoi que ce soit échoue.",
+      "title": "Retard de boucle d'événements p99 — api, worker et web",
+      "description": "Pour le worker c'est le signal principal : il monte quand un job synchrone bloque la boucle et fait prendre du retard à toutes les files, bien avant que quoi que ce soit échoue. Pour web, c'est le signal d'un rendu serveur qui bloque — la latence perçue par un parent sur son tableau de bord (NFR <2 s) avant qu'aucune requête n'échoue.",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
       "targets": [

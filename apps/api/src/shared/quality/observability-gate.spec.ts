@@ -54,12 +54,17 @@ interface Evaluation {
 }
 
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { evaluateObservability, metricNamesInExpr, serviceListenPort, splitTarget } = require(
-  SCRIPT_PATH,
-) as {
+const {
+  evaluateObservability,
+  metricNamesInExpr,
+  serviceListenPort,
+  serviceListenPorts,
+  splitTarget,
+} = require(SCRIPT_PATH) as {
   evaluateObservability: (input: unknown) => Evaluation;
   metricNamesInExpr: (expr: string) => string[];
   serviceListenPort: (service: unknown) => number | null;
+  serviceListenPorts: (service: unknown) => number[];
   splitTarget: (target: string) => { host: string; port: number } | null;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
@@ -78,6 +83,13 @@ function healthyInput(): Record<string, unknown> {
           services: {
             api: { environment: { PORT: '4000' }, volumes: [] },
             worker: { environment: { WORKER_HTTP_PORT: '4001' }, volumes: [] },
+            // `web` listens on TWO ports: Next on PORT, and a dedicated,
+            // never-published socket for the Prometheus exposition.
+            web: {
+              environment: { PORT: '3000', WEB_METRICS_PORT: '3001' },
+              ports: ['3000:3000'],
+              volumes: [],
+            },
             prometheus: {
               ports: ['9090:9090'],
               volumes: ['./grafana/prometheus.yml:/etc/prometheus/prometheus.yml:ro'],
@@ -108,6 +120,11 @@ function healthyInput(): Record<string, unknown> {
             job_name: 'pilotage-worker',
             metrics_path: '/metrics',
             static_configs: [{ targets: ['worker:4001'] }],
+          },
+          {
+            job_name: 'pilotage-web',
+            metrics_path: '/metrics',
+            static_configs: [{ targets: ['web:3001'] }],
           },
         ],
       },
@@ -143,6 +160,8 @@ function healthyInput(): Record<string, unknown> {
     ],
     bootRoutes: { 'apps/api': ['GET /metrics', 'GET /healthz'] },
     workerMetricsPath: '/metrics',
+    webMetricsPath: '/metrics',
+    webRoutes: ['/', '/parent/dashboard', '/admin/dashboard'],
     exposedMetrics: ['pilotage_http_requests_total', 'pilotage_http_request_duration_seconds'],
     nginxConfs: [{ file: 'infra/nginx/conf.d/pilotage.conf', text: '  location /api/ {\n' }],
   };
@@ -459,12 +478,140 @@ describe('observability gate — /metrics must not be published', () => {
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * S-E02-15 / PF-79 — the third artefact
+ * ------------------------------------------------------------------ */
+
+describe('observability gate — apps/web is scraped, and on the right socket', () => {
+  /**
+   * The trap this rule exists for. `web` sets `PORT: "3000"` for Next itself,
+   * so the singular port resolver rejected a correct `web:3001` target with
+   * "service web listens on 3000" — and the path of least resistance from there
+   * is to retarget `web:3000/metrics`, i.e. to turn the metrics socket into a
+   * published Next route behind nginx `location /`. A gate must not push anyone
+   * towards the leak it exists to prevent.
+   */
+  it('accepts a target on the second port the service declares', () => {
+    const { problems } = evaluateObservability(healthyInput());
+    expect(problems).toEqual([]);
+  });
+
+  it('fails on a port the web service declares nowhere, naming the ones it does', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        const prometheus = input.prometheus as { doc: { scrape_configs: Record<string, unknown>[] } };
+        at(prometheus.doc.scrape_configs, 2, 'scrape_configs').static_configs = [
+          { targets: ['web:9464'] },
+        ];
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('listens on 3000, 3001');
+  });
+
+  it('fails when the scraped path is not the path apps/web really serves', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.webMetricsPath = '/internal/metrics';
+      }),
+    );
+    expect(problems.join('\n')).toContain('apps/web serves metrics on "/internal/metrics"');
+  });
+
+  it('fails — never skips — when the web metrics path cannot be read', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.webMetricsPath = null;
+      }),
+    );
+    expect(problems.join('\n')).toContain('That is a failure, not a skip');
+  });
+
+  /**
+   * The leak check 7 is blind to. nginx `location /` proxies EVERYTHING
+   * unmatched to the web upstream, so an `app/metrics/route.ts` becomes public
+   * the day it is added — without one line of nginx changing, and therefore
+   * without check 7 noticing. This is the only assertion that would.
+   */
+  it('fails when the metrics path appears in the Next route inventory', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.webRoutes = ['/', '/parent/dashboard', '/metrics'];
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('infra/nginx/conf.d/pilotage.conf');
+    expect(joined).toContain('location /');
+    expect(joined).toContain('public internet');
+  });
+
+  it('fails — never skips — when the route inventory cannot be read', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.webRoutes = null;
+      }),
+    );
+    expect(problems.join('\n')).toContain('That is a failure, not a skip');
+  });
+
+  /**
+   * Escape by omission, the rule S-E02-9/-11/-12 each had to add at their own
+   * address. Before this slice, `scrapePathProblem` returned `null` — i.e.
+   * PASS — for every host that was not api or worker, so a `pilotage-web` job
+   * satisfied the check vacuously.
+   */
+  it('fails on a scrape job for a host it knows no artefact for', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        const compose = at(input.composeFiles as Record<string, unknown>[], 0, 'composeFiles');
+        const doc = compose.doc as { services: Record<string, unknown> };
+        doc.services.grafana = { environment: { PORT: '3000' }, volumes: [] };
+        const prometheus = input.prometheus as { doc: { scrape_configs: Record<string, unknown>[] } };
+        prometheus.doc.scrape_configs.push({
+          job_name: 'pilotage-grafana',
+          metrics_path: '/metrics',
+          static_configs: [{ targets: ['grafana:3000'] }],
+        });
+      }),
+    );
+    expect(problems.join('\n')).toContain('knows no artefact for host "grafana"');
+  });
+
+  it('still fails on a dashboard metric NO registry publishes, now that three do', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        const dashboards = input.dashboards as { doc: { panels: Record<string, unknown>[] } }[];
+        at(at(dashboards, 0, 'dashboards').doc.panels, 0, 'panels').targets = [
+          { expr: 'sum by (app) (rate(pilotage_web_render_seconds_count[5m]))' },
+        ];
+      }),
+    );
+    expect(problems.join('\n')).toContain('pilotage_web_render_seconds_count');
+  });
+});
+
 describe('observability gate — helpers behave as the rules assume', () => {
   it('reads the listening port from the environment, not from the host-side mapping', () => {
     // The two differ routinely: the worker publishes 4001 on loopback only.
     expect(serviceListenPort({ environment: { PORT: '4000' }, ports: ['8080:4000'] })).toBe(4000);
     expect(serviceListenPort({ ports: ['9090:9090'] })).toBe(9090);
     expect(serviceListenPort({})).toBeNull();
+  });
+
+  it('collects EVERY declared port, because a service may listen on more than one', () => {
+    expect(serviceListenPorts({ environment: { PORT: '3000', WEB_METRICS_PORT: '3001' } })).toEqual([
+      3000, 3001,
+    ]);
+    // The api and worker resolutions must be unchanged by that edit — a widened
+    // helper that quietly alters the two artefacts it already covered would be
+    // a regression bought with a feature.
+    expect(serviceListenPorts({ environment: { PORT: '4000' } })).toEqual([4000]);
+    expect(serviceListenPorts({ environment: { WORKER_HTTP_PORT: '4001' } })).toEqual([4001]);
+    expect(serviceListenPorts({})).toEqual([]);
+    // De-duplicated: a published mapping repeating the env port is one port.
+    expect(serviceListenPorts({ environment: { PORT: '3000' }, ports: ['3000:3000'] })).toEqual([
+      3000,
+    ]);
   });
 
   it('never mistakes a PromQL function for a metric name', () => {
@@ -512,12 +659,19 @@ describe('observability gate — the gate stays connected', () => {
     expect(source).toContain('# TYPE');
     expect(source).toContain('dist/modules/metrics/metrics.registry.js');
     expect(source).toContain('dist/shared/observability/metrics.registry.js');
+    // apps/web is read from SOURCE, and deliberately so: it has no `dist/`, its
+    // only compiler is a nine-minute `next build`, and the plain CommonJS module
+    // it ships verbatim IS the most resolved artefact that exists. The emitted
+    // half is covered by tracing-check.js reading `.next/server/instrumentation.js`.
+    expect(source).toContain('apps/web/src/observability/web-observability.js');
   });
 
-  it('the real prometheus.yml scrapes both applications', () => {
+  it('the real prometheus.yml scrapes all THREE applications', () => {
     expect(existsSync(PROMETHEUS_PATH)).toBe(true);
     const text = readFileSync(PROMETHEUS_PATH, 'utf8');
     expect(text).toContain('api:4000');
     expect(text).toContain('worker:4001');
+    // Not `web:3000` — that is Next's own port, published through nginx.
+    expect(text).toContain('web:3001');
   });
 });
