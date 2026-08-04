@@ -20,11 +20,20 @@ interface ComposeService {
 interface MainFile {
   file: string;
   source: string | null;
+  /**
+   * Les fragments asynchrones émis À CÔTÉ de l'entrée (`bundleContains`).
+   *
+   * Optionnel parce que les deux artefacts Nest n'en ont pas : leur preuve est
+   * l'ordre des `require` dans un `main.js` unique.
+   */
+  related?: Array<{ file: string; source: string }>;
 }
 interface Emission {
   spans: number;
   serialised: string;
   error?: string;
+  /** Renseigné par la seule sonde web : l'exposition Prometheus re-scrapée. */
+  exposition?: string;
 }
 
 interface TracingInput {
@@ -56,15 +65,26 @@ interface HealthyInput extends TracingInput {
 }
 
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { evaluateTracing, collectComposeServices, normaliseEnv, OTLP_ENV } = require(
-  SCRIPT_PATH,
-) as {
+const {
+  evaluateTracing,
+  collectComposeServices,
+  normaliseEnv,
+  escapeForRegExp,
+  APP_ARTEFACTS,
+  OTLP_ENV,
+  WEB_PROBE_ROUTE_TEMPLATE,
+  WEB_DURATION_METRIC,
+} = require(SCRIPT_PATH) as {
   evaluateTracing: (input: TracingInput) => Evaluation;
   collectComposeServices: (
     files: Array<{ file: string; doc: unknown }>,
   ) => Record<string, ComposeService>;
   normaliseEnv: (environment: unknown) => Record<string, string>;
+  escapeForRegExp: (raw: string) => string;
+  APP_ARTEFACTS: Record<string, { proof?: string; bundleCandidates?: string[]; probe: string }>;
   OTLP_ENV: string;
+  WEB_PROBE_ROUTE_TEMPLATE: string;
+  WEB_DURATION_METRIC: string;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -312,5 +332,390 @@ describe('S-E02-14 · la gate de traçage', () => {
     expect(existsSync(join(REPO_ROOT, 'packages/contracts/src/observability/tracing-policy.ts'))).toBe(
       true,
     );
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * S-E02-15 / PF-79 — le troisième artefact
+ * ------------------------------------------------------------------ */
+
+interface WebHealthyInput extends TracingInput {
+  composeServices: Named<'api' | 'worker' | 'web' | 'jaeger', ComposeService>;
+  mains: Named<'api' | 'worker' | 'web', MainFile>;
+  emission: Named<'api' | 'worker' | 'web', Emission | null>;
+}
+
+/**
+ * Une exposition Prometheus minimale, telle que la sonde web la rapporte.
+ *
+ * Écrite à la main plutôt que capturée : chaque cas ci-dessous en casse
+ * exactement un aspect, ce qui est impossible avec un échantillon figé dont on
+ * ne sait plus quelle partie porte quelle règle.
+ */
+function webExposition(
+  options: { route?: string; sampled?: boolean; leak?: string } = {},
+): string {
+  const route = options.route ?? WEB_PROBE_ROUTE_TEMPLATE;
+  const sampled = options.sampled ?? true;
+  const lines = [
+    `# HELP ${WEB_DURATION_METRIC} duree`,
+    `# TYPE ${WEB_DURATION_METRIC} histogram`,
+  ];
+  if (sampled) {
+    lines.push(
+      `${WEB_DURATION_METRIC}_bucket{le="0.25",app="web",method="GET",route="${route}",status_code="200"} 1`,
+      `${WEB_DURATION_METRIC}_count{app="web",method="GET",route="${route}",status_code="200"} 1`,
+    );
+  }
+  if (options.leak !== undefined) {
+    lines.push(`${WEB_DURATION_METRIC}_bucket{le="0.25",app="web",route="${options.leak}"} 1`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+describe('S-E02-15 · la gate de traçage couvre apps/web', () => {
+  /** Entrée saine à trois artefacts. Chaque cas n'en casse qu'un aspect. */
+  const healthyWeb = (): WebHealthyInput => ({
+    tracedServices: ['api', 'worker', 'web'],
+    composeServices: {
+      api: {
+        file: 'infra/docker-compose.yml',
+        environment: { [OTLP_ENV]: '${X:-}' },
+        ports: ['4000:4000'],
+        profiles: ['app'],
+      },
+      worker: {
+        file: 'infra/docker-compose.yml',
+        environment: { [OTLP_ENV]: '${X:-}' },
+        ports: [],
+        profiles: ['app'],
+      },
+      web: {
+        file: 'infra/docker-compose.yml',
+        environment: { [OTLP_ENV]: '${X:-}', WEB_METRICS_PORT: '3001' },
+        ports: ['3000:3000'],
+        profiles: ['app'],
+      },
+      jaeger: {
+        file: 'infra/docker-compose.yml',
+        environment: { COLLECTOR_OTLP_ENABLED: 'true' },
+        ports: ['16686:16686', '4317:4317', '4318:4318'],
+        profiles: ['obs'],
+      },
+    },
+    mains: {
+      api: {
+        file: 'apps/api/dist/main.js',
+        source:
+          'require("reflect-metadata");require("./shared/tracing/tracing.bootstrap");require("./app.module");',
+      },
+      worker: {
+        file: 'apps/worker/dist/main.js',
+        source:
+          'require("reflect-metadata");require("./shared/tracing/tracing.bootstrap");require("./app.module");',
+      },
+      web: {
+        file: 'apps/web/.next/server/instrumentation.js',
+        source:
+          '(()=>{const a="pilotage_http_request_duration_seconds";const b="pilotage_http_requests_total";})();',
+      },
+    },
+    emission: {
+      api: {
+        spans: 2,
+        serialised: '[{"name":"GET","attributes":{"url.path":"/api/v1/students/:id"}}]',
+      },
+      worker: { spans: 1, serialised: '[{"name":"GET"}]' },
+      web: {
+        spans: 1,
+        serialised:
+          '[{"name":"GET /parent/students/:id/grades","attributes":{"url.path":"/parent/students/:id/grades"}}]',
+        exposition: webExposition(),
+      },
+    },
+  });
+
+  it('passes on a coherent three-artefact pipeline', () => {
+    const { problems } = evaluateTracing(healthyWeb());
+    expect(problems).toEqual([]);
+  });
+
+  /* ---------------------------------------------------------------- *
+   * (i) le collecteur doit être remis à web — et à web SEUL
+   * ---------------------------------------------------------------- */
+  it('fails when web is traced but handed no endpoint — the pre-slice state', () => {
+    // C'est littéralement l'état d'avant : S-E02-14 avait RETIRÉ la variable du
+    // service web plutôt que de laisser une fausse déclaration. La remettre
+    // n'est légitime que parce que le mécanisme existe désormais.
+    const input = healthyWeb();
+    delete input.composeServices.web.environment[OTLP_ENV];
+    const { problems } = evaluateTracing(input);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('"web"');
+    expect(problems[0]).toContain('is in TRACED_SERVICES but is handed no');
+  });
+
+  it('fails naming migrator and seed when the endpoint returns to the shared anchor', () => {
+    // La re-largeur interdite : l'ancre `x-app-env` est consommée par migrator,
+    // api, worker, web ET seed. L'y remettre recrée PF-78 pour les deux jobs
+    // one-shot, qui ne peuvent rien émettre.
+    const input = healthyWeb();
+    for (const name of ['migrator', 'seed']) {
+      input.composeServices[name] = {
+        file: 'infra/docker-compose.yml',
+        environment: { [OTLP_ENV]: '${X:-}' },
+        ports: [],
+        profiles: ['app'],
+      };
+    }
+    const { problems } = evaluateTracing(input);
+    const joined = problems.join('\n');
+    expect(problems).toHaveLength(2);
+    expect(joined).toContain('"migrator"');
+    expect(joined).toContain('"seed"');
+    expect(joined).toContain('not in TRACED_SERVICES');
+  });
+
+  it('points at a stale contracts build as the other cause, not only at compose', () => {
+    // PM-18 : `TRACED_SERVICES` est lu depuis packages/contracts/**dist**. Une
+    // source à jour et un dist qui la précède produisent EXACTEMENT ce message,
+    // et le remède est alors opposé — reconstruire, pas dé-déclarer.
+    const input = healthyWeb();
+    input.tracedServices = ['api', 'worker'];
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('rebuild the contracts package');
+  });
+
+  /* ---------------------------------------------------------------- *
+   * (iii)/(iv) la preuve d'artefact pour web est le bundle ÉMIS
+   * ---------------------------------------------------------------- */
+  it('fails when the emitted instrumentation bundle is absent from BOTH candidate paths', () => {
+    const input = healthyWeb();
+    input.mains.web = {
+      file: 'apps/web/.next/server/instrumentation.js or apps/web/.next/server/src/instrumentation.js',
+      source: null,
+    };
+    const { problems } = evaluateTracing(input);
+    const joined = problems.join('\n');
+    expect(joined).toContain('is absent');
+    expect(joined).toContain('That is a failure, not a skip');
+  });
+
+  it('fails when the bundle was emitted but is empty', () => {
+    const input = healthyWeb();
+    input.mains.web.source = '   \n  ';
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('is empty');
+  });
+
+  it('fails when the bundle does not carry the registered metric names', () => {
+    // Le hook a compilé sans le registre qu'il est censé embarquer : l'artefact
+    // qui ship n'est alors pas le module que la gate a lu — ce qui est tout
+    // l'intérêt de lire la sortie émise plutôt que le source (R-26 règle (a)).
+    const input = healthyWeb();
+    input.mains.web.source = '(()=>{console.log("register");})();';
+    const { problems } = evaluateTracing(input);
+    const joined = problems.join('\n');
+    expect(joined).toContain('pilotage_http_request_duration_seconds');
+    expect(joined).toContain('pilotage_http_requests_total');
+  });
+
+  /* ---------------------------------------------------------------- *
+   * La forme que webpack émet RÉELLEMENT — le défaut qui aurait rendu
+   * cette gate rouge sur un artefact correct.
+   * ---------------------------------------------------------------- */
+
+  /**
+   * L'entrée serveur telle que Next l'émet quand le module est atteint par
+   * `await import()` : du runtime webpack, un `__webpack_require__.e(<id>)`, et
+   * un `require("./chunks/<id>.js")` — et AUCUN des marqueurs, qui sont partis
+   * dans le fragment. Écrite à la main, mais d'après la sortie mesurée du même
+   * webpack : le pire piège serait un fixture qui inline le module et jugerait
+   * donc une forme que le build ne produit jamais.
+   */
+  const SPLIT_ENTRY =
+    '(()=>{var e={},r={};function t(n){...}' +
+    't.e=n=>Promise.all([]).then(()=>require("./chunks/"+n+".js"));' +
+    'Promise.resolve().then(()=>t.e(672)).then(()=>t(672));})();';
+
+  it('passes when the markers live in the async chunk the entry loads, not in the entry', () => {
+    // `instrumentation.ts` DOIT charger son implémentation par `await import()`
+    // — un import statique serait résolu pour le runtime edge, où `node:http`
+    // et `prom-client` n'existent pas. Webpack sort donc l'implémentation dans
+    // un chunk séparé. Exiger les marqueurs dans la seule entrée mettrait cette
+    // règle-là et celle-ci en contradiction, et la gate crierait faux sur un
+    // build parfaitement correct.
+    const input = healthyWeb();
+    input.mains.web = {
+      file: 'apps/web/.next/server/instrumentation.js',
+      source: SPLIT_ENTRY,
+      related: [
+        {
+          file: 'apps/web/.next/server/chunks/672.js',
+          source:
+            'exports.id=672;const a="pilotage_http_request_duration_seconds";const b="pilotage_http_requests_total";',
+        },
+        { file: 'apps/web/.next/server/chunks/48.js', source: 'exports.id=48;' },
+      ],
+    };
+    const { problems, notes } = evaluateTracing(input);
+    expect(problems).toEqual([]);
+    expect(notes.join('\n')).toContain('+ 2 emitted chunk(s)');
+  });
+
+  it('still fails when NO emitted chunk carries the markers either', () => {
+    // L'élargissement ne doit pas devenir une amnistie : si le registre n'est
+    // nulle part dans la sortie serveur, l'artefact qui ship n'est pas le
+    // module que la gate a lu, et c'est toujours une panne.
+    const input = healthyWeb();
+    input.mains.web = {
+      file: 'apps/web/.next/server/instrumentation.js',
+      source: SPLIT_ENTRY,
+      related: [{ file: 'apps/web/.next/server/chunks/672.js', source: 'exports.id=672;' }],
+    };
+    const { problems } = evaluateTracing(input);
+    const joined = problems.join('\n');
+    expect(joined).toContain('chunk(s) emitted beside it');
+    expect(joined).toContain('pilotage_http_request_duration_seconds');
+  });
+
+  it('never lets a chunk excuse an empty entry — register() would do nothing', () => {
+    // Les fragments élargissent la recherche des MARQUEURS, jamais les deux
+    // contrôles portés par l'entrée seule (émise, non vide) : un `register()`
+    // creux reste une panne, quels que soient les fragments à côté.
+    const input = healthyWeb();
+    input.mains.web = {
+      file: 'apps/web/.next/server/instrumentation.js',
+      source: '   \n  ',
+      related: [
+        {
+          file: 'apps/web/.next/server/chunks/672.js',
+          source: 'const a="pilotage_http_request_duration_seconds";const b="pilotage_http_requests_total";',
+        },
+      ],
+    };
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('is empty');
+  });
+
+  it('never applies the require-order rule to web — Next has no main.js', () => {
+    // Recopier l'assertion d'ordre d'octets ici serait affirmer au lieu
+    // d'exécuter : Next GARANTIT que register() tourne avant de servir.
+    const { problems, notes } = evaluateTracing(healthyWeb());
+    expect(problems).toEqual([]);
+    expect(notes.join('\n')).toContain('the emitted instrumentation bundle');
+    expect(notes.join('\n')).not.toContain('web: tracing bootstrap is required');
+  });
+
+  /* ---------------------------------------------------------------- *
+   * La mesure Prometheus doit être ALIMENTÉE, pas seulement déclarée
+   * ---------------------------------------------------------------- */
+  it('fails when the histogram is registered but never observed', () => {
+    // prom-client émet `# HELP`/`# TYPE` pour un histogramme JAMAIS observé.
+    // `observability-check.js`, qui lit les lignes `# TYPE`, accepterait donc un
+    // panneau affichant "No data" pour toujours — indiscernable d'un système au
+    // repos. Seule une sonde qui pousse un span puis re-scrape fait la différence.
+    const input = healthyWeb();
+    (input.emission.web as Emission).exposition = webExposition({ sampled: false });
+    const { problems } = evaluateTracing(input);
+    const joined = problems.join('\n');
+    expect(joined).toContain('web:');
+    expect(joined).toContain('_bucket sample');
+  });
+
+  it('fails when the sample is labelled with a resolved URL instead of the template', () => {
+    const input = healthyWeb();
+    (input.emission.web as Emission).exposition = webExposition({
+      route: '/parent/students/clx1234567890abcdefghij/grades',
+    });
+    const { problems } = evaluateTracing(input);
+    const joined = problems.join('\n');
+    // Deux règles se déclenchent, et c'est voulu : le gabarit manque ET un
+    // identifiant est présent sur une surface non authentifiée.
+    expect(joined).toContain('_bucket sample');
+    expect(joined).toContain('clx1234567890abcdefghij');
+  });
+
+  it('fails when a tenant identifier reaches the Prometheus exposition', () => {
+    const input = healthyWeb();
+    (input.emission.web as Emission).exposition = webExposition({ leak: '/x?tenantId=demo' });
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('the Prometheus exposition contains "tenantId"');
+  });
+
+  it('fails when the web probe did not run at all', () => {
+    const input = healthyWeb();
+    input.emission.web = null;
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('the emission probe did not run');
+  });
+
+  it('fails when the web probe produced zero spans', () => {
+    const input = healthyWeb();
+    input.emission.web = { spans: 0, serialised: '[]', exposition: webExposition() };
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('produced 0 spans');
+  });
+
+  it('fails — and says so distinctly — when the probe hangs rather than answering', () => {
+    const input = healthyWeb();
+    input.emission.web = {
+      spans: 0,
+      serialised: '',
+      error: 'probe did not complete (ETIMEDOUT) — a hung probe is a failure, not a skip',
+    };
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('a hung probe is a failure, not a skip');
+  });
+
+  it('fails loudly when TRACED_SERVICES names an artefact the gate does not know', () => {
+    const input = healthyWeb();
+    input.tracedServices = ['api', 'worker', 'web', 'mobile'];
+    input.composeServices.mobile = {
+      file: 'infra/docker-compose.yml',
+      environment: { [OTLP_ENV]: '${X:-}' },
+      ports: [],
+      profiles: ['app'],
+    };
+    const { problems } = evaluateTracing(input);
+    expect(problems.join('\n')).toContain('knows no artefact');
+  });
+
+  /* ---------------------------------------------------------------- *
+   * Câblage — une sonde que rien ne lance ne garde rien
+   * ---------------------------------------------------------------- */
+  it('declares a web artefact with both emitted-bundle candidates', () => {
+    // Cette application a un répertoire `src/`, ce qui est la raison pour
+    // laquelle son middleware émis atterrit sous `.next/server/src/`. Les deux
+    // chemins sont cherchés ; aucun n'est codé en dur seul.
+    expect(APP_ARTEFACTS.web?.proof).toBe('bundleContains');
+    expect(APP_ARTEFACTS.web?.bundleCandidates).toEqual([
+      'apps/web/.next/server/instrumentation.js',
+      'apps/web/.next/server/src/instrumentation.js',
+    ]);
+  });
+
+  it('ships and spawns the web probe', () => {
+    expect(existsSync(join(REPO_ROOT, 'scripts/web-observability-probe.js'))).toBe(true);
+    // Une sonde que rien ne lance est le même défaut qu'une gate débranchée, un
+    // étage plus bas : elle passerait pour toujours en ne prouvant rien.
+    expect(read('scripts/tracing-check.js')).toContain('web-observability-probe.js');
+  });
+
+  it('reads the emitted chunks beside the entry, not the entry alone', () => {
+    // Une gate qui ne lit que l'entrée redevient rouge au premier build, sur un
+    // artefact correct — et une gate qui crie faux finit désactivée.
+    expect(read('scripts/tracing-check.js')).toContain('readEmittedChunks');
+  });
+
+  it('has no bypass flag for the web half either (DNC-10)', () => {
+    const source = read('scripts/tracing-check.js');
+    for (const flag of ['SKIP_WEB_OBS', 'OBS_SKIP_WEB', '--allow-unobserved-web']) {
+      expect(source).not.toContain(flag);
+    }
+  });
+
+  it('escapes the Next route template, whose brackets are regexp metacharacters', () => {
+    expect(escapeForRegExp('/parent/students/[id]/grades')).toBe('/parent/students/\\[id\\]/grades');
   });
 });

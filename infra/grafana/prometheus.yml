@@ -44,6 +44,28 @@ scrape_configs:
         labels:
           app: worker
 
+  - job_name: pilotage-web
+    metrics_path: /metrics
+    static_configs:
+      # `web` est un **nom de service compose**, résoluble uniquement depuis le
+      # réseau `pilotage` — et `3001` est le socket de métriques DÉDIÉ, pas le
+      # `PORT` de Next (3000). Les deux distinction comptent :
+      #
+      #  • le socket est séparé parce que `location /` de
+      #    infra/nginx/conf.d/pilotage.conf relaie tout ce qui n'est pas apparié
+      #    vers l'upstream web : une route Next `/metrics` serait publiée sur
+      #    l'internet public sans qu'une seule ligne de nginx change ;
+      #  • il n'a **aucun mapping `ports:`** côté hôte, contrairement à celui du
+      #    worker que la gate de release doit joindre depuis l'hôte. Ne rien
+      #    publier est vérifiable ; une convention de binding loopback ne l'est
+      #    pas (S-E02-13 l'avait consignée comme telle). Le port 3001 de l'hôte
+      #    est de toute façon déjà pris par `grafana`, sous ce même profil.
+      #
+      # Voir apps/web/src/observability/web-observability.js.
+      - targets: ['web:3001']
+        labels:
+          app: web
+
   - job_name: prometheus
     # Prometheus se scrape lui-même : sans cela, une panne d'ingestion est
     # indiscernable d'une absence de trafic.

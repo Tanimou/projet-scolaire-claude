@@ -134,8 +134,18 @@ fi
 # against the same booted route table as stage 7), dashboards must query metrics
 # the applications really register (read from the built registries), and nginx
 # must not publish /metrics. Reads dist/, so it runs after the build.
+#
+# S-E02-15 (PF-79) widened this stage from two artefacts to THREE. apps/web —
+# the one users actually touch — was covered by nothing, and this stage exited 0
+# on that exact state. It now also reads apps/web's registry, compares the
+# scraped path against the path its dedicated socket really serves, and asserts
+# that path is NOT in the Next route inventory: nginx `location /` proxies
+# everything unmatched to the web upstream, so an app/metrics/route.ts would be
+# public without one line of nginx changing — and the nginx rule above would not
+# see it. No stage 11 was added; widening the stage that already exists is what
+# keeps this file and .github/workflows/ci.yml in step (S-E02-2 AC-4).
 if [ "${QUICK}" -eq 0 ]; then
-  run_stage "observability (profile + scrape coherence)" node scripts/observability-check.js
+  run_stage "observability (profile + scrape coherence, 3 artefacts)" node scripts/observability-check.js
 else
   echo ""
   echo "⏭  observability check skipped (--quick — it reads the build's dist/)"
@@ -154,8 +164,19 @@ fi
 # modules as they load, so a SDK started after ./app.module patches nothing,
 # throws nothing, and yields an application that merely looks instrumented.
 # Reads dist/, so it runs after the build.
+#
+# S-E02-15 (PF-79) made this stage cover THREE artefacts too. `TRACED_SERVICES`
+# now names web, so a second probe — scripts/web-observability-probe.js — is
+# spawned for it. Web's proof has a deliberately different shape: Next has no
+# main.js and guarantees register() runs before it serves, so a byte-order
+# assertion would be asserting rather than executing. What is checked instead is
+# that the instrumentation hook was EMITTED (.next/server/instrumentation.js or
+# .next/server/src/instrumentation.js) and carries the registered metric names,
+# and that a real span through the real provider yields a histogram SAMPLE
+# labelled by route template — because prom-client emits `# TYPE` for a
+# histogram that was never observed, so "registered" is not "measured".
 if [ "${QUICK}" -eq 0 ]; then
-  run_stage "tracing (load order + real span emission)" node scripts/tracing-check.js
+  run_stage "tracing (load order + real span emission, 3 artefacts)" node scripts/tracing-check.js
 else
   echo ""
   echo "⏭  tracing check skipped (--quick — it reads the build's dist/)"

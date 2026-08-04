@@ -213,6 +213,21 @@ importers:
 
   apps/web:
     dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
+      '@opentelemetry/exporter-trace-otlp-http':
+        specifier: ^0.221.0
+        version: 0.221.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/resources':
+        specifier: ^2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-node':
+        specifier: ^2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/semantic-conventions':
+        specifier: ^1.43.0
+        version: 1.43.0
       '@pilotage/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -246,6 +261,9 @@ importers:
       next-intl:
         specifier: ^4.9.2
         version: 4.9.2(next@15.5.18(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
       react:
         specifier: ^18.3.1
         version: 18.3.1

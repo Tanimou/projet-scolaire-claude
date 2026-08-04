@@ -51,6 +51,20 @@
  *       → `/metrics` is unauthenticated by design (Prometheus carries no token).
  *         Its access control IS the network. If a `location` ever publishes it,
  *         that control is gone and nothing else would notice
+ *  8. the web metrics path is **not** a Next route (S-E02-15 / PF-79)
+ *       → check 7 is blind to the way this leak would really happen. nginx
+ *         `location /` proxies everything unmatched to the web upstream, so an
+ *         `app/metrics/route.ts` would be public without one line of nginx
+ *         changing. This is the only assertion that would notice
+ *
+ * SINCE S-E02-15 THERE ARE THREE OBSERVED ARTEFACTS, NOT TWO
+ * ----------------------------------------------------------
+ * `apps/web` — the artefact users actually touch — was covered by nothing.
+ * Measured before that slice: `grep -rniE 'prom-client|opentelemetry|/metrics'
+ * apps/web/src` returned zero hits, and this script exited **0** on that exact
+ * state. Checks 3, 4, 6 and 8 now reach it too, and its registry is read from
+ * `apps/web/src/observability/web-observability.js` — from source, because
+ * apps/web has no `dist/`, which is exactly why that module is plain CommonJS.
  *
  * WHY IT RUNS AFTER THE BUILD
  * ---------------------------
@@ -80,6 +94,16 @@ const { join, dirname, resolve, relative } = require('node:path');
 const yaml = require('js-yaml');
 
 const REPO_ROOT = resolve(__dirname, '..');
+
+/**
+ * Le module d'observabilité de `apps/web` (S-E02-15 / PF-79).
+ *
+ * Lu depuis la SOURCE et non depuis un `dist/`, contrairement à l'API et au
+ * worker : `apps/web` n'a pas de `dist/`. C'est précisément pourquoi ce module
+ * est du CommonJS simple — il ship verbatim, donc le lire ici, c'est lire ce
+ * qui tourne. Voir l'en-tête du fichier.
+ */
+const WEB_OBSERVABILITY_MODULE = 'apps/web/src/observability/web-observability.js';
 
 /* ------------------------------------------------------------------ *
  * Pure evaluation
@@ -170,36 +194,72 @@ function splitTarget(target) {
 }
 
 /**
- * The port a compose service listens on *inside* the network.
+ * Environment variables that declare a port a service process binds.
  *
- * Read from the service's own environment first (`PORT`, `WORKER_HTTP_PORT`),
- * because that is what the process binds; the `ports:` mapping is only how the
- * host reaches it, and the two are frequently different. Falls back to the
- * container side of the first published mapping.
+ * `WEB_METRICS_PORT` joined the list in S-E02-15: `apps/web` listens on TWO
+ * ports — `PORT` for Next itself and a separate internal socket for its
+ * Prometheus exposition. That second socket is deliberately not a Next route
+ * (`infra/nginx/conf.d/pilotage.conf` `location /` would publish it), so the
+ * gate has to know the difference between "a port this service never declares"
+ * and "the second port this service declares on purpose".
  */
-function serviceListenPort(service) {
-  if (!service || typeof service !== 'object') return null;
+const LISTEN_PORT_ENV_KEYS = ['PORT', 'WORKER_HTTP_PORT', 'WEB_METRICS_PORT'];
+
+/**
+ * EVERY port a compose service listens on *inside* the network.
+ *
+ * Read from the service's own environment first, because that is what the
+ * process binds; the `ports:` mapping is only how the host reaches it, and the
+ * two are frequently different.
+ *
+ * The plural exists because of the trap S-E02-15 walked into: `web` sets
+ * `PORT: "3000"`, so the singular resolver below rejected a perfectly correct
+ * `web:3001` scrape target with "service web listens on 3000" — and the path of
+ * least resistance from there is to retarget `web:3000/metrics`, i.e. to turn
+ * the metrics socket into a published Next route. The gate must not push anyone
+ * towards the leak it exists to prevent.
+ *
+ * Returns a de-duplicated list, in declaration order. Empty means the compose
+ * file declares nothing — which stays a failure, never a pass.
+ */
+function serviceListenPorts(service) {
+  if (!service || typeof service !== 'object') return [];
+
+  const ports = [];
+  const add = (raw) => {
+    if (raw === undefined || raw === null) return;
+    const parsed = Number.parseInt(String(raw), 10);
+    if (Number.isInteger(parsed) && !ports.includes(parsed)) ports.push(parsed);
+  };
 
   const env = service.environment;
   if (env && typeof env === 'object' && !Array.isArray(env)) {
-    for (const key of ['PORT', 'WORKER_HTTP_PORT']) {
-      const raw = env[key];
-      if (raw !== undefined && raw !== null) {
-        const parsed = Number.parseInt(String(raw), 10);
-        if (Number.isInteger(parsed)) return parsed;
-      }
+    for (const key of LISTEN_PORT_ENV_KEYS) add(env[key]);
+  }
+
+  const published = service.ports;
+  if (Array.isArray(published)) {
+    for (const mapping of published) {
+      if (typeof mapping !== 'string') continue;
+      const segments = mapping.split(':');
+      add(segments[segments.length - 1]);
     }
   }
 
-  const ports = service.ports;
-  if (Array.isArray(ports) && ports.length > 0 && typeof ports[0] === 'string') {
-    const segments = ports[0].split(':');
-    const containerSide = segments[segments.length - 1];
-    const parsed = Number.parseInt(containerSide, 10);
-    if (Number.isInteger(parsed)) return parsed;
-  }
+  return ports;
+}
 
-  return null;
+/**
+ * The *first* port a compose service listens on.
+ *
+ * Kept — and kept exported — because the Grafana datasource check below wants
+ * exactly one answer: a datasource url names one port, and "the service listens
+ * on several" is not a useful thing to say about it. The scrape-target check
+ * uses the plural resolver instead.
+ */
+function serviceListenPort(service) {
+  const ports = serviceListenPorts(service);
+  return ports.length > 0 ? ports[0] : null;
 }
 
 /**
@@ -317,16 +377,17 @@ function evaluateObservability(input) {
             continue;
           }
 
-          const listenPort = serviceListenPort(service);
-          if (listenPort === null) {
+          const listenPorts = serviceListenPorts(service);
+          if (listenPorts.length === 0) {
             problems.push(
               `scrape job "${name}" targets service "${parsed.host}", whose listening port cannot ` +
-                'be determined from the compose file (no PORT/WORKER_HTTP_PORT and no ports mapping).',
+                'be determined from the compose file (no PORT/WORKER_HTTP_PORT/WEB_METRICS_PORT ' +
+                'and no ports mapping).',
             );
-          } else if (listenPort !== parsed.port) {
+          } else if (!listenPorts.includes(parsed.port)) {
             problems.push(
               `scrape job "${name}" targets ${rawTarget}, but service "${parsed.host}" listens on ` +
-                `${listenPort} inside the network.`,
+                `${listenPorts.join(', ')} inside the network.`,
             );
           }
 
@@ -475,6 +536,41 @@ function evaluateObservability(input) {
     notes.push(`${nginxConfs.length} nginx config(s) read; none publishes a metrics path`);
   }
 
+  /* -- 8. the web metrics path must not be a Next route ---------------- */
+
+  // Check 7 above reads nginx `location` blocks. It is blind to the way this
+  // particular leak would actually happen: `infra/nginx/conf.d/pilotage.conf`
+  // `location /` proxies EVERYTHING unmatched to the web upstream, so the day
+  // someone "simplifies" the dedicated node:http socket into an
+  // `app/metrics/route.ts`, the endpoint becomes public without a single line
+  // of nginx changing — and check 7 would keep saying "none publishes a metrics
+  // path". This is the only assertion that would notice.
+  const webMetricsPath = input.webMetricsPath;
+  if (webMetricsPath) {
+    const webRoutes = input.webRoutes;
+    if (!Array.isArray(webRoutes)) {
+      problems.push(
+        'the web route inventory (scripts/web-route-baseline.json) could not be read, so it ' +
+          'cannot be verified that the metrics path is not a Next route. That is a failure, not ' +
+          'a skip: with nothing to compare against, the one check that would notice the leak ' +
+          'would pass vacuously.',
+      );
+    } else if (webRoutes.includes(webMetricsPath)) {
+      problems.push(
+        `the web route inventory lists "${webMetricsPath}" as a Next route. ` +
+          'infra/nginx/conf.d/pilotage.conf `location /` proxies everything unmatched to the web ' +
+          'upstream, so a Next route serving metrics is published on the public internet the day ' +
+          'it is added — and the nginx rule above would NOT see it, because nothing in nginx ' +
+          'changed. The exposition must stay on the separate internal node:http socket ' +
+          '(apps/web/src/observability/web-observability.js).',
+      );
+    } else {
+      notes.push(
+        `apps/web serves metrics on "${webMetricsPath}", which is not in its Next route inventory`,
+      );
+    }
+  }
+
   return { problems, notes };
 }
 
@@ -484,8 +580,14 @@ function evaluateObservability(input) {
  * For the API the comparison is against the booted route table
  * (`scripts/boot-route-baseline.json`) — not controller source — so that a
  * controller silently unmounted (PF-62's exact defect) breaks the scrape config
- * here as well. For the worker the comparison is against the constant its
- * **built** module exports.
+ * here as well. For the worker and for apps/web the comparison is against the
+ * constant each one's module exports.
+ *
+ * **The default is a problem, not `null`.** Until S-E02-15 an unknown host
+ * returned `null` — i.e. *pass* — so adding a `pilotage-web` job would have
+ * satisfied this check vacuously. That is escape-by-omission, the same defect
+ * S-E02-9, -11 and -12 each had to close at their own address. A host this gate
+ * knows no artefact for must fail loudly and be given a branch.
  */
 function scrapePathProblem(host, metricsPath, input) {
   if (host === 'api') {
@@ -520,7 +622,26 @@ function scrapePathProblem(host, metricsPath, input) {
     return null;
   }
 
-  return null;
+  if (host === 'web') {
+    const webPath = input.webMetricsPath;
+    if (!webPath) {
+      return (
+        'the web metrics path could not be read from ' +
+        'apps/web/src/observability/web-observability.js, so the scraped path cannot be verified. ' +
+        'That is a failure, not a skip.'
+      );
+    }
+    if (webPath !== metricsPath) {
+      return `it scrapes "${metricsPath}", but apps/web serves metrics on "${webPath}".`;
+    }
+    return null;
+  }
+
+  return (
+    `this gate knows no artefact for host "${host}", so the path it scrapes cannot be verified. ` +
+    'Add a branch to scrapePathProblem rather than letting an unknown target pass by omission — ' +
+    'a scrape job nothing validates is exactly how a metrics endpoint ends up unchecked.'
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -575,6 +696,14 @@ async function readExposedMetricNames() {
   const registries = [
     join(REPO_ROOT, 'apps/api/dist/modules/metrics/metrics.registry.js'),
     join(REPO_ROOT, 'apps/worker/dist/shared/observability/metrics.registry.js'),
+    // apps/web is read from SOURCE, and that is not an inconsistency to fix
+    // later — it is the whole reason the module is plain CommonJS. apps/web has
+    // no `dist/`: its only compiler is a nine-minute `next build`, so a
+    // TypeScript registry here would be readable by nothing but that build.
+    // The plain module that ships verbatim is the most resolved artefact that
+    // exists. `tracing-check.js` covers the other half by asserting the EMITTED
+    // instrumentation bundle carries these same metric names.
+    join(REPO_ROOT, WEB_OBSERVABILITY_MODULE),
   ];
 
   const names = new Set();
@@ -593,6 +722,31 @@ function readWorkerMetricsPath() {
   if (!existsSync(path)) return null;
   const mod = require(path);
   return typeof mod.METRICS_PATH === 'string' ? mod.METRICS_PATH : null;
+}
+
+/** Le chemin réellement servi par le socket dédié de `apps/web`. */
+function readWebMetricsPath() {
+  const path = join(REPO_ROOT, WEB_OBSERVABILITY_MODULE);
+  if (!existsSync(path)) return null;
+  const mod = require(path);
+  return typeof mod.WEB_METRICS_PATH === 'string' ? mod.WEB_METRICS_PATH : null;
+}
+
+/**
+ * L'inventaire des routes Next, lu du **build émis** par
+ * `scripts/web-artifact-check.js` et figé dans son baseline. Sert à une seule
+ * assertion : le chemin des métriques ne doit pas y figurer (voir le contrôle 8).
+ */
+function readWebRoutes() {
+  const path = join(REPO_ROOT, 'scripts/web-route-baseline.json');
+  if (!existsSync(path)) return null;
+  try {
+    const baseline = JSON.parse(readFileSync(path, 'utf8'));
+    const entry = (baseline.apps || {})['apps/web'];
+    return Array.isArray(entry && entry.routes) ? entry.routes : null;
+  } catch {
+    return null;
+  }
 }
 
 async function collectFromRepo() {
@@ -658,6 +812,8 @@ async function collectFromRepo() {
     dashboards,
     bootRoutes,
     workerMetricsPath: readWorkerMetricsPath(),
+    webMetricsPath: readWebMetricsPath(),
+    webRoutes: readWebRoutes(),
     exposedMetrics: await readExposedMetricNames(),
     nginxConfs,
   };
@@ -695,7 +851,9 @@ module.exports = {
   metricNamesInExpr,
   baseMetricName,
   serviceListenPort,
+  serviceListenPorts,
   splitTarget,
+  WEB_OBSERVABILITY_MODULE,
 };
 
 if (require.main === module) {
