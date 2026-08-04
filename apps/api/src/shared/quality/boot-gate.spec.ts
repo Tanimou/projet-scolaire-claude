@@ -48,6 +48,40 @@ interface Baseline {
   apps: Record<string, { routes: string[] }>;
 }
 
+/**
+ * Blank the `#` comments of a shell or YAML file, preserving byte offsets so an
+ * `indexOf` still points at the same line.
+ *
+ * WHY THIS EXISTS — it is R-26 rule (a), learned the hard way a second time.
+ * The two ordering assertions below compare `indexOf(…)` positions to prove the
+ * boot check runs AFTER the build. They read the file as raw text, so any
+ * *mention* of `scripts/boot-check.js` counts as an occurrence — and `indexOf`
+ * returns the FIRST one. S-E06-1 added a comment to `.github/workflows/ci.yml`
+ * explaining why its new env block is safe for the boot check; that comment sits
+ * above the build step, so the guard read the prose, computed bootAt(4409) <
+ * buildAt(5543), and failed on a workflow whose actual step order was never
+ * touched. A guard that a comment can turn red is a guard that gets deleted.
+ *
+ * The fix is to assert against what the runner EXECUTES, not what the file says
+ * — the same discipline as reading `tsc --showConfig` rather than the tsconfig
+ * source. Offsets are preserved (comments become spaces rather than being
+ * removed) so failure messages still name a position in the real file.
+ *
+ * Quoting is deliberately not modelled: neither file contains a `#` inside a
+ * string on a line that matters here, and a half-correct shell parser would be a
+ * worse guard than an honest textual one. `stripComments.spec` coverage lives in
+ * the two "a comment cannot satisfy the ordering assertion" cases below.
+ */
+function stripComments(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      const at = line.indexOf('#');
+      return at === -1 ? line : line.slice(0, at) + ' '.repeat(line.length - at);
+    })
+    .join('\n');
+}
+
 /** Filesystem discovery, mirroring `discoverNestApps()` in the script. */
 function discoverNestApps(): string[] {
   const appsDir = join(REPO_ROOT, 'apps');
@@ -122,7 +156,7 @@ describe('boot gate (PF-67, R-24)', () => {
   });
 
   it('ci-gate.sh runs the boot check, after the build stage', () => {
-    const gate = readFileSync(GATE_PATH, 'utf8');
+    const gate = stripComments(readFileSync(GATE_PATH, 'utf8'));
     expect(gate).toMatch(/node\s+scripts\/boot-check\.js/);
     // Ordering is a correctness requirement, not style: the check reads
     // `dist/`, so running it before the build would either test a stale
@@ -137,12 +171,49 @@ describe('boot gate (PF-67, R-24)', () => {
     // S-E02-2 AC-4: scripts/ci-gate.sh and .github/workflows/ci.yml must stay
     // the same command list. A stage that exists only locally is a stage that
     // stops existing the moment PF-59 is resolved and CI becomes the gate again.
-    const workflow = readFileSync(WORKFLOW_PATH, 'utf8');
+    const workflow = stripComments(readFileSync(WORKFLOW_PATH, 'utf8'));
     expect(workflow).toMatch(/node\s+scripts\/boot-check\.js/);
     const buildAt = workflow.indexOf('pnpm build');
     const bootAt = workflow.indexOf('scripts/boot-check.js');
     expect(buildAt).toBeGreaterThan(-1);
     expect(bootAt).toBeGreaterThan(buildAt);
+  });
+
+  // The negative direction of the fix above. Both cases reproduce the exact
+  // S-E06-1 defect against the REAL file: a comment naming the script, inserted
+  // before the build step. On the pre-fix guard each of these passes its
+  // ordering check by accident and fails the assertion — which is what made the
+  // gate red on a correct workflow.
+  it('a comment naming the boot check cannot satisfy the ci.yml ordering assertion', () => {
+    const raw = readFileSync(WORKFLOW_PATH, 'utf8');
+    const poisoned = `# see scripts/boot-check.js for why this is safe\n${raw}`;
+
+    // Raw text: the comment is found first, so the ordering "fails" — this is
+    // the false positive, reproduced.
+    expect(poisoned.indexOf('scripts/boot-check.js')).toBeLessThan(poisoned.indexOf('pnpm build'));
+
+    // Executable content: the comment is invisible and the real order stands.
+    const stripped = stripComments(poisoned);
+    expect(stripped.indexOf('scripts/boot-check.js')).toBeGreaterThan(stripped.indexOf('pnpm build'));
+  });
+
+  it('a comment naming the boot check cannot satisfy the ci-gate.sh ordering assertion', () => {
+    const raw = readFileSync(GATE_PATH, 'utf8');
+    const poisoned = `# see scripts/boot-check.js for why this is safe\n${raw}`;
+
+    expect(poisoned.indexOf('scripts/boot-check.js')).toBeLessThan(poisoned.indexOf('run_stage "build"'));
+
+    const stripped = stripComments(poisoned);
+    expect(stripped.indexOf('scripts/boot-check.js')).toBeGreaterThan(stripped.indexOf('run_stage "build"'));
+  });
+
+  it('stripping comments does not blind the guard to a genuinely misordered file', () => {
+    // The complement of the two cases above, and the one that matters: the fix
+    // must not turn the assertion into one that can no longer fail. A REAL
+    // invocation moved before the build is still caught.
+    const misordered = ['- run: node scripts/boot-check.js', '- run: pnpm build'].join('\n');
+    const stripped = stripComments(misordered);
+    expect(stripped.indexOf('scripts/boot-check.js')).toBeLessThan(stripped.indexOf('pnpm build'));
   });
 
   it('has no bypass flag (DNC-10)', () => {

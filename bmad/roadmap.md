@@ -42,11 +42,24 @@ next pick: it is not.
 rows (`S-E02-1` residual, `S-E02-3`, `S-E02-5`) need hosted credentials, an operator, or decision **D-01** — none is
 buildable from this checkout, and calling it `shipped` would claim the operator half was delivered.
 
-**Next V3 slice → `S-E06-1`** in **`V3-E06` — production hygiene** (`PF-17`/`PF-54`: Maildev and seed leakage on the
-hosted deployment, plus hard-coded credentials), the only story unblocked under the layer/dependency rule.
+**V3 slice ledger — `V3-E06` · Production hygiene and navigation completeness · layer L0 · `in-progress` (2026-08-04)**
+
+| Slice | State |
+|---|---|
+| **`S-E06-1`** — purge development artefacts from production-facing code, **and gate the purge**: the four Maildev `http://localhost:1080` instructions removed from the admin/teacher registration + invite surfaces (replaced by a config-driven `ActivationHint`), the `?? 'admin'` / `?? 'http://localhost:8180'` / `?? 'maildev'` fallbacks deleted from `KeycloakAdminService` / `JwtStrategy` / `KeycloakModule`, a fail-fast `assertRequiredConfig` preflight in `main.ts`, and a new one-way `scripts/production-artefact-check.js` ratchet wired into **both** `scripts/ci-gate.sh` and `.github/workflows/ci.yml`. Closes the **code path** of **`PF-54`**; **`PF-17`** partial (hosted DB seed labels stay operator work) | ✅ **2026-08-04 — this run** |
+| `S-E06-2` … `S-E06-6` | ⬜ todo (`S-E06-4` ⛔ blocked on decision **D-08**) |
+
+**`PF-54` is closed in code, not on the deployment.** The guard checks *presence*, not *strength*: the hosted
+Keycloak master account is still `admin`/`admin`, and rotating it (Keycloak master realm **then** `.env.prod`) is
+operator work this routine may not perform. Read the slice as "the silent default is gone", never as "the credential
+is safe".
+
+**Next V3 slice → `S-E06-2`** — enable CSP and sanitise branding injection (`PF-45`), the next unblocked story in
+`V3-E06` under the layer/dependency rule.
 
 This file carries the **pointer only** — it is not the V3 tracker. Per-slice status, evidence and the "not claimed"
-ledger live in **[`docs/spec/features/v3-e02/PROGRESS.md`](../docs/spec/features/v3-e02/PROGRESS.md)**; findings in
+ledger live in **[`docs/spec/features/v3-e02/PROGRESS.md`](../docs/spec/features/v3-e02/PROGRESS.md)** and
+**[`docs/spec/features/v3-e06/PROGRESS.md`](../docs/spec/features/v3-e06/PROGRESS.md)**; findings in
 `docs/daily-improvement-v3/audit-findings-index.md`.
 
 ---

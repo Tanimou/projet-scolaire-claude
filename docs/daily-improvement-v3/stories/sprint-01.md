@@ -410,7 +410,7 @@ by tag and outside this control.
 
 ---
 
-## S-E06-1 — Purge development artefacts from production builds
+## S-E06-1 — Purge development artefacts from production builds · ✅ `done` 2026-08-04
 
 | | |
 |---|---|
@@ -430,6 +430,15 @@ build on a hit · absent required configuration fails fast at startup with a cle
 **Test.** CI scan (evidence) + a startup test asserting fail-fast on missing config.
 
 **Out of scope.** CSP (that is `S-E06-2`).
+
+**Evidence 2026-08-04.** The scan is `scripts/production-artefact-check.js`, wired into **both** `scripts/ci-gate.sh`
+(stage 0b) and `.github/workflows/ci.yml`, executed → exit 0 over 562 files (Tier A clean, Tier B 17/17 at baseline);
+its spec runs it in both directions over a fixture, so it is shown to fail on the pre-fix state. Fail-fast is
+`apps/api/src/shared/config/config-preflight.ts`, called from `main.ts` before `NestFactory.create`, 12 spec cases,
+no bypass flag, names-only messages. **AC-1 is honoured over source, not over a built bundle** — no agent may build;
+extending the same rules to `.next/server` and `dist/` is carried forward. **`PF-54` closes in code only:** the hosted
+master credential is still `admin`/`admin` and its rotation is operator work — see
+`docs/spec/features/v3-e06/PROGRESS.md`.
 
 ---
 

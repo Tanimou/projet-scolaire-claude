@@ -1,10 +1,12 @@
 'use client';
 
-import { Check, GraduationCap, Loader2, Lock, Send, Users } from 'lucide-react';
+import { ArrowRight, Check, GraduationCap, Loader2, Lock, Send, Users } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { inviteUserAction } from './actions';
+
+import { ActivationHint } from '@/components/auth/ActivationHint';
 
 type RealmRole = 'school_admin' | 'teacher' | 'parent';
 
@@ -61,6 +63,17 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [sentEmail, setSentEmail] = useState<string | null>(null);
+  const successHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  /** Roles Keycloak also asks to configure TOTP for (invite.controller.ts §2). */
+  const mfaRequired = form.realmRole === 'school_admin' || form.realmRole === 'teacher';
+
+  // WCAG 4.1.3 — the form is replaced wholesale by the success card, so without an
+  // explicit focus move a keyboard/screen-reader user is left on a button that no
+  // longer exists and hears nothing.
+  useEffect(() => {
+    if (status === 'sent') successHeadingRef.current?.focus();
+  }, [status]);
 
   const customRolesForPortal = customRoles.filter(
     (r) =>
@@ -82,10 +95,8 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
     if (res.ok) {
       setStatus('sent');
       setSentEmail(res.email);
-      setTimeout(() => {
-        router.push('/admin/users');
-        router.refresh();
-      }, 2500);
+      // WCAG 2.2.1 — no timed redirect: the confirmation is information the admin
+      // must be able to read at their own pace. Leaving is an explicit control below.
     } else {
       setStatus('error');
       setError(res.error);
@@ -94,16 +105,40 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
 
   if (status === 'sent') {
     return (
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center">
+      <div
+        role="status"
+        aria-live="polite"
+        className="rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center"
+      >
         <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-100 text-emerald-700">
-          <Check className="h-7 w-7" strokeWidth={3} />
+          <Check className="h-7 w-7" strokeWidth={3} aria-hidden="true" />
         </div>
-        <h2 className="mt-4 text-lg font-bold text-emerald-900">Invitation envoyée !</h2>
+        <h2
+          ref={successHeadingRef}
+          tabIndex={-1}
+          className="mt-4 rounded-sm text-lg font-bold text-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
+        >
+          Invitation envoyée !
+        </h2>
         <p className="mt-2 text-sm text-emerald-800">
-          Un email a été envoyé à <span className="font-mono font-semibold">{sentEmail}</span> avec le lien de
-          configuration du compte. Vous pouvez le suivre via Maildev (http://localhost:1080).
+          Un email a été envoyé à{' '}
+          <span className="font-mono font-semibold break-all">{sentEmail}</span> avec le lien de
+          configuration du compte.
         </p>
-        <p className="mt-3 text-xs text-emerald-700">Redirection vers la liste des utilisateurs…</p>
+        <div className="mx-auto mt-1 max-w-md">
+          <ActivationHint portal="admin" variant="sent" mfa={mfaRequired} />
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            router.push('/admin/users');
+            router.refresh();
+          }}
+          className="mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-6 text-sm font-bold text-white shadow-lg shadow-blue-500/30 transition hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2"
+        >
+          Aller à la liste des utilisateurs
+          <ArrowRight className="h-4 w-4" aria-hidden="true" />
+        </button>
       </div>
     );
   }
@@ -256,7 +291,11 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
         </div>
 
         {error && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <div
+            id="invite-error"
+            role="alert"
+            className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+          >
             {error}
           </div>
         )}
@@ -264,14 +303,21 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
         <button
           type="submit"
           disabled={status === 'sending'}
-          className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-6 text-sm font-bold text-white shadow-lg shadow-blue-500/30 transition hover:shadow-xl disabled:opacity-70"
+          aria-busy={status === 'sending'}
+          aria-describedby={error ? 'invite-error' : undefined}
+          className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-6 text-sm font-bold text-white shadow-lg shadow-blue-500/30 transition hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 disabled:opacity-70"
         >
-          {status === 'sending' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          {status === 'sending' ? (
+            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          ) : (
+            <Send className="h-4 w-4" aria-hidden="true" />
+          )}
           {status === 'sending' ? 'Envoi en cours…' : 'Envoyer l\'invitation'}
         </button>
-        <p className="text-center text-xs text-slate-500">
-          Les emails de dev sont catchés par Maildev → <a href="http://localhost:1080" target="_blank" rel="noreferrer" className="font-bold text-blue-700 hover:underline">localhost:1080</a>
+        <p role="status" aria-live="polite" className="sr-only">
+          {status === 'sending' ? 'Envoi de l\'invitation en cours' : ''}
         </p>
+        <ActivationHint portal="admin" variant="pre-send" mfa={mfaRequired} />
       </aside>
     </form>
   );

@@ -13,13 +13,28 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
+import { assertRequiredConfig } from './shared/config/config-preflight';
 import { assertMigrationsClean } from './shared/migrations/migration-preflight';
 import { PrismaService } from './shared/prisma/prisma.service';
 import { assertReleaseMatches } from './shared/release/release-preflight';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const logger = new Logger('Bootstrap');
+
+  // Preflight configuration (S-E06-1 / PF-54) : l'API refuse de démarrer sur des
+  // identifiants d'administration Keycloak par défaut. EN PREMIER, avant même la
+  // construction du graphe de modules — une variable oubliée ne doit pas attendre
+  // derrière un aller-retour base de données pour se faire connaître, et le
+  // message nomme TOUTES les variables absentes en un seul jet.
+  //
+  // Ici et pas dans un constructeur de provider : `scripts/boot-check.js`
+  // construit le graphe depuis `dist/app.module.js` sans jamais exécuter
+  // `bootstrap()`, donc un jet en constructeur ferait échouer l'étape 7 de la
+  // gate sur un checkout sans `.env` — la même raison qui met déjà le preflight
+  // de migrations ici.
+  assertRequiredConfig(process.env, logger);
+
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
   // Preflight schéma (S-E02-1 / PF-03) : ne jamais servir de trafic contre un
   // schéma inconnu. Lève et fait sortir le process en cas de migration absente,
