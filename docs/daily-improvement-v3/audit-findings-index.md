@@ -105,6 +105,7 @@ It is a Step-6 *credential/decision-required* stop condition for any story whose
 | **PF-76** | **`.nvmrc` and `ci.yml` pinned a floating Node major that includes the window in which the API cannot boot.** `PF-73` called itself latent because "in practice everything runs 22"; it was latent for a weaker reason than that. A bare `22` *declares* 22.0.0–22.99.x, which includes 22.0–22.11 — the range where `jose@6` cannot be `require()`d and `AuthModule` cannot load. It was safe only because nvm and `actions/setup-node` happen to resolve a bare major to the newest release; a statement that is true by accident is the same defect one level down. Both now pin **22.13.1**, equal to the three `ARG NODE_VERSION` defaults, with the agreement checked | `TECH_DEBT` | DEFECT | Discovered by the V3 run of 2026-08-03 (run 14) | L0 | V3-E02 |
 | **PF-77** | **The routine's single-writer lock expires mid-run, and a concurrent tick reaps it and resets the working tree.** `routine-lock.sh` reclaims a `write.lock` whose heartbeat is older than `STALE_MIN` (60 min). V3's Step 4 says "heartbeat while polling" the build, and nothing asks for a heartbeat during **Step 3**, which in every run since run 9 has taken well over an hour. Measured on run 15: the lock was acquired at 20:03 and, with no heartbeat since, a **second V3 tick at 21:08 reaped it as stale**, took it, and released it at 21:11 — so from 21:09 the run held no lock while still writing to the checkout, which is precisely the pile-up the lock exists to prevent. The consequence was nearly destructive: re-acquiring the gate ran the salvage path, which `git stash`ed every tracked modification and reset the branch to `origin/main`. The work survived **only** because that salvage stash exists; the untracked new files survived by not being tracked. Two defects, one mechanism: the routine's own protocol does not keep the lock alive long enough to cover the phase that takes longest, and `heartbeat` reporting `no lock held` is the only signal that the guarantee has already lapsed | `BROKEN_RUNTIME` | DEFECT | Discovered by the V3 run of 2026-08-03 (run 15) | L0 | V3-E02 *(routine)* |
 | **PF-78** | **Tracing is configured end to end and emitted by nothing.** `infra/docker-compose.yml` declares a `jaeger` service and sets `OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318` in the shared application environment, so every application receives a collector endpoint. No application imports an OpenTelemetry SDK or creates a span — `grep -rn 'opentelemetry\|otel' apps/*/src` returns nothing. The only `@opentelemetry/api` in the tree arrives transitively through `prom-client`. This is the trace third of `PF-56`, separated because it is a build rather than a gate: the collector is reachable, the exporter variable is set, and the absence is upstream of both. Left open deliberately by `S-E02-13` rather than half-built | `NOT_IMPLEMENTED` | CAPABILITY | Discovered by the V3 run of 2026-08-03 (run 15) | L0 | V3-E02 |
+| **PF-79** | **`apps/web` is the one artefact no observability surface covers — no metrics, no traces.** Recorded as a residual by `S-E02-13` ("apps/web exposes no metrics") and made explicit by `S-E02-14`, which **removed** `OTEL_EXPORTER_OTLP_ENDPOINT` from the `web` service rather than leave a collector declared to an application that could never reach it. The removal must not be read as coverage: web is the artefact users actually touch, and today a slow or failing page is invisible to both Prometheus and Jaeger while api and worker are visible to both. Next.js instruments through its own `instrumentation.ts` `register()` hook and a Next-aware exporter, so it is a different build from the two Nest applications — separated rather than half-built, exactly as `S-E02-13` separated traces from metrics | `NOT_IMPLEMENTED` | CAPABILITY | Discovered by the V3 run of 2026-08-03 (run 16) | L0 | V3-E02 |
 | **PF-12** | Parent child/enrollment state contradicts itself: dashboard/detail say active; children list, "My family" and claim panel say none | `BROKEN_TRUTH` | DEFECT | A2 §7, App. B.7 | L0 | V3-E03 |
 | **PF-13** | Class gradebook links pass a **class-section id** where the page expects a **teaching-assignment id**; dashboard "create assessment" shares the broken URL | `BROKEN_RUNTIME` | DEFECT | A2 §6.1, App. B.6 | L1 | V3-E07 |
 | **PF-14** | `/admin/audit` crashes (server/client boundary); `/admin/reports` is 404 | `BROKEN_RUNTIME` | DEFECT | A2 §5.6, App. B.5 | L0 | V3-E04 |
@@ -245,9 +246,9 @@ Sourced from A3 Appendix C and A1 §11. **V3's routine must fail a story that re
 | Lakoli capability gaps | 29 |
 | Do-not-copy rules | 12 |
 | Validation obligations | 10 |
-| **Total tracked items** | **120** *(+`PF-72`, `PF-73`, `PF-74`, `PF-75`, `PF-76`, `PF-77`, `PF-78`)* |
+| **Total tracked items** | **121** *(+`PF-72`, `PF-73`, `PF-74`, `PF-75`, `PF-76`, `PF-77`, `PF-78`, `PF-79`)* |
 
-Delta since the 2026-08-02 baseline: **+12**. Four were discovered by V3 runs on 2026-08-02 —
+Delta since the 2026-08-02 baseline: **+13**. Four were discovered by V3 runs on 2026-08-02 —
 `PF-58` (substrate not on `main`, §3), `PF-59` (Actions billing lock, §1),
 `PF-60` (sprint workflow overrides story selection, §2) and `PF-61` (duplicate `R-17` id, §3).
 The fifth, `PF-71`, was discovered on 2026-08-03 (run 9) by the act of making the lint gate executable: the 996
@@ -259,8 +260,12 @@ was `R-25`'s residual half at the web address. `PF-75` and `PF-76` were found on
 making the *runtime declaration* checkable: `engines.pnpm` blessed a pnpm major that never produced this lockfile, and
 `.nvmrc`/`ci.yml` pinned a floating Node major that includes the window where the API cannot boot. `PF-78` was found on
 2026-08-03 (run 15) the same way — making the *observability profile* startable exposed that a Jaeger collector and an
-`OTEL_EXPORTER_OTLP_ENDPOINT` are declared for three applications, none of which emits a span. All follow the same
-pattern as `PF-62`: **turning a gate on is what finds the defect it was written for.**
+`OTEL_EXPORTER_OTLP_ENDPOINT` are declared for three applications, none of which emits a span. `PF-79` was found on
+2026-08-03 (run 16) while **closing** `PF-78`: enumerating which services actually receive the OTLP endpoint showed it
+was **five**, not three — the variable sat on the shared environment anchor, so the two one-shot jobs got it too — and
+narrowing it to the two applications that emit left `apps/web` observable by nothing at all, which needed an id rather
+than a silence. All follow the same pattern as `PF-62`: **turning a gate on is what finds the defect it was written
+for.**
 
 `PF-77` is the exception to that pattern, and worth naming as such: it was not found by turning a gate on, it was found
 by **being bitten**. The routine's own single-writer lock expired mid-run and a concurrent V3 tick reaped it, after

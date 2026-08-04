@@ -1,4 +1,11 @@
 import 'reflect-metadata';
+// Traçage (S-E02-14 / PF-78) — CET IMPORT DOIT RESTER LE PREMIER APRÈS
+// `reflect-metadata`. L'instrumentation OpenTelemetry patche `http`, `express`
+// et `@nestjs/core` au moment où ils sont chargés ; démarrée après eux, elle ne
+// patche rien, ne lève aucune erreur, et l'application paraît instrumentée sans
+// émettre un seul span de requête. `scripts/tracing-check.js` vérifie cet ordre
+// sur le `main.js` **émis**, pas sur ce fichier.
+import './shared/tracing/tracing.bootstrap';
 
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';

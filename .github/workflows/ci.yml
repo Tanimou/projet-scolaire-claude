@@ -132,6 +132,17 @@ jobs:
       # stage 9 — the two must not drift (S-E02-2 AC-4).
       - run: node scripts/observability-check.js
 
+      # Tracing (S-E02-14 / PF-78) — the traces half of PF-56. A `jaeger`
+      # service and an OTLP endpoint were declared for as long as the `obs`
+      # profile existed, and no application emitted a single span. This step
+      # holds the load order on the emitted main.js (OpenTelemetry patches
+      # modules as they load, so a SDK started too late patches nothing and
+      # says nothing) and then spawns a child process that serves a real
+      # request and fails if no span comes out. Reads dist/, so it belongs to
+      # the build job. Kept in step with scripts/ci-gate.sh stage 10 — the two
+      # must not drift (S-E02-2 AC-4).
+      - run: node scripts/tracing-check.js
+
   test:
     name: Test
     runs-on: ubuntu-latest

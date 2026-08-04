@@ -1,4 +1,9 @@
 import 'reflect-metadata';
+// Traçage (S-E02-14 / PF-78) — même règle que côté API : cet import doit rester
+// le premier après `reflect-metadata`, sans quoi `ioredis` (chargé par BullMQ
+// via `./app.module`) est résolu avant que l'instrumentation ait posé ses
+// hooks. Vérifié sur le `main.js` émis par `scripts/tracing-check.js`.
+import './shared/tracing/tracing.bootstrap';
 
 import { writeFile } from 'node:fs/promises';
 
