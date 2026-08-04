@@ -34,7 +34,15 @@ x-app-env: &app-env
   # Browser-facing web origin — used by the worker to absolutise notification
   # email deep links (e.g. "/parent/grades?..." → full clickable URL).
   WEB_PUBLIC_URL: http://localhost:3000
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  # OTEL_EXPORTER_OTLP_ENDPOINT n'est DÉLIBÉRÉMENT plus ici (S-E02-14 / PF-78).
+  # Posé sur cette ancre partagée, il était distribué à cinq services —
+  # migrator, api, worker, web et seed — dont trois ne peuvent rien émettre :
+  # deux sont des jobs one-shot, le troisième est une application Next.js dont
+  # l'instrumentation passe par un tout autre mécanisme. Déclarer un collecteur
+  # à un service qui ne l'utilisera jamais, c'est PF-78 en miniature, répété
+  # trois fois. Il est désormais posé explicitement sur `api` et `worker`, et
+  # `scripts/tracing-check.js` échoue si cette liste et `TRACED_SERVICES`
+  # divergent — dans les deux sens.
   LOG_LEVEL: debug
 
 networks:
@@ -263,6 +271,21 @@ services:
       # bloqué, mais `GET /version` le dit au lieu de laisser croire à une
       # vérification qui n'a pas eu lieu (DNC-08).
       EXPECTED_GIT_SHA: ${EXPECTED_GIT_SHA:-}
+      # Collecteur de traces (S-E02-14 / PF-78). Explicite ici plutôt que sur
+      # l'ancre partagée : seuls les services qui démarrent réellement le SDK
+      # doivent se voir déclarer un collecteur.
+      #
+      # Le défaut est **vide**, donc traçage désactivé, et c'est délibéré :
+      # `jaeger` vit dans le profil `obs` alors qu'`api` et `worker` vivent dans
+      # `app`. Pointer par défaut sur `http://jaeger:4318` ferait que la pile de
+      # dev ordinaire — lancée sans `--profile obs` — exporterait en boucle vers
+      # un nom qui ne résout pas, et noierait les logs sous des échecs
+      # d'export. Comme pour `EXPECTED_GIT_SHA` (S-E02-10), déclarer *est*
+      # l'interrupteur, et l'état est journalisé au démarrage plutôt que tu.
+      #
+      #   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 \
+      #     docker compose --profile app --profile obs up
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       # jwks-rsa@4 imports the ESM-only jose@6 via require(); Node enables
       # require(ESM) by default from 22.12, so enable it explicitly to stay
       # compatible if the base image ever lags behind. Harmless on newer Node.
@@ -304,6 +327,8 @@ services:
       # GIT_SHA gravé au build, mais rien ne lui donnait à quoi le comparer, donc
       # une dérive du worker — qui écrit des données réelles — était invisible.
       EXPECTED_GIT_SHA: ${EXPECTED_GIT_SHA:-}
+      # Voir la note côté api (S-E02-14 / PF-78).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       WORKER_HTTP_PORT: "4001"
       # See api note — jwks-rsa@4 / jose@6 require(ESM) compatibility.
       NODE_OPTIONS: "--enable-source-maps --experimental-require-module"

@@ -25,6 +25,7 @@
 | **S-E02-11** | The web build enters a gate; the release manifest is held to being dynamic | ✅ done | 2026-08-03 | 12/12 jest (73/73 across `src/shared/quality`); the gap measured first — with `apps/web/.next` **deleted entirely**, `boot-check.js` returned **exit 0**; the new check exercised in **9 directions**, 1 pass and 8 distinct failures |
 | **S-E02-12** | The declared runtime stops blessing a Node the API cannot boot on | ✅ done | 2026-08-03 | 18/18 jest (91/91 across `src/shared/quality`); run against the **unfixed** repo: `FAIL`, exit 1, naming **35** contradicting dependencies where the finding named one; the finding's own one-line fix measured **wrong in both directions**; 12 negative paths driven through the pure evaluator |
 | **S-E02-13** | The observability profile stops being a claim | ✅ done | 2026-08-03 | 33/33 jest (124/124 across `src/shared/quality`) + 13/13 metrics + 6/6 on a **real worker socket**; the profile measured **unable to start** — all 3 of its bind-mount sources absent; the check run against that exact state **fails** naming all three |
+| **S-E02-14** | The trace pipeline stops being a dead address: spans are emitted, and the gate runs the thing | ✅ done | 2026-08-04 | 17/17 tracing + 21/21 gate guard (112/112 across `src/shared/quality`); **api 2 spans, worker 2 spans** from a real request against the **built** `dist/`, where the number was 0 in all three applications before; the collector declaration measured at **five** services, not the three the finding named; 3 negative paths driven through the real script |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -671,26 +672,89 @@ nothing asks for one during Step 3, which has run over an hour in every run sinc
 writing to the checkout holding no lock. Re-acquiring the gate to recover made it worse: the salvage path `git stash`ed
 every tracked modification and reset the branch to `origin/main`. The slice survived only because that salvage exists.
 
+## S-E02-14 — the traces third: emitted, redacted, and proven by running it
+
+`S-E02-13` deliberately left tracing out rather than half-build it, and recorded it as `PF-78`. Step 2 confirmed the
+finding reproduced exactly — a case-insensitive grep for `opentelemetry|otel` across all three applications' source
+returned **0 files** — and then found it **wider than recorded**.
+
+**The declaration reached five services, not three.** `OTEL_EXPORTER_OTLP_ENDPOINT` sat on the compose file's shared
+`x-app-env` anchor, which is consumed by `migrator`, `api`, `worker`, `web` **and** `seed`. Two of those are one-shot
+jobs and one is a Next.js application whose instrumentation is a different mechanism entirely. So the repository was
+handing a collector address to three things that could never use it — PF-78 in miniature, three times over, inside the
+defect itself.
+
+### The load order is the whole risk, and it is invisible
+
+OpenTelemetry's auto-instrumentation works by **monkey-patching modules as they are loaded**. An SDK started after
+`require('./app.module')` finds `http`, `express` and `@nestjs/core` already resolved in the module cache: it patches
+nothing, throws nothing, logs nothing, and the application boots looking fully instrumented while emitting no request
+spans at all. Every gate in this epic would stay green.
+
+That is not a hypothetical. **The gate's own emission probe reproduced it by accident:** its first version required
+`node:http` at the top of the file, one line before `startTracing()`, and reported **0 spans** — while the identical
+probe run under `tsx`, where the require came after, reported **2**. The first full gate run of this slice therefore
+came back `TRACING CHECK: FAIL`, naming both applications, and it was right to.
+
+So `scripts/tracing-check.js` reads the order off the **emitted `main.js`**, not the source — R-26 rule (a), the same
+discipline as `tsc --showConfig` in `boot-gate.spec.ts` — and then does the thing no previous instance of R-26 could:
+it **runs the application code**, spawning a child Node process per app that serves a real request over a real socket
+and fails if no span comes out. An order assertion can be satisfied while emission is broken for some other reason;
+asserting the outcome as well as the condition is what makes the difference.
+
+**Why not a jest test — measured, not assumed.** It was written as one first, on a real socket, mirroring
+`metrics-server.spec.ts`. It produced **0 spans**. Jest does not use Node's module registry, so
+`require-in-the-middle` never fires and every instrumentation silently patches nothing. Same class as `jose` under
+ts-jest (`PF-67`), same answer as `S-E02-9`: run it outside jest, against `dist/`, which is also what ships.
+
+### G-TENANT: redaction at the exporter, in one copy
+
+Jaeger is unauthenticated by construction — its access control **is** the docker network — so the payload has to be
+safe on its own terms, exactly as `/metrics` does. Three placements were possible and two are traps: configuring each
+instrumentation is precise and unreliable (a version bump adds an attribute and the omission is silent), and a
+`SpanProcessor.onEnd` sees read-only attributes. The **exporter** is the one point every span passes regardless of
+which instrumentation produced it, including one added next year by someone who never reads this file.
+
+The policy lives once, in `packages/contracts/src/observability/`, imported by both applications — because two copies
+means one of them can forget `db.statement`, and ioredis writes Redis commands **with their arguments** into it, keys
+that carry tenant and user ids. Measured on the built artefacts: `url.path` arrives as `/api/v1/students/:id` and
+`?tenantId=demo` is gone.
+
+### Not claimed
+
+It does **not** start Jaeger and watch a span arrive — that needs `docker compose --profile obs up`, which the routine
+forbids. The pipeline is proven to **emit and redact**, not to be **ingested**. Prisma is deliberately uninstrumented:
+its instrumentation needs `previewFeatures = ["tracing"]` in `schema.prisma`, dragging G-MIGRATION into a slice that
+does not need it. There is no official BullMQ instrumentation, so job processing is untraced. And `apps/web` emits
+nothing at all — `OTEL_EXPORTER_OTLP_ENDPOINT` was **removed** from it rather than left as a false claim, and that
+removal is recorded as **`PF-79`** so it is not misread as coverage.
+
 ## Next slice
 
-Six blind spots this epic knew about are now closed or advanced: the lint gate executes, something boots the
+Seven blind spots this epic knew about are now closed or advanced: the lint gate executes, something boots the
 applications, the release gate covers the whole deployment, the web build is inspected, the declared runtime is
-checked, and the observability profile can now start and is held to being coherent. What is left, in order:
+checked, the observability profile can start and is held to being coherent, and the trace pipeline now emits. What is
+left, in order:
 
 1. **`PF-63`/`PF-65`** — 12 of the 18 baselined failures sit on the analytics/snapshot path (`V3-E03`), which is the
    epic that owns `PF-04`'s cross-portal count contradiction. Those red tests are very likely *already describing*
    that bug. **Note the sequencing constraint:** `V3-E03` depends on `E01`, `E04` and `E05`, all open, so this is not
    selectable under the roadmap's layer rule until they close — it is listed here because the triage is cheap and
    would inform E03, not because it can be picked next.
-2. **`PF-78`** — tracing. The collector (`jaeger`) and the exporter endpoint are declared in the compose file and **no
-   application emits a span**. This is the trace third of `PF-56`, separated by `S-E02-13` rather than half-built,
-   because instrumenting three applications is its own slice. It is unblocked, and it is the natural continuation:
-   `S-E02-13` proved the profile can start, and a Jaeger with nothing in it is the same "configuration present,
-   nothing proven" state the metrics half just left.
-3. **`PF-56`'s remaining thirds** — queue depth / failure / DLQ metrics (needs BullMQ processors instrumented one by
-   one), alert rules and SLO thresholds (**a product decision, not a build** — what counts as "good" cannot be
-   invented by the routine any more than legal text can, R-13), and the restore drill, which stays blocked on
-   **D-01**.
+2. **`PF-79`** — `apps/web` is observed by nothing: no metrics, no traces. It is the artefact users actually touch,
+   and it is now the only one of the three that neither surface reaches. Unblocked, and the natural continuation of
+   `S-E02-13` + `S-E02-14`, both of which covered api and worker and left web out for the same reason: Next.js
+   instruments through its own `instrumentation.ts` `register()` hook, which is a different build from the two Nest
+   applications. Separated rather than half-built, exactly as traces were separated from metrics.
+3. **`PF-56`'s remaining thirds** — queue depth / failure / DLQ, which is now a *tracing and* metrics gap: there is no
+   official BullMQ instrumentation, so processors must be instrumented one by one and would need a manual span as
+   well as a counter. Alert rules and SLO thresholds stay **a product decision, not a build** — what counts as "good"
+   cannot be invented by the routine any more than legal text can (R-13). The restore drill stays blocked on **D-01**.
+4. **Prisma tracing** — deliberately excluded from `S-E02-14` because `@prisma/instrumentation` requires
+   `previewFeatures = ["tracing"]` in `schema.prisma` and a version matched to the client, i.e. a schema change and a
+   `prisma generate`. That makes it a G-MIGRATION slice, and folding it into a slice that needed neither would have
+   been the scope-widening this routine records rather than performs. Database latency is currently visible only as
+   the inside of a request span.
 
 **A routine-level item that outranks all of the above, and is not this repository's to fix.** `PF-77` / `R-27`: the
 single-writer lock expires during Step 3 and a concurrent tick reaps it. It was observed causing a working-tree reset
@@ -698,7 +762,7 @@ on run 15. Until the routine heartbeats during implementation, every long run is
 until `heartbeat` prints `no lock held` — by which point another run may already have written. The fix lives in
 `~/.claude/scheduled-tasks/`, outside this checkout, so it is an operator action.
 
-With that, `V3-E02`'s unblocked code work is `PF-78`; `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
+With that, `V3-E02`'s unblocked code work is `PF-79`; `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
 operator or **D-01**. The alternative under the selection rule is to let it move to **`V3-E06`** (production hygiene —
 independent of everything, per `dependency-map.md` §3), whose first unblocked story is `S-E06-1` (`PF-17`/`PF-54`,
 Maildev and seed leakage plus hard-coded credentials). `S-E06-4`'s content half stays blocked on **D-08**.

@@ -141,6 +141,26 @@ else
   echo "⏭  observability check skipped (--quick — it reads the build's dist/)"
 fi
 
+# Stage 10 — tracing. The traces half of PF-56, separated from stage 9 rather
+# than half-built. `infra/docker-compose.yml` declared a `jaeger` service and
+# handed applications an OTLP endpoint since the `obs` profile was written;
+# measured at run 15, a grep for `opentelemetry|otel` over all three
+# applications' source returned ZERO hits. A collector was deployed, an address
+# supplied, and nothing emitted a span. This stage does what stage 9 does for
+# metrics and one thing more: it SPAWNS a child Node process, serves a real
+# request over a real socket, and fails if no span comes out — because the
+# defect being closed is precisely "everything configured, nothing emitted".
+# It also holds the load order, which is the sharp part: OpenTelemetry patches
+# modules as they load, so a SDK started after ./app.module patches nothing,
+# throws nothing, and yields an application that merely looks instrumented.
+# Reads dist/, so it runs after the build.
+if [ "${QUICK}" -eq 0 ]; then
+  run_stage "tracing (load order + real span emission)" node scripts/tracing-check.js
+else
+  echo ""
+  echo "⏭  tracing check skipped (--quick — it reads the build's dist/)"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  CI GATE SUMMARY"
