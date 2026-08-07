@@ -2,7 +2,11 @@
 
 **Layer** L0 · **Size** M · **Depends on** — (independent) · **Blocks** nothing
 **Closes** PF-17, PF-19, PF-29, PF-38, PF-39, PF-45, PF-54, PF-57 · **Gates** G-AUTHZ · **Decisions** D-08 (legal text)
-**Status (2026-08-04)** `in-progress` — `S-E06-1` landed; **next slice `S-E06-2`** (CSP + branding sanitisation, `PF-45`).
+**Status (2026-08-07)** `in-progress` — `S-E06-1`, `S-E06-2` and `S-E06-3` landed; **next slice `S-E06-6`**
+(confirmation + explicit scope for bulk/irreversible controls, `PF-29`). `S-E06-4` stays ⛔ blocked on **D-08**;
+`S-E06-5` was never enumerated in `sprint-01`. *(This header was stale by one slice until 2026-08-07 — it still
+pointed at `S-E06-2` after `S-E06-2` had landed in `296c5cd`. Corrected in the `S-E06-3` land pass, and named here
+rather than quietly overwritten.)*
 
 > **Why there is no `spec.md` here.** Same posture as `docs/spec/features/v3-e02/PROGRESS.md`: the V3 stories in
 > [`docs/daily-improvement-v3/stories/sprint-01.md`](../../../daily-improvement-v3/stories/sprint-01.md) are authored
@@ -20,10 +24,10 @@ valuable to credibility — which is why it is scheduled in parallel from day on
 |---|---|---|---|---|
 | **S-E06-1** | Purge development artefacts from production-facing code, and gate the purge | ✅ done | 2026-08-04 | spec: [`stories/S-E06-1.md`](./stories/S-E06-1.md) · evidence below |
 | **S-E06-2** | Enable CSP and sanitise branding injection | ✅ done | 2026-08-07 | PF-45 **closed**, PF-88 found + closed, R-28 raised · evidence below |
-| **S-E06-3** | Fix `/admin/classes/new`; route/link crawl gate | ⬜ **next** | — | PF-19, PF-39 |
+| **S-E06-3** | Fix `/admin/classes/new`; link-integrity gate over the **emitted** route inventory | ✅ done | 2026-08-07 | spec: [`stories/S-E06-3.md`](./stories/S-E06-3.md) · PF-19 **closed**, PF-39 inventoried-not-fixed, PF-91…PF-94 raised · evidence below |
 | **S-E06-4** | Legal, help and contact routes before consent | ⛔ blocked | — | needs decision **D-08** (holding pages allowed, policy text is not) |
 | **S-E06-5** | *(not enumerated in sprint-01)* | — | — | — |
-| **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⬜ todo | — | PF-29 |
+| **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⬜ **next** | — | PF-29 |
 
 ## S-E06-1 — evidence (2026-08-04)
 
@@ -92,6 +96,54 @@ one-`pnpm build` budget.
 **A false finding avoided:** five of the 14 prerendered routes looked like authenticated admin pages served from a
 shared build cache. They are pure `redirect()` backward-compat stubs rendering no data. Nothing raised.
 
+## S-E06-3 — evidence (2026-08-07)
+
+**The defect was reproduced against the emitted artefact, not read.** `apps/web/.next/app-path-routes-manifest.json`
+held **108 routes** and `routes.includes('/admin/classes/new') === false`, while
+`apps/web/src/app/admin/classes/page.tsx` linked at it **twice** — the `PageHeader` primary CTA (`:154-159`) and the
+`EmptyState` action (`:221`), the only affordance a school with zero classes ever sees. Both fell through to
+`/admin/classes/[id]` with `id = "new"`, the detail page fetched `/api/v1/classes/new`, and the page crashed. The
+write path had existed the whole time: `createClass` in `apps/web/src/app/admin/classes/actions.ts` had **zero
+callers** since the day it was written. **The page was the missing half, not the plumbing.**
+
+**Why a route-existence check could never have found it — the point of the slice.** `/admin/classes/new` *resolves*.
+Any gate that asks *"does this link match a route?"* answers **yes** and stays green while the link crashes. The rule
+that catches it is a different one: **a fully-literal target that matches only because a single-segment `[param]`
+swallowed a literal segment** — a literal in a dynamic slot means the author intended a static page. That failure
+class (**DYNAMIC CAPTURE**) is what `scripts/link-integrity-check.js` fails on *unconditionally*, with no baseline
+entry possible: `--update` was executed and **refused to write** ("a dynamic capture is never baselineable"),
+baseline byte-unchanged. A catch-all consuming literal segments stays ALIVE on purpose — that is the entire function
+of `/api/proxy/[...path]`, which every client fetch uses.
+
+**What executed.** `pnpm --filter @pilotage/api exec jest src/shared/quality/link-integrity-gate.spec.ts` →
+**94/94 pass**, including the `describeWithBuild` end-to-end case (a real `.next/` was present, so it ran rather than
+skipped). `pnpm typecheck` → **13/13 Turbo tasks, exit 0**. `git diff --check` clean on all three tracked edits and
+both new files. `bash -n scripts/ci-gate.sh` clean. Real-tree measurement by the CLI: **150 files · 114 literal
+targets · 90 alive · 24 dead (all baselined) · 0 captures** against the reviewed post-build inventory.
+
+**The gate reproduces the finding it closes, today.** Run against the *current, stale* `.next/` (108 routes,
+pre-build) the CLI exits **1** with exactly one `DYNAMIC CAPTURE — /admin/classes/new … /admin/classes/[id]`, citing
+`page.tsx:155` and `:221`. It goes green the moment the orchestrator's build emits the 109th route. **That is the
+verification this ledger cannot yet claim** — see the "not claimed" rows below.
+
+**The measured ceiling was 24, not the story's 15 — and the extra 9 are findings, not noise.** The story anticipated
+an undercount and said to check every row by hand. Beyond its 15: `/pricing` and `/contact` are **real dead links in
+the public landing footer** (`app/page.tsx:771,788` → **`PF-94`**), and 7 are `middleware.ts` prefix constants that a
+static extractor cannot distinguish from an `href` — four of which (`/admin`, `/teacher`, `/parent`, `/student`) are
+*also* a genuine gap, because the bare portal root has no index route and 404s (**`PF-93`**). One extractor false
+positive (`unit: '/20'` in `admin/alerts/types.ts`) was **fixed in the extractor rather than baselined** — baselining
+a non-link would have been dishonest. Every one of the 24 entries carries a `reason` **and** an owning finding id.
+
+**Two deliberate deviations from the story, recorded rather than shipped silently.** (1) The baseline landed as a flat
+top-level `{ dead: {…} }` map, not the story §4.5 per-app `{ apps: { "apps/web": { deadTargets } } }` sketch — because
+the guard spec, which is the *executable* contract, reads the flat shape. The consequence is real and carried:
+`discoverNextApps()` walks every app with a `next.config.*`, so **the day a second Next app exists, the stale-entry
+loop fires from app B against `apps/web`'s entries**. Latent today (only `apps/web/next.config.mjs` exists),
+structural tomorrow. (2) "Internal link" is implemented as *any literal string starting with `/`*, with no `href`/
+`Link` context — which is how the middleware prefix constants entered the ceiling. Defensible (it surfaced the real
+bare-portal-root gap) but it means the ratchet permanently carries rows whose own reason says *"not a defect"*, so it
+cannot reach zero without a `class: "prefix-constant"` tag. Ruled on here, not inherited.
+
 ## Not claimed (kept honest, per slice)
 
 | Item | Why it is not claimed | Who can close it |
@@ -109,6 +161,12 @@ shared build cache. They are pure `redirect()` backward-compat stubs rendering n
 | `report-only` rollout, which the story prescribes before enforcing | the mode exists, defaults to `enforce`, and `csp-check.js` refuses `CSP_REPORT_ONLY` in `docker-compose.prod.yml` so observation cannot become the resting state. It was never **exercised on a deployment**, because under Step −1 there is no deployment to roll out to | n/a — void under Step −1 |
 | `connect-src` / `img-src` inherit `NEXT_PUBLIC_API_URL=http://api:4000` | a docker-internal hostname a browser cannot resolve, so that source contributes nothing. Harmless and pre-existing (the compose comment explains why the internal URL is baked); noted rather than fixed, because changing it is `PF-82`'s build-time-inlining work | a later slice |
 | Span/`exception.*` event redaction, still open from `S-E02-15` | unrelated to this slice, listed so the E02 residual is not lost behind an E06 ledger | a later slice |
+| `S-E06-3` **AC-2** — *"create a class → redirect → it appears in `/admin/classes`"* | **no executed evidence.** The redirect *contract* was verified statically (`classes.controller.ts:249` returns the raw row, `api()` does not unwrap, so `res.data.id` resolves — byte-identical to the proven `createStudent` idiom), but **no browser was driven**. `apps/web` has no unit runner (Playwright only), so there is nothing in the suite that clicks the button. Do not read the green static gate as covering it | human, or `VAL-08` |
+| `S-E06-3` **AC-3** — the four French refusals rendered verbatim in a `role="alert"` region | same reason as AC-2: unexecuted. Additionally, one of the four (the 409 duplicate-name) is reachable only through a read-then-write race the controller does not catch as `P2002`, so it would surface as `Internal server error` instead of the promised French sentence | human, or `VAL-08` |
+| `S-E06-3` **AC-5/AC-10** — *"`bash scripts/ci-gate.sh` reports `GATE: PASS`"* | **the build has not run.** Agents may not build (§4). The gate this slice installs is red on the exact defect it closes until `pnpm build` emits the 109th route, and `scripts/web-route-baseline.json` was **hand-edited, not regenerated**. Both self-heal on one build — but until it runs, the central claim is unverified | orchestrator, in the land pass |
+| The authenticated **per-role browser crawl** of every portal | this gate reads **links, statically**. It does not drive a browser, so it can see neither a runtime error boundary, nor a 500 behind a route that exists, nor a computed `href` (`/admin/${x}`), nor a link rendered only after login. Naming this plainly is the whole reason this table exists | `VAL-08` (Playwright/axe harness) |
+| `PF-91` … `PF-94`, raised by this slice | **inventoried in `scripts/link-integrity-baseline.json` with an owning id, not fixed.** Nine phantom auth routes (`PF-91` — an invitation or password-reset email lands on a 404, P1, owner `V3-E05`), `/parent/remediation` with no index while both siblings have one (`PF-92`), the four bare portal roots that 404 (`PF-93`), and `/pricing` + `/contact` dead in the public footer (`PF-94`). The ratchet holds the ceiling; it does not lower it | later slices / `V3-E05` |
+| `/legal/privacy`, `/legal/terms`, `/legal/cookies` (`PF-38`) | **deliberately baselined, deliberately not fixed** — `S-E06-4` is blocked on **D-08** and risk `R-13` forbids the routine authoring policy text. Their presence in the ceiling is the honest record that they are dead, not permission to forget them | human + D-08 |
 
 ## Operator pre-requisites raised by this epic
 
@@ -122,6 +180,13 @@ shared build cache. They are pure `redirect()` backward-compat stubs rendering n
   `KEYCLOAK_ADMIN_PASSWORD` (see the new `apps/api/.env.example`). That file is gitignored, so on a **fresh clone**
   `bash scripts/ci-gate.sh` fails at the `boot` stage until it exists — an operator pre-requisite this slice created
   and did not close.
+- **Before `S-E06-3` lands — the one blocking step, and it is a build.** `/admin/classes/new` is the **109th** emitted
+  route; `scripts/web-route-baseline.json` was moved 108 → 109 **by hand**, because no agent may build. Run
+  `pnpm build`, then `node scripts/web-artifact-check.js --update` and confirm the file comes back **unchanged**, then
+  re-run `node scripts/link-integrity-check.js` (expect `LINK INTEGRITY CHECK: PASS`, exit 0) and
+  `bash scripts/ci-gate.sh` (expect the **verdict line** `GATE: PASS`, per **R-23** — a stage selection is not a
+  verdict). Until that runs, this PR installs a CI stage that is **red on the very defect it advertises as fixed** —
+  the worst available confusion shape.
 - **Urgent, raised by the escalation panel:** rotate the Keycloak master password. It was already inferable from the
   pre-existing `seed` literals in `infra/docker-compose.prod.yml`; this slice restates it in a public repository, so
   the disclosure is now permanent in git history whatever the templates say afterwards.

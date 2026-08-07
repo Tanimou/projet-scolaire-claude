@@ -208,6 +208,19 @@ jobs:
       # from the artefact protects nobody.
       - run: node scripts/csp-check.js
 
+      # S-E06-3 / PF-19 — link integrity. `/admin/classes/new` was the primary
+      # call to action of the admin classes page and was never emitted as a
+      # route; it nonetheless RESOLVED, against `/admin/classes/[id]` with
+      # `id = "new"`, so the page crashed while a "does this link exist?" check
+      # answered yes. The defect is the SHAPE of the match. This step resolves
+      # every fully-literal internal link in apps/web/src against the EMITTED
+      # route inventory and fails unconditionally on a literal that only
+      # resolves because a single-segment [param] swallowed it, and on a dead
+      # target absent from the reviewed ceiling. Reads .next/, so it belongs in
+      # the build job and after the build. Kept in step with scripts/ci-gate.sh
+      # stage 13; the two must not drift (S-E02-2 AC-4).
+      - run: node scripts/link-integrity-check.js
+
   test:
     name: Test
     runs-on: ubuntu-latest
