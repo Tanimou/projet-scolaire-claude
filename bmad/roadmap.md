@@ -51,26 +51,39 @@ it needs hosted credentials and an operator, is not buildable from this checkout
 would claim the operator half was delivered. **`D-01` no longer blocks anything here** (it asks when the hosted
 *audit fixture* may be taken down; the drill's target is a local container — see `open-decisions.md` D-01).
 
-**V3 slice ledger — `V3-E06` · Production hygiene and navigation completeness · layer L0 · `in-progress` (2026-08-07)**
+**V3 slice ledger — `V3-E06` · Production hygiene and navigation completeness · layer L0 · `code-complete` (2026-08-07)**
 
 | Slice | State |
 |---|---|
 | **`S-E06-1`** — purge development artefacts from production-facing code, **and gate the purge**: the four Maildev `http://localhost:1080` instructions removed from the admin/teacher registration + invite surfaces (replaced by a config-driven `ActivationHint`), the `?? 'admin'` / `?? 'http://localhost:8180'` / `?? 'maildev'` fallbacks deleted from `KeycloakAdminService` / `JwtStrategy` / `KeycloakModule`, a fail-fast `assertRequiredConfig` preflight in `main.ts`, and a new one-way `scripts/production-artefact-check.js` ratchet wired into **both** `scripts/ci-gate.sh` and `.github/workflows/ci.yml`. Closes the **code path** of **`PF-54`**; **`PF-17`** partial (hosted DB seed labels stay operator work) | ✅ **2026-08-04 — this run** |
 | **`S-E06-2`** — enable a **nonce CSP** and close the branding stored-XSS path: the policy shipped and proven on a real response (every script carrying the response nonce, five requests → five distinct nonces), `force-dynamic` at the root layout so no prerendered document can carry an unnonced `<script>`, the branding write route re-scoped to the caller's tenant, and `scripts/csp-check.js` wired into both harnesses. Closes **`PF-45`**; found + closed **`PF-88`** (cross-tenant branding write); raised **`R-28`** | ✅ 2026-08-07 |
 | **`S-E06-3`** — ship `/admin/classes/new` (the admin classes page's primary CTA, and the only affordance a school with zero classes ever saw, pointed at a route that was **never emitted** — it resolved against `/admin/classes/[id]` with `id = "new"` and crashed), **and gate the class of defect**: a new `scripts/link-integrity-check.js` ratchet resolves every fully-literal internal link in `apps/web/src` against the **emitted** route inventory and fails on **DYNAMIC CAPTURE** (a literal that only matches because a single-segment `[param]` swallowed it) as well as on a dead target outside the reviewed ceiling, wired into **both** `scripts/ci-gate.sh` (stage 13) and `.github/workflows/ci.yml`, with a 24-entry `scripts/link-integrity-baseline.json` where every row carries a reason **and** an owning finding. Closes **`PF-19`**; **`PF-39`** inventoried, not fixed; raises **`PF-91`**…**`PF-94`** | ⚠️ 2026-08-07 — landed needing human review |
-| `S-E06-6` | ⬜ todo (`PF-29`) · `S-E06-4` ⛔ blocked on decision **D-08** · `S-E06-5` not enumerated in `sprint-01` |
+| **`S-E06-6`** — **confirmation and explicit scope for a bulk, irreversible control**. "Importer les fériés (France)" wrote **22 `CalendarEvent` rows on one click**, asked nothing, named nothing, and stamped every row with the *active* academic year regardless of the date it carried. Now: `confirm: true` is required **server-side** (a `curl` is subject to it — the refusal throws before any read or write), `year` is **required** (the whole active-year→`new Date().getFullYear()` fallback cascade is **deleted, not kept** — the fallback *was* the stale-year half of the finding), `dryRun: true` returns the **same plan from the same code path** that writes and commits nothing, so the dialog's counts cannot be a second implementation of the scope (DNC-06 made structurally impossible, not re-read). The handler moved into a new `CalendarSeedService`: one `$transaction`, one `createMany`, one `AuditLog` row written **inside** it with a **derived** `actorRole` (a `super_admin` no longer audits as `school_admin`) plus sanitised IP/UA. The existence probe gained the `tenantId` it never had (a `PF-11`-family cross-tenant read), and each row's `academicYearId` is now the year **containing its own date**, or `null`. FE = a new `SeedHolidaysDrawer` that previews on open, states both civil years / 22 planned / already-present / per-academic-year attachment before enabling the confirm. **23 new tests** (`calendar-seed-holidays.spec.ts`, T1–T16 + extras). Closes **`PF-29`**; **advances `PF-31`** on one handler of ~20; fixes **`PF-51`** on this DTO only; **breaking request+response contract** on the endpoint (sole caller updated in the same PR) | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
+| `S-E06-4` | ⛔ blocked on decision **D-08** · `S-E06-5` not enumerated in `sprint-01` · `S-E06-7` (`PF-57`) referenced by the traceability matrix but **never enumerated** in `sprint-01` |
 
 **`PF-54` is closed in code, not on the deployment.** The guard checks *presence*, not *strength*: the hosted
 Keycloak master account is still `admin`/`admin`, and rotating it (Keycloak master realm **then** `.env.prod`) is
 operator work this routine may not perform. Read the slice as "the silent default is gone", never as "the credential
 is safe".
 
-**Next V3 slice → `S-E06-6`** — confirmation and explicit scope for bulk/irreversible controls (`PF-29`). Re-checked
-against `S-E02-5` on 2026-08-07 and **unchanged**, not carried over blindly: this run's slice belonged to `V3-E02`,
-which now holds only `S-E02-1`'s hosted residual; in `V3-E06`, `S-E06-1`/`S-E06-2`/`S-E06-3` have all landed,
-`S-E06-4` stays ⛔ blocked on decision **D-08** (the routine may ship holding pages, never author policy text — risk
-`R-13`), and `S-E06-5` was never enumerated in `sprint-01`. `S-E06-6` is therefore the next **unblocked** story under
-the layer/dependency rule.
+**`V3-E06` is `code-complete`, not `shipped` — and `sprint-01` is now exhausted.** With `S-E06-6` landed, every
+**enumerated, unblocked** story in this epic has shipped. What remains is not code the routine may write: `S-E06-4`
+stays ⛔ blocked on decision **D-08** (the routine may ship holding pages, never author policy text — risk `R-13`),
+`S-E06-5` was never enumerated, and `S-E06-7` (`PF-57`, the student portal's missing profile/settings) appears in
+`docs/daily-improvement-v3/traceability-matrix.md` but has **no story in `sprint-01`**. Calling the epic `shipped`
+would claim `PF-38`/`PF-39`/`PF-57` were delivered — same posture, and the same reason, as `V3-E02`.
+
+**Next V3 slice → none is enumerated. The next run is a `sprint-02` authoring / `epic-spec` run for `V3-E04`
+(audit trail and governance surfaces — `PF-14`, `PF-31`, `PF-32`).** Checked rather than assumed:
+`docs/daily-improvement-v3/stories/` holds **only** `sprint-01.md`, and its last unblocked story was the one that just
+landed. `V3-E04` is the right next epic on the file's own sequencing rule (§3: *"`V3-E04` depends on `V3-E02` … and
+unblocks evidence for everything after it"*) — `V3-E02` is `code-complete`, so the dependency is satisfied — and
+`S-E06-6` has just made the case concrete: it wrote the **first** `AuditLog.ipAddress` in the codebase and derived
+`actorRole` from the JWT on **one** handler while ~20 others still hard-code `'school_admin'`. `V3-E04`'s first slice
+is that shared provenance interceptor, and it must **open with the `trust proxy` decision** the escalation panel
+raised here (see the `S-E06-6` row in `docs/spec/features/v3-e06/PROGRESS.md`): behind Traefik→nginx, `req.ip` is the
+proxy, and enabling blanket XFF trust makes the field client-forgeable — strictly worse than blank. There is no
+`docs/spec/features/v3-e04/` yet, so that run is **`epic-spec`**, not `epic-slice`.
 
 **`S-E06-3` did not close the epic, and two of its own consequences are open.** The link gate is now a permanent CI
 stage, but it reads links **statically** — it does not drive a browser, so it can see neither a runtime error boundary

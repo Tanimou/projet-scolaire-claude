@@ -47,10 +47,20 @@ export interface CalendarEvent {
   classSection?: { name: string } | null;
 }
 
+/**
+ * `GET /api/v1/academic-years` already returns whole `AcademicYear` rows, so
+ * `startDate` / `endDate` are on the wire — this local shape just stopped
+ * narrowing them away. The calendar's holiday-import confirmation needs the
+ * ranges to state, before writing, which school years contain the imported
+ * dates and which part of the span no year covers (S-E06-6 / PF-29). Zero extra
+ * request, zero API change.
+ */
 interface SimpleAcademicYear {
   id: string;
   name: string;
   status: 'active' | 'closed' | 'archived';
+  startDate: string;
+  endDate: string;
 }
 
 interface SimpleGradeLevel {

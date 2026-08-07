@@ -2,9 +2,13 @@
 
 **Layer** L0 · **Size** M · **Depends on** — (independent) · **Blocks** nothing
 **Closes** PF-17, PF-19, PF-29, PF-38, PF-39, PF-45, PF-54, PF-57 · **Gates** G-AUTHZ · **Decisions** D-08 (legal text)
-**Status (2026-08-07)** `in-progress` — `S-E06-1`, `S-E06-2` and `S-E06-3` landed; **next slice `S-E06-6`**
-(confirmation + explicit scope for bulk/irreversible controls, `PF-29`). `S-E06-4` stays ⛔ blocked on **D-08**;
-`S-E06-5` was never enumerated in `sprint-01`. *(This header was stale by one slice until 2026-08-07 — it still
+**Status (2026-08-07)** `code-complete` — `S-E06-1`, `S-E06-2`, `S-E06-3` and `S-E06-6` landed. **No next slice in this
+epic, and `sprint-01` is exhausted:** `S-E06-4` stays ⛔ blocked on **D-08**, `S-E06-5` was never enumerated, and
+`S-E06-7` (`PF-57`) appears in `docs/daily-improvement-v3/traceability-matrix.md` with **no story in `sprint-01`**.
+`code-complete`, not `shipped`, deliberately — declaring `shipped` would claim `PF-38`/`PF-39`/`PF-57` were delivered.
+**Next run → a `sprint-02` authoring / `epic-spec` run for `V3-E04`** (audit trail and governance surfaces), whose
+first slice is the shared audit-provenance interceptor `S-E06-6` just prototyped on one handler — and which must open
+with the `trust proxy` decision recorded below. *(This header was stale by one slice until 2026-08-07 — it still
 pointed at `S-E06-2` after `S-E06-2` had landed in `296c5cd`. Corrected in the `S-E06-3` land pass, and named here
 rather than quietly overwritten.)*
 
@@ -27,7 +31,8 @@ valuable to credibility — which is why it is scheduled in parallel from day on
 | **S-E06-3** | Fix `/admin/classes/new`; link-integrity gate over the **emitted** route inventory | ✅ done | 2026-08-07 | spec: [`stories/S-E06-3.md`](./stories/S-E06-3.md) · PF-19 **closed**, PF-39 inventoried-not-fixed, PF-91…PF-94 raised · evidence below |
 | **S-E06-4** | Legal, help and contact routes before consent | ⛔ blocked | — | needs decision **D-08** (holding pages allowed, policy text is not) |
 | **S-E06-5** | *(not enumerated in sprint-01)* | — | — | — |
-| **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⬜ **next** | — | PF-29 |
+| **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E06-6.md`](./stories/S-E06-6.md) · PF-29 **closed**, PF-31 advanced-not-closed, PF-51 fixed on this DTO only · evidence below |
+| **S-E06-7** | *(referenced by the traceability matrix for `PF-57`; **no story in `sprint-01`**)* | ⬜ unenumerated | — | PF-57 |
 
 ## S-E06-1 — evidence (2026-08-04)
 
@@ -144,6 +149,112 @@ structural tomorrow. (2) "Internal link" is implemented as *any literal string s
 bare-portal-root gap) but it means the ratchet permanently carries rows whose own reason says *"not a defect"*, so it
 cannot reach zero without a `class: "prefix-constant"` tag. Ruled on here, not inherited.
 
+## S-E06-6 — evidence (2026-08-07)
+
+**The defect, reproduced against the running stack.** "Importer les fériés (France)" was a single `<button onClick>`
+that fired `seedFrenchHolidays()` with **no argument, no dialog and no statement of scope**, and the handler then
+guessed: `body.year` → the active academic year's `startDate.getFullYear()` → `new Date().getFullYear()`. One click
+wrote **22 `CalendarEvent` rows** (11 holidays × two civil years) with `visibility: 'all'` — i.e. visible to every
+parent — and stamped **every one** of them with `activeAcademicYearId`, whatever date the row carried. Measured on
+`voltaire-demo`: **13 of the 22 rows were attached to an academic year that does not contain their own date.** The
+button's own label named neither the count nor the years, so the operator could not have known either.
+
+**What the slice changed, and why each half is load-bearing.** `confirm: true` is required **server-side** —
+`calendar-seed.service.ts` throws **before any read and before any write**, so a `curl` is subject to the gate, not
+just the browser. `year` is **required**: the entire fallback cascade is **deleted, not kept**, because the fallback
+*was* the stale-year half of the finding, and a 400 on an absent year is strictly better than 22 rows in the wrong one.
+`dryRun: true` returns the **same plan object from the same code path** that writes, and commits nothing — so the
+dialog's counts cannot drift from what the write does (**DNC-06 made structurally impossible rather than re-read**; the
+FE never enumerates a holiday and never re-implements the computus). The handler moved out of the controller into a new
+`CalendarSeedService` (the `snapshot-ops.service` / `AdminRemediationService` precedent): **one `$transaction`, one
+`createMany`, one `AuditLog` row written inside it** — written even at `created: 0` — carrying a **derived** `actorRole`
+(a `super_admin` now audits as `super_admin`, not as the hard-coded `'school_admin'` of ~20 other sites), `portal`, and
+IP/UA sanitised **before** the transaction opens so audit hygiene can never roll back a valid import. The existence
+probe gained the `tenantId` it never had — the pre-diff query was `where: { schoolId, title, startsAt }`, a
+`PF-11`-family cross-tenant read — and suppression is decided on an exact `(title, startsAt)` pair `Set`, never an `IN`
+cross-product. Each row's `academicYearId` is now the year **containing its own date**, or `null`.
+
+**What executed.** `pnpm typecheck` → **13/13 Turbo tasks, exit 0**, with **both** packages carrying the diff
+**cache-miss and executed fresh** (`@pilotage/api` `19609675f8b089da`, `@pilotage/web` `90b039ea86b75fbb`) — a FULL
+TURBO replay was explicitly **not** accepted as evidence. `pnpm --filter @pilotage/api test -- "modules/calendar"` →
+**32/32 pass**: 23 new cases in `apps/api/src/modules/calendar/calendar-seed-holidays.spec.ts` (623 L — T1/T2 refusal
+*before any read*, T4/T5 the `PF-51` DTO bounds, T6/T16 single-`createMany` idempotency, T7/T8 tenant scoping on
+**both** the existence read and `academicYear.findMany`, T9a/T9b audit-inside-the-transaction proven in **both**
+directions against a buffering Prisma double, T10/T11/T12 derived `actorRole` + pre-transaction inet sanitisation,
+T13 per-row academic-year resolution, T14 `dryRun`-is-a-read, T15 the computus pinned against four real French dates)
+plus the 9 pre-existing `calendar.access.spec.ts` cases unbroken by the controller refactor. `git diff --check` → exit
+0 on the working tree, against `HEAD`, and per-file on all five new files. `npx eslint src/app/admin/calendar` → 1
+warning, the pre-existing `react-hooks/exhaustive-deps` at `CalendarManager.tsx:72`; `apps/web` is back at **34/34**,
+so `scripts/lint-warning-baseline.json` holds **in both directions** and the ceiling was not raised.
+
+**Two blockers were found by the verify panel and fixed before land, and one of them is a gate gap worth keeping.**
+(1) `pairKey` in `calendar-seed.service.ts` had been written with a **raw NUL byte** (U+0000, offset 3055) as its
+separator, so git classified the slice's core service as **binary** — `Bin 0 -> 13165 bytes`, "Binary file not shown"
+in the pull request, invisible to `git diff --check`, and skipped by `grep`/`ripgrep` (a `createMany` sweep over the
+module returned only spec hits). It would have been the only binary source file among **691** tracked `.ts`/`.tsx`.
+Fixed to `|`, the repo's established composite-key delimiter (≥7 sites), which is provably collision-free here: titles
+come from a fixed 11-entry table, so a generated key carries exactly one `|` and a hostile DB title carries two or more.
+**No existing gate could have caught it** — `git diff --check` has no text to scan on a binary file, the diff-reading
+reviewers see a space, and neither `production-artefact-check.js` nor `link-integrity-check.js` covers source-byte
+hygiene. A ~10-line "tracked `*.ts`/`*.tsx` must contain no `\0`" check would fit the `scripts/*-check.js` family and
+would land green with a zero-entry baseline; **it was not added here** — flagged, not done. (2) The new
+`SeedHolidaysDrawer` import broke `import/order` in `CalendarManager.tsx`, putting `apps/web` at 35 against a ceiling
+of 34; reordered rather than re-baselined.
+
+**A mutation-test edit left the tree unsafe mid-run, and was reverted.** While probing the controller boundary the
+`confirm` guard was rewritten to `confirm: true` — which reverts the endpoint to the audited behaviour *while all 32
+tests still pass*, and adds an audit row asserting the operator confirmed. Verified restored before land:
+`calendar.controller.ts:298` reads `confirm: body.confirm === true`. That the mutation survives the whole suite is the
+real result: **`CalendarController.prototype.seedFrenchHolidays` is invoked by no spec** — see the "not claimed" rows.
+
+**A deviation from the locked design, recorded rather than hidden.** Story §5.2 / decision **D8** specify
+`ConfirmDialog` from `@pilotage/ui`; the slice ships a new 521-line `SeedHolidaysDrawer.tsx` over the existing
+`FormDrawer` primitive. Defensible and deliberate — `ConfirmDialog` has **no focus trap** and **auto-focuses its
+confirm button** (`ConfirmDialog.tsx:48-54`), which is the wrong initial focus for a 22-row bulk write, while `Drawer`
+carries the `E3-S3` focus-trap + focus-restore; the drawer body also needs a `<select>` and a server-derived scope
+table. No `packages/ui` change was made. But **the story text still says `ConfirmDialog`** at `:212`, `:379` and `:571`,
+so `docs/spec/` currently specifies a component and a file layout that do not exist — reconcile it, and queue
+`ConfirmDialog`'s own focus-trap/auto-focus debt as its own finding rather than absorbing it silently.
+
+## S-E06-6 — the routine's executed half (2026-08-07, run 22)
+
+The sprint could not reach a database: no agent may build, and the committed spec proves the transaction claim
+against a **buffering Prisma double**. The orchestrator then re-proved it on the **live local Docker Postgres**
+(`pilotage_postgres`, port 5433) — Step −1 makes the local stack the target and local data expendable.
+A throwaway drill instantiated the real `CalendarSeedService` with a real `PrismaClient` on two
+throwaway tenants it created and deleted: **26/26 assertions, `REAL-DB DRILL: PASS`**.
+
+| Claim | Was (committed suite) | Now (executed) |
+|---|---|---|
+| AC-1 refusal writes nothing | mock call counts | **0 rows in `calendar_event`, 0 in `audit_log`**, counted in Postgres |
+| AC-4 / G-AUDIT audit rolls back with the events | buffering double (T9a/T9b) | a **real `ROLLBACK`** → `events=0 audit=0`. Forced by handing the service an *unsanitised* `ipAddress` so the `@db.Inet` cast fails **after** `createMany` — which also proves *why* `sanitiseInetOrNull` exists |
+| AC-4 exactly one audit row for 22 writes | asserted | **22 events + 1 audit row**, carrying `actorRole=super_admin` (derived, not the hard-coded literal), `portal=admin`, `ip=203.0.113.9`, `ua=pf29-drill/1.0`, `after.created=22`, `after.years=[2031,2032]` |
+| AC-3 idempotence | asserted | second apply → `created=0`, **table still holds 22**, and it still writes its own audit row (**2**) |
+| AC-5 / G-TENANT foreign duplicate does not suppress | asserted | a **second tenant holding all 22 identical `(title, startsAt)` pairs** still gets its own 22, with **0 cross tenant/school rows** |
+| AC-6 per-date attachment | unit-level | **invariant over the whole set**: 0 of 22 rows attached to a year that does not contain its own date; distribution `2030-2031`→6, `2031-2032`→9, `null`→7 |
+| AC-8 `GATE: PASS` | **unexecuted** (agents may not build) | `bash scripts/ci-gate.sh` → **`GATE: PASS`**, all **19** stages, one `pnpm build` (8/8 tasks, 6 cached, 10 m 13 s), boot **229 routes** |
+
+**One drill assertion failed and the code was right — recorded, because the error was the routine's.** The first
+version asserted *"no row is attached to the earlier academic year"* as proof the stale-year fallback was gone.
+That is the wrong invariant: `2030-2031` runs to 2031-07-05 and therefore legitimately contains the
+January–May 2031 holidays, so six rows belonged there. Re-specified to *no row attached to a year that does not
+contain its own date* → 0 violations. This is now risk **R-30** (a false **red** is more dangerous here than a
+false green, because the documented reflex on a red is to change the code).
+
+**Discovered by the cleanup, not by the slice: `PF-96`.** Deleting the drill's tenants cascaded away all 44
+`calendar_event` rows and **left all 6 `audit_log` rows behind** — `AuditLog.tenantId` has no
+`@relation` to `Tenant`, unlike `School` / `UserProfile` / `AcademicYear`. Plausibly
+deliberate for an append-only trail, but stated nowhere, so it is indistinguishable from a forgotten relation.
+Owned by `V3-E04`; the 6 orphan rows were deleted by hand and the local stack was left running and healthy.
+
+**No docker rebuild this run.** The stack was already up and healthy and the evidence needed only a real Postgres and
+the freshly built `dist/`, so nothing required recreating (Step −1 permits a rebuild; it does not ask for one).
+
+**What the drill does *not* close.** It calls the **service**, exactly as the committed suite does, so the controller
+boundary (`confirm: body.confirm === true`) still has no executed coverage — the mutation that makes it
+`confirm: true` leaves everything green. And no browser rendered the drawer, so every FE and a11y claim below
+remains static.
+
 ## Not claimed (kept honest, per slice)
 
 | Item | Why it is not claimed | Who can close it |
@@ -167,6 +278,18 @@ cannot reach zero without a `class: "prefix-constant"` tag. Ruled on here, not i
 | The authenticated **per-role browser crawl** of every portal | this gate reads **links, statically**. It does not drive a browser, so it can see neither a runtime error boundary, nor a 500 behind a route that exists, nor a computed `href` (`/admin/${x}`), nor a link rendered only after login. Naming this plainly is the whole reason this table exists | `VAL-08` (Playwright/axe harness) |
 | `PF-91` … `PF-94`, raised by this slice | **inventoried in `scripts/link-integrity-baseline.json` with an owning id, not fixed.** Nine phantom auth routes (`PF-91` — an invitation or password-reset email lands on a 404, P1, owner `V3-E05`), `/parent/remediation` with no index while both siblings have one (`PF-92`), the four bare portal roots that 404 (`PF-93`), and `/pricing` + `/contact` dead in the public footer (`PF-94`). The ratchet holds the ceiling; it does not lower it | later slices / `V3-E05` |
 | `/legal/privacy`, `/legal/terms`, `/legal/cookies` (`PF-38`) | **deliberately baselined, deliberately not fixed** — `S-E06-4` is blocked on **D-08** and risk `R-13` forbids the routine authoring policy text. Their presence in the ceiling is the honest record that they are dead, not permission to forget them | human + D-08 |
+| `S-E06-6` — **the concurrent-double-click race is narrowed, not eliminated** | Two requests that interleave inside the transaction window can both see an empty existence set and both insert, giving up to **44** duplicate `visibility: 'all'` rows visible to parents. There is **no DB-level unique constraint** on `(tenantId, schoolId, title, startsAt)` and `createMany` carries no `skipDuplicates`. AC-3 as written ("re-running produces no duplicates") is satisfied for **sequential** re-runs — which is what a human operator does and what the audit observed — and the drawer's `busy` flag narrows only the browser path. `isolationLevel: 'Serializable'` was deliberately **not** used: it has zero occurrences in `apps/api` and a new idiom would need a retry policy that does not exist. The durable fix is the migration deferred in story §3 **D6** — a `@@unique([tenantId, schoolId, title, startsAt])` whose **first task is a pre-existing-duplicates survey**, on data this routine cannot inspect on the hosted deployment | a later slice (G-MIGRATION) |
+| `S-E06-6` — **no browser rendered the dialog** | `apps/web` has no unit runner (Playwright only) and no Playwright test was written or run, so **every FE claim in this slice is static** — read from the source, not measured. That includes the a11y claims: the `role="status"` scope region is *unmounted at the exact moment the counts arrive* (the `loading` branch is replaced by the `ready` branch), so a screen-reader user is asked to confirm a 22-row bulk write having been told nothing about its scope (WCAG 4.1.3), and `FormDrawer` replaces the submit label with a bare `'…'` while busy, so the confirm button loses its accessible name mid-write. Reviewed statically, **not fixed here** | `VAL-08` / a later slice |
+| `S-E06-6` — **the controller boundary has no executed test** | All 23 new cases call `CalendarSeedService.seedFrenchHolidays(args)` **directly**; `CalendarController.prototype.seedFrenchHolidays` is invoked by **no spec**. Change `confirm: body.confirm === true` to `confirm: true` at `calendar.controller.ts:298` and **all 32 tests still pass** while the endpoint reverts to the audited behaviour — now with an audit row asserting the operator confirmed. This was attempted as a mutation during the run and reverted; it stands as a structural claim, verifiable in 30 seconds. Same shape for the provenance seam (the tests call `deriveAlertActorProvenance` / `sanitiseInetOrNull` themselves and pass the results in, proving the helpers and not the call sites) and for `@RequiresPermission('calendar.write')` on the seed route, which is unasserted even though the file already owns the `handlerRequiresPermission` idiom. **The FE half of DNC-12** — "preview never carries `confirm`" — likewise has no executed test at all; it is asserted today only by a code comment | next slice (an ~80-line controller spec) |
+| `S-E06-6` — **`AuditLog.ipAddress` records the reverse proxy, not the operator** | This is the **first** `@Ip()` / `@Headers()` capture in all of `apps/api`, and `trust proxy` is set **nowhere** (`grep 'trust proxy\|trustProxy'` over `apps/api/src` + `infra/` → 0 hits; `main.ts:37` is a bare `NestFactory.create`). Express `req.ip` is therefore the **socket peer**. The real chain is browser → Next server action → the `apps/web` server-side `fetch` (which forwards only Accept / Content-Type / Authorization) → nginx → API, so the stored value is the **web container's** address — identical for every actor forever — and `userAgent` is `null` on every UI-driven seed because undici sends none. `sanitiseInetOrNull` cannot catch it: a proxy IP *is* a valid inet. That **inverts the service's own stated principle** (*« une provenance absente, jamais une provenance fausse »*): the sanitiser rejects malformed values, never wrong ones. `/admin/audit` renders the field in monospace as "where the admin acted from". Recorded here rather than fixed, because `app.set('trust proxy', …)` is a security decision — blanket XFF trust makes the audit IP **client-forgeable**, strictly worse than blank — needing a pinned hop count against the real Traefik→nginx→api topology. **Read FR9 as "the capture seam exists", never as "the operator's IP is audited".** This handler is explicitly the precedent `V3-E04` will generalise to ~20 sites, so the decision must be made **there, first**, not inherited from here | `V3-E04` (with an ADR or a documented hop count) |
+| `S-E06-6` — **`PF-31` is advanced, not closed** | `actorRole` is derived rather than hard-coded and IP/UA are captured — on **this one handler**. The other ~20 audit call sites still hard-code `'school_admin'` and still write no IP/UA. The shared interceptor is `V3-E04`'s, and `sanitiseInetOrNull` / `truncateUserAgent` / `MAX_USER_AGENT_LENGTH` currently live in a *feature* module (`modules/calendar/`) — moving them to a `shared/audit/` home should be that interceptor's first task, so a second copy is never written | `V3-E04` |
+| `S-E06-6` — **`PF-51` is fixed on this DTO only** | `{year:'abc'}` and `{year:1e9}` now return 400 instead of producing an `Invalid Date` and an opaque 500. The missing-numeric-validator family may exist on other DTOs; this slice did **not** sweep them | `V3-E05` |
+| `S-E06-6` — **`PF-29` is closed for the reproduced control only** | Other bulk/irreversible surfaces were not audited in this slice (story §2 out-of-scope). "Confirmation for bulk controls" must **not** be read as product-wide. Note also that `seedFrenchHolidays(year)` in `actions.ts` hard-codes `confirm: true`, and a Next server action is itself a reachable POST — so anything holding an admin session bypasses the *dialog*; only the `calendar.write` check and the required explicit `year` remain. DNC-12 means "never defaulted **server-side**" | a later slice |
+| `S-E06-6` — **rows attached to no academic year are correct, not missing data** | `academicYearId: null` is the right answer when no declared academic year contains the date. On a fresh tenant this can be most of the 22. Full attachment needs the academic-year rows to exist first — a data problem, not a code one | n/a (data) |
+| `S-E06-6` — **historical rows are not repaired** | The 22 rows the audit's own click wrote, with the wrong `academicYearId` (13 of 22 measured wrong on `voltaire-demo`), are still wrong wherever they were written. Backfilling them is an operator/data action, not this diff. Relatedly, on a **partial re-run** the audit row's `after.academicYearIds` / `unattachedCount` and the dialog's per-year breakdown are computed over all **22 planned** entries, not the `missing` subset actually written — so a `created: 0` re-run still records a plan-wide distribution that the database does not hold | operator / a later slice |
+| `S-E06-6` — **AC-8 was not executed** | `bash scripts/ci-gate.sh` (`GATE: PASS` verdict line, per **R-23**) and `node scripts/test-ratchet.js api` were **not run**: the gate needs a build and agents may not build (§4). Typecheck, the targeted calendar suite, `git diff --check` and a scoped eslint run were executed and are reported above; the gate verdict is not claimed | orchestrator, in the land pass |
+| `S-E06-6` — **G-MIGRATION does not trigger, and that is a decision** | There is **no `schema.prisma` change** in this diff — stated rather than omitted, per story §3 **D6**. The unique constraint the concurrency residual wants *would* trigger it in full (a reviewed file under `apps/api/prisma/migrations`, never `db push`, with an expand/contract shape and a dedupe step in the same SQL over hosted data this routine cannot inspect). That is its own slice | a later slice |
+| `S-E06-6` — **two smaller drift surfaces, ruled on rather than inherited** | (a) `MAX_SEED_YEAR = 2100` in `french-holidays.ts` vs the `2099` literal in `SeedHolidaysDrawer.tsx:38` (deliberately one lower, because the endpoint emits `year + 1`): the module docblock exists expressly so validator and announced scope cannot diverge, and the FE re-breaks that one layer out with **no shared source and no pinning test** — `packages/contracts` was ruled out of scope for this slice. (b) `resourceType: 'calendar_event'` is **not** in `RESOURCE_TYPE_LABELS` (`apps/web/src/app/admin/audit/AuditPageFilters.tsx:21-35`), so the RGPD-facing audit surface will render **"Calendar event"** in English amongst thirteen French labels — a one-line addition that fell through the gap between the disjoint api/web file sets | next slice (both one-liners) |
 
 ## Operator pre-requisites raised by this epic
 
@@ -191,6 +314,22 @@ cannot reach zero without a `class: "prefix-constant"` tag. Ruled on here, not i
   pre-existing `seed` literals in `infra/docker-compose.prod.yml`; this slice restates it in a public repository, so
   the disclosure is now permanent in git history whatever the templates say afterwards.
 
+- **Before `S-E06-6` lands — no schema, no config, one gate run.** The slice adds **no** `schema.prisma` change, no new
+  environment variable and no new permission, so there is **no operator pre-requisite for demoability**. What is owed is
+  the gate the agents may not run: `bash scripts/ci-gate.sh` (expect the **verdict line** `GATE: PASS`, per **R-23**)
+  and `node scripts/test-ratchet.js api` (expect no NEW failures) — AC-8, listed as unexecuted above.
+- **Before `V3-E04`'s first slice — decide `trust proxy`.** `AuditLog.ipAddress` now has its first writer and it records
+  the reverse proxy. Do not generalise the capture to the other ~20 audit sites until a specific trusted-hop count or
+  trusted subnet is decided against the real Traefik→nginx→api topology, because the naive fix (blanket XFF trust) makes
+  an append-only governance column **client-forgeable**. Either resolution is acceptable for this PR — the one taken here
+  is to keep the capture and state plainly, above, that the value is the proxy's.
+
 ## Done when
 
 Eight findings `closed`; the link crawl is a permanent CI gate; R-13 addressed via holding pages.
+
+**Status against that bar (2026-08-07).** `PF-19`, `PF-29`, `PF-45` and `PF-88` are `closed`; `PF-54` is `partial`
+(presence, not strength) and `PF-17` is `partial` (hosted seed labels are operator work); `PF-38`, `PF-39` and `PF-57`
+are **measured and inventoried, not fixed** — `PF-38` because `S-E06-4` is blocked on **D-08**, `PF-57` because no story
+was ever enumerated for it. The link crawl **is** a permanent CI gate (stage 13), and so are the CSP and
+production-artefact gates. `R-13` is **not** addressed: no holding pages shipped. Hence `code-complete`, not `shipped`.

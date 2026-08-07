@@ -18,12 +18,8 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import {
-  createCalendarEvent,
-  deleteCalendarEvent,
-  seedFrenchHolidays,
-  updateCalendarEvent,
-} from './actions';
+import { SeedHolidaysDrawer, type SeedYearOption } from './SeedHolidaysDrawer';
+import { createCalendarEvent, deleteCalendarEvent, updateCalendarEvent } from './actions';
 import type { CalendarEvent, CalendarEventType } from './page';
 
 const TYPE_LABEL: Record<CalendarEventType, string> = {
@@ -58,7 +54,7 @@ const TYPE_DOT: Record<CalendarEventType, string> = {
 
 interface Props {
   events: CalendarEvent[];
-  years: Array<{ id: string; name: string; status: string }>;
+  years: SeedYearOption[];
   gradeLevels: Array<{ id: string; code: string; name: string }>;
   classes: Array<{ id: string; name: string; gradeLevel: { name: string } }>;
 }
@@ -66,6 +62,7 @@ interface Props {
 export function CalendarManager({ events, years, gradeLevels, classes }: Props) {
   const [editing, setEditing] = useState<CalendarEvent | null>(null);
   const [creating, setCreating] = useState(false);
+  const [seedOpen, setSeedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [monthOffset, setMonthOffset] = useState(0);
@@ -95,23 +92,14 @@ export function CalendarManager({ events, years, gradeLevels, classes }: Props) 
       .slice(0, 12);
   }, [events, filterType]);
 
-  const handleSeed = async () => {
-    setBusy(true);
-    setFeedback(null);
-    const res = await seedFrenchHolidays();
-    setBusy(false);
-    if (!res.ok) setFeedback({ kind: 'err', text: res.error });
-    else {
-      const r = res.data as { created: number; skipped: number; year: number };
-      setFeedback({
-        kind: 'ok',
-        text: `${r.created} jours fériés ajoutés (${r.skipped} déjà présents) pour ${r.year}–${r.year + 1}.`,
-      });
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Supprimer cet événement ?')) return;
+  // The holiday import no longer fires on click: the trigger only opens the
+  // confirmation drawer, which reads the plan (dry run) before anything is
+  // written. See SeedHolidaysDrawer for the scope statement it must show
+  // (S-E06-6 / PF-29).
+  const handleDelete = async (id: string, title: string) => {
+    // Still a native confirm (migrating it to ConfirmDialog is out of this
+    // slice), but it now names what it deletes instead of nothing.
+    if (!confirm(`Supprimer « ${title} » ?`)) return;
     setBusy(true);
     const res = await deleteCalendarEvent(id);
     setBusy(false);
@@ -119,7 +107,7 @@ export function CalendarManager({ events, years, gradeLevels, classes }: Props) 
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" aria-busy={busy}>
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-1.5">
           <button type="button" onClick={() => setMonthOffset((o) => o - 1)} className="grid h-8 w-8 place-items-center rounded-lg text-slate-600 hover:bg-slate-100">
@@ -143,25 +131,29 @@ export function CalendarManager({ events, years, gradeLevels, classes }: Props) 
           ))}
         </select>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <button type="button" onClick={handleSeed} disabled={busy} className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900 hover:bg-amber-100 disabled:opacity-50">
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            Importer les fériés (France)
+        <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          {/* Ellipsis = « ouvre une boîte de dialogue », ne déclenche rien. */}
+          <button type="button" onClick={() => setSeedOpen(true)} className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 sm:w-auto">
+            <Sparkles className="h-3.5 w-3.5" aria-hidden />
+            Importer les jours fériés…
           </button>
-          <button type="button" onClick={() => setCreating(true)} className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-500/30">
-            <Plus className="h-4 w-4" /> Nouvel événement
+          <button type="button" onClick={() => setCreating(true)} className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-500/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 sm:w-auto">
+            <Plus className="h-4 w-4" aria-hidden /> Nouvel événement
           </button>
         </div>
       </div>
 
-      {feedback && (
-        <div className={`flex items-start gap-2 rounded-xl border px-4 py-2.5 text-sm ${
-          feedback.kind === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-red-200 bg-red-50 text-red-900'
-        }`}>
-          {feedback.kind === 'ok' ? <CheckCircle2 className="h-4 w-4 mt-0.5" /> : <X className="h-4 w-4 mt-0.5" />}
-          {feedback.text}
-        </div>
-      )}
+      {/* WCAG 4.1.3 — le résultat d'une écriture de masse doit être annoncé. */}
+      <div role="status" aria-live="polite">
+        {feedback && (
+          <div className={`flex items-start gap-2 rounded-xl border px-4 py-2.5 text-sm ${
+            feedback.kind === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-red-200 bg-red-50 text-red-900'
+          }`}>
+            {feedback.kind === 'ok' ? <CheckCircle2 className="h-4 w-4 mt-0.5" aria-hidden /> : <X className="h-4 w-4 mt-0.5" aria-hidden />}
+            {feedback.text}
+          </div>
+        )}
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <section className="lg:col-span-2 rounded-2xl bg-white ring-1 ring-slate-200 overflow-hidden">
@@ -194,7 +186,7 @@ export function CalendarManager({ events, years, gradeLevels, classes }: Props) 
                     <button onClick={() => setEditing(e)} className="grid h-7 w-7 place-items-center rounded-md text-slate-500 hover:bg-slate-200 hover:text-slate-900">
                       <Edit2 className="h-3.5 w-3.5" />
                     </button>
-                    <button onClick={() => handleDelete(e.id)} className="grid h-7 w-7 place-items-center rounded-md text-red-500 hover:bg-red-100">
+                    <button onClick={() => handleDelete(e.id, e.title)} className="grid h-7 w-7 place-items-center rounded-md text-red-500 hover:bg-red-100">
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -204,6 +196,13 @@ export function CalendarManager({ events, years, gradeLevels, classes }: Props) 
           </ul>
         </section>
       </div>
+
+      <SeedHolidaysDrawer
+        open={seedOpen}
+        onClose={() => setSeedOpen(false)}
+        years={years}
+        onImported={(text) => setFeedback({ kind: 'ok', text })}
+      />
 
       {(creating || editing) && (
         <EventEditor
@@ -333,7 +332,7 @@ function EventEditor({
   onSave,
 }: {
   event: CalendarEvent | null;
-  years: Array<{ id: string; name: string; status: string }>;
+  years: SeedYearOption[];
   gradeLevels: Array<{ id: string; code: string; name: string }>;
   classes: Array<{ id: string; name: string; gradeLevel: { name: string } }>;
   onClose: () => void;
@@ -446,7 +445,7 @@ function EventEditor({
             }}
             className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-500/30 disabled:opacity-60"
           >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flag className="h-4 w-4" />}
+            {saving ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Flag className="h-4 w-4" aria-hidden />}
             {event ? 'Mettre à jour' : 'Créer'}
           </button>
         </div>
