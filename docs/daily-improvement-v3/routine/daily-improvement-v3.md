@@ -59,10 +59,20 @@ log the first time it matters, so nobody reads V2 and thinks this document drift
 When the local stack is stale, wrong, or simply unknown, **rebuild it and recreate the containers**:
 
 ```
-docker compose -f infra/docker-compose.yml build <service>
-docker compose -f infra/docker-compose.yml up -d --force-recreate <service>
-docker compose -f infra/docker-compose.yml --profile obs up -d      # when the evidence needs it
+docker compose --env-file .env -f infra/docker-compose.yml build <service>
+docker compose --env-file .env -f infra/docker-compose.yml up -d --force-recreate <service>
+docker compose --env-file .env -f infra/docker-compose.yml --profile obs up -d   # when evidence needs it
 ```
+
+> **`--env-file .env` was missing from these three lines until run 20, and that is `PF-86`.** Compose resolves `.env`
+> from the compose file's directory (`infra/`), not the caller's cwd, and `infra/.env` does not exist — so the three
+> commands *this document* gave the routine started a stack on the compose defaults rather than on the ports the root
+> `.env` declares. Run 19 was bitten by exactly this: Postgres came back without its `5433:5432` mapping and every
+> host-side prisma command failed `P1001`. `S-E02-16` removed the defaults, so those commands now **refuse** instead of
+> silently doing the wrong thing, and `scripts/compose-invocation-check.js` polices this file's own command lines.
+>
+> **Operator action:** `~/.claude/scheduled-tasks/daily-improvement-v3/SKILL.md` Step −1 carries the same three lines
+> and lives outside this checkout, so the routine cannot fix it. Mirror the `--env-file .env` there.
 
 Rules that still bind:
 

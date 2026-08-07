@@ -1,12 +1,39 @@
 # =============================================================================
 # Pilotage Scolaire — docker-compose (dev local complet)
 # =============================================================================
-# Lancement:
-#   docker compose up -d
-#   docker compose up -d --build           # rebuild images
-#   docker compose --profile prod up -d    # mode prod (avec nginx)
-#   docker compose --profile obs up -d     # avec stack observabilité
-#   docker compose down -v                 # tout supprimer (volumes inclus)
+# Lancement — TOUJOURS depuis la RACINE du dépôt, avec `--env-file .env` :
+#   docker compose --env-file .env -f infra/docker-compose.yml up -d
+#   docker compose --env-file .env -f infra/docker-compose.yml up -d --build
+#   docker compose --env-file .env -f infra/docker-compose.yml --profile app up -d
+#   docker compose --env-file .env -f infra/docker-compose.yml --profile obs up -d
+#   docker compose --env-file .env -f infra/docker-compose.yml down -v
+#
+# POURQUOI `--env-file .env` N'EST PAS FACULTATIF (PF-86)
+# ------------------------------------------------------
+# Compose résout `.env` depuis le **project directory** — le dossier du fichier
+# compose, donc `infra/` — et non depuis le `cwd` de l'appelant. `infra/.env`
+# n'existe pas : les ports vivent dans le `.env` **racine**, à côté de la
+# `DATABASE_URL` que prisma, les seeds et les scripts hôte lisent. Sans
+# `--env-file .env`, Compose ne voyait aucune de ces variables et retombait
+# silencieusement sur les défauts `${VAR:-…}` — donc deux commandes d'apparence
+# identique démarraient deux piles différentes, et la différence n'était visible
+# que lorsqu'un outil hors conteneur tentait de se connecter.
+#
+# Le pire n'était pas la divergence entre le `.env` et les défauts, mais la
+# divergence **interne à ce fichier** : `KC_HOSTNAME` et `KEYCLOAK_PUBLIC_URL`
+# codaient `localhost:8180` en dur pendant que `ports:` publiait `8080` par
+# défaut. Sur le chemin documenté, Keycloak signait donc des jetons
+# `iss=http://localhost:8180` sur un port que personne ne publiait, et l'API
+# rejetait chaque jeton : la connexion était cassée par construction.
+#
+# Deux corrections, pas une :
+#   1. plus AUCUN défaut `${VAR:-…}` sur un port publié — `${VAR:?…}` fait
+#      REFUSER Compose, dans le terminal de l'opérateur, en nommant le remède ;
+#   2. plus aucun port codé en dur : l'URL publique de Keycloak est dérivée de
+#      `${KEYCLOAK_PORT}`, donc les deux ne peuvent plus diverger.
+#
+# `scripts/compose-invocation-check.js` (stage `ci-gate.sh`) tient les deux.
+# `bash infra/pilotage.sh up` fait tout cela pour vous.
 # =============================================================================
 
 name: pilotage-scolaire
@@ -18,7 +45,13 @@ x-app-env: &app-env
   KEYCLOAK_URL: http://keycloak:8080
   # Browser-facing Keycloak URL (must equal KC_HOSTNAME). The api uses it as the
   # expected token issuer; the web uses it as the OIDC issuer + auth-redirect host.
-  KEYCLOAK_PUBLIC_URL: http://localhost:8180
+  #
+  # DÉRIVÉ de ${KEYCLOAK_PORT}, jamais codé en dur (PF-86). Ce littéral valait
+  # `http://localhost:8180` pendant que `keycloak.ports` publiait `8080` par
+  # défaut : sur le chemin documenté, l'émetteur annoncé n'était joignable sur
+  # aucun port. Un port écrit à deux endroits finit toujours par diverger ; il
+  # n'est donc plus écrit qu'à un seul.
+  KEYCLOAK_PUBLIC_URL: http://localhost:${KEYCLOAK_PORT:?KEYCLOAK_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}
   KEYCLOAK_REALM: pilotage-scolaire
   # Compte d'administration Keycloak utilisé par l'API (invitations, MFA,
   # réinitialisations). Ces deux clés étaient ABSENTES de cette ancre : le code
@@ -45,7 +78,7 @@ x-app-env: &app-env
   MAIL_FROM: "Pilotage scolaire <no-reply@pilotage.local>"
   # Browser-facing web origin — used by the worker to absolutise notification
   # email deep links (e.g. "/parent/grades?..." → full clickable URL).
-  WEB_PUBLIC_URL: http://localhost:3000
+  WEB_PUBLIC_URL: http://localhost:${WEB_PORT:?WEB_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}
   # OTEL_EXPORTER_OTLP_ENDPOINT n'est DÉLIBÉRÉMENT plus ici (S-E02-14 / PF-78).
   # Posé sur cette ancre partagée, il était distribué à cinq services —
   # migrator, api, worker, web et seed — dont trois ne pouvaient rien émettre :
@@ -88,7 +121,7 @@ services:
       POSTGRES_DB: pilotage
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:?POSTGRES_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -108,7 +141,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_PORT:?REDIS_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -140,13 +173,13 @@ services:
       # token/jwks endpoints on the request host (keycloak:8080) so the api/web
       # containers reach them internally. This makes BOTH the credentials (ROPC,
       # internal) and SSO-redirect (OIDC, browser) flows mint a consistent iss.
-      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:?KEYCLOAK_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HTTP_ENABLED: "true"
       KC_PROXY: edge
       KC_HEALTH_ENABLED: "true"
     ports:
-      - "${KEYCLOAK_PORT:-8080}:8080"
+      - "${KEYCLOAK_PORT:?KEYCLOAK_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:8080"
     volumes:
       - keycloak_data:/opt/keycloak/data
       - ./keycloak:/opt/keycloak/data/import:ro
@@ -173,8 +206,8 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: miniominio
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${MINIO_PORT:?MINIO_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:9000"
+      - "${MINIO_CONSOLE_PORT:?MINIO_CONSOLE_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -209,8 +242,8 @@ services:
     container_name: pilotage_maildev
     restart: unless-stopped
     ports:
-      - "${MAILDEV_SMTP_PORT:-1025}:1025"
-      - "${MAILDEV_WEB_PORT:-1080}:1080"
+      - "${MAILDEV_SMTP_PORT:?MAILDEV_SMTP_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:1025"
+      - "${MAILDEV_WEB_PORT:?MAILDEV_WEB_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:1080"
     # The image's built-in healthcheck reads ${MAILDEV_WEB_PORT}, which is a
     # host-side compose var unset inside the container → it probes localhost:
     # with an empty port and always fails. Override with the real internal port.
@@ -235,7 +268,7 @@ services:
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "${JAEGER_UI_PORT:-16686}:16686"   # UI
+      - "${JAEGER_UI_PORT:?JAEGER_UI_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:16686"   # UI
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
     networks: [pilotage]
@@ -251,7 +284,11 @@ services:
       dockerfile: infra/docker/Dockerfile.api
       target: build
     container_name: pilotage_migrator
-    profiles: ["app"]
+    # `seed` figure ici en plus de `app` parce que `seed` en dépend (PF-86) :
+    # Compose exige qu'un service dont on dépend soit activé par le profil qu'on
+    # active, sinon le projet est INVALIDE — pas dégradé, invalide. `--profile
+    # seed` seul échouait donc sur *"service seed depends on undefined service"*.
+    profiles: ["app", "seed", "prod"]
     environment:
       <<: *app-env
     # Le schéma est piloté par un historique SQL revu (apps/api/prisma/migrations),
@@ -279,7 +316,12 @@ services:
         # Grave DANS l'image le commit dont elle est issue (S-E02-6 / VAL-10, R-05).
         GIT_SHA: ${GIT_SHA:-}
     container_name: pilotage_api
-    profiles: ["app"]
+    # `prod` en plus de `app` : `nginx` (profil `prod`) depend de ce service,
+    # et Compose exige que la dependance soit activee par le meme profil, sinon le
+    # projet entier est INVALIDE. `--profile prod` seul echouait sur
+    # *"service nginx depends on undefined service web"* (PF-86, decouvert par
+    # scripts/compose-invocation-check.js).
+    profiles: ["app", "prod"]
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -302,14 +344,15 @@ services:
       # l'interrupteur, et l'état est journalisé au démarrage plutôt que tu.
       #
       #   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 \
-      #     docker compose --profile app --profile obs up
+      #     docker compose --env-file .env -f infra/docker-compose.yml \
+      #       --profile app --profile obs up
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       # jwks-rsa@4 imports the ESM-only jose@6 via require(); Node enables
       # require(ESM) by default from 22.12, so enable it explicitly to stay
       # compatible if the base image ever lags behind. Harmless on newer Node.
       NODE_OPTIONS: "--enable-source-maps --experimental-require-module"
     ports:
-      - "${API_PORT:-4000}:4000"
+      - "${API_PORT:?API_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:4000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -337,7 +380,11 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-}
     container_name: pilotage_worker
-    profiles: ["app"]
+    # `prod` aussi : le profil `prod` pretend demarrer "le mode prod", et un mode
+    # prod sans son worker n' est pas le mode prod — c' est la meme faute que
+    # PF-86 (une commande documentee qui demarre autre chose que ce qu' elle
+    # annonce), a une adresse que la regle de validite seule n' aurait pas atteinte.
+    profiles: ["app", "prod"]
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -353,7 +400,7 @@ services:
     ports:
       # Manifeste de release uniquement (GET /version/worker). Publié en LOOPBACK :
       # la gate tourne sur l'hôte, personne d'autre n'a besoin de ce socket.
-      - "127.0.0.1:${WORKER_HTTP_PORT:-4001}:4001"
+      - "127.0.0.1:${WORKER_HTTP_PORT:?WORKER_HTTP_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:4001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -379,11 +426,16 @@ services:
         # localhost and ECONNREFUSEs.
         NEXT_PUBLIC_API_URL: http://api:4000
         # Browser-facing: KC login redirects must hit the host-published port.
-        NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
+        NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:?KEYCLOAK_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}
         NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
         GIT_SHA: ${GIT_SHA:-}
     container_name: pilotage_web
-    profiles: ["app"]
+    # `prod` en plus de `app` : `nginx` (profil `prod`) depend de ce service,
+    # et Compose exige que la dependance soit activee par le meme profil, sinon le
+    # projet entier est INVALIDE. `--profile prod` seul echouait sur
+    # *"service nginx depends on undefined service web"* (PF-86, decouvert par
+    # scripts/compose-invocation-check.js).
+    profiles: ["app", "prod"]
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -397,7 +449,7 @@ services:
       # the browser calls the same-origin /api/proxy route, which fans out here.
       NEXT_PUBLIC_API_URL: http://api:4000
       # Browser-facing: login redirects must hit the host-published Keycloak port.
-      NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:-8080}
+      NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT:?KEYCLOAK_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}
       NEXT_PUBLIC_KEYCLOAK_REALM: pilotage-scolaire
       # NextAuth v5 (Auth.js) REQUIRES a secret to sign session JWTs — without it
       # every /api/auth/* call 500s with MissingSecret and login is impossible.
@@ -430,7 +482,7 @@ services:
       # même (le SDK est aussi l'appareil de mesure ici).
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${WEB_PORT:?WEB_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:3000"
     depends_on:
       api:
         condition: service_healthy
@@ -462,9 +514,19 @@ services:
       ALLOW_SEED: ${ALLOW_SEED:-provision-demo-data}
     # No `prisma.seed` key in package.json — run the tsx seed script directly.
     command: ["pnpm", "--filter", "@pilotage/api", "run", "prisma:seed"]
+    # Dépend du MIGRATOR, pas de l'`api` (PF-86). Deux raisons, et la seconde
+    # n'est pas cosmétique :
+    #   1. `api` vit dans le profil `app` : `--profile seed` seul produisait
+    #      *"service seed depends on undefined service api"*, donc la commande
+    #      de seed documentée ne pouvait pas fonctionner ;
+    #   2. le seed écrit dans Postgres via tsx — il n'appelle jamais l'API. Ce
+    #      dont il a réellement besoin, c'est que les migrations soient
+    #      appliquées. Dépendre de l'`api` l'exprimait par transitivité
+    #      (`api` attend `migrator`), en démarrant trois conteneurs de plus
+    #      pour une dépendance qui n'était pas la sienne.
     depends_on:
-      api:
-        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     networks: [pilotage]
     restart: "no"
 
@@ -481,8 +543,8 @@ services:
     # HTTP_PORT/HTTPS_PORT to 127.0.0.1-bound values in .env and route Traefik to
     # this container over a shared docker network (see infra/docker-compose.prod.yml).
     ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
+      - "${HTTP_PORT:?HTTP_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:80"
+      - "${HTTPS_PORT:?HTTPS_PORT manquant, lancez Compose depuis la racine du depot avec --env-file .env (PF-86)}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro

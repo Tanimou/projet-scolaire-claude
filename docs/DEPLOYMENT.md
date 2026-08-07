@@ -106,11 +106,28 @@ bash infra/pilotage.sh reset              # wipe volumes + fresh up
 |--------|----------|-------------|
 | *(base)* | postgres, redis, keycloak, minio, minio_init, maildev | `pnpm docker:up`, `dev:start` |
 | `app` | migrator, api, worker, web | `deploy:prod` |
-| `prod` | nginx | `deploy:prod` |
-| `obs` | jaeger, prometheus, grafana, loki | `docker compose --profile obs up -d` |
-| `seed` | seed (one-shot) | `--profile seed up seed` |
+| `prod` | nginx **+ migrator, api, worker, web** | `deploy:prod` |
+| `obs` | jaeger, prometheus, grafana, loki | `docker compose --env-file .env -f infra/docker-compose.yml --profile obs up -d` |
+| `seed` | seed (one-shot) **+ migrator** | `bash infra/pilotage.sh seed` |
+
+> **Un profil doit activer ses propres dépendances (PF-86 / S-E02-16).** Compose refuse le projet
+> **entier** — il ne le dégrade pas — dès qu'un service activé dépend d'un service qu'aucun profil
+> actif n'active. `--profile seed` échouait sur *"service seed depends on undefined service api"*, et
+> `--profile prod` sur *"service nginx depends on undefined service web"* : les deux commandes
+> documentées ici étaient inexécutables. `migrator`, `api`, `worker` et `web` portent donc désormais
+> les profils qui en dépendent, et `scripts/compose-invocation-check.js` échoue si un nouveau
+> `depends_on` recrée la situation.
 
 ## Ports (configurables via `.env`)
 
 Postgres **5433** · Redis **6379** · Keycloak **8180** · MinIO **9000/9001** · Web **3000** · API **4000** · Maildev **1080**.
 (Postgres en `5433` pour ne pas entrer en conflit avec un Postgres natif en `5432`.)
+
+> **`--env-file .env` n'est pas facultatif (PF-86).** Compose résout `.env` depuis le dossier du
+> fichier compose (`infra/`), et non depuis le `cwd` de l'appelant ; `infra/.env` n'existe pas. Les
+> ports ci-dessus vivent dans le `.env` **racine**, à côté de la `DATABASE_URL` que prisma et les
+> seeds lisent. Sans `--env-file .env`, Compose ne voyait aucune de ces variables. Depuis S-E02-16
+> `infra/docker-compose.yml` n'a plus aucun défaut `${VAR:-…}` sur un port publié : Compose
+> **refuse** en nommant la variable manquante au lieu de démarrer silencieusement une autre pile.
+> `cp .env.example .env` est donc l'étape d'installation, et les treize variables de ports y sont
+> toutes obligatoires.

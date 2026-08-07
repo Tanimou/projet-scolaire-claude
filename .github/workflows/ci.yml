@@ -63,6 +63,20 @@ jobs:
       # it fails on the diff rather than ten minutes later. Kept in step with
       # scripts/ci-gate.sh stage 0b — the two must not drift (S-E02-2 AC-4).
       - run: node scripts/production-artefact-check.js
+      # Compose invocation (S-E02-16 / PF-86). The documented way to start the
+      # local stack started a DIFFERENT stack: compose resolves `.env` from the
+      # compose file's directory (`infra/`), `infra/.env` does not exist, and the
+      # ports live in the root `.env`, so the documented command fell through to
+      # `${VAR:-default}`. Worse, inside the compose file itself KC_HOSTNAME and
+      # KEYCLOAK_PUBLIC_URL hard-coded `localhost:8180` while the port defaulted
+      # to 8080 — the announced token issuer was reachable on no port and the api
+      # rejected every token, so login was broken by construction on that path.
+      # Source-only, so it belongs here with the other early readers. It also
+      # executes `docker compose config` in both directions where a docker binary
+      # exists (it does on ubuntu-latest); `.env` is gitignored, so the accepting
+      # probes are reported as not-executed here rather than silently skipped.
+      # Kept in step with scripts/ci-gate.sh stage 0c (S-E02-2 AC-4).
+      - run: node scripts/compose-invocation-check.js
       # `lint` dependsOn `^build` in turbo.json, and the API build needs the
       # generated Prisma client — without this the lint job dies on unresolvable
       # `@prisma/client` types rather than on a lint rule.
