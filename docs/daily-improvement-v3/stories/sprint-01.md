@@ -843,6 +843,20 @@ exactly once. Recorded rather than quietly overwritten, per the same idiom as `S
 
 ---
 
+## S-E02-17 — Job processing stops being invisible: BullMQ is instrumented, and a gate observes it
+
+Authored by the routine's Step 2 on run 24. Takes the **last third of `PF-56` this routine can execute** — queue depth,
+failure rate and DLQ, named as a deferred residual in three consecutive matrix rows and in
+`apps/worker/src/shared/observability/metrics.registry.ts`'s own header. Step 2 found the gap slightly wider than
+recorded: the queue-name constants are declared **twice**, once per module, and nothing compares them.
+
+Its full contract, design record, executed evidence and stated limits are
+[`docs/spec/features/v3-e02/stories/S-E02-17.md`](../../spec/features/v3-e02/stories/S-E02-17.md) and
+`docs/spec/features/v3-e02/PROGRESS.md` § S-E02-17 — **one** copy, in the directory the convention puts per-story specs
+in (the lesson `S-E06-5` recorded).
+
+---
+
 ## Sprint 01 exit criteria
 
 - `prisma migrate status` clean; no `db push` outside development; preflight blocks unapplied migrations.

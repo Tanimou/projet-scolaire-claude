@@ -11,6 +11,7 @@ import { NotificationsDigestModule } from './modules/notifications-digest/notifi
 import { NotificationsEmailModule } from './modules/notifications-email/notifications-email.module';
 import { ParentDigestModule } from './modules/parent-digest/parent-digest.module';
 import { RemediationSweepModule } from './modules/remediation-sweep/remediation-sweep.module';
+import { ObservabilityModule } from './shared/observability/observability.module';
 import { PrismaModule } from './shared/prisma/prisma.module';
 import { QueueModule } from './shared/queue/queue.module';
 import { StorageModule } from './shared/storage/storage.module';
@@ -30,6 +31,9 @@ import { StorageModule } from './shared/storage/storage.module';
     PrismaModule,
     StorageModule,
     QueueModule,
+    // Après QueueModule : le collecteur de profondeur `@InjectQueue` les trois
+    // files que celui-ci enregistre (S-E02-17).
+    ObservabilityModule,
     ExportsModule,
     ImportsModule,
     AlertsCronModule,

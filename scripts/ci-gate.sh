@@ -216,8 +216,22 @@ fi
 # public without one line of nginx changing — and the nginx rule above would not
 # see it. No stage 11 was added; widening the stage that already exists is what
 # keeps this file and .github/workflows/ci.yml in step (S-E02-2 AC-4).
+#
+# S-E02-17 (PF-56, queue third) widened it again, and this time the subject is
+# the QUEUES. The stage now also holds **instrumented queues == registered
+# queues**: the set of BullMQ queues the worker instruments must equal the set
+# both applications really register, and it fails in BOTH directions — a
+# registered queue nobody instruments is invisible on a dashboard that still
+# looks healthy, and an instrumented queue nobody registers is a series pinned
+# at zero that reads as an idle queue. "Registered" means the RESOLVED
+# BullModule.registerQueue registration read off the built modules, not the
+# exported constant, because a constant exported and never registered is not a
+# registered queue. It is also the first thing that ever compares apps/api's and
+# apps/worker's queue-name blocks, which each carried a comment pointing at the
+# other and were read by nothing. Still no new stage, for the same reason as
+# last time.
 if [ "${QUICK}" -eq 0 ]; then
-  run_stage "observability (profile + scrape coherence, 3 artefacts)" node scripts/observability-check.js
+  run_stage "observability (profile + scrape coherence, 3 artefacts + queue instrumentation)" node scripts/observability-check.js
 else
   echo ""
   echo "⏭  observability check skipped (--quick — it reads the build's dist/)"

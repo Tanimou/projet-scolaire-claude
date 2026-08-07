@@ -39,6 +39,16 @@ next pick: it is not.
 | **`S-E02-15`** — `apps/web` becomes the **third observed artefact**: Prometheus metrics on a dedicated internal `node:http` socket (never a Next route, because nginx `location /` would publish one), spans through the single `withRedaction` exporter from `@pilotage/contracts`, `web` added to `TRACED_SERVICES`, every `pilotage-slo.json` HTTP panel regrouped `by (app, …)`, and two gates widened to hold it. Closes **`PF-79`** | ✅ 2026-08-04 |
 | **`S-E02-3`** — the **timed backup → restore rehearsal**, **executed against the LOCAL Docker stack**, not asserted: `scripts/restore-drill.js` dumps the seeded database, restores it into a name-guarded scratch database and verifies row counts **and** per-table `md5(row::text)` checksums **and** schema, against the reviewed `scripts/restore-drill-baseline.json`; six verdicts driven against the real database, `--update` proven to **refuse** a failed run; `docs/runbooks/backup-restore-drill.md` + `ADR-025` (the drill is deliberately **not** a `ci-gate.sh` stage, and the guard spec asserts that absence in the negative). Also carries the **`PF-84`** guard — `.dockerignore` excluded `infra/docker`, so the safe migrator's entrypoint was absent from **every** `Dockerfile.api` build and it had never once started. Closes **`VAL-03`** (local half) + **`PF-84`**; records **`PF-86`** | ✅ 2026-08-07 |
 | **`S-E02-5`** — the **migration ledger must reproduce `schema.prisma`**, and something now says so. `scripts/schema-drift-check.js` creates a disposable scratch database in a real PostgreSQL, runs `prisma migrate deploy` into it, diffs **that database** against the datamodel, and drops it on every exit path — wired as stage **0d** of `scripts/ci-gate.sh` (before `prisma generate`, outside the `--quick` guard) **and** as a step of `ci.yml`'s `build` job, the only one with a `postgres:15-alpine` service. Executed, not asserted: **PASS / exit 0 / 55 tables** on the unmodified repository; **exit 2 naming the drifted object** against a temp copy of the datamodel; **exit 1** on a migration whose SQL does not execute; **exit 1 naming all three routes tried** against a dead address, unchanged with every plausible bypass variable set. `--from-migrations` was measured and **rejected** (permanently red on a correct repository) and its absence is pinned by test. Ships **`ADR-027`** — this is `ci-gate.sh`'s first service-dependent stage, which narrows `ADR-025 D1`. Closes the **`PF-03`** residual | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
+| **`S-E02-17`** — **the queue third of `PF-56`: BullMQ stops being invisible, and a gate observes it.** The worker registry carried `collectDefaultMetrics` and nothing else, and its own header said so. It now publishes `pilotage_queue_depth{queue,state}` (**eight** BullMQ states, not the six the story named — measured: a job added with `priority` lands in `prioritized` and never in `waiting`, so a six-state gauge reads **0 on a backlogged queue**), `pilotage_queue_jobs_total{queue,job,outcome}` with **retryable vs terminal** split by a predicate mirroring BullMQ's own `shouldRetryJob` (`discard()` and `UnrecoverableError` included — arithmetic alone would promise a retry that never comes), `pilotage_queue_job_duration_seconds{queue,job}`, and `pilotage_queue_depth_collection_failures_total{queue}` so a Redis outage cannot render as a healthy system. **No dead-letter series**, because BullMQ has none (`DNC-06`); depth is collected in the **worker only** (`DNC-01`, asserted in the negative on the API exposition). Labels come from a build-time **whitelist**, not a sanitiser — a cuid survives any character-class filter — proven by driving a real payload carrying `tenantId`, `exportJobId` and a cuid, **with a cuid as the job name**, and finding none of them in the rendered exposition. **The durable half is check 9**: `instrumented ≡ registered`, both directions, plus api-side ≠ worker-side named per queue — the first thing that ever compares the two queue-name constant blocks, read as the **resolved** `BullQueue_*` registration off the built modules, so **neither `queue.module.ts` nor `packages/contracts` was edited** (`PF-80` avoided). Executed, not asserted: prom-client measured to **reject** on a throwing `collect()` (→ 500 through `version-server.ts`) and to **hang** on a never-settling one, both then driven through the real `node:http` socket → **200 with a body**; every negative shown able to fail (whitelist removed → G-TENANT red, deadline removed → both hang cases time out, check 9 removed → 11/11 red). Ships **`ADR-028`** — `registry.metrics()` may now perform I/O, and every future collector inherits a five-rule contract. **`PF-56` stays open** for the alert-rules / SLO-threshold decision, which is a product call. Raises **`PF-104`**…**`PF-110`**, registered by this land pass: a job that fails by **stalling** reaches no counter, check 9's rule 6 is a **tautology**, the six new `@OnWorkerEvent` handlers are executed by **no test**, the failure counter panel 5's own description names is **plotted nowhere**, a gauge is `sum`-med across replicas, a `DNC-06` guard is defeated by a French plural **in the file it inspects**, and `ADR-028` takes a number `architecture-impact.md` §4 had reserved for `V3-E04` | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
+
+**Corrected 2026-08-07 (`S-E02-17` landed).** The table above used to stop at `S-E02-15`/`S-E02-3`/`S-E02-5`, the
+paragraph below called `S-E02-15` "the last *enumerated* slice", and the "Next V3 slice" pointer named `PF-102` or a
+`V3-E04` `epic-spec` run. All three were **stale**: `docs/daily-improvement-v3/stories/sprint-01.md` enumerates
+`S-E02-17` and `docs/spec/features/v3-e02/stories/S-E02-17.md` is its contract. Named here rather than quietly
+overwritten, for the same reason the `S-E06-5` land pass had to correct its own "never enumerated" claim: a ledger
+line the next autonomous run reads at Step 1 is exactly the kind of stale truth that makes it re-implement work that
+already shipped — or, as here, skip work that was queued. The epic stays **`code-complete`**: `S-E02-1`'s hosted
+residual is still the one open row, and `PF-56` does not close.
 
 **Corrected 2026-08-07 (`S-E02-5` landed).** The paragraph below used to group `S-E02-5` with the hosted halves.
 That was wrong: the SLICE is a **repository** invariant — the ledger reproduces `schema.prisma` — proven against the
@@ -81,8 +91,22 @@ that `docs/daily-improvement-v3/stories/` held only `sprint-01.md` — which `S-
 rather than quietly overwritten, because a ledger claim that the next autonomous run reads at Step 1 is exactly the
 kind of stale truth that makes it re-implement work that already shipped.)*
 
-**Next V3 slice → none is enumerated in this epic, and there are two candidates. Read `PF-102` first.**
+**Next V3 slice → `S-E02-18`, a `V3-E02` follow-up that closes what `S-E02-17` itself raised. Then `PF-102`.**
 
+*(Rewritten 2026-08-07, `S-E02-17` land pass. This pointer used to open "none is enumerated in this epic, and there are
+two candidates" — true of `sprint-01` again now that `S-E02-17` has landed, but no longer the whole picture: that slice
+queued **seven** findings, three of which are defects **inside the gate it just made blocking**, and a gate that cannot
+fail is the one thing this programme has had to re-close four times. It goes first, ahead of `PF-102`, because
+`PF-105`/`PF-106` mean the freshly-landed check 9 currently passes on a queue nobody instruments.)*
+
+0. **`S-E02-18` — make `S-E02-17`'s own gate able to fail, `L0`, ~1 spec file + ~15 lines + 2 dashboard targets.**
+   `PF-106` first: no test anywhere executes the six new `@OnWorkerEvent` handlers or
+   `QueueDepthCollector.onModuleInit`, so a swapped queue constant or a dropped `ObservabilityModule` ships green and
+   panels 6–8 render "No data" for ever — indistinguishable from an idle system. `PF-105` next: check 9's rule 6
+   compares `INSTRUMENTED_QUEUES` against labels rendered *from* `INSTRUMENTED_QUEUES`, so `declared ≡ rendered`
+   reduces to `A ≡ A`. Then `PF-104` (a job killed mid-execution emits `stalled`, never `failed`, so the terminal-failure
+   series under-reports exactly when the worker is broken) and the two dashboard rows `PF-107`/`PF-108`. All five are in
+   or under a **blocking** CI stage and a live SLO dashboard. Owner `V3-E02` *(follow-up)*.
 1. **`PF-102` — a post-authentication open redirect, `L0`, security, ~4 lines + four negative tests.**
    `apps/web/src/components/PortalLoginForm.tsx:76` reads `callbackUrl` off the query string with **no same-origin
    validation** and `:125` hands it to `router.push`, so `/parent/login?callbackUrl=https://evil.example/` shows the
@@ -101,7 +125,7 @@ kind of stale truth that makes it re-implement work that already shipped.)*
    blanket XFF trust makes the field client-forgeable — strictly worse than blank. There is no
    `docs/spec/features/v3-e04/` yet, so that run is **`epic-spec`**, not `epic-slice`.
 
-A **`V3-E06` follow-up** slice is also now enumerable rather than hypothetical, and would be the cheapest of the three:
+A **`V3-E06` follow-up** slice is also now enumerable rather than hypothetical, and would be the cheapest of these:
 make `link-integrity-check.js` resolve a baseline row's finding id against `audit-findings-index.md` instead of against
 a regex (`/^(PF|R|VAL|D)-\d+$/` let three live rows cite an id that existed nowhere), and clear `PF-103`'s three
 lexer residuals — the `'}'` JSX-comment mis-read, the tautological anti-drop invariant, and the unbounded

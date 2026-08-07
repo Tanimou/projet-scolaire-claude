@@ -164,6 +164,18 @@ function healthyInput(): Record<string, unknown> {
     webRoutes: ['/', '/parent/dashboard', '/admin/dashboard'],
     exposedMetrics: ['pilotage_http_requests_total', 'pilotage_http_request_duration_seconds'],
     nginxConfs: [{ file: 'infra/nginx/conf.d/pilotage.conf', text: '  location /api/ {\n' }],
+    // S-E02-17 — check 9. `declared` is the exported INSTRUMENTED_QUEUES
+    // constant; `rendered` is the set of queue labels the worker exposition
+    // really carries. They are separate fields because a check that trusted the
+    // constant alone would be a declaration nobody executes.
+    instrumentedQueues: {
+      declared: ['exports', 'notifications-email', 'imports'],
+      rendered: ['exports', 'notifications-email', 'imports'],
+    },
+    registeredQueues: {
+      api: ['exports', 'notifications-email', 'imports'],
+      worker: ['exports', 'notifications-email', 'imports'],
+    },
   };
 }
 
@@ -187,6 +199,29 @@ function at<T>(items: T[] | undefined, index: number, what: string): T {
   const item = items?.[index];
   if (item === undefined) throw new Error(`fixture is missing ${what}[${index}]`);
   return item;
+}
+
+/**
+ * Comment-stripped JavaScript, offsets preserved (comments become spaces).
+ *
+ * The JS sibling of `boot-gate.spec.ts`'s `stripComments`, and it exists for
+ * the same reason that one does: an assertion over raw source is an assertion
+ * about prose. Quoting is deliberately not modelled — a `//` inside a string
+ * blanks the rest of that line, which can only ever cause this guard to MISS a
+ * flag, never to invent one. A half-correct JavaScript parser would be a worse
+ * guard than an honest textual one.
+ */
+function stripJsComments(text: string): string {
+  const withoutBlocks = text.replace(/\/\*[\s\S]*?\*\//g, (match) =>
+    match.replace(/[^\n]/g, ' '),
+  );
+  return withoutBlocks
+    .split('\n')
+    .map((line) => {
+      const at = line.indexOf('//');
+      return at === -1 ? line : line.slice(0, at) + ' '.repeat(line.length - at);
+    })
+    .join('\n');
 }
 
 describe('observability gate — the positive path', () => {
@@ -344,16 +379,22 @@ describe('observability gate — dashboards must query metrics that exist', () =
    * confidence without performing a check.
    */
   it('fails when a panel queries a metric no application registers', () => {
+    // The example metric is deliberately one that will NEVER be registered.
+    // It used to be `pilotage_queue_depth_total`, and S-E02-17 renamed it:
+    // that slice registers `pilotage_queue_depth` (no `_total`, on purpose —
+    // Prometheus tooling reads `x` and `x_total` as one metric), and leaving a
+    // near-identical name here would invite the next reader to "fix the
+    // fixture" by adding the metric, silently disarming a negative test.
     const { problems } = evaluateObservability(
       withInput((input) => {
         const dashboards = input.dashboards as { doc: { panels: Record<string, unknown>[] } }[];
         at(at(dashboards, 0, 'dashboards').doc.panels, 0, 'panels').targets = [
-          { expr: 'rate(pilotage_queue_depth_total[5m])' },
+          { expr: 'rate(pilotage_metric_no_application_will_ever_register_total[5m])' },
         ];
       }),
     );
     const joined = problems.join('\n');
-    expect(joined).toContain('pilotage_queue_depth_total');
+    expect(joined).toContain('pilotage_metric_no_application_will_ever_register_total');
     expect(joined).toContain('indistinguishable from a system at rest');
   });
 
@@ -590,6 +631,243 @@ describe('observability gate — apps/web is scraped, and on the right socket', 
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * S-E02-17 / PF-56 — instrumented queues ≡ registered queues (check 9)
+ * ------------------------------------------------------------------ */
+
+describe('observability gate — every registered queue is instrumented', () => {
+  /**
+   * The durable half of S-E02-17. Metrics that exist today and silently miss
+   * the fourth queue added next quarter are worth less than a gate — so the
+   * gauges are the demo and this is the acceptance criterion.
+   *
+   * T10 and T11 are the proof the check is not tautological, and both were
+   * written before the reader that feeds them and watched to go red against a
+   * deliberately mismatched fixture (R-26 / PF-83).
+   */
+  it('T9 — a coherent instrumentation still yields no problems', () => {
+    const { problems } = evaluateObservability(healthyInput());
+    expect(problems).toEqual([]);
+  });
+
+  it('T9b — says what it compared, so a pass is readable rather than silent', () => {
+    const { notes } = evaluateObservability(healthyInput());
+    const joined = notes.join('\n');
+    expect(joined).toContain('instrumented queues ≡ registered queues');
+    expect(joined).toContain('exports');
+  });
+
+  it('T10 — direction 1: a registered queue nobody instruments FAILS, naming it', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.registeredQueues = {
+          api: ['exports', 'notifications-email', 'imports', 'reports'],
+          worker: ['exports', 'notifications-email', 'imports', 'reports'],
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('queue "reports"');
+    expect(joined).toContain('instrumented by nothing');
+  });
+
+  it('T11 — direction 2: an instrumented queue nobody registers FAILS, naming it', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = {
+          declared: ['exports', 'notifications-email', 'imports', 'ghost'],
+          rendered: ['exports', 'notifications-email', 'imports', 'ghost'],
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('queue "ghost"');
+    expect(joined).toContain('permanently zero');
+  });
+
+  /**
+   * The assertion that finally compares the two constant blocks nobody
+   * compared. A UNION of the two sides would hide exactly this: a queue
+   * registered on one side only would still satisfy "instrumented ≡
+   * registered", and producer-without-consumer is the defect the two comments
+   * in those files warn about.
+   */
+  it('T12 — api and worker declaring different sets FAILS, naming both files', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.registeredQueues = {
+          api: ['exports', 'notifications-email', 'imports'],
+          worker: ['exports', 'notifications-email', 'imports', 'audit'],
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('queue "audit"');
+    expect(joined).toContain('apps/api/dist/shared/queue/queue.module.js');
+    expect(joined).toContain('apps/worker/dist/shared/queue/queue.module.js');
+    expect(joined).toContain('apps/api lacks it');
+  });
+
+  it('T12b — names the side that lacks it, in the other direction too', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.registeredQueues = {
+          api: ['exports', 'notifications-email', 'imports', 'audit'],
+          worker: ['exports', 'notifications-email', 'imports'],
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('apps/worker lacks it');
+    expect(joined).toContain('produces jobs nothing');
+  });
+
+  it('T13 — instrumentedQueues null FAILS rather than skips', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = null;
+      }),
+    );
+    expect(problems.join('\n')).toContain('That is a failure, not a skip');
+  });
+
+  it('T14 — registeredQueues null FAILS rather than skips', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.registeredQueues = null;
+      }),
+    );
+    expect(problems.join('\n')).toContain('That is a failure, not a skip');
+  });
+
+  it('T15 — a truncated registered set FAILS rather than passing vacuously', () => {
+    // The realistic shape of a broken reader is not `null`, it is `[]`. The
+    // registration site is `registerQueue({ name: QUEUE_EXPORTS })` — an
+    // indirection through a constant — so a naive extractor returns nothing and
+    // "instrumented ≡ registered" degenerates to {} ≡ {}, i.e. PASS.
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.registeredQueues = { api: [], worker: [] };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('below the floor');
+    expect(joined).toContain('{} ≡ {}');
+  });
+
+  it('T15b — one queue short of the floor is still a failure', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.registeredQueues = {
+          api: ['exports', 'imports'],
+          worker: ['exports', 'imports'],
+        };
+      }),
+    );
+    expect(problems.join('\n')).toContain('below the floor');
+  });
+
+  /**
+   * C2 — the instrumented set must be a RESOLVED read, not a constant. A check
+   * that trusted `INSTRUMENTED_QUEUES` alone would reproduce the exact defect
+   * it exists to close: a declaration nobody executes.
+   */
+  it('T15c — a declared queue that renders no series FAILS', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = {
+          declared: ['exports', 'notifications-email', 'imports'],
+          rendered: ['exports', 'notifications-email'],
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('really publishes must be the same set');
+    expect(joined).toContain('imports');
+  });
+
+  it('T15d — a rendered set that is empty FAILS rather than skips', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = {
+          declared: ['exports', 'notifications-email', 'imports'],
+          rendered: [],
+        };
+      }),
+    );
+    expect(problems.join('\n')).toContain('That is a failure, not a skip');
+  });
+
+  /**
+   * T17 — the dashboard half of AC-4, asserted over the REAL file rather than
+   * the fixture. The fixture proves the rule; this proves the repository obeys
+   * it.
+   */
+  it('T17 — the real pilotage-slo.json queries the queue metrics', () => {
+    const dashboardPath = join(
+      REPO_ROOT,
+      'infra',
+      'grafana',
+      'dashboards',
+      'pilotage-slo.json',
+    );
+    expect(existsSync(dashboardPath)).toBe(true);
+    const dashboard = JSON.parse(readFileSync(dashboardPath, 'utf8')) as {
+      panels: { title?: string; datasource?: { uid?: string }; targets?: { expr?: string }[] }[];
+    };
+
+    const exprs = dashboard.panels.flatMap((panel) =>
+      (panel.targets ?? []).map((target) => target.expr ?? ''),
+    );
+    expect(exprs.some((expr) => expr.includes('pilotage_queue_depth'))).toBe(true);
+    expect(exprs.some((expr) => expr.includes('pilotage_queue_jobs_total'))).toBe(true);
+    expect(exprs.some((expr) => expr.includes('pilotage_queue_job_duration_seconds_bucket'))).toBe(
+      true,
+    );
+
+    // Every metric named there resolves through the same extractor the gate
+    // uses, so a rename breaks the gate rather than the dashboard.
+    for (const expr of exprs.filter((candidate) => candidate.includes('pilotage_queue'))) {
+      for (const name of metricNamesInExpr(expr)) {
+        expect(name.startsWith('pilotage_queue_') || name.startsWith('nodejs_')).toBe(true);
+      }
+    }
+  });
+
+  /**
+   * DNC-06 reaches the presentation layer. Metric names are gated by check 6;
+   * panel titles, descriptions and legends are gated by nothing, so they are
+   * where "DLQ" would re-enter — one layer up, where no test looks. Except
+   * this one.
+   */
+  it('T17b — no panel names a dead-letter mechanism this system does not have', () => {
+    const dashboardPath = join(REPO_ROOT, 'infra', 'grafana', 'dashboards', 'pilotage-slo.json');
+    const raw = readFileSync(dashboardPath, 'utf8').toLowerCase();
+    for (const forbidden of ['dlq', 'dead letter', 'dead-letter', 'lettre morte', 'file morte']) {
+      expect(raw).not.toContain(forbidden);
+    }
+  });
+
+  it('T17c — every queue legend interpolates only closed-set labels', () => {
+    const dashboardPath = join(REPO_ROOT, 'infra', 'grafana', 'dashboards', 'pilotage-slo.json');
+    const dashboard = JSON.parse(readFileSync(dashboardPath, 'utf8')) as {
+      panels: { targets?: { expr?: string; legendFormat?: string }[] }[];
+    };
+    const allowed = new Set(['queue', 'state', 'job', 'outcome', 'app', 'route']);
+
+    for (const panel of dashboard.panels) {
+      for (const target of panel.targets ?? []) {
+        for (const match of (target.legendFormat ?? '').matchAll(/\{\{\s*([^}\s]*)\s*\}\}/g)) {
+          // `{{__name__}}` and a bare `{{}}` render EVERY label on the series,
+          // so a future label carrying an id would surface on an
+          // unauthenticated dashboard with no code change at all.
+          expect(allowed.has(match[1] ?? '')).toBe(true);
+        }
+      }
+    }
+  });
+});
+
 describe('observability gate — helpers behave as the rules assume', () => {
   it('reads the listening port from the environment, not from the host-side mapping', () => {
     // The two differ routinely: the worker publishes 4001 on loopback only.
@@ -644,11 +922,50 @@ describe('observability gate — the gate stays connected', () => {
     expect(readFileSync(WORKFLOW_PATH, 'utf8')).toContain('scripts/observability-check.js');
   });
 
+  /**
+   * DNC-10, widened by S-E02-17 for two reasons the previous shape had.
+   *
+   * It was too NARROW: it listed three literal strings, so `SKIP_QUEUE_CHECK`
+   * or `ALLOW_UNINSTRUMENTED` would have sailed straight through. Patterns
+   * close that.
+   *
+   * And it was comment-FRAGILE: it read raw source, so a new comment containing
+   * the words "--skip" would turn it red on a slice that shipped no bug. "A
+   * guard that a comment can turn red is a guard that gets deleted"
+   * (`boot-gate.spec.ts`). So it now runs over comment-stripped content, using
+   * the same discipline as that file — assert against what the runtime
+   * EXECUTES, not what the file says.
+   */
   it('has no bypass flag — DNC-10', () => {
-    const source = readFileSync(SCRIPT_PATH, 'utf8');
-    for (const flag of ['--force', '--skip', 'SKIP_OBSERVABILITY']) {
-      expect(source).not.toContain(flag);
+    const executable = stripJsComments(readFileSync(SCRIPT_PATH, 'utf8'));
+
+    for (const flag of ['--force', '--skip', '--no-verify', 'SKIP_OBSERVABILITY']) {
+      expect(executable).not.toContain(flag);
     }
+    // Whole families, not three literals: the next bypass will not be named
+    // after the last one.
+    for (const pattern of [
+      /\bSKIP_[A-Z0-9_]+\b/,
+      /\bALLOW_[A-Z0-9_]+\b/,
+      /\bQUEUE_METRICS_[A-Z0-9_]+\b/,
+      /--(?:skip|force|no-verify)\b/,
+    ]) {
+      expect(executable).not.toMatch(pattern);
+    }
+  });
+
+  it('the DNC-10 guard can actually fail — proven, not assumed', () => {
+    // R-26 / PF-83. A guard that has never been shown to fire is a guard we
+    // hope works. Feed it a throw-away copy carrying a real flag.
+    const withFlag = stripJsComments(
+      'const off = process.env.SKIP_QUEUE_CHECK === "1";\nif (off) process.exit(0);\n',
+    );
+    expect(withFlag).toMatch(/\bSKIP_[A-Z0-9_]+\b/);
+
+    // …and it must NOT fire on the same flag hidden in a comment, or the guard
+    // becomes a trap for the next person who documents it.
+    const inComment = stripJsComments('// there is deliberately no SKIP_QUEUE_CHECK here\nrun();\n');
+    expect(inComment).not.toMatch(/\bSKIP_[A-Z0-9_]+\b/);
   });
 
   it('reads registered metric names from the build output, not from source text', () => {

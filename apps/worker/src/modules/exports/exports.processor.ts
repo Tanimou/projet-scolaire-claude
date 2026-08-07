@@ -1,8 +1,12 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import type { ExportStatus } from '@prisma/client';
 import type { Job } from 'bullmq';
 
+import {
+  observeJobCompleted,
+  observeJobFailed,
+} from '../../shared/observability/queue-metrics';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_EXPORTS } from '../../shared/queue/queue.module';
 import { S3Service } from '../../shared/storage/s3.service';
@@ -15,7 +19,7 @@ import { generateReportCardPdf } from './generators/report-card-pdf.generator';
 import type { Generator } from './generators/types';
 
 /** Mirrors `apps/api/src/modules/exports/exports.types.ts ExportJobPayload`. */
-interface ExportJobPayload {
+export interface ExportJobPayload {
   exportJobId: string;
   tenantId: string;
   schoolId: string | null;
@@ -29,7 +33,13 @@ interface ExportJobPayload {
   requestedBy: string;
 }
 
-const GENERATORS: Record<ExportJobPayload['kind'], Generator> = {
+/**
+ * Exported since S-E02-17 so `queue-metrics.spec.ts` can COMPARE the job-name
+ * allow-list against it rather than copy it. A generator added here without
+ * being instrumented turns that test red — which is the whole point: a fourth
+ * un-compared literal block is the defect that slice exists to close (R-26).
+ */
+export const GENERATORS: Record<ExportJobPayload['kind'], Generator> = {
   grades_xlsx: generateGradesXlsx,
   attendance_xlsx: generateAttendanceXlsx,
   enrollment_xlsx: generateEnrollmentXlsx,
@@ -112,5 +122,31 @@ export class ExportsProcessor extends WorkerHost {
       });
       throw err; // re-throw so BullMQ records the failure
     }
+  }
+
+  /**
+   * S-E02-17 — outcome + duration instrumentation. The first `@OnWorkerEvent`
+   * handlers in this worker.
+   *
+   * They are event handlers rather than a `try/finally` around `process()` on
+   * purpose, and the reason is measured: BullMQ decides retryable-vs-terminal
+   * inside `Job.moveToFailed` (`shouldRetryJob`), which runs AFTER `process()`
+   * throws — a wrapper would have to re-implement that predicate. It would also
+   * count a rate-limited or delayed job as a failure, which
+   * `Worker.handleFailed` explicitly does not (it returns early for
+   * `DelayedError`/`WaitingError`/`RATE_LIMIT_ERROR` before emitting `failed`).
+   *
+   * One line each, all logic in `queue-metrics.ts`: one number, one
+   * implementation. Both helpers are total — a throw in a BullMQ event listener
+   * is an unhandled rejection in this process.
+   */
+  @OnWorkerEvent('completed')
+  onCompleted(job: Job<ExportJobPayload>): void {
+    observeJobCompleted(QUEUE_EXPORTS, job);
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job<ExportJobPayload> | undefined, error: Error): void {
+    observeJobFailed(QUEUE_EXPORTS, job, error);
   }
 }
