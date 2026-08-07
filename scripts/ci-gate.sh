@@ -76,6 +76,30 @@ run_stage "runtime engines" node scripts/runtime-engines-check.js
 # .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
 run_stage "production artefacts (string scan)" node scripts/production-artefact-check.js
 
+# Stage 0c — compose invocation. The routine's target IS the local Docker stack
+# (SKILL Step -1), so "the documented command starts the documented stack" is a
+# release property, not a documentation nicety. It was false: compose resolves
+# `.env` from the compose file's directory (`infra/`), `infra/.env` does not
+# exist, and every port lived in the ROOT .env — so the documented invocation
+# fell through to `${VAR:-default}` and started a different stack, silently.
+#
+# Measured when this stage was written, the finding was understated. Inside
+# infra/docker-compose.yml alone, KC_HOSTNAME and KEYCLOAK_PUBLIC_URL hard-coded
+# `localhost:8180` (the api uses the latter as the EXPECTED TOKEN ISSUER) while
+# `keycloak.ports` defaulted to 8080 and the web was sent to 8080. On the
+# documented path Keycloak announced an issuer reachable on no port and the api
+# rejected every token: login was broken by construction, and "worked" only
+# because one machine's gitignored .env said 8180 on a path where compose never
+# read it.
+#
+# Like every other stage here it reads the parsed artefact rather than grepping
+# for expected shapes, so a new service inherits the rules. Beyond that it RUNS
+# `docker compose config` in both directions and asserts the refusal actually
+# happens; where docker is absent it says so rather than passing vacuously.
+# Source-only, so it runs early and under `--quick`. Kept in step with
+# .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
+run_stage "compose invocation (documented command = documented stack)" node scripts/compose-invocation-check.js
+
 # Stage 1 — Prisma client. Everything downstream (typecheck, tests, build) fails
 # with unresolvable types if the generated client is missing, which is precisely
 # how the audited worktree reported "tests cannot run".

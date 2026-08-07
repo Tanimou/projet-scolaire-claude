@@ -663,6 +663,110 @@ connection string.
 
 ---
 
+## S-E02-16 — The documented way to start the stack starts the documented stack · ✅ `done` 2026-08-07
+
+| | |
+|---|---|
+| **Epic** | V3-E02 · **Finding** PF-86 *(closed, re-scoped)*, PF-89 *(discovered and closed)* · **Risk** R-26 · **Gates** G-DNC, G-MIGRATION |
+| **blockedBy** | — · **requiresDecision** — · **Size** M |
+
+**Why.** The routine's target *is* the local Docker stack (`SKILL.md` Step −1), so "the documented command starts the
+documented stack" is a release property, not a documentation nicety. It was false. Compose resolves `.env` from the
+**project directory** — the compose file's directory, `infra/` — not from the caller's cwd, and `infra/.env` does not
+exist. Every port lives in the root `.env`, beside the `DATABASE_URL` that prisma, the seeds and every host-side script
+read. So the command in `infra/docker-compose.yml`'s own header, and the one in `SKILL.md` Step −1, resolved none of
+them and fell silently through to `${VAR:-default}`.
+
+**Step 2 measured the premise, and it was a functional break rather than the documentation defect that was filed.**
+`PF-86` was recorded as `TECH_DEBT`, closing with *"neither is a runtime defect in the application"*. The
+counter-evidence is inside `infra/docker-compose.yml` alone and needs no untracked file: `KC_HOSTNAME` and
+`KEYCLOAK_PUBLIC_URL` hard-coded `http://localhost:8180` — the api uses the latter as its **expected token issuer** —
+while `keycloak.ports` defaulted to `8080` and the web's `NEXT_PUBLIC_KEYCLOAK_URL` defaulted to `8080` too. On the
+documented path Keycloak published on 8080, announced an issuer reachable on no port, sent the browser to 8080, and the
+api rejected every resulting token. **Login was broken by construction**, and appeared to work only because one
+machine's gitignored `.env` said `8180` on a path where compose never read it. Re-scoped to `BROKEN_RUNTIME`.
+
+**Design — a refusal is a control, a default is a second stack.** Thirteen published host ports lose their
+`${VAR:-…}` and take `${VAR:?…}`: compose now refuses in the operator's terminal and names the remedy. This is
+`S-E06-1`'s argument about `?? 'admin'` applied one layer out — *a default nobody wrote down is the defect, so the fix
+is a declaration, not a better default.* Rule 1 alone would not have prevented the login break, so rule 2 is separate:
+**a host port is written exactly once**, and every browser-facing URL derives from the variable that publishes it.
+ADR-026 records both, and why `infra/.env` and `--project-directory ..` were rejected.
+
+**Discovered by the gate, on its first execution.** `--profile prod` alone was *also* an invalid Compose project
+(`service nginx depends on undefined service web`) — a third instance of the profile-reachability defect, at an address
+nobody had read. Recorded as **`PF-89`** and closed in the same run. Two of the file's five profiles were unrunnable
+exactly as documented.
+
+**Acceptance criteria.**
+1. No published host port carries a silent default; the wrong invocation is **refused**, naming the variable. ✅
+2. No host port is written twice; the announced Keycloak issuer equals the published port by construction. ✅
+3. Every profile activates its own dependencies — `--profile seed` and `--profile prod` are valid projects. ✅
+4. `.env.example` stops describing a third, incompatible stack, and declares all thirteen required variables. ✅
+5. A gate holds all of it, wired into `scripts/ci-gate.sh` **and** `.github/workflows/ci.yml`. ✅
+
+**Test.** `apps/api/src/shared/quality/compose-invocation-gate.spec.ts` — **34/34**. The evaluator is a pure function
+driven with configurations known to be wrong, including the pre-slice shapes verbatim (`${KEYCLOAK_PORT:-8080}:8080`,
+`KC_HOSTNAME: http://localhost:8180`, `seed depends_on api`, `nginx depends_on web`).
+
+**Evidence — executed in both directions.**
+- The **real script** run against the restored pre-slice compose file → **exit 1, 4 problems**, one per rule family
+  (C1 silent default, C3 hard-coded issuer, C4 ×2 invalid profiles). Restored → exit 0, `git diff` clean.
+- The stage replaced with `true` in **both** `ci-gate.sh` and `ci.yml` → **2 failed / 32 passed**, one per disconnected
+  file. Restored → 34/34.
+- Three **live** docker probes inside the script itself: without `--env-file` compose **refuses** (exit 1, naming the
+  missing variable); with `--env-file .env` it accepts; `--profile seed` alone is a valid project.
+- `--profile prod` alone, before the fix, observed live: `service "nginx" depends on undefined service "web"`.
+- **The stack was recreated through the corrected command** and left healthy: `keycloak`, `api`, `worker`, `web`
+  force-recreated, migrator idempotent (*"No pending migrations to apply"*), all eight containers healthy on the ports
+  the root `.env` declares (5433, 8180, 3000, 4000, 4001-loopback). `GET /healthz` 200, `GET /version` answers, web `/`
+  200, and the **running** Keycloak's discovery document reports
+  `issuer: http://localhost:8180/realms/pilotage-scolaire` — the port that is actually published.
+
+**A second live instance of `PF-80`'s shape, caught by the ratchet rather than by the author.** Removing the `:-`
+defaults turned `release-surface.spec.ts` red: its loopback assertion read
+`toContain('127.0.0.1:${WORKER_HTTP_PORT:-4001}:4001')`, pinning the **default** as a side effect of pinning the
+**bind address**. A change that strengthened the exact property that spec exists to protect therefore broke it, from a
+file the editing view never opens. `node scripts/test-ratchet.js api` reported **1 NEW test failure**, and it was
+fixed by asserting the intent (bound to `127.0.0.1`, mapped to container `4001`, interpolation form unconstrained)
+rather than by baselining it. This is the argument for running the **full** gate before merging (`R-23`) rather than
+the stages one happens to watch.
+
+**And `PF-90`, found by being bitten.** Stopping a background `ci-gate.sh` reported success but left the process
+running — the harness kills the task shell, not the tree beneath it — so relaunching produced **five** concurrent
+gates, one inside `pnpm build`, all truncating the same log. The tell was a stage list that read back in an impossible
+order. Every verdict from those logs was discarded and one clean, uncontended run was taken as the gate result. The
+write lock cannot catch this: all five belong to the same run and hold the same lock, so single-writer is *satisfied*
+while the guarantee fails. Recorded as `PF-90` / **R-29**; the durable fix is in the harness, outside this checkout.
+
+**Out of scope, stated.** This does **not** prove a full login journey (that is `V3-E05`); what is proven is that the
+issuer and the published port agree, on a running container. `infra/docker-compose.prod.yml` is deliberately outside
+the gate's C5 scope — it is driven by `scripts/deploy-prod.sh` with its own `--env-file .env.prod`, and per Step −1 the
+hosted host is an audit fixture; **its own port coherence is unexamined and stays so.** The C3 rule catches a
+hard-coded port that no service publishes as a literal; a value hard-coding a port some *other* service publishes
+literally would still pass.
+
+**Two full gate runs, stated plainly, and why (`R-23`).** The routine permits one `pnpm build` per run. This slice
+spent two, and neither was avoidable once `PF-90` and the ratchet regression appeared. Run 1 completed all fourteen
+stages and returned **`GATE: FAIL (1 stage)`** — `test:api`, on the `release-surface.spec.ts` assertion described
+above, which was fixed *after* that stage had already run. Every other stage passed, including `build`, `boot`,
+`web artefact`, `observability`, `tracing` and `csp`. Run 2 is the authoritative verdict: **`GATE: PASS`, all 14
+stages** — ✓ runtime engines · ✓ production artefacts · ✓ **compose invocation** · ✓ prisma generate · ✓ lint ·
+✓ lint:warnings *(no drift, this slice added none)* · ✓ typecheck · ✓ test:api **1013/1024**, 11 known-failing
+*(was 1012/1024 — exactly +1, the spec repaired above, no other drift)* · ✓ test:worker **160/167**, 7 known-failing,
+no drift · ✓ build · ✓ boot · ✓ web artefact · ✓ observability · ✓ tracing · ✓ csp.
+
+Two earlier attempts were discarded entirely rather than quoted: the first died on a lint error in this slice's own
+spec (wrong disable-rule name), and its successor was corrupted by `PF-90`. **No verdict from a contended log was
+used for anything.**
+
+**Operator note.** Thirteen variables are now mandatory. `WORKER_HTTP_PORT`, `HTTP_PORT` and `HTTPS_PORT` were never in
+`.env.example` and are now required — this run added them to `.env.example` and to the local gitignored `.env`, so this
+machine's stack keeps working. Any other checkout needs `cp .env.example .env` or the three lines appended. The break
+is one-time and self-describing: compose names the missing variable.
+
+---
+
 ## Sprint 01 exit criteria
 
 - `prisma migrate status` clean; no `db push` outside development; preflight blocks unapplied migrations.

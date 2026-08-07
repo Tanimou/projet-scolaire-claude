@@ -166,6 +166,20 @@ describe('the deployment wires the expectation into all three (S-E02-10 / PF-68)
   it('publishes the worker manifest port on loopback only', () => {
     // It carries no business surface and nobody outside the host needs it; the
     // public path is nginx's rate-limited exact-match location.
-    expect(compose).toContain('127.0.0.1:${WORKER_HTTP_PORT:-4001}:4001');
+    //
+    // Asserted as INTENT — bound to 127.0.0.1, mapped to container 4001 —
+    // rather than as one literal string. This line used to read
+    // `toContain('127.0.0.1:${WORKER_HTTP_PORT:-4001}:4001')`, which pinned the
+    // `:-` default as a side effect of pinning the loopback bind. S-E02-16
+    // removed every `${VAR:-…}` from a published port, so compose REFUSES
+    // rather than silently starting a different stack (PF-86) — and this spec
+    // went red on a change that strengthened the very property it exists to
+    // protect. The ratchet caught it, which is PF-80's shape exactly: a
+    // shared-file edit has a blast radius the editing view cannot see.
+    const loopback = compose
+      .split(/\r?\n/)
+      .filter((l) => l.includes('127.0.0.1:') && l.includes('WORKER_HTTP_PORT'));
+    expect(loopback).toHaveLength(1);
+    expect(loopback[0]).toMatch(/"127\.0\.0\.1:\$\{WORKER_HTTP_PORT[^}]*\}:4001"/);
   });
 });

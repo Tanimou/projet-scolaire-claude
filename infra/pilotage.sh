@@ -53,13 +53,18 @@ APP_SERVICES_DEFAULT=(api worker web migrator)
 HEALTH_SERVICES=(api web)   # migrator is one-shot (exits 0) — never health-waited
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"   # seconds to wait for healthy
 
-# .env is optional but recommended (host port mapping). Fall back gracefully.
+# .env is REQUIRED, and the fallback that used to exist here was the same defect
+# as PF-86 one layer up: "fall back gracefully" meant "start a different stack
+# and say nothing". Compose resolves `.env` from the compose file's directory
+# (`infra/`), not the caller's cwd, so without `--env-file` none of the port
+# variables in the ROOT .env are seen — and since S-E02-16 the compose file has
+# no defaults to fall back to, so the fallback branch could only ever produce an
+# obscure interpolation error. Refuse here instead, where we can name the remedy.
 compose() {
-  if [[ -f "$ENV_FILE" ]]; then
-    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
-  else
-    docker compose -f "$COMPOSE_FILE" "$@"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    die ".env introuvable a $ENV_FILE — copiez-le : cp .env.example .env (PF-86)"
   fi
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
 }
 
 log()  { printf '\033[1;36m▶ %s\033[0m\n' "$*"; }
@@ -149,8 +154,12 @@ cmd_migrate() {
 
 cmd_seed() {
   log "Seeding data…"
-  # `seed` depends on the api service (app profile), so activate both profiles.
-  compose --profile app --profile seed run --rm seed
+  # `--profile seed` seul suffit depuis S-E02-16 : `seed` dépend désormais du
+  # `migrator` (qui porte les deux profils) et non de l'`api`. Activer `app` en
+  # plus démarrait api + worker + web pour un script tsx qui écrit directement
+  # dans Postgres et n'appelle jamais l'API — et masquait le fait que la
+  # commande documentée `--profile seed` était, elle, un projet invalide (PF-86).
+  compose --profile seed run --rm seed
   ok "Seed complete."
 }
 

@@ -1166,3 +1166,66 @@ the next unblocked story under the layer/dependency rule. `S-E06-4`'s content ha
 *(This paragraph previously read "`S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an operator or **D-01**".
 `S-E02-3` did not: D-01 is a question about a hosted audit fixture, and the drill's target is a local container. That
 mis-read is what routed three runs away from this epic — see the SUPERSEDED note above.)*
+
+---
+
+## 2026-08-07 (run 20) — `S-E02-16`: the documented way to start the stack starts the documented stack
+
+**The pointer above was wrong, and that is the first thing to record.** It said *"this time the epic really is out of
+unblocked work"* and routed the next run to `V3-E06`. `PF-86` was sitting in this epic the whole time, marked `open`,
+`V3-E02`, *"recorded, deliberately not fixed here"* — no blocker, no decision, no operator. The layer/dependency rule
+selected it immediately on run 20. A finding parked with "deliberately not fixed here" is still open work; the pointer
+counted it as absent because the previous run had *chosen* not to do it, which is not the same thing.
+
+**And it was not the documentation defect it was filed as.** Step 2 measured the premise and re-scoped `PF-86` from
+`TECH_DEBT` to `BROKEN_RUNTIME`. Inside `infra/docker-compose.yml` alone — no untracked file involved — `KC_HOSTNAME`
+and `KEYCLOAK_PUBLIC_URL` hard-coded `http://localhost:8180` while `keycloak.ports` defaulted to `8080`. The api uses
+`KEYCLOAK_PUBLIC_URL` as its **expected token issuer**. So on the documented path Keycloak published on 8080, announced
+an issuer reachable on no port, the web sent the browser to 8080, and the api rejected every token that came back:
+**login was broken by construction**, and looked fine only because one machine's gitignored `.env` said `8180` on a
+code path where compose never read it.
+
+**What landed.** Four corrections, because any one alone leaves the hole open (ADR-026):
+
+1. Thirteen published host ports lose `${VAR:-…}` for `${VAR:?…}` — compose **refuses**, in the operator's terminal,
+   naming the variable and `--env-file .env`. Same argument `S-E06-1` made about `?? 'admin'`: a default nobody wrote
+   down *is* the defect, so the fix is a declaration, not a better default.
+2. A host port is written **once**. Every browser-facing URL derives from the variable that publishes it. Rule 1 alone
+   would still have shipped a wrong issuer at `KEYCLOAK_PORT=9999`.
+3. Every profile activates its own dependencies — Compose refuses the *entire* project otherwise, it does not degrade.
+4. `.env.example` stops describing a **third**, incompatible stack: it alone said 5432/8080 while `apps/api/.env.example`,
+   the seed scripts, the restore runbook and the drill all said 5433/8180.
+
+Plus `scripts/compose-invocation-check.js` as **stage 0c** of `ci-gate.sh` and a step of `ci.yml`, evaluating the
+**parsed** compose file so a service added tomorrow inherits every rule, and executing `docker compose config` in both
+directions where a docker binary exists.
+
+**One finding discovered, by the gate, on its first execution.** `PF-89` — `--profile prod` alone was *also* an invalid
+project (`service nginx depends on undefined service web`), confirmed live before the fix. Two of the file's five
+profiles were unrunnable exactly as documented. Recorded separately from `PF-86` because it was found by an executed
+gate rather than by reading: it is the evidence that rule C4 generalises rather than describing one mistake.
+
+**The gate caught its own first defect.** Its very first run failed with `bad indentation of a mapping entry`: the `:?`
+message this slice had just written contained a `": "`, which YAML reads as a mapping separator — the fix had broken
+the file it was fixing, and the check said so before anything ran.
+
+**Executed, not asserted.** Real script against the restored pre-slice file → exit 1, 4 problems, one per rule family;
+restored → exit 0, `git diff` clean. Stage replaced with `true` in **both** wiring files → 2 failed / 32 passed.
+Three live docker probes inside the script. And the stack was **recreated through the corrected command** and left
+healthy: eight containers up on the ports the root `.env` declares, migrator idempotent, `/healthz` 200, web `/` 200,
+and the running Keycloak reporting `issuer: http://localhost:8180/realms/pilotage-scolaire` — the port that is in fact
+published.
+
+### The pointer, as of 2026-08-07 (run 20) — **next slice → `S-E06-3`**
+
+`V3-E02`'s open findings are now `PF-77` and `PF-80`, both of which live in the routine's own files
+(`~/.claude/scheduled-tasks/…` and `bmad/workflows/sprint.workflow.js`) rather than in the product, plus `PF-82`
+(V3-E06). `PF-63` and `PF-65` are red-spec findings owned by `V3-E03`, which is still blocked behind `V3-E01`/`E05`.
+
+**Next slice → `S-E06-3`** in `V3-E06` — fix `/admin/classes/new` and add a route/link crawl gate (`PF-19`, `PF-39`).
+`V3-E06` is independent of everything (`dependency-map.md` §3), `S-E06-1` and `S-E06-2` have both landed, and
+`S-E06-3` has no `blockedBy`. `S-E06-4`'s content half stays blocked on **D-08**.
+
+**Do not repeat this pointer's mistake:** before declaring an epic out of work, re-read its `open` findings in
+`traceability-matrix.md` rather than its story list. `PF-86` had no story, which is exactly why the story list said the
+epic was empty.
