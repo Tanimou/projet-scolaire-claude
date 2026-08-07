@@ -8,7 +8,27 @@ consequence. The routine picks it up on the next run.
 
 ---
 
-## D-01 — Backup/restore window on hosted data · `open` · blocks V3-E02
+## D-01 — Backup/restore window on hosted data · `open` · **no longer blocks `S-E02-3`**
+
+> ### Re-scoped 2026-08-06 (run 19) — this decision does not gate the local drill
+>
+> The routine's target is the **local Docker stack** (`SKILL.md` Step −1, commit `99d7f1d`). There is no production:
+> `pilotage.srv861861.hstgr.cloud` is an audit fixture with no users, and local data is expendable by rule. The
+> question below — *when may we take the hosted deployment down, and who signs off* — is a question about **downtime
+> on a fixture**. It cannot gate a rehearsal that drops and recreates a database inside a container on this machine.
+>
+> `S-E02-3` was therefore **selected and executed** on run 19 against the local stack. That is substance, not a
+> paperwork bypass: the restore procedure is now proven to work and is timed, so if a deployment holding real data ever
+> exists, the open question shrinks from *"does our restore work at all?"* to *"when may we take **that** one down?"* —
+> a scheduling question rather than an engineering one.
+>
+> **What is still not proven, said plainly:** the drill runs against a local database whose content is a demo seed. It
+> establishes that the procedure is correct and yields a duration on this hardware; it does **not** establish a restore
+> time at real volume, and it does not exercise a backup taken on one machine and restored on another. The recorded
+> SLO is a floor, not a forecast.
+>
+> The decision stays `open` because option (a) is still owed before any destructive migration on a deployment whose
+> data anyone depends on. It simply no longer blocks a story.
 
 **Question.** When may we take the hosted deployment down (or to read-only) long enough to prove a timed
 backup → restore rehearsal, and who signs off that the restore is acceptable?

@@ -2,12 +2,21 @@
 
 **Layer** L0 · **Closes** PF-03, PF-55, PF-56, VAL-01, VAL-03, VAL-10 (+ PF-58, PF-59, PF-60, PF-61 discovered in flight)
 **Spec** the story contracts in `docs/daily-improvement-v3/stories/sprint-01.md` are the spec-kit for this epic.
-**Status (2026-08-04, after `S-E02-15`)** `code-complete` — **not `shipped`**, deliberately. Every story that can be
-built from this checkout is done: `S-E02-15` was the last enumerated slice, and the three rows that are not ✅ cannot be
-closed by code at all — `S-E02-1`'s residual and `S-E02-5` need hosted credentials and an operator, `S-E02-3` is blocked
-on decision **D-01**. Recording this as `shipped` would claim the operator half was delivered, which is the exact
-overstatement this epic exists to end. **Next selectable work is in another epic** → `V3-E06`, story `S-E06-1`
-(see [Next slice](#next-slice)).
+**Status (2026-08-07, after `S-E02-3`)** `code-complete` — still **not `shipped`**. `S-E02-3` is now ✅ done, executed
+against the **local Docker stack**; `S-E02-1`'s residual and `S-E02-5` keep their hosted halves open, and those need
+hosted credentials and an operator. Recording this as `shipped` would claim the operator half was delivered, which is
+the exact overstatement this epic exists to end.
+
+> ### ⚠️ The paragraph this replaced was wrong on one point, and it is worth saying which
+>
+> It read: *"`S-E02-3` is blocked on decision **D-01**"* and *"next selectable work is in another epic → `V3-E06`"*.
+> Both were stale by 2026-08-06. **D-01 asks when the HOSTED deployment may be taken down** —
+> `pilotage.srv861861.hstgr.cloud` is an **audit fixture**, not a production system — and the drill's target is the
+> local Docker stack, whose data is expendable. D-01 gated nothing here. `open-decisions.md` D-01 and the
+> [Next slice](#next-slice) pointer were corrected earlier in run 19; this header was not, so the file contradicted
+> itself for one run. `docs/daily-improvement-v3/stories/sprint-01.md` §`S-E02-3` still carries a literal
+> *"STOP condition … the routine must not start this story"*: it is stale for the same reason, and it is left in place
+> rather than rewritten, because the sprint file is the historical record of what was believed at the time.
 
 > **Why there is no `spec.md` here.** The V3 stories are authored pre-sliced with acceptance criteria, a stated test
 > and an explicit out-of-scope list — they already carry what a `spec.md` + `tasks.md` pair would. Spending a run on
@@ -20,7 +29,7 @@ overstatement this epic exists to end. **Next selectable work is in another epic
 | **S-E02-0** | Land the V3 substrate on `main` | ✅ done | 2026-08-02 | PR #170 → `81c6e15` |
 | **S-E02-1** | Baseline migration; stop `db push`; preflight; schema manifest | 🟡 partial | 2026-08-02 | baseline applied to scratch DB, `migrate diff --exit-code` = 0, `migrate status` clean, entrypoint refusal exercised, 10/10 jest |
 | **S-E02-2** | Make CI actually run | 🟢 done *(local gate)* | 2026-08-02 | suites executed for the first time — **568/588 passing**; 18 failures all baselined with owning finding ids; ratchet proven to block in **both** directions; **surfaced and fixed a live production P0 (`PF-62`)** |
-| **S-E02-3** | Timed backup → restore rehearsal | ⛔ blocked | — | blocked by decision **D-01** |
+| **S-E02-3** | Timed backup → restore rehearsal, **executed against the LOCAL Docker stack** | ✅ done | 2026-08-07 | 78/78 new guard (**328/328** across 10 suites in `src/shared/quality`, was 250/250 across 9). The drill was **run, not asserted**: `PASS`, exit 0, **55 base tables / 13 550 rows** dumped, restored into a scratch database and verified on row counts **and** per-table checksums **and** schema — dump **1242 ms**, restore **7488 ms**, verify **4001 ms**, total **22 737 ms**. Six verdicts driven against the real database: `row_count_divergence` and `checksum_divergence` by deliberate divergence, `unreachable_source`, `unbaselined_ledger`, `tooling_unavailable`, and `--update` **refusing** to write from a failed run |
 | **S-E02-4** | Seed cannot run in production | ✅ done | 2026-08-03 | 34/34 jest; the guard was **executed** — all **7** seed scripts exit 1 `[refused-production]` under a production target *with the correct token*, and the allowed demo path crosses the guard and fails on the DB connection instead; `nest build` exit 0 |
 | **S-E02-5** | Reconcile source ↔ hosted schema drift | ⬜ todo | — | *(implied by S-E02-1; needs hosted access)* |
 | **S-E02-6** | Release manifest made real; deploy gate compares it | ✅ done | 2026-08-03 | 19/19 jest; the gate was **executed** — exit 1 against the live drifted API, exit 0 on a conforming manifest, exit 1 on all four bad verdicts *and* on a manifest lying `match`; `nest build` exit 0 |
@@ -959,15 +968,155 @@ of that assertion that still bites.
 **Second gate run: `GATE: PASS`, 12/12 stages, exit 0.** One build was spent on the failure and one on the fix, which is
 the rebuild-once the routine allows.
 
+---
+
+## S-E02-3 — the restore stopped being a thing we assumed we could do
+
+**Done 2026-08-07 (run 19).** `VAL-03`, risk `R-01`, gate `G-MIGRATION`. Target: the **local Docker stack**.
+
+Every mitigation ever written for `R-01` — the safe migrator (`S-E02-1`), the baseline runbook, the drift measurement
+(`S-E02-5`) — assumed that when something went wrong there was a backup to go back to. **Nothing in this repository had
+ever executed a restore.** "We have `pg_dump`" is a claim about a backup strategy, not one, and claims nobody executed
+were the largest category in the audit.
+
+### What was executed, with the numbers
+
+```
+$ node scripts/restore-drill.js
+  source     : 127.0.0.1:5433/pilotage as pilotage
+  route      : docker exec pilotage_postgres
+  scratch    : restore_drill_1786061599037
+
+▶ source reachable — role pilotage (superuser=true, bypassrls=true)
+▶ building the source manifest … 55 base tables, 13550 rows, ledger present
+▶ dumping … 1242 ms
+▶ restoring … 7488 ms
+▶ verifying … 4001 ms — 55 base tables, 13550 rows
+▶ scratch database "restore_drill_1786061599037" dropped
+
+RESTORE DRILL: PASS — 55 tables, 13550 rows restored and verified row-count + checksum + schema
+```
+
+Exit 0. **55 base tables** (54 application tables + `_prisma_migrations`), **30 non-empty**, **13 550 rows**, from the
+demo seed (tenant demo, school VOLTAIRE). Those durations are what `scripts/restore-drill-baseline.json` now records —
+written by `--update` from a passing run, every entry carrying a written reason, **no placeholders**.
+
+### The divergence paths were driven, not argued (AC-3)
+
+Verification is its own phase taking two manifests, so a fault can be injected into the **scratch** database strictly
+between restore and verify. Both directions were run against the real database:
+
+| Injected into the scratch DB | Verdict | Exit | What it named |
+|---|---|---|---|
+| `DELETE FROM student … LIMIT 1` | `row_count_divergence` | 1 | `student — rowCount: source 2463, restored 2462`, plus the three tables the FK cascade reached (`enrollment`, `grade`, `guardianship`) — and each of their checksums |
+| `UPDATE school SET name = name \|\| ' (drill mutation)' … LIMIT 1` | `checksum_divergence` | 1 | `school — checksum: source c70151c2…, restored 3d2862d3…` — **same row count**, which is exactly the divergence a counter-only check misses |
+
+The seam that makes this reachable is `--inject-fault-sql`, and it is **not** a bypass: it is monotone in the failing
+direction. It can make the drill fail; it can never make it pass, the verdict can never be `ok`, and such a run can
+never write the baseline.
+
+### It refuses to report a success it did not obtain (AC-4, DNC-08)
+
+| Run | Verdict | Exit |
+|---|---|---|
+| `--source …/no_such_db` | `unreachable_source` | 1 |
+| `--source …/postgres` (a database with no `_prisma_migrations`) | `unbaselined_ledger` | 1 |
+| `--container pilotage_nope` | `tooling_unavailable` | 1, naming **both** routes it tried |
+| `--update` from that failed run | *refused* — `refusing to write the baseline` | 1, and **no file was written** |
+
+`grep -ic skip` over the unreachable run's whole output returns **0**. The `unbaselined_ledger` case is not
+hypothetical: it is the state this exact database was in earlier in this run (`PF-03`, 52 tables, no ledger, 24 DDL
+statements of drift).
+
+### Two defects the first execution found in the drill itself
+
+1. **`psql -A -t` renders an uncast boolean `t`/`f` and a `::text`-cast one `true`/`false`.** The first run reported
+   `superuser=false` on a superuser role and `ledger ABSENT` on a database whose ledger was right there — i.e. it
+   would have failed correctly-shaped databases and, worse, was reading its own inputs wrong in a way no assertion
+   would have caught. Fixed with a helper that accepts both, and the reason is written next to it.
+2. **CHECK constraints cannot be compared across two databases.** PostgreSQL names the implicit NOT NULL checks after
+   object OIDs, which differ by construction, so including them in the schema manifest would have guaranteed a false
+   divergence on every run — the kind that gets "fixed" by deleting the check. Only PK/UNIQUE/FK are compared, and
+   the exclusion carries its reason.
+
+### Decisions taken here rather than escalated
+
+- **A duration outside tolerance is a WARN, not a failure.** These numbers are a laptop against a Docker volume under
+  variable load. A timing flake that turned the drill red would train the operator to re-run until green, which is
+  how a gate stops being read. Correctness diverging fails; slowness is reported. Stated in the script header and in
+  the runbook so the concession is visible rather than discovered.
+- **The manifest/dump race is closed at the acceptable floor, not the ideal.** A `pg_export_snapshot()` +
+  `pg_dump --snapshot=…` needs a session held open across processes, which a script speaking through one short-lived
+  `docker exec psql` per query cannot do. Instead the source manifest is **re-read after the dump** and any change is
+  reported as its own verdict, `source_mutated_during_dump` — never as a data divergence, so the alert cron writing
+  mid-dump can never be attributed to the restore.
+- **The drill is deliberately NOT a `ci-gate.sh` stage** (ADR-025 D1). It needs a running Postgres; `ci-gate.sh`
+  deliberately needs none. A stage that cannot run where the gate runs is either skipped — DNC-08, a success nobody
+  obtained — or red every run and routed around (R-23). The guard spec asserts that absence **in the negative**, with
+  the reason in the test name, so a future run does not "fix the missing stage".
+
+### PF-84 cannot come back
+
+The same file carries the `PF-84` guard: `.dockerignore` excluded `infra/docker`, so
+`infra/docker/migrate-entrypoint.sh` was absent from **every** build of `Dockerfile.api` and the migrator exited 2
+(`sh: can't open`) on every stack ever started — the safe migrator that replaced `prisma db push --accept-data-loss`
+had never once run. The guard asserts the **general rule** — every `/app/…` path in a compose `command:`/`entrypoint:`
+exists in the repository **and** survives `.dockerignore` — not "this literal string is absent". It parses all three
+YAML forms (exec list, shell string, and the folded block `minio-init` uses), evaluates `.dockerignore` with
+last-match-wins including `!` negation and `**` globs, **reads executable content only** (comments stripped, so the
+five-line explanation that names `infra/docker` three times can neither break nor satisfy it — that is `PF-83`'s
+lesson), and is **proven in the negative** on a synthetic pattern list, because a matcher that always returned false
+would pass every positive assertion and cover nothing. **The guard never mutates `.dockerignore`** — it reads the file
+as it stands and evaluates a synthetic pattern list for the negative case. (`.dockerignore` *is* edited by this slice:
+the `infra/docker` line is removed and replaced by an eleven-line rationale naming `PF-84`. An earlier draft of this
+paragraph said the file "was not touched by this slice", which was simply false, and is corrected here rather than
+quietly deleted.)
+
+### Not claimed
+
+`R-01` stays **open**. The drill has run against the LOCAL seeded database; the hosted database is still un-baselined
+and has never been dumped or restored. The runbook §7 states the nine things the drill does not prove — production
+data volume, cross-machine restore, cross-PostgreSQL-version restore (the `md5(row::text)` checksum is comparable only
+between two databases on the same server version and locale), PITR/WAL, retention, offsite copy, the hosted database,
+the partial route-identity check, and that the drill is not a quiesce. `PF-86` (Compose resolving `.env` from `infra/`,
+so `docker compose up -d` silently starts a portless stack) is **recorded here and in the runbook, not fixed** — fixing
+Compose's env-file resolution is its own slice.
+
 ## Next slice
 
-> **Pointer, stated once and plainly.** The next slice is **not in this epic**. `S-E02-15` closed the last enumerated
-> story; what remains here (`S-E02-1` residual, `S-E02-3`, `S-E02-5`) needs an operator or **D-01**, not a run. Under the
-> roadmap's layer/dependency rule the next selectable story is **`S-E06-1`** in **`V3-E06` — production hygiene**
-> (`PF-17`/`PF-54`: Maildev and seed leakage on the hosted deployment, plus hard-coded credentials). It is independent of
-> everything per `dependency-map.md` §3, which is why it is selectable while `V3-E01`/`E03`/`E04`/`E05` are not.
-> `V3-E03` is **not** selectable yet despite the tempting `PF-63`/`PF-65` triage below — it depends on `E01`, `E04` and
-> `E05`, all open.
+> ### ⚠️ SUPERSEDED 2026-08-06 (run 19) — this epic has unblocked work again
+>
+> **What changed.** The routine was retargeted at the **local Docker stack** (`SKILL.md` Step −1, landed as
+> commit `99d7f1d` / PR [#187](https://github.com/Tanimou/projet-scolaire-claude/pull/187)). There is no production:
+> `pilotage.srv861861.hstgr.cloud` is an audit fixture. Local data is expendable, and rebuilding or recreating local
+> containers is permitted and expected.
+>
+> Every reason the pointer below gave for leaving this epic was a **hosted-access** reason, and hosted access was never
+> the point:
+> - **`S-E02-1` residual** — *"baselining the database is an operator action"*. Executed this run, locally: the local
+>   database was reset, `docker compose … --profile app` ran the migrator, `0_baseline` applied, and
+>   `migrate diff --from-url … --exit-code` returned **0, "No difference detected"**, 55 tables (54 + the ledger).
+>   First time the baseline has been proven to *reproduce* `schema.prisma` on a real database rather than argued to.
+> - **`S-E02-5` (source↔DB drift)** — measured locally for the first time (24 DDL statements: 5 enums, 2 tables,
+>   columns/indexes/FKs on `import_batch`, `import_row`, `student`) and then **resolved by construction** by the reset.
+>   The drift class is not closed — nothing yet *prevents* a `db push` database reappearing — but its local instance is.
+> - **`S-E02-3` / `D-01`** — D-01 asks *"when may we take the hosted deployment down, and who signs off"*. That is a
+>   question about a fixture. It does not gate a drill whose target is a local container, so **`S-E02-3` is the story
+>   this run selected**.
+>
+> **And running the artefact found `PF-84`, which the pointer could not have known about:** the migrator that replaced
+> `prisma db push --accept-data-loss` had **never been able to start** — `.dockerignore` excluded `infra/docker`, so its
+> entrypoint was absent from every image ever built and the service exited 2 with *"can't open"*. This epic's central
+> mechanism was inert for three days while the ledger recorded it as delivered. That is the strongest possible argument
+> against the pointer's premise: an epic is not out of work because its stories are written down as done.
+>
+> *(Original pointer, retained because deleting it would hide why three runs routed away from this epic:*
+> ~~The next slice is **not in this epic**. `S-E02-15` closed the last enumerated story; what remains here
+> (`S-E02-1` residual, `S-E02-3`, `S-E02-5`) needs an operator or **D-01**, not a run. Under the roadmap's
+> layer/dependency rule the next selectable story is **`S-E06-1`** in **`V3-E06` — production hygiene**.~~*)*
+>
+> `V3-E03` is still **not** selectable despite the tempting `PF-63`/`PF-65` triage below — it depends on `E01`, `E04`
+> and `E05`, all open. That part of the pointer was, and remains, correct.
 
 Eight blind spots this epic knew about are now closed or advanced: the lint gate executes, something boots the
 applications, the release gate covers the whole deployment, the web build is inspected, the declared runtime is
@@ -988,7 +1137,8 @@ checked, the observability profile can start and is held to being coherent, the 
 3. **`PF-56`'s remaining thirds** — queue depth / failure / DLQ, which is now a *tracing and* metrics gap: there is no
    official BullMQ instrumentation, so processors must be instrumented one by one and would need a manual span as
    well as a counter. Alert rules and SLO thresholds stay **a product decision, not a build** — what counts as "good"
-   cannot be invented by the routine any more than legal text can (R-13). The restore drill stays blocked on **D-01**.
+   cannot be invented by the routine any more than legal text can (R-13). *(The line that used to end this item —
+   "the restore drill stays blocked on D-01" — is void: `S-E02-3` shipped 2026-08-07 against the local stack.)*
 4. **Prisma tracing** — deliberately excluded from `S-E02-14` because `@prisma/instrumentation` requires
    `previewFeatures = ["tracing"]` in `schema.prisma` and a version matched to the client, i.e. a schema change and a
    `prisma generate`. That makes it a G-MIGRATION slice, and folding it into a slice that needed neither would have
@@ -1001,8 +1151,18 @@ on run 15. Until the routine heartbeats during implementation, every long run is
 until `heartbeat` prints `no lock held` — by which point another run may already have written. The fix lives in
 `~/.claude/scheduled-tasks/`, outside this checkout, so it is an operator action.
 
-With `PF-79` closed, `V3-E02` has **no unblocked code work left**: `S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an
-operator or **D-01**, and the two residuals `S-E02-15` recorded (span-event redaction, BullMQ queue metrics) are
-follow-ups rather than open findings. The alternative under the selection rule is to let it move to **`V3-E06`** (production hygiene —
-independent of everything, per `dependency-map.md` §3), whose first unblocked story is `S-E06-1` (`PF-17`/`PF-54`,
-Maildev and seed leakage plus hard-coded credentials). `S-E06-4`'s content half stays blocked on **D-08**.
+### The pointer, as of 2026-08-07 — **next slice → `S-E06-2`**, and this time the epic really is out of unblocked work
+
+`S-E02-3` shipped this run, which was the last story here that a run could execute. What remains in `V3-E02` is
+**`S-E02-1`'s residual** and **`S-E02-5`** — both the *hosted* half, both needing production credentials and an
+operator, neither buildable from this checkout. So the epic stays **`code-complete`, not `shipped`**; recording it as
+shipped would claim the operator half was delivered, which is the overstatement this epic exists to end. The two
+residuals `S-E02-15` recorded (span-event redaction, BullMQ queue metrics) are follow-ups, not open findings.
+
+**Next slice → `S-E06-2`** in **`V3-E06`** — enable CSP and sanitise branding injection (`PF-45`). `V3-E06` is
+independent of everything (`dependency-map.md` §3) and its first story `S-E06-1` landed 2026-08-04, so `S-E06-2` is
+the next unblocked story under the layer/dependency rule. `S-E06-4`'s content half stays blocked on **D-08**.
+
+*(This paragraph previously read "`S-E02-1`'s residual, `S-E02-5` and `S-E02-3` all need an operator or **D-01**".
+`S-E02-3` did not: D-01 is a question about a hosted audit fixture, and the drill's target is a local container. That
+mis-read is what routed three runs away from this epic — see the SUPERSEDED note above.)*

@@ -31,16 +31,19 @@ track (`V3-E01` … `V3-E11`, layered L0→L4) — **not** from the E1–E12 fea
 cancelled**; every entry in it stays accurate as of E11. Do **not** read its "E12 finance is next" tail as the routine's
 next pick: it is not.
 
-**V3 slice ledger — `V3-E02` · Versioned database lifecycle and release integrity · layer L0 · `code-complete` (2026-08-04)**
+**V3 slice ledger — `V3-E02` · Versioned database lifecycle and release integrity · layer L0 · `code-complete` (2026-08-07)**
 
 | Slice | State |
 |---|---|
 | `S-E02-0` … `S-E02-14` | ✅ landed — per-slice evidence in `docs/spec/features/v3-e02/PROGRESS.md` |
-| **`S-E02-15`** — `apps/web` becomes the **third observed artefact**: Prometheus metrics on a dedicated internal `node:http` socket (never a Next route, because nginx `location /` would publish one), spans through the single `withRedaction` exporter from `@pilotage/contracts`, `web` added to `TRACED_SERVICES`, every `pilotage-slo.json` HTTP panel regrouped `by (app, …)`, and two gates widened to hold it. Closes **`PF-79`** | ✅ **2026-08-04 — this run** |
+| **`S-E02-15`** — `apps/web` becomes the **third observed artefact**: Prometheus metrics on a dedicated internal `node:http` socket (never a Next route, because nginx `location /` would publish one), spans through the single `withRedaction` exporter from `@pilotage/contracts`, `web` added to `TRACED_SERVICES`, every `pilotage-slo.json` HTTP panel regrouped `by (app, …)`, and two gates widened to hold it. Closes **`PF-79`** | ✅ 2026-08-04 |
+| **`S-E02-3`** — the **timed backup → restore rehearsal**, **executed against the LOCAL Docker stack**, not asserted: `scripts/restore-drill.js` dumps the seeded database, restores it into a name-guarded scratch database and verifies row counts **and** per-table `md5(row::text)` checksums **and** schema, against the reviewed `scripts/restore-drill-baseline.json`; six verdicts driven against the real database, `--update` proven to **refuse** a failed run; `docs/runbooks/backup-restore-drill.md` + `ADR-025` (the drill is deliberately **not** a `ci-gate.sh` stage, and the guard spec asserts that absence in the negative). Also carries the **`PF-84`** guard — `.dockerignore` excluded `infra/docker`, so the safe migrator's entrypoint was absent from **every** `Dockerfile.api` build and it had never once started. Closes **`VAL-03`** (local half) + **`PF-84`**; records **`PF-86`** | ✅ **2026-08-07 — this run** |
 
-`S-E02-15` was the **last enumerated slice**, so the epic is **`code-complete`, not `shipped`**: the three unfinished
-rows (`S-E02-1` residual, `S-E02-3`, `S-E02-5`) need hosted credentials, an operator, or decision **D-01** — none is
-buildable from this checkout, and calling it `shipped` would claim the operator half was delivered.
+`S-E02-15` was the last *enumerated* slice and `S-E02-3` was the last *unblocked* one, so the epic stays
+**`code-complete`, not `shipped`**: the two remaining rows (`S-E02-1` residual, `S-E02-5`) are the **hosted** halves —
+they need hosted credentials and an operator, are not buildable from this checkout, and calling the epic `shipped`
+would claim the operator half was delivered. **`D-01` no longer blocks anything here** (it asks when the hosted
+*audit fixture* may be taken down; the drill's target is a local container — see `open-decisions.md` D-01).
 
 **V3 slice ledger — `V3-E06` · Production hygiene and navigation completeness · layer L0 · `in-progress` (2026-08-04)**
 
@@ -54,8 +57,9 @@ Keycloak master account is still `admin`/`admin`, and rotating it (Keycloak mast
 operator work this routine may not perform. Read the slice as "the silent default is gone", never as "the credential
 is safe".
 
-**Next V3 slice → `S-E06-2`** — enable CSP and sanitise branding injection (`PF-45`), the next unblocked story in
-`V3-E06` under the layer/dependency rule.
+**Next V3 slice → `S-E06-2`** — enable CSP and sanitise branding injection (`PF-45`). Restated as a **current**
+decision on 2026-08-07, not carried over: `V3-E02`'s last unblocked story (`S-E02-3`) shipped this run, its two
+remaining rows are hosted-operator work, and `S-E06-2` is the next unblocked story under the layer/dependency rule.
 
 This file carries the **pointer only** — it is not the V3 tracker. Per-slice status, evidence and the "not claimed"
 ledger live in **[`docs/spec/features/v3-e02/PROGRESS.md`](../docs/spec/features/v3-e02/PROGRESS.md)** and
