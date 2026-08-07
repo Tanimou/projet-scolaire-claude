@@ -186,6 +186,14 @@ jobs:
       # "registered" is not "measured".
       - run: node scripts/tracing-check.js
 
+      # S-E06-2 / PF-45 — content security policy + branding injection sink.
+      # Kept in step with scripts/ci-gate.sh stage 12; the two must not drift
+      # (S-E02-2 AC-4), and csp-check.js asserts that both files run it.
+      # Reads the EMITTED api main.js and web middleware.js, so it belongs in
+      # the build job and after the build: a policy present in source and absent
+      # from the artefact protects nobody.
+      - run: node scripts/csp-check.js
+
   test:
     name: Test
     runs-on: ubuntu-latest

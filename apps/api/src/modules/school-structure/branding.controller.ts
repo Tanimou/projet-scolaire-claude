@@ -33,10 +33,21 @@ export class BrandingController {
     return this.branding.getForTenant(user.tenantId);
   }
 
+  /**
+   * S-E06-2 / PF-88 : le locataire est résolu depuis le jeton, jamais depuis le
+   * chemin. `branding.write` dit *qu'on peut écrire un branding*, pas *lequel* ;
+   * sans la résolution ci-dessous, la permission valait pour toutes les écoles
+   * de toutes les instances.
+   */
   @Patch('schools/:id/branding')
   @RequiresPermission('branding.write')
   @ApiOkResponse({ description: 'Branding mis à jour' })
-  update(@Param('id') id: string, @Body() body: UpdateBrandingDto) {
-    return this.branding.update(id, body);
+  async update(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id') id: string,
+    @Body() body: UpdateBrandingDto,
+  ) {
+    const user = await this.users.ensureUser(jwt);
+    return this.branding.update(user.tenantId, id, body);
   }
 }

@@ -198,6 +198,26 @@ else
   echo "⏭  tracing check skipped (--quick — it reads the build's dist/)"
 fi
 
+# ---------------------------------------------------------------------------
+# Stage 12 — content security policy + branding injection sink (S-E06-2, PF-45)
+# ---------------------------------------------------------------------------
+# helmet ran with the content security policy explicitly disabled for the life
+# of the project, and three tenant-controlled strings were interpolated into a
+# server-rendered <style> through dangerouslySetInnerHTML — which React does not
+# escape, so the sink was stored XSS on every authenticated page of all four
+# portals rather than the CSS injection the finding described.
+#
+# This stage DRIVES the policy builder and the branding sanitiser rather than
+# reading them, then reads the EMITTED api main.js and web middleware.js — a
+# policy that exists in source and not in the artefact protects nobody. It runs
+# after the build for that reason.
+if [ "${QUICK}" -eq 0 ]; then
+  run_stage "csp (policy + branding injection sink)" node scripts/csp-check.js
+else
+  echo ""
+  echo "⏭  csp check skipped (--quick — it reads the emitted dist/ and .next/)"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  CI GATE SUMMARY"

@@ -1,3 +1,4 @@
+import { buildBrandingCss, sanitizeAssetUrl, CSP_NONCE_HEADER } from '@pilotage/contracts';
 import {
   AppShell,
   DISPLAY_PREFS_DEFAULTS,
@@ -88,6 +89,11 @@ export async function AppShellRoot({
   // Detect active sidebar entry from the requested pathname
   const hdrs = await headers();
   const pathname = hdrs.get('x-pathname') ?? hdrs.get('x-next-pathname') ?? '/';
+  // Nonce CSP de CETTE réponse, posé par `middleware.ts` (S-E06-2 / PF-45).
+  // Absent seulement si le middleware n'a pas tourné pour ce chemin — dans ce
+  // cas les blocs en ligne partent sans nonce et la politique les bloque, ce qui
+  // est la dégradation voulue : jamais de repli silencieux vers `unsafe-inline`.
+  const cspNonce = hdrs.get(CSP_NONCE_HEADER) ?? undefined;
 
   // Admin gets the grouped sidebar (per spec §5); teacher/parent stay flat for now.
   let sidebarGroups: SidebarGroup[] | undefined;
@@ -147,8 +153,8 @@ export async function AppShellRoot({
 
   return (
     <>
-      <BrandingStyle branding={branding} />
-      <BootstrapDisplayPrefsStyle prefs={display} />
+      <BrandingStyle branding={branding} nonce={cspNonce} />
+      <BootstrapDisplayPrefsStyle prefs={display} nonce={cspNonce} />
       <DisplayPrefsProvider initial={display}>
         <AppShell portal={portal} sidebar={sidebar} topbar={topbar} contentClassName={contentClassName}>
           {children}
@@ -182,7 +188,7 @@ function resolveDisplayPrefs(me: MeResponse | null): DisplayPreferences {
  * CSS variables and `data-density` selector matches (the client provider then
  * keeps them in sync across navigations).
  */
-function BootstrapDisplayPrefsStyle({ prefs }: { prefs: DisplayPreferences }) {
+function BootstrapDisplayPrefsStyle({ prefs, nonce }: { prefs: DisplayPreferences; nonce?: string }) {
   const acc = ACCENT_PALETTE[prefs.accent];
   const css =
     `:root{` +
@@ -196,8 +202,9 @@ function BootstrapDisplayPrefsStyle({ prefs }: { prefs: DisplayPreferences }) {
     `}`;
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: css }} />
+      <style nonce={nonce} dangerouslySetInnerHTML={{ __html: css }} />
       <script
+        nonce={nonce}
         // No-flash density init: write `data-density` and `data-accent` on <html>
         // synchronously, before React hydrates, so CSS selectors apply on first paint.
         dangerouslySetInnerHTML={{
@@ -222,19 +229,36 @@ const ACCENT_PALETTE: Record<DisplayPreferences['accent'], { solid: string; soft
 /**
  * Inline <style> that injects the school's branding palette as CSS variables.
  * Server-rendered so first paint has the correct colors.
+ *
+ * ---------------------------------------------------------------------------
+ * S-E06-2 / PF-45 — POURQUOI L'ASSAINISSEMENT EST ICI *AUSSI*
+ * ---------------------------------------------------------------------------
+ * Ce bloc interpolait `branding.primaryColor` (etc.) directement dans un
+ * `dangerouslySetInnerHTML`. React n'échappe rien dans ce contexte, et
+ * l'analyseur HTML ferme un `<style>` sur la seule séquence `</style` : une
+ * valeur de 37 caractères comme `red}</style><script>alert(1)</script>` tenait
+ * dans le `@MaxLength(60)` du DTO, donc le sink n'était pas une injection CSS
+ * mais un XSS stocké, servi sur **toutes** les pages authentifiées des **quatre**
+ * portails du locataire.
+ *
+ * `UpdateBrandingDto` valide désormais à l'écriture, et cela ne suffit pas : la
+ * base porte déjà des lignes écrites avant ce correctif, et les scripts de seed
+ * écrivent `branding` via Prisma sans jamais traverser le DTO. Le rendu doit
+ * donc être sûr **indépendamment** de ce qui est stocké — c'est ce que
+ * `buildBrandingCss` garantit, et son garde-fou terminal lève si le CSS produit
+ * contient malgré tout un caractère capable de terminer l'élément.
  */
-function BrandingStyle({ branding }: { branding: BrandingResponse | null }) {
+function BrandingStyle({ branding, nonce }: { branding: BrandingResponse | null; nonce?: string }) {
   if (!branding) return null;
-  const css = `:root{${branding.primaryColor ? `--brand-primary:${branding.primaryColor};` : ''}${branding.accentColor ? `--brand-accent:${branding.accentColor};` : ''}${branding.fontFamily ? `--brand-font:${branding.fontFamily};` : ''}}`;
+  const css = buildBrandingCss(branding);
+  const faviconUrl = sanitizeAssetUrl(branding.faviconUrl);
   return (
     <>
       {/* React 19 hoists this <link> into <head>; an explicit rel="icon" wins
           over the default /favicon.ico, so the school's favicon shows in the tab
           across every authenticated portal page. */}
-      {branding.faviconUrl ? (
-        <link rel="icon" href={branding.faviconUrl} />
-      ) : null}
-      <style dangerouslySetInnerHTML={{ __html: css }} />
+      {faviconUrl ? <link rel="icon" href={faviconUrl} /> : null}
+      <style nonce={nonce} dangerouslySetInnerHTML={{ __html: css }} />
     </>
   );
 }

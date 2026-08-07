@@ -46,7 +46,49 @@ async function bootstrap() {
   // verdict est `unverified` et rien n'est bloqué — l'attente est l'interrupteur.
   assertReleaseMatches(logger);
 
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // Politique de sécurité du contenu (S-E06-2 / PF-45).
+  //
+  // Cette ligne disait `contentSecurityPolicy: false` : helmet était appelé, et
+  // la seule directive qui transforme une injection en non-événement était la
+  // seule désactivée.
+  //
+  // L'API ne sert PAS le portail — c'est `apps/web` qui rend le HTML, et sa
+  // politique (avec nonce, par requête) est construite dans son middleware. Ici
+  // la surface est du JSON, plus Swagger hors production. La politique correcte
+  // pour du JSON est donc la plus stricte qui existe : `default-src 'none'`. Une
+  // réponse d'API ne charge rien, et si un jour elle rend du HTML par accident
+  // (page d'erreur d'un framework, upload rejoué), ce HTML n'exécutera rien.
+  //
+  // Swagger UI, lui, est une vraie page : il injecte ses styles et son script
+  // d'amorçage en ligne. Il n'est monté que hors production (voir plus bas), et
+  // sa politique élargie est portée par la MÊME condition — les deux ne peuvent
+  // pas diverger, parce qu'un seul booléen les décide.
+  const swaggerEnabled = process.env.NODE_ENV !== 'production';
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: swaggerEnabled
+          ? {
+              'default-src': ["'none'"],
+              'script-src': ["'self'", "'unsafe-inline'"],
+              'style-src': ["'self'", "'unsafe-inline'"],
+              'img-src': ["'self'", 'data:'],
+              'connect-src': ["'self'"],
+              'font-src': ["'self'", 'data:'],
+              'base-uri': ["'none'"],
+              'form-action': ["'none'"],
+              'frame-ancestors': ["'none'"],
+            }
+          : {
+              'default-src': ["'none'"],
+              'base-uri': ["'none'"],
+              'form-action': ["'none'"],
+              'frame-ancestors': ["'none'"],
+            },
+      },
+    }),
+  );
   // `metrics` rejoint les surfaces d'exploitation hors préfixe versionné
   // (S-E02-13 / PF-56) : Prometheus scrape un chemin fixe, et le faire migrer
   // avec la version de l'API métier casserait la configuration de scrape à

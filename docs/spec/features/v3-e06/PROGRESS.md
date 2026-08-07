@@ -19,8 +19,8 @@ valuable to credibility — which is why it is scheduled in parallel from day on
 | Story | Title | State | Run | Evidence |
 |---|---|---|---|---|
 | **S-E06-1** | Purge development artefacts from production-facing code, and gate the purge | ✅ done | 2026-08-04 | spec: [`stories/S-E06-1.md`](./stories/S-E06-1.md) · evidence below |
-| **S-E06-2** | Enable CSP and sanitise branding injection | ⬜ **next** | — | PF-45 |
-| **S-E06-3** | Fix `/admin/classes/new`; route/link crawl gate | ⬜ todo | — | PF-19, PF-39 |
+| **S-E06-2** | Enable CSP and sanitise branding injection | ✅ done | 2026-08-07 | PF-45 **closed**, PF-88 found + closed, R-28 raised · evidence below |
+| **S-E06-3** | Fix `/admin/classes/new`; route/link crawl gate | ⬜ **next** | — | PF-19, PF-39 |
 | **S-E06-4** | Legal, help and contact routes before consent | ⛔ blocked | — | needs decision **D-08** (holding pages allowed, policy text is not) |
 | **S-E06-5** | *(not enumerated in sprint-01)* | — | — | — |
 | **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⬜ todo | — | PF-29 |
@@ -48,6 +48,50 @@ throw, with **no `SKIP_*`/`ALLOW_*`/`NODE_ENV` bypass** (DNC-10) and **names onl
 "Aller à la liste des utilisateurs" button, because a timed redirect is a **WCAG 2.2.1** failure on a screen whose
 whole purpose is a confirmation the admin must read. Recorded here rather than shipped silently.
 
+## S-E06-2 — evidence (2026-08-07)
+
+**What executed.** Full `scripts/ci-gate.sh` **twice**, both `GATE: PASS`, 14/14 stages, exit 0 — the verdict line, not
+a stage selection (**R-23**). New stage 12 (`csp`). `pnpm exec jest src/shared/quality src/modules/school-structure` →
+**448/448** across 13 suites (was 331/331 across 10). api ratchet **979/990**, worker **160/167**, no drift either side.
+Lint warnings **44/44 held — this slice added none**.
+
+**The premise was reproduced against the running artefact, not read.** `curl` on the local stack, before any change:
+`/admin/login` → **200 with no `content-security-policy` at all**; `/healthz` → every other helmet header (COOP, CORP,
+HSTS, `X-Content-Type-Options`, …) and **no CSP**. helmet ran; the one directive that turns an injection into a
+non-event was the one switched off. `node scripts/csp-check.js` against the **pre-fix build artefact** →
+**`CSP CHECK: FAIL`, exit 1**, naming all four defects.
+
+**The finding was larger than recorded, twice.** A2 §11 says *"stored CSS-injection"*; it is **stored XSS** —
+`red}</style><script>alert(1)</script>` is 37 characters against `@MaxLength(60)`, React does not escape inside
+`dangerouslySetInnerHTML`, and the HTML parser closes a `<style>` on `</style` alone. And the write route never
+consulted the caller's tenant (**PF-88**), which makes the composition **cross-tenant** stored XSS.
+
+**The main result came from booting it — `R-28`.** With the policy shipped, `csp-check.js` green, the guard spec 40/40
+and the whole gate 14/14, `/admin/login` was still **dead**: served `x-nextjs-cache: HIT` from the build-time cache with
+**21 `<script>` tags and 0 nonces**, and `'strict-dynamic'` makes CSP3 browsers ignore `'self'`. Dropping
+`'strict-dynamic'` does not rescue it — the 6 inline RSC scripts stay blocked, so the page renders and does not respond,
+which is worse because it looks alive. **A header's correctness is a property of the header *and the document it is
+served with*, and every cheap check only sees the header.** Fixed as a class — `force-dynamic` at the root layout, not
+14 enumerated routes — with the gate refusing any prerendered document carrying a `<script>`, proven in the negative on
+the real artefact where it named all 14. Static pages **14 → 2/2**.
+
+**Executed live, after rebuilding both images** (they were **2 months old** — R-05 on this machine, and the reason the
+running containers proved nothing): all four portals return cache MISS with **every script carrying the response
+nonce** (was 0), and five consecutive requests produced **five distinct nonces**. `--probe` → *HTTP 200, ENFORCING,
+13 directives*. **The stored-row half was proven on the real database:** a hostile value written straight into
+`branding` with `psql`, bypassing the DTO exactly as the seed scripts do, read back and fed through the built module →
+`":root{}"`. Row restored; stack left healthy (8/8 containers).
+
+**Docker rebuilds (Step −1):** `web` ×2 and `api` ×1, because the gate's question — does the policy reach a real
+response — cannot be answered against a two-month-old image. Reported separately; they do not consume the
+one-`pnpm build` budget.
+
+**The gate caught this slice twice, both fixed at source:** a stray **NUL byte** written into one of my own comments
+(`no-control-regex` — repaired with a codepoint loop, not a disable directive) and an `import/order` warning.
+
+**A false finding avoided:** five of the 14 prerendered routes looked like authenticated admin pages served from a
+shared build cache. They are pure `redirect()` backward-compat stubs rendering no data. Nothing raised.
+
 ## Not claimed (kept honest, per slice)
 
 | Item | Why it is not claimed | Who can close it |
@@ -61,6 +105,10 @@ whole purpose is a confirmation the admin must read. Recorded here rather than s
 | `NEXT_PUBLIC_SUPPORT_EMAIL` reachability | the variable is read by `apps/web/src/lib/support-contact.ts` but declared in no `.env*.example` and in no `web.build.args`, and Next inlines `NEXT_PUBLIC_*` at build time — so on the hosted stack only the fallback can ever render. AC-2's "config-driven" is half-true in deployment | a later slice |
 | `packages/ui` / `packages/i18n` string coverage | `SCAN_ROOTS` is `apps/{web,api,worker}/src` by design; both packages are compiled into the shipped web artefact and are unscanned. Verified clean today — a coverage gap, not a defect | a later slice |
 | Legal/policy copy (`S-E06-4`) | risk **R-13** — the routine may ship holding pages, never author policy text | human + D-08 |
+| `S-E06-2` AC-3, *"no console CSP violation on any of the four portals' main journeys"* | proven for the four **login** pages by nonce coverage + cache-miss on a real response. **No browser was driven**, so an authenticated journey through each portal — where Radix popovers, charts and the branding block actually render — is unverified. Needs the Playwright/axe harness `VAL-08` still owns | a later slice (with VAL-08) |
+| `report-only` rollout, which the story prescribes before enforcing | the mode exists, defaults to `enforce`, and `csp-check.js` refuses `CSP_REPORT_ONLY` in `docker-compose.prod.yml` so observation cannot become the resting state. It was never **exercised on a deployment**, because under Step −1 there is no deployment to roll out to | n/a — void under Step −1 |
+| `connect-src` / `img-src` inherit `NEXT_PUBLIC_API_URL=http://api:4000` | a docker-internal hostname a browser cannot resolve, so that source contributes nothing. Harmless and pre-existing (the compose comment explains why the internal URL is baked); noted rather than fixed, because changing it is `PF-82`'s build-time-inlining work | a later slice |
+| Span/`exception.*` event redaction, still open from `S-E02-15` | unrelated to this slice, listed so the E02 residual is not lost behind an E06 ledger | a later slice |
 
 ## Operator pre-requisites raised by this epic
 

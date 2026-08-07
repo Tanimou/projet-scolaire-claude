@@ -30,8 +30,25 @@ export class BrandingService {
     };
   }
 
-  async update(schoolId: string, patch: UpdateBrandingDto): Promise<BrandingDto> {
-    const school = await this.prisma.school.findUnique({ where: { id: schoolId } });
+  /**
+   * Met à jour le branding d'une école **du locataire appelant**.
+   *
+   * `tenantId` est le premier paramètre et non une option : jusqu'à S-E06-2 la
+   * méthode prenait un `schoolId` nu et le résolvait par `findUnique`, de sorte
+   * qu'un administrateur d'un locataire pouvait réécrire le branding de
+   * n'importe quelle école de n'importe quel autre locataire — et, le branding
+   * étant injecté dans un `<style>` rendu côté serveur sur toutes les pages
+   * authentifiées, y déposer du contenu visible par les quatre portails de la
+   * victime. C'est `PF-88` ; il est réparé ici parce que la validation de
+   * PF-45 seule aurait laissé la porte d'écriture inter-locataires ouverte.
+   *
+   * `findFirst({ id, tenantId })` et non `findUnique` + comparaison : la
+   * contrainte entre dans la requête, donc il n'existe pas de chemin où l'on
+   * lit la ligne d'un autre locataire avant de décider. L'absence renvoie 404 et
+   * non 403 — un 403 confirmerait l'existence de l'identifiant.
+   */
+  async update(tenantId: string, schoolId: string, patch: UpdateBrandingDto): Promise<BrandingDto> {
+    const school = await this.prisma.school.findFirst({ where: { id: schoolId, tenantId } });
     if (!school) throw new NotFoundException('School not found');
 
     const updated = await this.prisma.branding.upsert({
