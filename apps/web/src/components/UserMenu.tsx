@@ -1,10 +1,32 @@
 'use client';
 
-import { ChevronDown, LogOut, Settings, UserRound } from 'lucide-react';
+import { ChevronDown, LogOut, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { signOut } from 'next-auth/react';
 import { useState } from 'react';
 
+/**
+ * ⚠️ ORPHANED DUPLICATE — nothing imports this file (S-E06-5 / PF-97, PF-100).
+ *
+ * `components/shell/TopbarUserMenu.tsx` is the menu the application actually
+ * renders; it composes `@pilotage/ui`'s `UserMenu`. This file is an older
+ * app-level fork of the same dropdown with zero import sites, which is exactly why
+ * its dead « Mon profil » link went unnoticed for so long — and why the link gate
+ * could not see it either: the href was a template literal, and the extractor's
+ * character class excluded the backtick (PF-97).
+ *
+ * The dead profile link is removed here for the same reason it is removed from the
+ * live menu: `/admin/profile`, `/teacher/profile` and `/parent/profile` are not
+ * emitted routes, so the entry pointed at a 404.
+ *
+ * The FILE is kept rather than deleted, on purpose. Its `` `/${portal}/settings` ``
+ * href is the in-repo **3-union** canary for the widened link extractor: `portal`
+ * is declared as three portals here, so a resolver that guesses "four portals"
+ * instead of reading the declared union would invent a `/student/settings` finding
+ * that correct code cannot produce. Deleting the file would delete that test
+ * fixture from the real tree. Its removal belongs to the story that owns the
+ * duplication finding.
+ */
 export function UserMenu({
   firstName,
   lastName,
@@ -51,14 +73,6 @@ export function UserMenu({
               <div className="truncate text-xs text-slate-500">{email}</div>
             </div>
             <div className="my-1 h-px bg-slate-100" />
-            <Link
-              href={`/${portal}/profile`}
-              className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-50"
-              onClick={() => setOpen(false)}
-            >
-              <UserRound className="h-4 w-4 text-slate-500" />
-              Mon profil
-            </Link>
             <Link
               href={`/${portal}/settings`}
               className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-50"

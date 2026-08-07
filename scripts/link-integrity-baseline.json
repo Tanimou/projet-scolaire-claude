@@ -4,13 +4,11 @@
     "Dead internal link targets tolerated until their owning finding is closed.",
     "This list may only ever SHRINK.",
     "Every entry carries the finding id that owns the fix, so nothing here is \"silenced\" — it is queued.",
-    "An entry whose target resolves again, or that nothing links to any more, is a FAILURE: remove it."
+    "An entry whose target resolves again, or that nothing links to any more, is a FAILURE: remove it.",
+    "\"class\": \"prefix-constant\" marks a target referenced ONLY as a string prefix that nothing will ever create; it stops counting as dead DEBT but still carries a reason and an owning finding, and the gate REFUSES the class by file:line if any reference to it sits on an href-like line.",
+    "\"deadShapes\" is the same ceiling for interpolated hrefs that could not be resolved to concrete targets, keyed on the shape (/admin/guardians/*) and held to the same four rules."
   ],
   "dead": {
-    "/admin": {
-      "finding": "PF-93",
-      "reason": "middleware.ts:130 `pathname.startsWith('/admin')` — a portal-prefix predicate, not an href. Inventoried rather than excluded because dropping middleware.ts would also hide the nine phantom auth routes (PF-91), which are real. It is ALSO a genuine navigation gap: the bare portal root has no index route, so typing it 404s instead of reaching /admin/dashboard. Owner: V3-E06."
-    },
     "/admin/accept-invite": {
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; an invitation email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."
@@ -29,19 +27,13 @@
     },
     "/api/auth": {
       "finding": "PF-93",
-      "reason": "middleware.ts:35 PUBLIC_PREFIXES entry — the NextAuth namespace root, used with startsWith. /api/auth/[...nextauth] is a catch-all and needs at least one segment, so the bare namespace resolves to nothing by construction. Not user-facing and not a defect; inventoried because a static extractor cannot tell a prefix constant from an href. Owner: V3-E06."
-    },
-    "/contact": {
-      "finding": "PF-94",
-      "reason": "Public landing footer « Contact » (app/page.tsx:788), on the unauthenticated marketing surface. Same class as /help: linked from a shipped page, never built. Owner: V3-E06."
+      "reason": "middleware.ts:34 PUBLIC_PREFIXES entry — the NextAuth namespace root, consumed by startsWith and never navigated to. /api/auth/[...nextauth] is a catch-all needing at least one segment, so the bare namespace cannot resolve BY CONSTRUCTION: there is no route anyone could ever add here, hence nothing to queue. Classified prefix-constant (S-E06-5 / PF-93) so it stops counting as dead debt; the class is REFUSED with a file:line the moment any reference to it sits on an href-like line, so it cannot become a quieter baseline. Owner: none — closed as a false positive, kept for provenance.",
+      "class": "prefix-constant"
     },
     "/favicon": {
       "finding": "PF-93",
-      "reason": "middleware.ts:35 PUBLIC_PREFIXES entry — an asset prefix for /favicon.ico, used with startsWith. Not a route and not a defect; inventoried because a static extractor cannot tell a prefix constant from an href. Owner: V3-E06."
-    },
-    "/help": {
-      "finding": "PF-39",
-      "reason": "« Centre d'aide » in components/shell/TopbarUserMenu.tsx:58, rendered for every role on every authenticated page. Owner: V3-E06 / S-E06-4."
+      "reason": "middleware.ts:34 PUBLIC_PREFIXES entry — an asset prefix for /favicon.ico, consumed by startsWith. Not a route, and no route will ever be created at it: assets are served from public/, not from the router. Classified prefix-constant (S-E06-5 / PF-93) rather than counted as dead debt, under the same refusal rule as /api/auth. Owner: none — closed as a false positive, kept for provenance.",
+      "class": "prefix-constant"
     },
     "/legal": {
       "finding": "PF-38",
@@ -59,10 +51,6 @@
       "finding": "PF-38",
       "reason": "Consent link (app/page.tsx:786, parent/register/ParentRegisterForm.tsx:172). Owned by S-E06-4, blocked on decision D-08 — the routine may ship a holding page but may never author policy text (R-13)."
     },
-    "/parent": {
-      "finding": "PF-93",
-      "reason": "middleware.ts:132 `pathname.startsWith('/parent')` — a portal-prefix predicate, not an href. ALSO a genuine navigation gap: the bare portal root has no index route, so typing it 404s instead of reaching /parent/dashboard. Owner: V3-E06."
-    },
     "/parent/forgot-password": {
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; a password-reset email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."
@@ -79,18 +67,6 @@
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; a verification email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."
     },
-    "/pricing": {
-      "finding": "PF-94",
-      "reason": "Public landing footer « Tarifs » (app/page.tsx:771), on the unauthenticated marketing surface. Same class as /help: linked from a shipped page, never built. Owner: V3-E06."
-    },
-    "/student": {
-      "finding": "PF-93",
-      "reason": "middleware.ts:133 `pathname.startsWith('/student')` — a portal-prefix predicate, not an href. ALSO a genuine navigation gap: the bare portal root has no index route, so typing it 404s instead of reaching /student/dashboard. Owner: V3-E06."
-    },
-    "/teacher": {
-      "finding": "PF-93",
-      "reason": "middleware.ts:131 `pathname.startsWith('/teacher')` — a portal-prefix predicate, not an href. ALSO a genuine navigation gap: the bare portal root has no index route, so typing it 404s instead of reaching /teacher/dashboard. Owner: V3-E06."
-    },
     "/teacher/accept-invite": {
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; an invitation email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."
@@ -99,9 +75,23 @@
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; a password-reset email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."
     },
+    "/teacher/messaging": {
+      "finding": "PF-98",
+      "reason": "« Nouvelle annonce » CTA in the « Communiquer avec les familles » card (app/teacher/classes/[id]/page.tsx:903), written as a template literal and therefore invisible until S-E06-5 widened the extractor. /teacher/messaging was never emitted. Deliberately NOT retargeted: the nearest real surface /teacher/messages/new IGNORES classSectionId (TeacherMessageComposer seeds the class from classes[0]), so pointing the CTA there would silently compose an announcement for the WRONG class — DNC-06 at a new address. Fixing it means teaching the composer to honour the parameter. Owner: V3-E06 follow-up."
+    },
     "/teacher/reset-password": {
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; a password-reset email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."
+    }
+  },
+  "deadShapes": {
+    "/admin/assessments/*": {
+      "finding": "PF-98",
+      "reason": "Row link on the admin assessments list (app/admin/assessments/page.tsx:184) built from an assessment id. /admin/assessments is emitted; /admin/assessments/[id] is NOT, so the shape cannot resolve for any value. Discovered by the S-E06-5 widening; building an admin assessment detail page is a different theme. Owner: V3-E06 follow-up."
+    },
+    "/admin/guardians/*": {
+      "finding": "PF-98",
+      "reason": "Four affordances built from a guardian id — app/admin/guardians/page.tsx:192,238,239 (including a RowActions editHref) and app/admin/enrollments/page.tsx:277. /admin/guardians is emitted; /admin/guardians/[id] is NOT, so the shape cannot resolve for any value. Discovered by the S-E06-5 widening; building an admin guardian detail page is a different theme. Owner: V3-E06 follow-up."
     }
   }
 }

@@ -9,8 +9,15 @@ import {
 import { NextResponse } from 'next/server';
 
 import { auth } from '@/auth';
+import { PORTAL_LANDING, type PortalId } from '@/lib/portals';
 
-const PORTAL_REQUIRED_ROLES = {
+/**
+ * The realm roles each portal requires. Typed `Record<PortalId, …>` so the portal
+ * set here, the landing map in `@/lib/portals`, and the four bare portal roots
+ * cannot drift apart silently — adding a fifth portal id fails to compile until
+ * this table gains its row (S-E06-5 / AC-2).
+ */
+const PORTAL_REQUIRED_ROLES: Record<PortalId, readonly string[]> = {
   admin: ['super_admin', 'school_admin'],
   teacher: ['teacher'],
   parent: ['parent'],
@@ -18,19 +25,11 @@ const PORTAL_REQUIRED_ROLES = {
   // The set is disjoint from the other three (a `student` token never satisfies
   // /parent|/teacher|/admin, and vice-versa) — INV-1.
   student: ['student'],
-} as const;
-
-/**
- * Where each portal lands after a successful login. Most portals land on their
- * dashboard; the student portal has no dashboard until E8-S3, so it lands on
- * "Mon objectif" (the E8-S3 hero dashboard; `/student/grades` stays valid).
- */
-const PORTAL_LANDING: Record<keyof typeof PORTAL_REQUIRED_ROLES, string> = {
-  admin: '/admin/dashboard',
-  teacher: '/teacher/dashboard',
-  parent: '/parent/dashboard',
-  student: '/student/dashboard',
 };
+
+// `PORTAL_LANDING` used to be declared right here. It moved to `@/lib/portals`
+// (S-E06-5 / AC-2) so the four bare portal roots redirect to the SAME value this
+// middleware sends a fresh login to, instead of a second copy that can drift.
 
 const PUBLIC_PREFIXES = ['/_next', '/api/auth', '/api/healthz', '/favicon', '/legal'];
 
@@ -125,8 +124,11 @@ export default auth((req) => {
     return proceed(pathname);
   }
 
-  // Detect portal from URL prefix
-  let portal: keyof typeof PORTAL_REQUIRED_ROLES | null = null;
+  // Detect portal from URL prefix. `/admin` itself matches — the bare root is
+  // inside the protected zone (it is not a `PUBLIC_PREFIXES` member and not an
+  // auth route), so an unauthenticated or wrong-role visitor is redirected below
+  // and never reaches `app/admin/page.tsx` (S-E06-5 / G-AUTHZ).
+  let portal: PortalId | null = null;
   if (pathname.startsWith('/admin')) portal = 'admin';
   else if (pathname.startsWith('/teacher')) portal = 'teacher';
   else if (pathname.startsWith('/parent')) portal = 'parent';

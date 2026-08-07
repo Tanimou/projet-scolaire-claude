@@ -827,6 +827,22 @@ the **repository** invariant: the ledger reproduces the source of truth.
 
 ---
 
+## S-E06-5 — The link gate stops being blind to the shell's own menu · ✅ `done` 2026-08-07
+
+Authored by the routine's Step 2 on run 23, which measured the gate `S-E06-3` had shipped and found it blind to every
+template-literal href in `apps/web` — so « Mon profil » 404'd on every authenticated page of three portals while
+`link-integrity-check.js` printed `PASS`. The extractor was therefore widened **before** any row was retired. Closed
+`PF-93`, `PF-94`, `PF-97`; advanced `PF-39`; raised `PF-98`…`PF-103`.
+
+Its full contract, design record, executed evidence and stated limits are
+[`docs/spec/features/v3-e06/stories/S-E06-5.md`](../../spec/features/v3-e06/stories/S-E06-5.md) and
+`docs/spec/features/v3-e06/PROGRESS.md` § S-E06-5 — **one** copy, in the directory the convention puts per-story specs
+in. A second same-named document briefly existed here and was deleted in the land pass: two documents with one identity
+already disagreed about which findings the slice closed, in the slice whose stated theme is that a value is written
+exactly once. Recorded rather than quietly overwritten, per the same idiom as `S-E02-9` and `S-E02-11` above.
+
+---
+
 ## Sprint 01 exit criteria
 
 - `prisma migrate status` clean; no `db push` outside development; preflight blocks unapplied migrations.

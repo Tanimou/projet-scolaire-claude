@@ -20,6 +20,13 @@
  * the journey), so either parent is safe to swap via `E2E_PARENT_EMAIL`.
  */
 
+// S-E06-5 / AC-2: the four landing paths are read from the ONE place that declares
+// them (`apps/web/src/lib/portals.ts`, which `middleware.ts` and the four bare
+// portal roots also read). This file used to MIRROR them as literals — a fourth
+// copy of a value that must be written exactly once. The module is pure and
+// import-free, so pulling it into the Playwright runtime costs nothing.
+import { PORTAL_LANDING } from '../../../src/lib/portals';
+
 export type Portal = 'admin' | 'teacher' | 'parent' | 'student';
 
 export interface PortalUser {
@@ -28,7 +35,7 @@ export interface PortalUser {
   password: string;
   /** Realm role expected in the session after login (asserted by the setup; INV-1 portal isolation). */
   expectedRole: string;
-  /** Landing path after a successful login — MIRRORS `PORTAL_LANDING` in `apps/web/src/middleware.ts`. */
+  /** Landing path after a successful login — READ FROM `PORTAL_LANDING`, never mirrored. */
   landing: string;
 }
 
@@ -57,7 +64,7 @@ const PORTAL_DEFAULTS: Record<Portal, PortalDefaults> = {
     email: 'mme.dupont@voltaire.fr',
     password: DEMO_PASSWORD,
     expectedRole: 'school_admin',
-    landing: '/admin/dashboard',
+    landing: PORTAL_LANDING.admin,
   },
   // The rich-data demo teacher (`seed-demo-teacher.ts`) — the `voltaire-demo`
   // teacher with the MOST teaching assignments, in the SAME tenant as the demo
@@ -72,21 +79,21 @@ const PORTAL_DEFAULTS: Record<Portal, PortalDefaults> = {
     email: 'teacher.demo@voltaire.fr',
     password: DEMO_PASSWORD,
     expectedRole: 'teacher',
-    landing: '/teacher/dashboard',
+    landing: PORTAL_LANDING.teacher,
   },
   // The rich-data demo parent (`seed-demo-parent.ts`) — carries the J1 alert graph.
   parent: {
     email: 'parent.demo@voltaire.fr',
     password: DEMO_PASSWORD,
     expectedRole: 'parent',
-    landing: '/parent/dashboard',
+    landing: PORTAL_LANDING.parent,
   },
   // The E8 student (operator-activated). Fixture-ready; journeys land in a later epic.
   student: {
     email: 'student@pilotage.local',
     password: SIMPLE_PASSWORD,
     expectedRole: 'student',
-    landing: '/student/dashboard',
+    landing: PORTAL_LANDING.student,
   },
 };
 

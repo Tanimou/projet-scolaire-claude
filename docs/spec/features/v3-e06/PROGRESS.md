@@ -1,16 +1,22 @@
 # V3-E06 — Production hygiene and navigation completeness
 
 **Layer** L0 · **Size** M · **Depends on** — (independent) · **Blocks** nothing
-**Closes** PF-17, PF-19, PF-29, PF-38, PF-39, PF-45, PF-54, PF-57 · **Gates** G-AUTHZ · **Decisions** D-08 (legal text)
-**Status (2026-08-07)** `code-complete` — `S-E06-1`, `S-E06-2`, `S-E06-3` and `S-E06-6` landed. **No next slice in this
-epic, and `sprint-01` is exhausted:** `S-E06-4` stays ⛔ blocked on **D-08**, `S-E06-5` was never enumerated, and
-`S-E06-7` (`PF-57`) appears in `docs/daily-improvement-v3/traceability-matrix.md` with **no story in `sprint-01`**.
-`code-complete`, not `shipped`, deliberately — declaring `shipped` would claim `PF-38`/`PF-39`/`PF-57` were delivered.
+**Closes** PF-17, PF-19, PF-29, PF-38, PF-39, PF-45, PF-54, PF-57 · **Gates** G-AUTHZ, G-PORTAL, G-DNC · **Decisions** D-08 (legal text)
+**Status (2026-08-07)** `code-complete` — `S-E06-1`, `S-E06-2`, `S-E06-3`, `S-E06-6` and **`S-E06-5`** landed.
+**No next slice in this epic:** `S-E06-4`'s residual scope is ⛔ blocked on **D-08** (`/legal/*` only — `/help` and
+`/contact`, which its row used to claim, shipped in `S-E06-5`), and `S-E06-7` (`PF-57`) appears in
+`docs/daily-improvement-v3/traceability-matrix.md` with **no story in `sprint-01`**.
+`code-complete`, not `shipped`, deliberately — declaring `shipped` would claim `PF-38`/`PF-57` were delivered, and
+`S-E06-5` raised four follow-ups of its own (`PF-98`…`PF-101`) plus the gate's residual `PF-103`.
 **Next run → a `sprint-02` authoring / `epic-spec` run for `V3-E04`** (audit trail and governance surfaces), whose
 first slice is the shared audit-provenance interceptor `S-E06-6` just prototyped on one handler — and which must open
-with the `trust proxy` decision recorded below. *(This header was stale by one slice until 2026-08-07 — it still
-pointed at `S-E06-2` after `S-E06-2` had landed in `296c5cd`. Corrected in the `S-E06-3` land pass, and named here
-rather than quietly overwritten.)*
+with the `trust proxy` decision recorded below. **One item competes with that sequencing and should be read first:
+`PF-102`**, the post-authentication open redirect on all four portal login forms, is pre-existing, `L0`, security, and
+a ~4-line fix plus four negative tests — see the `S-E06-5` "not claimed" rows. *(This header was stale by one slice
+until 2026-08-07 — it still pointed at `S-E06-2` after `S-E06-2` had landed in `296c5cd`. Corrected in the `S-E06-3`
+land pass, and named here rather than quietly overwritten. It was stale a second way until the `S-E06-5` land pass: it
+declared `sprint-01` exhausted and `S-E06-5` "never enumerated" while `S-E06-5` was being implemented — corrected
+here, again by naming it rather than overwriting it.)*
 
 > **Why there is no `spec.md` here.** Same posture as `docs/spec/features/v3-e02/PROGRESS.md`: the V3 stories in
 > [`docs/daily-improvement-v3/stories/sprint-01.md`](../../../daily-improvement-v3/stories/sprint-01.md) are authored
@@ -29,8 +35,8 @@ valuable to credibility — which is why it is scheduled in parallel from day on
 | **S-E06-1** | Purge development artefacts from production-facing code, and gate the purge | ✅ done | 2026-08-04 | spec: [`stories/S-E06-1.md`](./stories/S-E06-1.md) · evidence below |
 | **S-E06-2** | Enable CSP and sanitise branding injection | ✅ done | 2026-08-07 | PF-45 **closed**, PF-88 found + closed, R-28 raised · evidence below |
 | **S-E06-3** | Fix `/admin/classes/new`; link-integrity gate over the **emitted** route inventory | ✅ done | 2026-08-07 | spec: [`stories/S-E06-3.md`](./stories/S-E06-3.md) · PF-19 **closed**, PF-39 inventoried-not-fixed, PF-91…PF-94 raised · evidence below |
-| **S-E06-4** | Legal, help and contact routes before consent | ⛔ blocked | — | needs decision **D-08** (holding pages allowed, policy text is not) |
-| **S-E06-5** | *(not enumerated in sprint-01)* | — | — | — |
+| **S-E06-4** | Legal routes before consent — **residual scope is `/legal/privacy\|terms\|cookies` only** | ⛔ blocked | — | needs decision **D-08** (holding pages allowed, policy text is not). **Restated 2026-08-07:** the row used to read "Legal, help and contact routes"; `/help` and `/contact` shipped in `S-E06-5`, which links to no `/legal/*` deliberately, so this story remains the sole owner of `PF-38`'s legal trio and nothing else |
+| **S-E06-5** | The link gate stops being blind to template-literal hrefs; every dead target it can honestly close is closed | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E06-5.md`](./stories/S-E06-5.md) · `PF-97` **closed** (and discovered here), `PF-93`/`PF-94` **closed**, `PF-39` advanced, `PF-98`…`PF-101` raised, `PF-102`/`PF-103` raised by the verify panel · evidence below |
 | **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E06-6.md`](./stories/S-E06-6.md) · PF-29 **closed**, PF-31 advanced-not-closed, PF-51 fixed on this DTO only · evidence below |
 | **S-E06-7** | *(referenced by the traceability matrix for `PF-57`; **no story in `sprint-01`**)* | ⬜ unenumerated | — | PF-57 |
 
@@ -255,6 +261,84 @@ boundary (`confirm: body.confirm === true`) still has no executed coverage — t
 `confirm: true` leaves everything green. And no browser rendered the drawer, so every FE and a11y claim below
 remains static.
 
+## S-E06-5 — evidence (2026-08-07, run 23)
+
+**The premise was measured before anything was closed, and the measurement changed the slice.** The story set out to
+retire nine static rows of `scripts/link-integrity-baseline.json`. Step 2 instead measured the extractor:
+`LITERAL_LINK = /(['"])(\/[^'"`\n\r]*)\1/g` matches quoted strings only and its character class **excludes the
+backtick**, so **every template-literal href in the application was invisible** — 18 sites, 6 portal-interpolated.
+Expanded over the interpolated variable's *declared* union, `` `/${portal}/profile` `` in `TopbarUserMenu.tsx` and in the
+orphaned `components/UserMenu.tsx` gives **0 of 3 alive**: **« Mon profil » 404'd on every authenticated page of the
+admin, teacher and parent portals**, while the gate written to stop exactly that class printed
+`LINK INTEGRITY CHECK: PASS`. That is `PF-97`, and closing the nine static rows on top of it would have been a green
+gate over a hole. **So the extractor was widened first, and the slice closed what the widened gate found** — which is
+why the diff is ~2.2k insertions rather than nine JSON deletions.
+
+**What executed.** `pnpm typecheck` → **13/13 Turbo tasks, exit 0**. `git diff --check` → **exit 0 on both the working
+tree and the index** (sole output is the pre-existing CRLF warning on `apps/web/tests/e2e/fixtures/users.ts`, which is
+LF-normalised on commit — a warning, not a whitespace defect).
+`pnpm --filter @pilotage/api exec jest src/shared/quality/link-integrity-gate.spec.ts` → **173/173**
+(167 pre-existing + 6 new), including the real-tree parity checks. `node scripts/link-integrity-check.js` executed on
+the tree reports **exactly the seven new routes as dead and nothing else** — no `DYNAMIC CAPTURE`, no `STALE BASELINE`,
+no `BASELINED BUT ALIVE` — so the extractor widening and the baseline shrink are internally consistent.
+
+**The red on the CLI is the stale artefact, not the diff.** `apps/web/.next/app-path-routes-manifest.json` still holds
+109 routes and none of the seven new ones. Same family as the documented `prisma generate` RED gate: **mechanical,
+resolved by the orchestrator's single `pnpm build`, do not re-scope.** `scripts/web-route-baseline.json` was
+**hand-edited 109 → 116** with its count and sort order asserted, so a build mismatch surfaces as a reviewable diff
+rather than a silent pass.
+
+**The typecheck gate went red first, and the prescribed root cause was one site short — recorded, because the routine's
+inventory was wrong, not the code.** 17 `TS2322` errors, all one class, all in the three new public pages: a
+`ComponentType<{ className?: string; strokeWidth?: number }>` annotation cannot accept a `lucide-react` icon, whose
+`LucideProps.strokeWidth` is `string | number` and which carries a `propTypes: WeakValidationMap<…>`. The gate report
+named **two** declaration sites in one file; there were **three, in two files** — the third
+(`apps/web/src/app/help/page.tsx:105`, `HelpPortalSection.icon`) is declared locally in the page, so the prescribed fix
+cleared 13 of 17 and left the four `PORTAL_HELP` entries red. All three now use the repo's established
+`import type { LucideIcon } from 'lucide-react'` idiom (8+ existing call sites). `ComponentType` stays imported in both
+files because the sibling declarations **without** `strokeWidth` are genuinely not implicated; `apps/web/src` was swept
+for the pattern (0 remaining matches) so a third site could not be followed by a fourth.
+
+**Two blockers were found by measuring the new lexer, and fixed at one root cause.** `'<'` is a member of
+`REGEX_MAY_FOLLOW_PUNCTUATION`, so the `/` of a JSX **closing tag** was read as a regex opener and the scanner ran
+forward to the next `/` on the line. Consequences, both measured against a guard-reverted copy:
+
+| fixture | pre-fix | post-fix |
+|---|---|---|
+| `</div> // href="/admin/classes/[id]"` | returned **verbatim** — comment never blanked | blanked, byte length preserved |
+| the same, end-to-end through `classifyAll` | `captures: 1` → an **unbaselineable** `DYNAMIC CAPTURE` (`--update` refuses to record one, so the gate is red with no way back) | 0 targets, 0 captures, 0 problems |
+| `</span>` + a template href on one line | **0 literals, 0 template rows** — a silent drop, `PF-97`'s exact shape inside the function written to close it | 3 expansions, identical to the control |
+| controls without the closing tag | correct | unchanged |
+
+Fixed by a new `regexMayStartAt(src, i, token)` refusing the regex branch when `src[i - 1] === '<'`, used by **both**
+scanners — the **narrow** option of the two offered, so `a < /re/` keeps its old reading and the change is strictly a
+subset (nothing can regress). Six guard cases pin it over throw-away `mkdtempSync` trees, because the shape is
+**latent** in `apps/web/src` — which is precisely why the 168-row real-tree parity check kept passing while both
+scanners mis-read it. Each case is paired with its control so a stripper that strips nothing cannot satisfy it, and
+`toHaveLength(1)` is pinned on **both** sides of the template case so "both dropped everything" cannot pass.
+
+**What the slice actually built.** `apps/web/src/lib/portals.ts` (51 L) is a **moved**, not copied, single source of
+portal identity — `PORTAL_IDS`, `PORTAL_LANDING`, `PORTAL_REQUIRED_ROLES: Record<PortalId, readonly string[]>` (a fifth
+portal is now a compile error until the table gains a row) and `PORTAL_SETTINGS_HREF` as a `Partial`, so "no surface →
+no menu entry" is the typed default instead of an `isStudent` runtime branch a static checker cannot evaluate. It is
+deliberately **import-free**, reads no `process.env` and carries no `server-only`, because the Next **edge** middleware
+consumes it; `packages/contracts` was correctly rejected (CJS `dist/`, shared with api/worker runtimes that have no use
+for a Next route) and the residual vocabulary split is recorded as `PF-101`. Four bare portal roots redirect through
+that constant; `/pricing`, `/contact` and `/help` are new public pages over a shared 452-line `PublicInfoPage`, each
+`force-dynamic` so no prerendered document can carry an unnonced `<script>` under the `S-E06-2` nonce CSP.
+Every redirect key is a **literal** lookup — no `searchParams`, no `headers()`, no referrer — so none of the seven new
+routes adds an open-redirect surface.
+
+**A green gate over a hole, one level up from the hole the slice closed — found by the escalation panel and repaired in
+this land pass.** Three shipped rows of `scripts/link-integrity-baseline.json` carried `"finding": "PF-98"`, and
+`PF-97`…`PF-101` were cited in code comments, the story and the guard spec — while
+`docs/daily-improvement-v3/audit-findings-index.md` ended at `PF-96`. The gate validates the id's **shape only**
+(`/^(PF|R|VAL|D)-\d+$/`), so it passed, which made the baseline's own contract — *"every entry carries the finding id
+that owns the fix, so nothing here is 'silenced' — it is queued"* — **false for three real dead targets**. All seven ids
+are now registered with a class, a type, a layer and an owner (`PF-97` `CLOSED`; `PF-98`…`PF-101` queued; `PF-102` and
+`PF-103` raised by the verify panel and previously unowned). **The durable fix — resolving the id against the index
+instead of against a regex — is owed by the next follow-up, not done here.**
+
 ## Not claimed (kept honest, per slice)
 
 | Item | Why it is not claimed | Who can close it |
@@ -290,6 +374,20 @@ remains static.
 | `S-E06-6` — **AC-8 was not executed** | `bash scripts/ci-gate.sh` (`GATE: PASS` verdict line, per **R-23**) and `node scripts/test-ratchet.js api` were **not run**: the gate needs a build and agents may not build (§4). Typecheck, the targeted calendar suite, `git diff --check` and a scoped eslint run were executed and are reported above; the gate verdict is not claimed | orchestrator, in the land pass |
 | `S-E06-6` — **G-MIGRATION does not trigger, and that is a decision** | There is **no `schema.prisma` change** in this diff — stated rather than omitted, per story §3 **D6**. The unique constraint the concurrency residual wants *would* trigger it in full (a reviewed file under `apps/api/prisma/migrations`, never `db push`, with an expand/contract shape and a dedupe step in the same SQL over hosted data this routine cannot inspect). That is its own slice | a later slice |
 | `S-E06-6` — **two smaller drift surfaces, ruled on rather than inherited** | (a) `MAX_SEED_YEAR = 2100` in `french-holidays.ts` vs the `2099` literal in `SeedHolidaysDrawer.tsx:38` (deliberately one lower, because the endpoint emits `year + 1`): the module docblock exists expressly so validator and announced scope cannot diverge, and the FE re-breaks that one layer out with **no shared source and no pinning test** — `packages/contracts` was ruled out of scope for this slice. (b) `resourceType: 'calendar_event'` is **not** in `RESOURCE_TYPE_LABELS` (`apps/web/src/app/admin/audit/AuditPageFilters.tsx:21-35`), so the RGPD-facing audit surface will render **"Calendar event"** in English amongst thirteen French labels — a one-line addition that fell through the gap between the disjoint api/web file sets | next slice (both one-liners) |
+| `S-E06-5` **AC-8** — *"`bash scripts/ci-gate.sh` reports `GATE: PASS`"* | **the build has not run.** Agents may not build (§4), and every safety claim in both guard specs resolves links against `scripts/web-route-baseline.json`, whose **7 new rows were added by hand in this diff**. So the headline claim — *the seven new routes resolve* — is currently **self-certified**: the page files exist, and a JSON asserting the routes exist is checked against them. Only `web-artifact-check.js` (baseline ↔ real build manifest) and `link-integrity-check.js` (stage 13, **after** `pnpm build`) close that loop. Sharpest instance: `AppShellRoot` now passes `ctaHref="/help"` on **every** parent and student page, so if `/help` does not emit, the slice ships a *claimed* fix over an unchanged 404 on the most-trafficked chrome in the product. Green Jest cannot see this; `GATE: PASS` can | orchestrator, in the land pass |
+| `S-E06-5` — **`apps/api/src/shared/quality/portal-landing-gate.spec.ts` (748 L) has no reported execution** | Only `link-integrity-gate.spec.ts` was executed (173/173). The new portal/landing guard spec was authored this run and no agent reported a run of it, so its ~30 cases — including the `PORTAL_LANDING`-declared-exactly-once assertion (**P-2**) and the edge-safety assertions (**P-1**) — are **written, not demonstrated**. One `pnpm --filter @pilotage/api exec jest src/shared/quality/portal-landing-gate.spec.ts` closes this; it is listed rather than assumed | orchestrator, in the land pass |
+| `S-E06-5` **AC-7 / G-AUTHZ** — *"an unauthenticated visitor and a wrong-role visitor are each redirected, never served"* | **proven only by regex over `middleware.ts`'s source.** `portal-landing-gate.spec.ts` P-5 asserts that `PUBLIC_PREFIXES` contains no portal prefix and that both redirect branches still textually exist — it **never calls the middleware**. There is currently **no executable test of `apps/web/src/middleware.ts` anywhere in the repo** (verified: every repo assertion about it is static source-text matching). An `if` added above the prefix ladder, a reordered `startsWith` chain, or a matcher edit would leave all 748 lines green while `/admin` served a redirect-to-dashboard to a logged-out visitor. **Mitigating, and worth stating so the grep is not read as weaker than it is:** the authz branches are **byte-unchanged** by this diff (only the `Record<PortalId, …>` annotation and the moved constant), `pathname.startsWith('/admin')` already matched the bare root pre-slice, and the second hop is itself protected — so there is no *new* authz behaviour, only newly-reachable routes behind an unchanged wall. The gate's own suggested test (`apps/web/tests/unit/middleware.portal-root.spec.ts`, T1–T7 driving the real exported `default` with `auth` mocked, asserting status + `Location`, with a positive control per portal and a negative control on the guard itself) is **not written** | next slice |
+| `S-E06-5` — **`PF-102`, a post-authentication open redirect, is registered but NOT fixed** | `apps/web/src/components/PortalLoginForm.tsx:76` reads `callbackUrl` off the query string with no same-origin validation and `:125` hands it to `router.push`, so `/parent/login?callbackUrl=https://evil.example/` authenticates the parent for real and then lands them off-site. **Pre-existing and outside this diff** — but this slice's AC-7 wording ("never derived from `searchParams`") is true of the middleware's *emission* side only, and the slice adds three new public entry points into that flow (`/contact`'s CTA, `/help`'s four login links, `PublicInfoPage`'s footer « Portails » column), so the surface from which such a link is reached **grows in this PR**. Recorded as `PF-102` (L0, `V3-E05`) rather than fixed, because a security fix on an authentication path belongs in its own reviewable diff | next slice — **read this before the `V3-E04` epic-spec** |
+| `S-E06-5` — **`PF-103`: three residuals in the new 700-line hand-rolled lexer, all latent today** | (a) `'}'` is still in `REGEX_MAY_FOLLOW_PUNCTUATION`, so `<X a={b} /> {/* <Link href="/admin/ghost" /> */}` is returned **unchanged** by the stripper and `/admin/ghost` is emitted as a live target — the `</` guard added this run does not cover it, because the `}` is not adjacent. (b) `templateRows === expanded + shape + unparsed` is a **tautology** over the real extractor (one array partitioned by `kind`); the actual drops are two `continue`s that discard **133 of 301** slash-leading templates uncounted, so the printed *"168 interpolated"* is not what the gate saw. (c) `keyof typeof C` has no member floor, so a spread or computed-key map silently under-approximates. Measured on the tree: **0 surviving `{/*` markers, 0 lost hrefs across 365 files** — so nothing is wrong today, but this is a **blocking** CI stage and a false red on correct code is the `R-30` trap | next `V3-E06` follow-up |
+| `S-E06-5` — **the baseline gate validates a finding id's shape, not its existence** | `/^(PF\|R\|VAL\|D)-\d+$/` at `link-integrity-check.js:1322` and `:1422`. This land pass registered `PF-97`…`PF-103` so the three shipped `PF-98` rows stop being silenced, but the **mechanism** that let an unregistered id become a live ceiling row is unchanged: resolving the id against `docs/daily-improvement-v3/audit-findings-index.md` is the durable fix and is **not** in this diff | next `V3-E06` follow-up |
+| `S-E06-5` — **no browser rendered any of the three new public pages, so every FE and a11y claim is static** | `apps/web` has no unit runner (Playwright only) and no Playwright test was written or run. Four a11y findings were **measured from source and left unfixed**, deliberately, because they are repo-wide conventions rather than regressions and fixing them here would widen the diff: (1) `PublicInfoPage.tsx:102` wraps `<header>` and `<footer>` **inside `<main>`**, so per HTML-AAM both map to `generic` and all three pages expose **zero** `banner` and `contentinfo` landmark — and the skip link at `:104` is itself inside `main`, targeting `#contenu` at `:170`, i.e. *past* the `<h1>` and the page's only primary action; (2) the CTA gradients fail SC 1.4.3 for their white 14px semibold labels — measured **sky-500 #0ea5e9 = 2.77:1** (`/contact`'s « Écrire au professeur »), violet-500 4.23:1, indigo-500 4.47:1, and ~3.3:1 under the label where the `to-br` gradient starts; the measured passing replacements are `from-sky-700 to-blue-700`, `from-violet-600 to-indigo-600`, `from-indigo-600 via-blue-600 to-blue-700` (sky-600 at 4.10:1 is **not** enough); (3) the `/40`-opacity focus rings measure **1.51–1.68:1** against white, under SC 1.4.11's 3:1 — full opacity measures 3.68:1+ and the file's own skip link already uses it; (4) the sticky header row cannot wrap or shrink inside an `overflow-x-hidden` `<main>`, and the computed intrinsic width at **320 CSS px** is ~322px against 272px available, which would clip the « Aide » link (SC 1.4.10 Reflow) — it fits at 375–390px, so an operator's 390×844 pass will not see it | `VAL-08` / the `R9` accessibility epic |
+| `S-E06-5` — **`/help` is a session-reading page on the middleware's default-allow branch, and its two branches disagree about what may be published** | It matches no portal prefix, so `middleware.ts:137 if (!portal) return proceed(pathname)` serves it unauthenticated (correct today — it carries only static copy and literal hrefs). Two consequences recorded rather than fixed: (a) `resolveViewerPortal()` collapses *signed out* and *signed in but `portal` unresolved* into the same `null`, and the second state is reachable (`auth.ts:323` itself branches on `!token.portal`; a refresh failure leaves `token.error` with `session.user` present) — in which case the page renders **all four** portal sections, i.e. the full admin route inventory, to an authenticated parent or **student**, the opposite of its own stated `G-PORTAL` guarantee; degrading toward *less* (support block only) is a one-line intent change. (b) Signed **out**, all four sections render by design — including `/admin/audit`, `/admin/users/invite`, `/admin/imports/new` with descriptions — while a signed-in admin is deliberately shown less. No data leaks and every target is still gated, but whichever posture is right, both cannot be. **The standing constraint:** `/help` must stay static copy + literal hrefs. The moment anyone adds a personalised row (a child's name, an open-alert count, a `/parent/children/[id]` deep link), that data lands on a route the middleware default-allows, outside every portal wall, and the current `catch { return null }` would silently serve the signed-out shape rather than failing | next slice (one-line intent fix) + a conscious posture decision |
+| `S-E06-5` — **`/help` is written twice, in the one place the slice adds a write** | `AppShellRoot.tsx:124` passes `ctaHref="/help"`, a value **identical** to `packages/ui/src/components/HelpSidebarCard.tsx:24`'s own default, purely to drag the literal inside the gate's `apps/web/src` source set. Honestly commented, but it breaks the very rule the slice quotes to justify moving `PORTAL_LANDING` (`S-E02-16` rule 2 — a value is written exactly once), and the **unguarded** copy is the dangerous one: `HelpSidebarCard` renders with no props on the parent and student portals, so if `/help` ever moves, the `packages/ui` default 404s there again and the gate stays green. Fix is either making `ctaHref` required (deleting the default) or widening the gate's source root to `packages/ui/src` — neither done here | next `V3-E06` follow-up |
+| `S-E06-5` — **`PORTAL_LANDING` is NOT declared exactly once, and the new guard cannot see the surviving copy** | `PortalLoginForm.tsx:25-30`'s `DEFAULT_LANDING: Record<PortalAccent, string>` is a fifth byte-identical copy of the four landing paths. P-2 passes only because that copy carries a **different identifier**, so the guard measures the *name*, not the invariant. This matters more than ordinary duplication: it **is** the post-login redirect target for all four portals, so if a landing path moves, the guard stays green while every credentials login without an explicit `callbackUrl` lands on a stale route. `@/lib/portals` is import-free and edge-safe, so this client component can import it as-is — the fix is a deletion plus widening P-2 to *"no file outside `lib/portals.ts` contains two or more of the four literal landing paths"* | next `V3-E06` follow-up (pairs naturally with `PF-102`, same file) |
+| `S-E06-5` — **the slice ships two documents with one identity** | `docs/daily-improvement-v3/stories/S-E06-5.md` (76 L, staged) and `docs/spec/features/v3-e06/stories/S-E06-5.md` (540 L, untracked) are two same-named story docs, **in the slice whose stated theme is that a value is written exactly once** — and they already disagree: the sprint copy records `PF-39 *(advance)*` and omits `PF-98`…`PF-101`, while the epic copy records `PF-39` closed and raises all four. The directory convention is unambiguous (`docs/daily-improvement-v3/stories/` held only `sprint-01.md`; per-story specs live under `docs/spec/features/<epic>/stories/`), so the sprint-directory copy is the off-convention one. **Not deleted here** — a tech-writer pass may correct a ledger, but deleting a staged story document is a content decision for the reviewer | human, before land |
+| `S-E06-5` — **first `tests → src` import in `apps/web`, and `pnpm typecheck` does not cover it** | `apps/web/tests/e2e/fixtures/users.ts` now imports `../../../src/lib/portals` to de-duplicate the four landing literals (the right call). But `apps/web/tsconfig.json` includes only `src/**`, and the E2E suite is not a `ci-gate.sh` stage — so renaming `lib/portals.ts` breaks Playwright at runtime with **no gate catching it** | a later slice (with `VAL-08`) |
+| `S-E06-5` — **`PublicInfoPage` hand-wrote a second public footer instead of extracting the existing one, and the two already diverge** | `PublicInfoPage.tsx:174-237` duplicates `app/page.tsx:750-797`'s inline footer plus its local `FooterCol`. Divergent at birth: the new footer's « Portails » column lists **four** portals (adds `/student/login`) while the landing footer lists three, and the new one omits the « Légal » column entirely while the landing keeps three `/legal/*` links. The gradient "P" brand tile markup now exists in **four** places. Same surface, same audience, so every future public-nav change must be made twice or it drifts — and it already has | a later slice (extract one `SiteFooter` + `BrandMark`) |
+| `S-E06-5` — **~700 lines of hand-rolled lexing now sit in a blocking gate with no recorded rejection of the alternative** | Comment stripper, template scanner, regex-literal skipper, brace-aware object-key reader, regex-based TS union resolver — well documented and well tested, but nothing records **why** `typescript` 5.6 (already a workspace dependency) and `ts.createSourceFile` were rejected. That "considered and rejected" note belongs in the file header or an `ADR` amendment so the next maintainer does not re-litigate it. No new ADR is *owed* for the slice itself: `scripts/ci-gate.sh` and `.github/workflows/ci.yml` are untouched (stage 13 already existed), so `ADR-025`/`ADR-027` are unaffected | next `V3-E06` follow-up |
 
 ## Operator pre-requisites raised by this epic
 
@@ -318,6 +416,15 @@ remains static.
   environment variable and no new permission, so there is **no operator pre-requisite for demoability**. What is owed is
   the gate the agents may not run: `bash scripts/ci-gate.sh` (expect the **verdict line** `GATE: PASS`, per **R-23**)
   and `node scripts/test-ratchet.js api` (expect no NEW failures) — AC-8, listed as unexecuted above.
+- **Before `S-E06-5` lands — the one blocking step, and it is a build.** The seven new routes take the emitted inventory
+  **109 → 116**, and `scripts/web-route-baseline.json` was moved by hand because no agent may build. Run `pnpm build`,
+  then `node scripts/web-artifact-check.js --update` and confirm the file comes back **unchanged**, then re-run
+  `node scripts/link-integrity-check.js` (expect `LINK INTEGRITY CHECK: PASS`, exit 0 — it currently names exactly the
+  seven new routes as dead against the stale 109-route manifest, and nothing else) and `bash scripts/ci-gate.sh`
+  (expect the **verdict line** `GATE: PASS`, per **R-23** — a stage selection is not a verdict). Also run the one
+  targeted suite no agent executed: `pnpm --filter @pilotage/api exec jest src/shared/quality/portal-landing-gate.spec.ts`.
+  No schema change, no new environment variable, no new permission — so there is **no operator pre-requisite for
+  demoability** beyond the build.
 - **Before `V3-E04`'s first slice — decide `trust proxy`.** `AuditLog.ipAddress` now has its first writer and it records
   the reverse proxy. Do not generalise the capture to the other ~20 audit sites until a specific trusted-hop count or
   trusted subnet is decided against the real Traefik→nginx→api topology, because the naive fix (blanket XFF trust) makes
@@ -328,8 +435,14 @@ remains static.
 
 Eight findings `closed`; the link crawl is a permanent CI gate; R-13 addressed via holding pages.
 
-**Status against that bar (2026-08-07).** `PF-19`, `PF-29`, `PF-45` and `PF-88` are `closed`; `PF-54` is `partial`
-(presence, not strength) and `PF-17` is `partial` (hosted seed labels are operator work); `PF-38`, `PF-39` and `PF-57`
-are **measured and inventoried, not fixed** — `PF-38` because `S-E06-4` is blocked on **D-08**, `PF-57` because no story
-was ever enumerated for it. The link crawl **is** a permanent CI gate (stage 13), and so are the CSP and
-production-artefact gates. `R-13` is **not** addressed: no holding pages shipped. Hence `code-complete`, not `shipped`.
+**Status against that bar (2026-08-07, after `S-E06-5`).** `PF-19`, `PF-29`, `PF-45`, `PF-88`, **`PF-93`**, **`PF-94`**
+and **`PF-97`** are `closed`; `PF-39` is **advanced** — its `/help` and profile-link halves are closed (the `/help` row
+left the ceiling, the three dead « Mon profil » entries are gone), its teacher-copy and teacher-"Import grades" halves
+are untouched; `PF-54` is `partial` (presence, not strength) and `PF-17` is `partial` (hosted seed labels are operator
+work); `PF-38` and `PF-57` are **measured and inventoried, not fixed** — `PF-38` because `S-E06-4`'s residual is blocked
+on **D-08**, `PF-57` because no story was ever enumerated for it. The link crawl **is** a permanent CI gate (stage 13),
+now reading template-literal hrefs too, and so are the CSP and production-artefact gates.
+`R-13` is **not** addressed: **no holding pages shipped, and `S-E06-5` deliberately links to no `/legal/*`** — the three
+public pages it does ship (`/pricing`, `/contact`, `/help`) carry no invented copy, no price (`D-05` is open) and no
+« en cours de finalisation » (`DNC-09`). Hence `code-complete`, not `shipped`: five findings raised by this slice
+(`PF-98`…`PF-101`, `PF-103`) and one it merely uncovered (`PF-102`) are queued with owners, not delivered.
