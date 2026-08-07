@@ -200,6 +200,16 @@ jobs:
       # Next route inventory — nginx `location /` would publish it the day it
       # became a route, and the nginx rule above would not notice. No new step
       # was added, deliberately: widening keeps the two files in step.
+      #
+      # S-E02-17 (PF-56, queue third) widened it again, on the QUEUES this time.
+      # The step now also holds instrumented queues == registered queues, failing
+      # in BOTH directions: a registered queue nobody instruments is invisible on
+      # a dashboard that still looks healthy, an instrumented queue nobody
+      # registers is a series pinned at zero that reads as an idle queue.
+      # "Registered" is the RESOLVED BullModule.registerQueue registration read
+      # off the built modules, not the exported constant. It is also the first
+      # thing that ever compares apps/api's and apps/worker's queue-name blocks.
+      # Still no new step, for the same reason as last time.
       - run: node scripts/observability-check.js
 
       # Tracing (S-E02-14 / PF-78) — the traces half of PF-56. A `jaeger`

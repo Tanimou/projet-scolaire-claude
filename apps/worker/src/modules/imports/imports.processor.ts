@@ -1,4 +1,4 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import {
   applyBatchRows,
@@ -11,6 +11,10 @@ import {
 import { ImportStatus, type ImportMode } from '@prisma/client';
 import type { Job } from 'bullmq';
 
+import {
+  observeJobCompleted,
+  observeJobFailed,
+} from '../../shared/observability/queue-metrics';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
 
@@ -56,6 +60,22 @@ export class ImportsProcessor extends WorkerHost {
       return this.processRollback(job.data);
     }
     return this.processApply(job.data, mode);
+  }
+
+  /**
+   * S-E02-17 — outcome + duration instrumentation. One line each; everything
+   * lives in `queue-metrics.ts` (see `ExportsProcessor` for why these are
+   * events and not a wrapper). The label is the JOB NAME (`apply`/`rollback`),
+   * never `batchId` or `tenantId` — the exposition is unauthenticated.
+   */
+  @OnWorkerEvent('completed')
+  onCompleted(job: Job<ImportJobPayload>): void {
+    observeJobCompleted(QUEUE_IMPORTS, job);
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job<ImportJobPayload> | undefined, error: Error): void {
+    observeJobFailed(QUEUE_IMPORTS, job, error);
   }
 
   /**
