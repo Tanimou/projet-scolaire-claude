@@ -45,21 +45,33 @@ they need hosted credentials and an operator, are not buildable from this checko
 would claim the operator half was delivered. **`D-01` no longer blocks anything here** (it asks when the hosted
 *audit fixture* may be taken down; the drill's target is a local container — see `open-decisions.md` D-01).
 
-**V3 slice ledger — `V3-E06` · Production hygiene and navigation completeness · layer L0 · `in-progress` (2026-08-04)**
+**V3 slice ledger — `V3-E06` · Production hygiene and navigation completeness · layer L0 · `in-progress` (2026-08-07)**
 
 | Slice | State |
 |---|---|
 | **`S-E06-1`** — purge development artefacts from production-facing code, **and gate the purge**: the four Maildev `http://localhost:1080` instructions removed from the admin/teacher registration + invite surfaces (replaced by a config-driven `ActivationHint`), the `?? 'admin'` / `?? 'http://localhost:8180'` / `?? 'maildev'` fallbacks deleted from `KeycloakAdminService` / `JwtStrategy` / `KeycloakModule`, a fail-fast `assertRequiredConfig` preflight in `main.ts`, and a new one-way `scripts/production-artefact-check.js` ratchet wired into **both** `scripts/ci-gate.sh` and `.github/workflows/ci.yml`. Closes the **code path** of **`PF-54`**; **`PF-17`** partial (hosted DB seed labels stay operator work) | ✅ **2026-08-04 — this run** |
-| `S-E06-2` … `S-E06-6` | ⬜ todo (`S-E06-4` ⛔ blocked on decision **D-08**) |
+| **`S-E06-2`** — enable a **nonce CSP** and close the branding stored-XSS path: the policy shipped and proven on a real response (every script carrying the response nonce, five requests → five distinct nonces), `force-dynamic` at the root layout so no prerendered document can carry an unnonced `<script>`, the branding write route re-scoped to the caller's tenant, and `scripts/csp-check.js` wired into both harnesses. Closes **`PF-45`**; found + closed **`PF-88`** (cross-tenant branding write); raised **`R-28`** | ✅ 2026-08-07 |
+| **`S-E06-3`** — ship `/admin/classes/new` (the admin classes page's primary CTA, and the only affordance a school with zero classes ever saw, pointed at a route that was **never emitted** — it resolved against `/admin/classes/[id]` with `id = "new"` and crashed), **and gate the class of defect**: a new `scripts/link-integrity-check.js` ratchet resolves every fully-literal internal link in `apps/web/src` against the **emitted** route inventory and fails on **DYNAMIC CAPTURE** (a literal that only matches because a single-segment `[param]` swallowed it) as well as on a dead target outside the reviewed ceiling, wired into **both** `scripts/ci-gate.sh` (stage 13) and `.github/workflows/ci.yml`, with a 24-entry `scripts/link-integrity-baseline.json` where every row carries a reason **and** an owning finding. Closes **`PF-19`**; **`PF-39`** inventoried, not fixed; raises **`PF-91`**…**`PF-94`** | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
+| `S-E06-6` | ⬜ todo (`PF-29`) · `S-E06-4` ⛔ blocked on decision **D-08** · `S-E06-5` not enumerated in `sprint-01` |
 
 **`PF-54` is closed in code, not on the deployment.** The guard checks *presence*, not *strength*: the hosted
 Keycloak master account is still `admin`/`admin`, and rotating it (Keycloak master realm **then** `.env.prod`) is
 operator work this routine may not perform. Read the slice as "the silent default is gone", never as "the credential
 is safe".
 
-**Next V3 slice → `S-E06-2`** — enable CSP and sanitise branding injection (`PF-45`). Restated as a **current**
-decision on 2026-08-07, not carried over: `V3-E02`'s last unblocked story (`S-E02-3`) shipped this run, its two
-remaining rows are hosted-operator work, and `S-E06-2` is the next unblocked story under the layer/dependency rule.
+**Next V3 slice → `S-E06-6`** — confirmation and explicit scope for bulk/irreversible controls (`PF-29`). Restated as a
+**current** decision on 2026-08-07, not carried over: `S-E06-3` shipped this run, `S-E06-4` stays ⛔ blocked on decision
+**D-08** (the routine may ship holding pages, never author policy text — risk `R-13`), and `S-E06-5` was never
+enumerated in `sprint-01`. `S-E06-6` is therefore the next **unblocked** story under the layer/dependency rule.
+
+**`S-E06-3` did not close the epic, and two of its own consequences are open.** The link gate is now a permanent CI
+stage, but it reads links **statically** — it does not drive a browser, so it can see neither a runtime error boundary
+nor a 500 behind a route that exists (that crawl is `VAL-08`'s). And the slice **raised four findings it did not fix**:
+`PF-91` (nine phantom auth routes — an invitation or password-reset email lands on a 404), `PF-92`
+(`/parent/remediation` has no index while the admin and teacher siblings do), `PF-93` (the bare portal roots `/admin`,
+`/teacher`, `/parent`, `/student` have no index route) and `PF-94` (`/pricing` + `/contact` are dead links in the
+public landing footer). All four are **inventoried in the baseline with an owning id, not silenced** — the ratchet
+holds the ceiling, it does not lower it.
 
 This file carries the **pointer only** — it is not the V3 tracker. Per-slice status, evidence and the "not claimed"
 ledger live in **[`docs/spec/features/v3-e02/PROGRESS.md`](../docs/spec/features/v3-e02/PROGRESS.md)** and

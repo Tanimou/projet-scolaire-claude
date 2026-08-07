@@ -242,6 +242,34 @@ else
   echo "⏭  csp check skipped (--quick — it reads the emitted dist/ and .next/)"
 fi
 
+# ---------------------------------------------------------------------------
+# Stage 13 — link integrity (S-E06-3, PF-19)
+# ---------------------------------------------------------------------------
+# `/admin/classes/new` was the primary call to action of the admin classes page,
+# and the only affordance a school with zero classes ever saw, and it was never
+# emitted as a route. It nonetheless RESOLVED — Next matched it against
+# `/admin/classes/[id]` with `id = "new"` — so the page crashed on an error
+# boundary while a naive "does this link exist in the route table?" check
+# answered yes and reported green.
+#
+# The defect is the SHAPE of the match, not the absence of one. This stage
+# extracts every fully-literal internal link from apps/web/src and resolves it
+# against the EMITTED route inventory: it fails unconditionally on a literal
+# that resolves only because a single-segment [param] swallowed it, and fails on
+# a dead target that is not in the reviewed ceiling with a reason AND an owning
+# finding. A catch-all consuming literal segments is ALIVE on purpose — that is
+# the entire function of `/api/proxy/[...path]`, which every client fetch uses.
+#
+# Reads the emitted .next/, so it runs after the build and is skipped by
+# --quick, exactly like stages 8-12. Kept in step with .github/workflows/ci.yml
+# — the two must not drift (S-E02-2 AC-4).
+if [ "${QUICK}" -eq 0 ]; then
+  run_stage "link integrity (literal internal links vs emitted routes)" node scripts/link-integrity-check.js
+else
+  echo ""
+  echo "⏭  link integrity check skipped (--quick — it reads the build's .next/)"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  CI GATE SUMMARY"

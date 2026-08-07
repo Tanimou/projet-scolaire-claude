@@ -19,6 +19,7 @@
         "/admin/child-claims",
         "/admin/classes",
         "/admin/classes/[id]",
+        "/admin/classes/new",
         "/admin/communications",
         "/admin/conversations",
         "/admin/cycles",
