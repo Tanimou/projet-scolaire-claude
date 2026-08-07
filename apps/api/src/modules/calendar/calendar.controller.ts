@@ -4,6 +4,8 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
+  Ip,
   NotFoundException,
   Param,
   Patch,
@@ -17,10 +19,13 @@ import {
   IsBoolean,
   IsDateString,
   IsEnum,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -31,8 +36,16 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { deriveAlertActorProvenance } from '../alerts/alert-provenance';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
+
+import {
+  CalendarSeedService,
+  sanitiseInetOrNull,
+  truncateUserAgent,
+} from './calendar-seed.service';
+import { MAX_SEED_YEAR, MIN_SEED_YEAR } from './french-holidays';
 
 /**
  * Construit le fragment de `where` Prisma qui applique l'ABAC de visibilité du
@@ -74,53 +87,6 @@ export function calendarVisibilityWhere(
   };
 }
 
-const FRENCH_PUBLIC_HOLIDAYS = (year: number): Array<{ title: string; date: string }> => {
-  // Easter-anchored: Easter Monday & Pentecost Monday.
-  const easter = computeEaster(year);
-  const easterMonday = addDays(easter, 1);
-  const pentecostMonday = addDays(easter, 50);
-  const ascension = addDays(easter, 39);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  return [
-    { title: 'Jour de l’an', date: `${year}-01-01` },
-    { title: 'Lundi de Pâques', date: iso(easterMonday) },
-    { title: 'Fête du Travail', date: `${year}-05-01` },
-    { title: 'Victoire 1945', date: `${year}-05-08` },
-    { title: 'Ascension', date: iso(ascension) },
-    { title: 'Lundi de Pentecôte', date: iso(pentecostMonday) },
-    { title: 'Fête nationale', date: `${year}-07-14` },
-    { title: 'Assomption', date: `${year}-08-15` },
-    { title: 'Toussaint', date: `${year}-11-01` },
-    { title: 'Armistice 1918', date: `${year}-11-11` },
-    { title: 'Noël', date: `${year}-12-25` },
-  ];
-};
-
-// Computus algorithm — returns Easter Sunday for a given Gregorian year.
-function computeEaster(year: number): Date {
-  const a = year % 19;
-  const b = Math.floor(year / 100);
-  const c = year % 100;
-  const d = Math.floor(b / 4);
-  const e = b % 4;
-  const f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4);
-  const k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const month = Math.floor((h + l - 7 * m + 114) / 31);
-  const day = ((h + l - 7 * m + 114) % 31) + 1;
-  return new Date(Date.UTC(year, month - 1, day));
-}
-
-function addDays(d: Date, n: number): Date {
-  const r = new Date(d);
-  r.setUTCDate(r.getUTCDate() + n);
-  return r;
-}
-
 class CreateCalendarEventDto {
   @IsString() @MinLength(1) @MaxLength(200) title!: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
@@ -145,8 +111,30 @@ class UpdateCalendarEventDto extends CreateCalendarEventDto {
   @IsOptional() @IsDateString() override endsAt!: string;
 }
 
-class SeedHolidaysDto {
-  @IsOptional() year?: number;
+/**
+ * Corps de `POST /calendar/events/seed-french-holidays`.
+ *
+ * `year` est **REQUIS** : toute la cascade de replis serveur (année scolaire
+ * active → `startDate.getFullYear()`, puis `new Date().getFullYear()`) est
+ * SUPPRIMÉE, pas gardée. Le repli *était* l'hypothèse — c'est la moitié
+ * « année périmée » de PF-29 — et un 400 sur une année absente vaut mieux que
+ * 22 lignes dans la mauvaise année. Changement cassant pour un seul appelant
+ * (`apps/web/src/app/admin/calendar/actions.ts`), modifié dans la même PR.
+ *
+ * Validation à l'idiome de la maison (`classes.controller.ts`, `cycles.controller.ts`) :
+ * `@IsInt() @Min() @Max()` **sans** `@Type(() => Number)`. La `ValidationPipe`
+ * globale tourne en `transform: true` **sans** `enableImplicitConversion`, donc
+ * un nombre JSON arrive déjà en `number` — et `@Type(() => Number)` ferait
+ * silencieusement accepter `{"year":"2026"}`, soit l'inverse de l'intention de
+ * PF-51. Ferme la famille PF-51 sur ce DTO : `{year:'abc'}` et `{year:1e9}`
+ * renvoient 400 au lieu de produire une `Invalid Date` puis un 500 opaque.
+ */
+export class SeedHolidaysDto {
+  @IsInt() @Min(MIN_SEED_YEAR) @Max(MAX_SEED_YEAR) year!: number;
+  /** Jamais défaillé côté serveur : son absence est un refus (DNC-12). */
+  @IsOptional() @IsBoolean() confirm?: boolean;
+  /** Simulation : même lecture, même forme de réponse, aucune écriture. */
+  @IsOptional() @IsBoolean() dryRun?: boolean;
 }
 
 @ApiTags('calendar')
@@ -159,6 +147,7 @@ export class CalendarController {
     private readonly users: UserSyncService,
     private readonly ctx: SchoolContextService,
     private readonly studentAccess: StudentAccessService,
+    private readonly seed: CalendarSeedService,
   ) {}
 
   @Get('events')
@@ -265,57 +254,52 @@ export class CalendarController {
   }
 
   /**
-   * Seed the 11 standard French public holidays for a given year, idempotent (skips duplicates).
-   * Defaults to the year covering the currently-active academic year.
+   * Importe les jours fériés français des DEUX années civiles `year` et
+   * `year + 1` (11 + 11 = 22 événements), de façon idempotente.
+   *
+   * S-E06-6 / PF-29 — le contrôle écrivait en masse sans rien demander et sans
+   * nommer son périmètre. Désormais :
+   * - `confirm: true` est exigé **côté serveur** (donc un `curl` y est soumis),
+   * - `dryRun: true` renvoie le même plan sans rien écrire, et l'UI construit sa
+   *   confirmation EXCLUSIVEMENT depuis cette réponse (DNC-06 rendu
+   *   structurellement impossible plutôt que relu),
+   * - `year` est requis (plus aucun repli sur l'année scolaire active),
+   * - tout l'import + UNE ligne d'audit tiennent dans une seule transaction.
+   *
+   * IP / user-agent sont capturés ici avec les décorateurs Nest natifs `@Ip()` /
+   * `@Headers()` et ASSAINIS **avant** l'ouverture de la transaction (cf.
+   * `sanitiseInetOrNull`). Aucun intercepteur partagé n'est construit : ce
+   * chantier est PF-31 / V3-E04, et cette slice l'AVANCE sur un handler sans le
+   * clore (~20 autres sites d'audit continuent de coder `'school_admin'` en dur
+   * et n'écrivent ni IP ni user-agent).
    */
   @Post('events/seed-french-holidays')
   @RequiresPermission('calendar.write')
-  async seedFrenchHolidays(@Body() body: SeedHolidaysDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
+  async seedFrenchHolidays(
+    @Body() body: SeedHolidaysDto,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
     const me = await this.users.ensureUser(jwt);
-    const { schoolId, activeAcademicYearId } = await this.ctx.forTenant(me.tenantId);
+    const { schoolId } = await this.ctx.forTenant(me.tenantId);
+    // Rôle et portail DÉRIVÉS du JWT (helper partagé, déjà importé par
+    // messaging / remediation / *-exports) — jamais le rôle « admin d'école »
+    // codé en dur des autres sites d'audit : un super_admin s'audite super_admin.
+    const { actorRole, portal } = deriveAlertActorProvenance(jwt);
 
-    let year = body.year;
-    if (!year && activeAcademicYearId) {
-      const ay = await this.prisma.academicYear.findUnique({ where: { id: activeAcademicYearId } });
-      year = ay?.startDate.getFullYear();
-    }
-    if (!year) year = new Date().getFullYear();
-
-    const holidays = FRENCH_PUBLIC_HOLIDAYS(year).concat(FRENCH_PUBLIC_HOLIDAYS(year + 1));
-
-    let created = 0;
-    let skipped = 0;
-    for (const h of holidays) {
-      const start = new Date(`${h.date}T00:00:00Z`);
-      const end = new Date(`${h.date}T23:59:59Z`);
-      // Skip if same title+date already exists for this school
-      const dup = await this.prisma.calendarEvent.findFirst({
-        where: { schoolId, title: h.title, startsAt: start },
-      });
-      if (dup) {
-        skipped += 1;
-        continue;
-      }
-      await this.prisma.calendarEvent.create({
-        data: {
-          tenantId: me.tenantId,
-          schoolId,
-          academicYearId: activeAcademicYearId ?? undefined,
-          type: 'public_holiday',
-          scope: 'school_wide',
-          visibility: 'all',
-          title: h.title,
-          startsAt: start,
-          endsAt: end,
-          allDay: true,
-          color: 'oklch(0.68 0.18 25)',
-          icon: 'Flag',
-          createdBy: me.id,
-        },
-      });
-      created += 1;
-    }
-    return { ok: true, created, skipped, year };
+    return this.seed.seedFrenchHolidays({
+      tenantId: me.tenantId,
+      schoolId,
+      actorId: me.id,
+      actorRole,
+      portal,
+      year: body.year,
+      confirm: body.confirm === true,
+      dryRun: body.dryRun === true,
+      ipAddress: sanitiseInetOrNull(ip),
+      userAgent: truncateUserAgent(userAgent),
+    });
   }
 
   /**

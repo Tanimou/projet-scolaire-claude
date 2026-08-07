@@ -506,7 +506,7 @@ being finalised and gives a contact route · registration links resolve to the c
 
 ---
 
-## S-E06-6 — Confirmation and explicit scope for bulk/irreversible controls
+## S-E06-6 — Confirmation and explicit scope for bulk/irreversible controls · ✅ `done` 2026-08-07
 
 | | |
 |---|---|
