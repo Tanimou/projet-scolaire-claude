@@ -209,3 +209,36 @@ automatiquement par l'étape `test:api (ratchet)` (`node scripts/test-ratchet.js
 `apps/api/jest.config.js` matche `<rootDir>/src/**/*.spec.ts`. Elle verrouille la table verdict → code de sortie,
 l'absence de contournement, le refus d'écriture de `--update`, les garde-fous de la base scratch, G-TENANT dans les
 deux sens, et la non-régression de PF-84.
+
+---
+
+## 9. Dérive de schéma — `ci-gate.sh` exige désormais un PostgreSQL joignable (S-E02-5, ADR-027)
+
+**Nouveau pré-requis, dit ici plutôt que découvert.** Depuis `S-E02-5`, `scripts/ci-gate.sh` porte une étape **0d**,
+`node scripts/schema-drift-check.js`, qui **crée une base scratch jetable**, y applique `apps/api/prisma/migrations`,
+compare **cette base** à `apps/api/prisma/schema.prisma`, puis la supprime sur **tous** les chemins de sortie. Elle
+tourne aussi sous `--quick` (elle lit `prisma/` et une base, jamais `dist/` ni `.next/`).
+
+Conséquence directe : **stack local éteint ⇒ `bash scripts/ci-gate.sh` échoue**, sur un arbre pourtant sain. C'est
+voulu — DNC-08 ne laisse pas de troisième option : une étape qui se dégraderait en « sautée » rapporterait un contrôle
+qui n'a pas eu lieu comme un résultat. Le remède est **de démarrer la base, jamais de modifier du code** :
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml up -d postgres
+```
+
+Comment distinguer les deux familles de verdicts (l'étape imprime la ligne `SCHEMA DRIFT CHECK: FAIL — <verdict>`) :
+
+| Verdict | Ce que ça veut dire | Action |
+|---|---|---|
+| `tooling_unavailable` / `unreachable_server` | le contrôle **n'a pas pu tourner** (aucune route SQL, ou aucun serveur ne répond). Les trois routes essayées sont nommées avec leur erreur réelle | démarrer le stack (commande ci-dessus), puis relancer |
+| `migrate_deploy_failed` | une migration **ne s'exécute pas** sur PostgreSQL (la sortie de Prisma est reproduite telle quelle) | corriger le SQL de la migration |
+| `schema_drift` | le registre de migrations **ne reproduit pas** `schema.prisma`. La sortie de Prisma nomme l'objet dérivé (`[+] Added tables …`) | écrire la migration manquante : `pnpm --filter @pilotage/api exec prisma migrate dev --name <ce-qui-change>` |
+| `scratch_create_failed` / `scratch_not_empty` / `scratch_cleanup_failed` | problème sur la base scratch (droit `CREATEDB` manquant, base non vide à la création, suppression impossible) | la commande de suppression manuelle est imprimée par le script |
+| `no_migrations` / `empty_scratch_schema` / `ledger_incomplete` | le contrôle aurait comparé **rien** — refusé plutôt que passé à vide | vérifier `apps/api/prisma/migrations` |
+| `unknown` | le run n'a pas produit les preuves qu'un verdict exige (chaque champ manquant est nommé) | lire les champs listés ; ce n'est jamais un succès |
+
+Ce pré-requis **ne s'applique pas** au drill du §8 : ADR-027 explique pourquoi les deux décisions tiennent ensemble —
+le drill a besoin de la base **applicative peuplée** (un *état* que la CI ne peut pas avoir et ne doit pas fabriquer),
+l'étape 0d a besoin d'un **serveur PostgreSQL vide** (une *capacité* que le job `build` de `ci.yml` provisionne déjà
+et que le stack local fait déjà tourner).
