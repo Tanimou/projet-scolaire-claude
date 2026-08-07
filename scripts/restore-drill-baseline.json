@@ -1,0 +1,44 @@
+{
+  "$comment": "Reviewed SLO baseline for scripts/restore-drill.js. Every entry carries a written reason, never a bare number: a duration without the dataset and machine it was measured on is not an SLO. Rewritten deliberately with `node scripts/restore-drill.js --update`, which refuses to write from any run that found a correctness failure or injected a fault — the diff is meant to be reviewed. Exceeding toleranceFactor is reported as a WARN and does NOT fail the drill; see FR-8 in the runbook for why.",
+  "recordedAt": "2026-08-07T00:56:44.123Z",
+  "recordedFrom": "127.0.0.1:5433/pilotage (local Docker stack)",
+  "source": {
+    "host": "127.0.0.1",
+    "port": 5433,
+    "database": "pilotage"
+  },
+  "inventory": {
+    "tableCount": 55,
+    "nonEmptyTableCount": 30,
+    "totalRows": 13550,
+    "reason": "Measured by the drill on the local Docker stack after the migrator applied 0_baseline and the demo seed ran (tenant demo, school VOLTAIRE). tableCount drift is a hard failure: a table dropped from schema.prisma vanishes from the source AND the restore and would compare equal for ever. Row totals move with the seed and are reported, not enforced."
+  },
+  "ledger": {
+    "migrations": [
+      "0_baseline"
+    ],
+    "reason": "Every directory under apps/api/prisma/migrations must come back in the restored _prisma_migrations, finished and not rolled back. A restore without the migration history is a restore of the data, not of the database."
+  },
+  "durations": {
+    "dumpMs": {
+      "value": 2284,
+      "reason": "Measured by `node scripts/restore-drill.js --update` — pg_dump -Fc of the whole database. Windows 11 host, Docker Desktop, postgres:15-alpine, the seeded demo dataset recorded under `inventory`."
+    },
+    "restoreMs": {
+      "value": 8499,
+      "reason": "Measured by `node scripts/restore-drill.js --update` — pg_restore --exit-on-error into a fresh scratch database. Windows 11 host, Docker Desktop, postgres:15-alpine, the seeded demo dataset recorded under `inventory`."
+    },
+    "verifyMs": {
+      "value": 6190,
+      "reason": "Measured by `node scripts/restore-drill.js --update` — rebuilding the manifest from the restored database and comparing it. Windows 11 host, Docker Desktop, postgres:15-alpine, the seeded demo dataset recorded under `inventory`."
+    },
+    "totalMs": {
+      "value": 34357,
+      "reason": "Measured by `node scripts/restore-drill.js --update` — the whole cycle, including manifest builds and cleanup. Windows 11 host, Docker Desktop, postgres:15-alpine, the seeded demo dataset recorded under `inventory`."
+    }
+  },
+  "toleranceFactor": {
+    "value": 3,
+    "reason": "Wide on purpose. The measurement is a developer laptop against a Docker volume under variable load; a tight factor would make the drill flake, and a gate that flakes is re-run until green instead of read. Exceeding it is a WARN, never a non-zero exit."
+  }
+}

@@ -60,8 +60,19 @@ docs/screens
 !packages/*/README.md
 !README.md
 
-# Existing Docker artefacts (avoid recursion)
-infra/docker
+# Runtime data directories these services write into. They are state, never
+# build input, and some of them are gigabytes.
+#
+# `infra/docker` USED TO BE LISTED HERE, under the heading "avoid recursion".
+# It is not a data directory — it holds the Dockerfiles and the shell scripts
+# they reference — and excluding it made `infra/docker/migrate-entrypoint.sh`
+# unreachable in EVERY build of Dockerfile.api, so the migrator's
+# `command: ["sh", "/app/infra/docker/migrate-entrypoint.sh"]` could never
+# resolve. The safe migrator delivered by S-E02-1 to replace
+# `prisma db push --accept-data-loss` therefore exited 2 ("can't open") on
+# every stack it was ever started on. Recorded as PF-84; a guard spec fails if
+# the entry returns. Do not re-add it: the build context cost is ~20 kB, and
+# the recursion the heading feared is handled by the `dist`/`build` globs above.
 infra/nginx/certs
 infra/keycloak/data
 infra/postgres/data

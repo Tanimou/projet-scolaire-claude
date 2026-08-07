@@ -41,11 +41,47 @@ export const meta = {
   ],
 }
 
-const WT = (args && args.worktree) || 'C:/Users/HP/Downloads/pilotage-scolaire-claude'
-const HINT = (args && args.hint) || ''
-const ARG_MODE = (args && args.mode) || 'auto'
-const ARG_EPIC = (args && args.epic) || ''
-const ARG_SLICE = (args && args.slice) || ''
+// PF-87 — `args` may arrive as a JSON STRING rather than an object, and reading
+// it directly is silently wrong in a way specifically designed to look right.
+//
+// On a string, `args.epic` and `args.mode` are `undefined` (so the override
+// falls back to '' / 'auto' and the intake agent's own pick wins), while
+// `args.slice` is `String.prototype.slice` — a FUNCTION, therefore TRUTHY.
+// So the one field that carries the story identity becomes the literal text
+// `function slice() { [native code] }`, and every other override field goes
+// quietly missing. That is not a hypothetical: on run 19 three consecutive
+// sprints were briefed on `S-E06-2` while the routine had passed `V3-E02` /
+// `S-E02-3`, and the agents' own reports are what surfaced it — one of them
+// wrote "the operator override arrived malformed: SLICE and INTENT were both
+// `function slice() { [native code] }`".
+//
+// This is very probably the true mechanism behind PF-60 as well, which was
+// diagnosed as a precedence bug (`intake.* || ARG_*`) and fixed as one. The
+// precedence fix was correct and necessary — but with `ARG_EPIC` resolving to
+// `''` it could never have changed the outcome, which is why the same symptom
+// came back. A collision with a built-in method name is the reason a missing
+// value never once read as missing.
+const ARGS = (() => {
+  if (typeof args === 'string') {
+    try { return JSON.parse(args) } catch { return {} }
+  }
+  return args && typeof args === 'object' ? args : {}
+})()
+
+// Only own string properties count. `ARGS.slice` inherited from a prototype is
+// exactly the bug above; a function is never a story id.
+const argStr = (k) => {
+  const v = Object.prototype.hasOwnProperty.call(ARGS, k) ? ARGS[k] : undefined
+  return typeof v === 'string' ? v : ''
+}
+
+const WT = argStr('worktree') || 'C:/Users/HP/Downloads/pilotage-scolaire-claude'
+const HINT = argStr('hint')
+const ARG_MODE = argStr('mode') || 'auto'
+const ARG_EPIC = argStr('epic')
+const ARG_SLICE = argStr('slice')
+
+log(`args: type=${typeof args} mode=${ARG_MODE} epic=${ARG_EPIC || '(none)'} slice=${ARG_SLICE ? ARG_SLICE.slice(0, 60) : '(none)'} hint=${HINT.length}c`)
 const GUARD = `ALWAYS read ${WT}/bmad/project-context.md, ${WT}/bmad/agents.md and ${WT}/bmad/roadmap.md FIRST and obey them as hard constraints. Work ONLY inside ${WT}. NEVER run any build/rebuild (pnpm build, next build, docker build/compose build, infra/pilotage.sh update|rebuild|reset). Do NOT run 'pnpm typecheck' (only the test-architect agent runs it, to protect CPU/RAM). NEVER touch unrelated areas or remove working features.`
 
 const INTAKE_SCHEMA = {
@@ -151,6 +187,33 @@ const epicId = ARG_EPIC || intakeEpic
 const slice = ARG_SLICE || intakeSlice
 const epicDir = epicId ? `${WT}/docs/spec/features/${epicId.toLowerCase()}` : ''
 
+// PF-85 — the override must reach the AGENTS, not just this file's own header.
+// PF-60 fixed `mode` / `epic` / `slice`. It did NOT fix `intent`, and `intent` is
+// the field every downstream agent actually reads (see `sliceCtx` below:
+// `INTENT: ${...}`). The three identifiers are a label; the intent is the
+// instruction body.
+//
+// Measured on run 19, which is why this exists: the routine passed
+// epic=V3-E02 slice="S-E02-3 — timed backup -> restore rehearsal" plus a
+// 6 000-character hint, and intake returned V3-E06 / S-E06-2 with a
+// 1 500-character intent describing S-E06-2's CSP + branding-sanitisation work.
+// Lines 149-151 correctly resolved epicId to V3-E02 — and the UX and
+// test-architect agents were nonetheless briefed on S-E06-2, because the header
+// said V3-E02 while the body said S-E06-2 and the body is what an agent builds.
+// The run was killed after two agents had produced specs for the wrong story.
+//
+// When the operator names the slice, the operator's hint IS the intent. The
+// intake agent's prose is not merged in — merging is how the wrong story gets a
+// second vote.
+const intent = ARG_SLICE
+  ? `${ARG_SLICE}\n\n${HINT}`
+  : (intake && intake.intent) || ''
+
+// The same object the agents are handed, with the override already applied — so
+// the epic-spec branch below cannot re-leak the intake's pick through
+// `JSON.stringify(resolvedIntake)` the way `sliceCtx` did through `intake.intent`.
+const resolvedIntake = { ...(intake || {}), mode, epic: epicId, slice, intent }
+
 // Disagreement is not silently resolved — it is reported, because it usually
 // means the roadmap the intake agent read and the story the operator selected
 // have diverged, and a human needs to know which one is stale.
@@ -160,6 +223,9 @@ if (ARG_EPIC && intakeEpic && intakeEpic !== ARG_EPIC) {
 if (ARG_MODE !== 'auto' && intakeMode !== ARG_MODE) {
   log(`⚠️ intake picked mode ${intakeMode} but the operator override is ${ARG_MODE} — honoring the override (PF-60)`)
 }
+if (ARG_SLICE && intakeSlice && intakeSlice !== ARG_SLICE) {
+  log(`⚠️ intake picked slice "${intakeSlice}" but the operator override is "${ARG_SLICE}" — honoring the override, and DISCARDING intake's intent with it (PF-85)`)
+}
 
 // =============================================================================
 // BRANCH A — EPIC-SPEC: write the spec-kit folder (docs only, NO build)
@@ -168,15 +234,15 @@ if (mode === 'epic-spec') {
   phase('Plan')
   const [prd, arch, ux] = await parallel([
     () => agent(
-      `${GUARD}\nYou are JOHN (PM). Author the PRODUCT SPEC for epic ${epicId} "${intake.epicTitle || ''}" from the roadmap + cahier de charges. Cover: vision & the parent value, target users, concrete scenarios, FUNCTIONAL REQUIREMENTS, explicit ACCEPTANCE CRITERIA, NON-GOALS, and a sliced delivery plan (an ordered list of thin VERTICAL slices, each demoable end-to-end and shippable in one PR). Keep each slice ≤ a day of focused work.\n\nINTAKE:\n${JSON.stringify(intake)}`,
+      `${GUARD}\nYou are JOHN (PM). Author the PRODUCT SPEC for epic ${epicId} "${intake.epicTitle || ''}" from the roadmap + cahier de charges. Cover: vision & the parent value, target users, concrete scenarios, FUNCTIONAL REQUIREMENTS, explicit ACCEPTANCE CRITERIA, NON-GOALS, and a sliced delivery plan (an ordered list of thin VERTICAL slices, each demoable end-to-end and shippable in one PR). Keep each slice ≤ a day of focused work.\n\nINTAKE:\n${JSON.stringify(resolvedIntake)}`,
       { label: 'john:prd', phase: 'Plan' }
     ),
     () => agent(
-      `${GUARD}\nYou are WINSTON (Architect). For epic ${epicId}: produce the DATA MODEL (new/changed Prisma models, relations, constraints, tenant_id + indexes, a non-destructive migration plan) AND the API CONTRACTS (REST endpoints under /api/v1, payloads, errors, RBAC/ABAC per endpoint). Flag any NEW architectural decision that needs a docs/adr/ ADR. Respect existing conventions (aggregate endpoints, packages/contracts, RLS).\n\nINTAKE:\n${JSON.stringify(intake)}`,
+      `${GUARD}\nYou are WINSTON (Architect). For epic ${epicId}: produce the DATA MODEL (new/changed Prisma models, relations, constraints, tenant_id + indexes, a non-destructive migration plan) AND the API CONTRACTS (REST endpoints under /api/v1, payloads, errors, RBAC/ABAC per endpoint). Flag any NEW architectural decision that needs a docs/adr/ ADR. Respect existing conventions (aggregate endpoints, packages/contracts, RLS).\n\nINTAKE:\n${JSON.stringify(resolvedIntake)}`,
       { label: 'winston:datamodel', phase: 'Plan' }
     ),
     () => agent(
-      `${GUARD}\nYou are SALLY (UX). For epic ${epicId}: define the premium, colorful, mobile-first (parent <2 s), WCAG 2.2 AA UX — key screens/states, the information→action flow, empty/loading/error states, and reuse of @pilotage/ui. Non-stigmatising, kind tone.\n\nINTAKE:\n${JSON.stringify(intake)}`,
+      `${GUARD}\nYou are SALLY (UX). For epic ${epicId}: define the premium, colorful, mobile-first (parent <2 s), WCAG 2.2 AA UX — key screens/states, the information→action flow, empty/loading/error states, and reuse of @pilotage/ui. Non-stigmatising, kind tone.\n\nINTAKE:\n${JSON.stringify(resolvedIntake)}`,
       { label: 'sally:ux', phase: 'Plan' }
     ),
   ])
@@ -217,7 +283,7 @@ Write real, specific content (no placeholders). Make the edits now. Then return 
 // BRANCH B — EPIC-SLICE / POLISH: implement ONE vertical slice (build = 1×)
 // =============================================================================
 phase('Plan')
-const sliceCtx = `MODE: ${mode}\nEPIC: ${epicId} ${intake && intake.epicTitle ? '— ' + intake.epicTitle : ''}\nSLICE: ${slice || '(polish — no epic slice)'}\nINTENT: ${intake && intake.intent}\nFor epic-slice runs, read ${epicDir}/spec.md, tasks.md and PROGRESS.md and implement ONLY the next slice — a thin VERTICAL slice (DB + API + UI + worker as needed) that is demoable end-to-end and fits ONE PR.`
+const sliceCtx = `MODE: ${mode}\nEPIC: ${epicId} ${intake && intake.epicTitle ? '— ' + intake.epicTitle : ''}\nSLICE: ${slice || '(polish — no epic slice)'}\nINTENT: ${intent}\n${ARG_SLICE ? `The SLICE and INTENT above are an OPERATOR OVERRIDE and they WIN OUTRIGHT. Read ${epicDir}/spec.md, tasks.md and PROGRESS.md for CONTEXT ONLY. Those files record what was true when they were last written and MAY BE STALE — in particular, a "Next slice" pointer in PROGRESS.md is NOT an instruction to you, and a story those files call blocked may since have been unblocked. If they disagree with the SLICE above, the SLICE above is right and the file is out of date: implement the SLICE above, and say in your output that the ledger disagreed. Never substitute a different story.` : `Read ${epicDir}/spec.md, tasks.md and PROGRESS.md and implement ONLY the next slice — a thin VERTICAL slice (DB + API + UI + worker as needed) that is demoable end-to-end and fits ONE PR.`}`
 const [spec, archRuling, uxNotes, preMortem, testDesign] = await parallel([
   () => agent(
     `${GUARD}\nYou are JOHN, the BMAD PM. Author a SELF-CONTAINED story spec for THIS slice — a developer must be able to implement it with no other context. Set touchesUi / touchesBackend / touchesWorker honestly. Keep it to ONE shippable vertical slice (do NOT try to build the whole epic).\n\n${sliceCtx}`,
