@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
@@ -43,6 +44,33 @@ import { join, resolve } from 'node:path';
  *     BOTH directions, so every assertion here can actually fail; and proves the
  *     stage is still wired into `ci-gate.sh` and `ci.yml`.
  *
+ * WHAT S-E06-5 ADDED, AND THE HOLE IT CLOSED (PF-97)
+ * --------------------------------------------------
+ * `LITERAL_LINK` excluded the backtick, so every template-literal href in
+ * `apps/web` was invisible to this gate — 391 single-line strings and 2 spanning
+ * lines. Among them was the application shell's own account menu, which wrote
+ * `` `/${portal}/profile` ``. No per-portal profile route was ever emitted, so
+ * « Mon profil » 404'd on every authenticated page of three portals while the gate
+ * printed `LINK INTEGRITY CHECK: PASS`. A gate that is blind where the shell lives
+ * is worse than no gate: it certifies the defect.
+ *
+ * A template-literal href is now resolved over the DECLARED union of its
+ * interpolated variable, or REPORTED — never dropped, because a silent drop is how
+ * the hole was made. Three outcomes, and the arithmetic between them is asserted:
+ *
+ *     expanded   whole-segment interpolations whose variables have a declared
+ *                union in the same file → the cross-product, each expansion
+ *                classified by the SAME four verdicts as a quoted literal
+ *     shape      anything else → a pattern (`/x/*`) checked for "a route of this
+ *                shape and depth exists", listed in the run output, and FAILING
+ *                unless baselined under `deadShapes`
+ *     unparsed   a `/`-leading template that cannot be parsed → structural failure
+ *
+ * The union is READ, never guessed at "the four portals": `apps/web/src` declares
+ * `Portal`-ish unions with three different arities, and a name-keyed guess would
+ * manufacture findings correct code cannot produce (R-30, the false-red lesson).
+ * Two candidate unions in one file is unresolvable, reported as a shape.
+ *
  * THE MODULE CONTRACT THIS SPEC PINS
  * ----------------------------------
  * `scripts/link-integrity-check.js` must guard its CLI with
@@ -51,8 +79,17 @@ import { join, resolve } from 'node:path';
  * `runtime-engines-check.js:402`. Requiring the module must have no side effect.
  *
  *     classifyTarget(target: string, routes: string[]): Verdict
+ *     classifyPattern(pattern: string, routes: string[]): ShapeVerdict
+ *     stripCommentsPreservingLines(source: string): string
+ *     resolveDeclaredUnion(name: string, source: string): string[] | null
+ *     expandTemplateTarget(raw: string, source: string): ExpansionResult
  *     extractLiteralLinks(): Array<{ target: string; file: string; line: number }>
- *     classifyAll({ targets, routes, baseline }): { problems: string[]; stats: {...} }
+ *     extractTemplateLinks(): Array<TemplateRow>
+ *     classifyAll({ targets, routes, baseline, templates?, deadShapes? })
+ *         → { problems: string[]; stats: {...}; patterns: [...] }
+ *
+ * `templates` and `deadShapes` are OPTIONAL so every pre-S-E06-5 call site — every
+ * case in section 3 below — still exercises exactly the behaviour it used to.
  *
  * `classifyAll` returns `{ problems, stats }` — the shape
  * `evaluateComposeInvocation` already established, so the gate can be driven
@@ -95,11 +132,14 @@ const SCRIPT_REF = 'scripts/link-integrity-check.js';
  * ------------------------------------------------------------------ */
 
 type Verdict = 'exact' | 'catch-all' | 'dynamic-capture' | 'dead';
+type ShapeVerdict = 'shape-alive' | 'shape-dead';
 
 interface LinkTarget {
   target: string;
   file: string;
   line: number;
+  /** Set by the extractor; `href-like` means the reference's line navigates. */
+  context?: 'href-like' | 'plain';
 }
 
 interface BaselineEntry {
@@ -108,6 +148,27 @@ interface BaselineEntry {
   reason?: string;
   class?: string;
 }
+
+interface ShapeBaselineEntry {
+  pattern: string;
+  finding?: string;
+  reason?: string;
+}
+
+interface TemplateRow {
+  raw: string;
+  file: string;
+  line: number;
+  kind: 'expanded' | 'shape' | 'unparsed';
+  expansions?: string[];
+  pattern?: string;
+  vars?: string[];
+}
+
+type ExpansionResult =
+  | { kind: 'expanded'; expansions: string[]; vars: string[] }
+  | { kind: 'shape'; pattern: string; vars: string[] }
+  | { kind: 'unparsed'; raw: string };
 
 interface Evaluation {
   problems: string[];
@@ -118,16 +179,33 @@ interface Evaluation {
     dead?: number;
     captures?: number;
     baselined?: number;
+    prefixConstants?: number;
+    deadDebt?: number;
+    templateRows?: number;
+    expanded?: number;
+    shapeChecked?: number;
+    unparsed?: number;
+    shapes?: number;
+    deadShapes?: number;
   };
+  patterns?: Array<{ pattern: string; verdict: ShapeVerdict; sites: number; vars: string[] }>;
 }
 
 interface LinkIntegrityModule {
   classifyTarget: (target: string, routes: string[]) => Verdict;
-  extractLiteralLinks: () => LinkTarget[];
+  classifyPattern: (pattern: string, routes: string[]) => ShapeVerdict;
+  stripCommentsPreservingLines: (source: string) => string;
+  resolveDeclaredUnion: (name: string, source: string) => string[] | null;
+  expandTemplateTarget: (raw: string, source: string) => ExpansionResult;
+  extractLiteralLinks: (srcDir?: string) => LinkTarget[];
+  extractTemplateLinks: (srcDir?: string) => TemplateRow[];
+  normalizeShapeBaseline: (raw: unknown) => ShapeBaselineEntry[];
   classifyAll: (input: {
     targets: LinkTarget[];
     routes: string[];
     baseline: BaselineEntry[];
+    templates?: TemplateRow[];
+    deadShapes?: ShapeBaselineEntry[];
   }) => Evaluation;
 }
 
@@ -138,7 +216,17 @@ interface LinkIntegrityModule {
 const gate: LinkIntegrityModule = require(SCRIPT_PATH);
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-const { classifyTarget, classifyAll, extractLiteralLinks } = gate;
+const {
+  classifyTarget,
+  classifyPattern,
+  classifyAll,
+  extractLiteralLinks,
+  extractTemplateLinks,
+  expandTemplateTarget,
+  resolveDeclaredUnion,
+  stripCommentsPreservingLines,
+  normalizeShapeBaseline,
+} = gate;
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -241,16 +329,40 @@ const PHANTOM_AUTH_ROUTES = [
   '/parent/verify-email',
 ];
 
-/** Every dead target measured for this slice, with the finding that owns the fix. */
+/**
+ * Every dead target measured for this slice, with the finding that owns the fix.
+ *
+ * `/help` used to be in this list under `PF-39`. S-E06-5 ships the page, so the row
+ * is NARROWED into `MEASURED_ALIVE` below rather than deleted: the fact changed,
+ * and both directions must still be asserted or the suite quietly stops covering
+ * the target it was written for. (This is neither "the assertion was wrong" nor
+ * "the code is wrong" — it is a measurement that a slice deliberately invalidated,
+ * which is the one case where editing an assertion is correct.)
+ *
+ * `/api/auth` and `/favicon` also remain dead here and always will be: they are
+ * still classified `dead` by the four-verdict classifier, and their
+ * `class: 'prefix-constant'` changes only how the RECONCILER counts them (§4).
+ */
 const MEASURED_DEAD: Array<[string, string]> = [
   ['/admin/reports', 'PF-14'],
-  ['/help', 'PF-39'],
   ['/legal/privacy', 'PF-38'],
   ['/legal/terms', 'PF-38'],
   ['/legal/cookies', 'PF-38'],
   ['/parent/remediation', 'PF-92'],
+  // Discovered BY the widening: a « Nouvelle annonce » CTA written as a template
+  // literal, at a route that was never emitted (PF-98).
+  ['/teacher/messaging', 'PF-98'],
   ...PHANTOM_AUTH_ROUTES.map((r): [string, string] => [r, 'PF-91']),
 ];
+
+/**
+ * The seven targets this slice takes OUT of the ceiling.
+ *
+ * Asserted alive, and asserted absent from the reviewed baseline, because the gate
+ * fails on a baselined target that resolves again — that pre-existing rule is this
+ * slice's bidirectional evidence (AC-6), and it only bites if the rows are gone.
+ */
+const CLOSED_BY_THIS_SLICE = ['/admin', '/teacher', '/parent', '/student', '/pricing', '/contact', '/help'];
 
 /**
  * Hand-listed live routes, one block per portal (G-PORTAL).
@@ -261,10 +373,13 @@ const MEASURED_DEAD: Array<[string, string]> = [
  * rather than one corner of it.
  */
 const ALIVE_SAMPLES: Record<string, string[]> = {
-  admin: ['/admin/dashboard', '/admin/classes', '/admin/students/new', '/admin/roles/new', '/admin/audit'],
-  teacher: ['/teacher/dashboard', '/teacher/classes', '/teacher/reports', '/teacher/conversations'],
-  parent: ['/parent/dashboard', '/parent/grades', '/parent/recommendations', '/parent/messages/new'],
-  student: ['/student/dashboard', '/student/grades', '/student/attendance'],
+  admin: ['/admin', '/admin/dashboard', '/admin/classes', '/admin/students/new', '/admin/roles/new', '/admin/audit'],
+  teacher: ['/teacher', '/teacher/dashboard', '/teacher/classes', '/teacher/reports', '/teacher/conversations'],
+  parent: ['/parent', '/parent/dashboard', '/parent/grades', '/parent/recommendations', '/parent/messages/new'],
+  student: ['/student', '/student/dashboard', '/student/grades', '/student/attendance'],
+  // The three public pages S-E06-5 ships. They are not a portal, and they are
+  // deliberately outside every portal prefix — see `portal-landing-gate.spec.ts`.
+  public: ['/pricing', '/contact', '/help'],
 };
 
 /* ================================================================== *
@@ -282,8 +397,8 @@ describe('classifyTarget — the four verdicts', () => {
   });
 
   it.each(Object.entries(ALIVE_SAMPLES))(
-    'resolves the %s portal’s real routes as exact (PF-84 — the positive direction)',
-    (_portal, samples) => {
+    'resolves the %s group’s real routes as exact (PF-84 — the positive direction)',
+    (_group, samples) => {
       for (const target of samples) {
         expect(REVIEWED_ROUTES).toContain(target);
         expect(classifyTarget(target, REVIEWED_ROUTES)).toBe('exact');
@@ -372,10 +487,16 @@ describe('extractLiteralLinks — measured over apps/web/src', () => {
     // filter typo or a Windows separator slip: the extractor finds nothing, finds
     // no dead links, and reports PASS forever. Every negative assertion in this
     // file is satisfied by an empty inventory, so the floor is the assertion that
-    // makes the rest mean anything. Measured 2026-08-07: 353 source files,
-    // ~102 distinct literal internal targets.
-    expect(targets.length).toBeGreaterThanOrEqual(80);
-    expect(files.size).toBeGreaterThanOrEqual(20);
+    // makes the rest mean anything.
+    //
+    // The floor is RAISED for S-E06-5, and that matters more than it looks: the
+    // widened extractor now reads comment-stripped content, and a comment stripper
+    // that destroyed half of `apps/web/src` would still have cleared the old floor
+    // of 80 while silently deleting real hrefs. Measured 2026-08-07 after the
+    // widening: 353 source files, 173 files carrying a target, 116 distinct
+    // literal internal targets (114 before, + the roots' own references).
+    expect(targets.length).toBeGreaterThanOrEqual(114);
+    expect(files.size).toBeGreaterThanOrEqual(120);
   });
 
   it.each([
@@ -384,8 +505,19 @@ describe('extractLiteralLinks — measured over apps/web/src', () => {
     '/teacher/reports',
     '/student/grades',
     '/admin/classes/new',
+    '/help',
   ])('finds the named canary %s', (canary) => {
     expect(targets).toContain(canary);
+  });
+
+  it('finds /teacher/messaging — a target ONLY the widened extractor can see', () => {
+    // Measured: of the 116 distinct targets, exactly two are produced by no quoted
+    // literal anywhere and come solely from a template literal. This is the
+    // user-facing one — the « Nouvelle annonce » CTA at a route that was never
+    // emitted (PF-98) — so it is the single strongest proof that the widening is
+    // live rather than merely present. Delete the backtick handling and this case
+    // is the first to go red.
+    expect(targets).toContain('/teacher/messaging');
   });
 
   it('covers all four portals', () => {
@@ -423,6 +555,485 @@ describe('extractLiteralLinks — measured over apps/web/src', () => {
       return v === 'exact' || v === 'catch-all';
     });
     expect(alive.length).toBeGreaterThanOrEqual(80);
+  });
+});
+
+/* ================================================================== *
+ * 2b. The widened extractor (S-E06-5 / PF-97) — resolve, or report
+ * ================================================================== */
+
+/**
+ * The account menu AS IT WAS before this slice — a fixture string, deliberately
+ * NOT the edited file.
+ *
+ * G-2 is the reproduction, and a reproduction has to survive the fix. Reading the
+ * real `TopbarUserMenu.tsx` here would make this case pass because the defect was
+ * removed, which proves the fix and nothing about the extractor. Held as a fixture,
+ * it fails on the old extractor (which could not see a backtick href at all) and
+ * passes on the new one, forever.
+ */
+const TOPBAR_USER_MENU_BEFORE = [
+  "'use client';",
+  '',
+  'export interface TopbarUserMenuProps {',
+  "  portal: 'admin' | 'teacher' | 'parent' | 'student';",
+  '  firstName: string;',
+  '}',
+  '',
+  'export function TopbarUserMenu({ portal }: TopbarUserMenuProps) {',
+  '  const items = [',
+  "    { id: 'profile', label: 'Mon profil', href: `/${portal}/profile` },",
+  "    { id: 'settings', label: 'Paramètres', href: `/${portal}/settings` },",
+  '  ];',
+  '  return items;',
+  '}',
+].join('\n');
+
+describe('stripCommentsPreservingLines — G-6, and the trap inside it', () => {
+  it('blanks a JSDoc route TEMPLATE, so prose cannot become a dynamic capture', () => {
+    // T2, measured: `admin/classes/new/page.tsx:16` documents `/admin/classes/[id]`
+    // in a JSDoc block. Extracted, it is a DYNAMIC CAPTURE — which is unbaselineable
+    // by design, so the gate would be permanently red with no way back to green.
+    const source = ['/**', ' * Sibling of `/admin/classes/[id]`.', ' */', "const href = '/admin/dashboard';"].join('\n');
+    const executable = stripCommentsPreservingLines(source);
+    expect(executable).not.toContain('/admin/classes/[id]');
+    expect(executable).toContain("'/admin/dashboard'");
+  });
+
+  it('is STRING-AWARE — a naive //-stripper would delete the href next to a URL', () => {
+    // The hole being closed, re-opened at a new address. `/\/\/.*$/gm` eats
+    // everything after the `//` in `https://`, taking real hrefs with it.
+    const source = 'const doc = "https://x.test/a"; const href = "/admin/dead"; // gone';
+    const executable = stripCommentsPreservingLines(source);
+    expect(executable).toContain('"/admin/dead"');
+    expect(executable).toContain('https://x.test/a');
+    expect(executable).not.toContain('gone');
+  });
+
+  it('preserves byte length and every newline, so reported lines stay true', () => {
+    const source = ['const a = 1; // tail', '/* block', '   spans lines */', 'const b = 2;'].join('\n');
+    const executable = stripCommentsPreservingLines(source);
+    expect(executable).toHaveLength(source.length);
+    expect(executable.split('\n')).toHaveLength(source.split('\n').length);
+    expect(executable).not.toContain('tail');
+    expect(executable).not.toContain('spans lines');
+  });
+
+  it('leaves a comment-looking sequence inside a template literal alone', () => {
+    expect(stripCommentsPreservingLines('const p = `/a/b`; // x')).toContain('`/a/b`');
+    expect(stripCommentsPreservingLines('const r = /\\/\\/[a-z]+/; const h = "/admin/x";')).toContain('"/admin/x"');
+  });
+
+  it.each(['/me', '/students', '/calendar/events', '/messaging/eligible-teachers', '/analytics/parent-upcoming'])(
+    'the real inventory does not contain %s — it exists only in JSDoc prose',
+    (prose) => {
+      // Measured: each of these is an API-relative path written in a comment. Read
+      // as a link, every one of them is a dead route, and the gate would report five
+      // defects that do not exist. The floor above (≥ 114 targets) is what stops
+      // this from being satisfiable by an extractor that finds nothing.
+      const extracted = new Set(extractLiteralLinks().map((e) => e.target));
+      expect(extracted.size).toBeGreaterThanOrEqual(114);
+      expect(extracted).not.toContain(prose);
+    },
+  );
+
+  it('emits no `[param]` target at all — the whole class T2 warns about', () => {
+    for (const entry of extractLiteralLinks()) {
+      expect(entry.target).not.toContain('[');
+      expect(entry.target).not.toContain(']');
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * A JSX closing tag is not a regex opener
+ * ------------------------------------------------------------------ */
+
+/**
+ * Write a one-file `src/app/page.tsx` tree and return its `src` directory, so the
+ * scanners can be driven over a fixture instead of only over `apps/web/src`. The
+ * real tree cannot pin this class: the shape is LATENT there (0 lines today), which
+ * is exactly why the 168-row parity check kept passing while both scanners were
+ * mis-reading it.
+ */
+const jsxFixtureRoots: string[] = [];
+
+function fixtureSrcDir(body: string): string {
+  const root = mkdtempSync(join(tmpdir(), 'link-integrity-jsx-'));
+  jsxFixtureRoots.push(root);
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'app'), { recursive: true });
+  writeFileSync(join(src, 'app', 'page.tsx'), body, 'utf8');
+  return src;
+}
+
+const TEMPLATE_HREF_LINE = '  return <q>%TAG%<a href={`/${p}/profile`}>go</a></q>;';
+
+function templateHrefFixture(withClosingTag: boolean): string {
+  return [
+    "type P = 'admin' | 'teacher' | 'parent';",
+    'export function C({ p }: { p: P }) {',
+    TEMPLATE_HREF_LINE.replace('%TAG%', withClosingTag ? '<span>x</span>' : ''),
+    '}',
+    '',
+  ].join('\n');
+}
+
+describe('both scanners — a `</tag>` is a closing tag, never a regex opener', () => {
+  afterAll(() => {
+    for (const root of jsxFixtureRoots) rmSync(root, { recursive: true, force: true });
+  });
+
+  // `'<'` sits in REGEX_MAY_FOLLOW_PUNCTUATION, so the `/` of a JSX closing tag
+  // used to be read as opening a regex literal; the scanner then ran forward to the
+  // next `/` on the line and swallowed whatever sat between. Both scanners share
+  // the branch, so the same mis-read produced two distinct defects, below.
+
+  it('D1 — strips a `//` comment that a closing tag precedes on the same line', () => {
+    // PF-97 family: an ODD number of `</` before a `//` left the comment
+    // UNSTRIPPED. A comment naming a concrete path then becomes a DYNAMIC CAPTURE,
+    // which fails unconditionally and which `--update` refuses to record — the
+    // "permanently red with no way back" mode this file's header names.
+    const line = '      </div> // href="/admin/classes/[id]"';
+    const stripped = stripCommentsPreservingLines(line);
+    expect(stripped).not.toContain('/admin/classes/[id]');
+    expect(stripped).toContain('</div>');
+    expect(stripped).toHaveLength(line.length);
+  });
+
+  it('D1b — the control without the closing tag is stripped too (not a no-op stripper)', () => {
+    // Without this pair, D1 is satisfiable by a stripper that strips nothing.
+    const line = '      x;     // href="/admin/classes/[id]"';
+    const stripped = stripCommentsPreservingLines(line);
+    expect(stripped).not.toContain('/admin/classes/[id]');
+    expect(stripped).toHaveLength(line.length);
+  });
+
+  it('D2 — a comment naming a concrete path raises no capture end to end', () => {
+    const srcDir = fixtureSrcDir(
+      ['export function C() {', '  return <p>a</p>; // renvoie vers "/parent/messages/inbox"', '}', ''].join('\n'),
+    );
+    const targets = extractLiteralLinks(srcDir);
+    expect(targets).toHaveLength(0);
+    const result = classifyAll({
+      targets,
+      templates: extractTemplateLinks(srcDir),
+      routes: ['/parent/messages', '/parent/messages/[id]'],
+      baseline: [],
+      deadShapes: [],
+    });
+    expect(result.stats.captures).toBe(0);
+    expect(result.problems).toHaveLength(0);
+  });
+
+  it('A1 — a template href sharing a line with a closing tag is NOT silently dropped', () => {
+    // AC-1: never silently dropped. Before the fix this template was neither
+    // expanded, nor shape-checked, nor reported `unparsed` — zero rows, and a
+    // reader of the output could not tell it had been seen.
+    const srcDir = fixtureSrcDir(templateHrefFixture(true));
+    const rows = extractTemplateLinks(srcDir);
+    expect(rows).toHaveLength(1);
+    expect(rows.map((row) => row.kind)).toEqual(['expanded']);
+    expect(rows.flatMap((row) => row.expansions ?? [])).toEqual([
+      '/admin/profile',
+      '/teacher/profile',
+      '/parent/profile',
+    ]);
+    expect(extractLiteralLinks(srcDir).map((e) => e.target)).toEqual([
+      '/admin/profile',
+      '/teacher/profile',
+      '/parent/profile',
+    ]);
+  });
+
+  it('A1b — and it reads BYTE-IDENTICALLY to the same href without the closing tag', () => {
+    // The href is byte-identical between the two fixtures; only the preceding
+    // `</span>` differs. Any divergence here is the scanner reacting to the tag.
+    const withTag = extractTemplateLinks(fixtureSrcDir(templateHrefFixture(true)));
+    const withoutTag = extractTemplateLinks(fixtureSrcDir(templateHrefFixture(false)));
+    // Pinned to 1, not merely to each other: "both dropped everything" must not pass.
+    expect(withoutTag).toHaveLength(1);
+    expect(withTag).toHaveLength(1);
+    expect(withTag.map((row) => row.kind)).toEqual(withoutTag.map((row) => row.kind));
+    expect(withTag.flatMap((row) => row.expansions ?? [])).toEqual(
+      withoutTag.flatMap((row) => row.expansions ?? []),
+    );
+  });
+
+  it('a real regex literal is still skipped — the narrowing did not disable the branch', () => {
+    // The guard is keyed on ADJACENCY (`src[i - 1] === '<'`), so a regex in a
+    // genuine value position keeps its old reading. A regex body in this repository
+    // routinely contains quotes; mis-reading one as division is the failure the
+    // `'<'` entry was there to prevent, and it must stay prevented.
+    const stripped = stripCommentsPreservingLines('const r = /"[a-z]+\\/x/; const h = "/admin/dead";');
+    expect(stripped).toContain('"/admin/dead"');
+  });
+});
+
+describe('resolveDeclaredUnion — G-1: read the declaration, or say you cannot', () => {
+  it('resolves an inline union (form a)', () => {
+    expect(resolveDeclaredUnion('portal', "interface P { portal: 'admin' | 'teacher' | 'parent' }")).toEqual([
+      'admin',
+      'teacher',
+      'parent',
+    ]);
+  });
+
+  it('resolves a named alias (form b)', () => {
+    const source = ["type AccountPortal = 'admin' | 'teacher';", 'interface P { portal: AccountPortal }'].join('\n');
+    expect(resolveDeclaredUnion('portal', source)).toEqual(['admin', 'teacher']);
+  });
+
+  it('resolves `keyof typeof C` (form c)', () => {
+    const source = [
+      "const ROLES = { admin: ['a'], teacher: ['t'], parent: ['p'], student: ['s'] };",
+      'let portal: keyof typeof ROLES | null = null;',
+    ].join('\n');
+    expect(resolveDeclaredUnion('portal', source)).toEqual(['admin', 'teacher', 'parent', 'student']);
+  });
+
+  it('returns null for an unknown name, and for a non-literal type', () => {
+    expect(resolveDeclaredUnion('portal', 'const x = 1;')).toBeNull();
+    expect(resolveDeclaredUnion('portal', 'function f(portal: string) { return portal; }')).toBeNull();
+    // A cross-file type is the honest limit: `portal: Portal` imported from another
+    // module cannot be read from this file, so the site stays shape-checked (§10.2).
+    expect(resolveDeclaredUnion('portal', "import type { Portal } from './x';\nlet portal: Portal;")).toBeNull();
+  });
+
+  it('returns null when a file declares TWO candidate unions for the same name', () => {
+    // Ambiguity is unresolvable, never a proximity pick. Picking the nearest one
+    // would under-approximate the expansion invisibly, and an under-approximation
+    // is a silent drop wearing a different hat — the defect PF-97 was.
+    const source = ["interface A { portal: 'a' | 'b' }", "interface B { portal: 'c' | 'd' }"].join('\n');
+    expect(resolveDeclaredUnion('portal', source)).toBeNull();
+  });
+
+  it('does not mistake a VALUE assignment for a one-member union', () => {
+    // `{ portal: 'admin' }` occurs many times in this codebase. Read as a declared
+    // union it would expand `` `/${portal}/x` `` to a single target and report the
+    // other three as verified — silently wrong in the direction that looks green.
+    expect(resolveDeclaredUnion('portal', "const props = { portal: 'admin' };")).toBeNull();
+  });
+
+  it('reads the declaration through comments, not around them', () => {
+    const source = ["// portal: 'ghost' | 'phantom'", "interface P { portal: 'admin' | 'teacher' }"].join('\n');
+    expect(resolveDeclaredUnion('portal', source)).toEqual(['admin', 'teacher']);
+  });
+
+  it('resolves the four real declarations this slice depends on', () => {
+    // Floor first (run-10): these files exist and the resolver returns from them,
+    // before any negative below is allowed to mean anything.
+    const read = (...parts: string[]) => readFileSync(join(REPO_ROOT, 'apps', 'web', 'src', ...parts), 'utf8');
+    expect(resolveDeclaredUnion('portal', read('components', 'shell', 'TopbarUserMenu.tsx'))).toEqual([
+      'admin',
+      'teacher',
+      'parent',
+      'student',
+    ]);
+    expect(resolveDeclaredUnion('portal', read('components', 'UserMenu.tsx'))).toEqual([
+      'admin',
+      'teacher',
+      'parent',
+    ]);
+    // P1-C8 / R-30: three portals, NOT four. A resolver that guessed "the four
+    // portals" would invent `/student/notifications` — a dead target correct code
+    // cannot produce (PF-57 is out of scope and its href does not exist).
+    expect(resolveDeclaredUnion('portal', read('components', 'notifications', 'NotificationCenter.tsx'))).toEqual([
+      'admin',
+      'teacher',
+      'parent',
+    ]);
+    expect(resolveDeclaredUnion('portal', read('components', 'PortalErrorState.tsx'))).toEqual([
+      'admin',
+      'teacher',
+      'parent',
+    ]);
+  });
+});
+
+describe('expandTemplateTarget — G-2, G-4, G-5: the reproduction and the two traps', () => {
+  it('G-2 REPRODUCTION: `/${portal}/profile` expands to four targets, all DEAD', () => {
+    const result = expandTemplateTarget('/${portal}/profile', TOPBAR_USER_MENU_BEFORE);
+    expect(result.kind).toBe('expanded');
+    const expansions = result.kind === 'expanded' ? result.expansions : [];
+    expect(expansions).toEqual(['/admin/profile', '/teacher/profile', '/parent/profile', '/student/profile']);
+    // …and every one of them is dead against the inventory AFTER this slice, which
+    // is what makes « Mon profil » a defect rather than a style preference.
+    for (const target of expansions) {
+      expect(classifyTarget(target, ROUTES_AFTER)).toBe('dead');
+    }
+  });
+
+  it('G-2, other direction: the sibling settings href expands to three LIVE targets', () => {
+    // Same file, same union, opposite verdict. Without this the case above is
+    // satisfied by an expander that reports everything dead.
+    const result = expandTemplateTarget('/${portal}/settings', TOPBAR_USER_MENU_BEFORE);
+    expect(result.kind).toBe('expanded');
+    const expansions = result.kind === 'expanded' ? result.expansions : [];
+    expect(expansions).toContain('/admin/settings');
+    for (const alive of ['/admin/settings', '/teacher/settings', '/parent/settings']) {
+      expect(classifyTarget(alive, ROUTES_AFTER)).toBe('exact');
+    }
+    // And it is why the union must be DECLARED, not guessed: `/student/settings` is
+    // in this expansion and is dead (PF-57), which is precisely why the shipped code
+    // states the three literal hrefs as data instead of interpolating a 4-portal id.
+    expect(classifyTarget('/student/settings', ROUTES_AFTER)).toBe('dead');
+  });
+
+  it('G-4 (T1): an interpolation is masked BEFORE `?` is stripped', () => {
+    // `RemediationProgressStrip.tsx:222`. Strip at the first `?` and the target
+    // becomes `/parent/remediation/${visible[0]` — whose last segment matches
+    // `[planId]`, i.e. a DYNAMIC CAPTURE. A capture can never be baselined, so the
+    // gate would be red forever with no way back.
+    const result = expandTemplateTarget('/parent/remediation/${visible[0]?.planId}', '');
+    expect(result.kind).toBe('shape');
+    expect(result.kind === 'shape' ? result.pattern : '').toBe('/parent/remediation/*');
+    expect(classifyPattern('/parent/remediation/*', ROUTES_AFTER)).toBe('shape-alive');
+
+    // Both halves of the trap, stated explicitly. The bogus target a `?`-first
+    // stripper produces really WOULD be a dynamic capture…
+    expect(classifyTarget('/parent/remediation/${visible[0]', ROUTES_AFTER)).toBe('dynamic-capture');
+    // …and it never reaches the classifier, because nothing like it is ever emitted.
+    const emitted = extractLiteralLinks().map((e) => e.target);
+    expect(emitted).not.toContain('/parent/remediation/${visible[0]');
+    expect(emitted.filter((t) => t.startsWith('/parent/remediation/'))).toEqual([]);
+  });
+
+  it('G-5 (T3): a mixed segment truncates at the interpolation, keeping the literal', () => {
+    // `ParentActionCenter.tsx` × 4. The interpolation expands to a QUERY STRING, so
+    // treating it as a segment reports four correct links dead — and throwing the
+    // whole segment away reports them against `/parent`, the wrong target.
+    const result = expandTemplateTarget('/parent/recommendations${childQuery(id)}', '');
+    expect(result.kind).toBe('expanded');
+    expect(result.kind === 'expanded' ? result.expansions : []).toEqual(['/parent/recommendations']);
+    expect(classifyTarget('/parent/recommendations', ROUTES_AFTER)).toBe('exact');
+  });
+
+  it('a query-only interpolation is not reported at all', () => {
+    const result = expandTemplateTarget('/admin/alerts?${next.toString()}', '');
+    expect(result.kind).toBe('expanded');
+    expect(result.kind === 'expanded' ? result.expansions : []).toEqual(['/admin/alerts']);
+  });
+
+  it('an unterminated interpolation is UNPARSED, never a silent skip (DNC-08)', () => {
+    expect(expandTemplateTarget('/admin/${broken', '').kind).toBe('unparsed');
+  });
+});
+
+describe('classifyPattern — weak by design, and not a constant function', () => {
+  it('a `*` may align to a literal segment as well as to a [param]', () => {
+    // Requiring a dynamic segment would make `` `/${portal}/settings` `` report dead
+    // on a correct repository — the R-30 false red, one layer up.
+    expect(classifyPattern('/*/settings', ROUTES_AFTER)).toBe('shape-alive');
+    expect(classifyPattern('/admin/students/*', ROUTES_AFTER)).toBe('shape-alive');
+  });
+
+  it('a shape nothing matches is shape-dead, and depth is respected', () => {
+    expect(classifyPattern('/*/profile', ROUTES_AFTER)).toBe('shape-dead');
+    expect(classifyPattern('/admin/guardians/*', ROUTES_AFTER)).toBe('shape-dead');
+    expect(classifyPattern('/admin/dashboard/*/deeper', ROUTES_AFTER)).toBe('shape-dead');
+  });
+
+  it('is not a constant function in either direction', () => {
+    const verdicts = new Set([
+      classifyPattern('/admin/students/*', ROUTES_AFTER),
+      classifyPattern('/nowhere/*', ROUTES_AFTER),
+    ]);
+    expect(verdicts).toEqual(new Set(['shape-alive', 'shape-dead']));
+  });
+});
+
+describe('extractTemplateLinks — G-3, G-7: over the real tree, and nothing dropped', () => {
+  const rows = extractTemplateLinks();
+  const expanded = rows.filter((r) => r.kind === 'expanded');
+  const shapes = rows.filter((r) => r.kind === 'shape');
+  const unparsed = rows.filter((r) => r.kind === 'unparsed');
+
+  it('G-7 anti-drop: templateRows === expanded + shape + unparsed, and neither branch is dead code', () => {
+    // The run-10 lesson made executable. Measured 2026-08-07: 168 rows =
+    // 66 expanded + 102 shape + 0 unparsed.
+    expect(rows.length).toBeGreaterThanOrEqual(120);
+    expect(rows.length).toBe(expanded.length + shapes.length + unparsed.length);
+    expect(expanded.length).toBeGreaterThan(0);
+    expect(shapes.length).toBeGreaterThan(0);
+  });
+
+  it('reports ZERO unparsed rows on this tree — and an unparsed row is a failure, not a skip', () => {
+    expect(unparsed).toEqual([]);
+  });
+
+  it.each([
+    ['apps/web/src/app/parent/recommendations/alert-next-steps.ts', 70, '/parent/grades'],
+    ['apps/web/src/app/parent/remediation/[planId]/page.tsx', 127, '/parent/recommendations'],
+  ])('G-3: finds the MULTI-LINE template at %s:%i, which a line-based scanner drops silently', (file, line, target) => {
+    // T4. Exactly two template literals in `apps/web/src` span lines, and both are
+    // hrefs. A line-anchored scanner returns nothing for either and says nothing
+    // about it — the precise failure AC-1 forbids.
+    const row = rows.find((r) => r.file === file && r.line === line);
+    expect(row).toBeDefined();
+    expect(row?.raw).toContain('\n');
+    expect(row?.kind).toBe('expanded');
+    expect(row?.expansions).toContain(target);
+  });
+
+  it('every emitted row carries a repo-relative position with forward slashes', () => {
+    for (const row of rows) {
+      expect(row.file).not.toContain('\\');
+      expect(row.line).toBeGreaterThan(0);
+      expect(row.raw.startsWith('/')).toBe(true);
+    }
+  });
+
+  it('excludes the API namespace, so a correct BFF fetch is never reported', () => {
+    // `` `/api/v1/students/${id}` `` shape-checks as `/api/v1/students/*`, which no
+    // Next route can match — correctly, it is the NestJS namespace. Reporting it
+    // would make the gate red on every dynamic fetch in the application.
+    for (const row of shapes) {
+      expect(row.pattern?.startsWith('/api/v1')).toBe(false);
+    }
+  });
+
+  it('G-8: the widened extractor is not a constant function', () => {
+    // A dead expansion on a synthetic dead union, zero on a live one — driven
+    // through the real module, so neither direction can be an artefact of the fixture.
+    const deadUnion = "interface P { kind: 'nope' | 'nada' }";
+    const deadResult = expandTemplateTarget('/admin/${kind}', deadUnion);
+    expect(deadResult.kind).toBe('expanded');
+    const deadTargets = deadResult.kind === 'expanded' ? deadResult.expansions : [];
+    expect(deadTargets.every((t) => classifyTarget(t, ROUTES_AFTER) === 'dead')).toBe(true);
+
+    const liveUnion = "interface P { section: 'dashboard' | 'settings' | 'audit' }";
+    const liveResult = expandTemplateTarget('/admin/${section}', liveUnion);
+    const liveTargets = liveResult.kind === 'expanded' ? liveResult.expansions : [];
+    expect(liveTargets).toHaveLength(3);
+    expect(liveTargets.every((t) => classifyTarget(t, ROUTES_AFTER) === 'exact')).toBe(true);
+  });
+
+  it('the two shape families this slice records are found, and the third is a concrete target', () => {
+    // PF-98, measured. Two families cannot be resolved to concrete targets (no
+    // `[id]` route exists to give them a shape), and one is fully literal once its
+    // query string is stripped.
+    const patterns = new Set(shapes.map((r) => r.pattern));
+    expect(patterns).toContain('/admin/guardians/*');
+    expect(patterns).toContain('/admin/assessments/*');
+    expect(new Set(expanded.flatMap((r) => r.expansions ?? []))).toContain('/teacher/messaging');
+  });
+
+  it('tags an href-like reference as such, and a prefix-only one as plain (AC-5 machinery)', () => {
+    const references = extractLiteralLinks();
+    const contexts = new Set(references.map((r) => r.context));
+    // Floor: BOTH values actually occur, or the refusal below is untestable.
+    expect(contexts).toEqual(new Set(['href-like', 'plain']));
+
+    const reports = references.filter((r) => r.target === '/admin/reports');
+    expect(reports.length).toBeGreaterThan(0);
+    expect(reports.every((r) => r.context === 'href-like')).toBe(true);
+
+    for (const target of ['/api/auth', '/favicon']) {
+      const found = references.filter((r) => r.target === target);
+      expect(found.length).toBeGreaterThan(0);
+      expect(found.every((r) => r.context === 'plain')).toBe(true);
+    }
   });
 });
 
@@ -499,13 +1110,20 @@ describe('classifyAll — the gate fails in every direction it claims to', () =>
   it('fails a baselined entry that is no longer referenced anywhere', () => {
     // Same rule, second shape: a ceiling nobody is standing under is stale, and a
     // stale ceiling silently re-authorises the target the day someone links it again.
+    //
+    // The target used here must be one NOTHING links to, which is why it is not
+    // `/help` any more: S-E06-5 ships that page, `/help` is now in ALIVE_SAMPLES,
+    // and the case would have passed for the wrong reason (BASELINED BUT ALIVE
+    // rather than STALE) while looking green.
     const result = classifyAll({
       targets: cleanTargets,
       routes: ROUTES_AFTER,
-      baseline: [{ target: '/help', finding: 'PF-39', reason: 'help centre not built' }],
+      baseline: [{ target: '/nobody/links/here', finding: 'PF-39', reason: 'not linked from anywhere' }],
     });
     expect(result.problems.length).toBeGreaterThan(0);
-    expect(result.problems.join('\n')).toContain('/help');
+    const text = result.problems.join('\n');
+    expect(text).toContain('/nobody/links/here');
+    expect(text).toContain('STALE BASELINE ENTRY');
   });
 
   it('fails a DYNAMIC CAPTURE unconditionally — it is not baselineable', () => {
@@ -534,6 +1152,237 @@ describe('classifyAll — the gate fails in every direction it claims to', () =>
     const text = result.problems.join('\n');
     expect(text).toMatch(/capture/i);
   });
+});
+
+/* ================================================================== *
+ * 3b. The prefix-constant class, the shape ceiling, and the anti-drop
+ *     invariant — each proven in BOTH directions
+ * ================================================================== */
+
+describe('classifyAll — G-9: the prefix-constant class cannot hide a real href', () => {
+  const cleanTargets = Object.values(ALIVE_SAMPLES)
+    .flat()
+    .map((t) => link(t));
+
+  const prefixRow = (target: string): BaselineEntry => ({
+    target,
+    finding: 'PF-93',
+    reason: 'a string used only as a prefix; nothing will ever create it',
+    class: 'prefix-constant',
+  });
+
+  it('honours the class when every reference is plain, and stops counting it as dead DEBT', () => {
+    const result = classifyAll({
+      targets: [...cleanTargets, { target: '/api/auth', file: 'apps/web/src/middleware.ts', line: 34, context: 'plain' }],
+      routes: ROUTES_AFTER,
+      baseline: [prefixRow('/api/auth')],
+    });
+    expect(result.problems).toEqual([]);
+    expect(result.stats.prefixConstants).toBe(1);
+    expect(result.stats.deadDebt).toBe(0);
+    // …and it is still DEAD to the classifier. The class changes the accounting, not
+    // the verdict, which is why the row stays in `dead` and keeps its reason.
+    expect(result.stats.dead).toBe(1);
+  });
+
+  it('REFUSES the class when any reference sits on an href-like line, naming file:line', () => {
+    const result = classifyAll({
+      targets: [
+        ...cleanTargets,
+        { target: '/api/auth', file: 'apps/web/src/middleware.ts', line: 34, context: 'plain' },
+        { target: '/api/auth', file: 'apps/web/src/app/rogue/page.tsx', line: 12, context: 'href-like' },
+      ],
+      routes: ROUTES_AFTER,
+      baseline: [prefixRow('/api/auth')],
+    });
+    const text = result.problems.join('\n');
+    expect(result.problems.length).toBeGreaterThan(0);
+    expect(text).toContain('PREFIX-CONSTANT CLASSIFICATION REFUSED');
+    expect(text).toContain('apps/web/src/app/rogue/page.tsx:12');
+    // The message must say what the class is FOR, or the next author "fixes" the
+    // failure by tagging more rows — which is the thing being forbidden.
+    expect(text).toContain('It is not a quieter baseline');
+    // Refused ⇒ counted as ordinary dead debt again, not quietly excused.
+    expect(result.stats.prefixConstants).toBe(0);
+    expect(result.stats.deadDebt).toBe(1);
+  });
+
+  it('REFUSED against the real code: /admin/reports may not be tagged prefix-constant', () => {
+    // The negative proof AC-5 asks for, driven from the REAL extractor over the REAL
+    // tree. `/admin/reports` is the « Rapports » sidebar item — `href: '/admin/reports'`
+    // at `components/shell/sidebar-items.ts:175` — so the mechanism must refuse it,
+    // and it must refuse it by name rather than merely fail somewhere.
+    const baseline = BASELINE.map((entry) =>
+      entry.target === '/admin/reports' ? { ...entry, class: 'prefix-constant' } : entry,
+    );
+    const result = classifyAll({
+      targets: extractLiteralLinks(),
+      routes: REVIEWED_ROUTES,
+      baseline,
+      templates: extractTemplateLinks(),
+      deadShapes: normalizeShapeBaseline(baselineRaw),
+    });
+    const text = result.problems.join('\n');
+    expect(text).toContain('PREFIX-CONSTANT CLASSIFICATION REFUSED — /admin/reports');
+    expect(text).toContain('components/shell/sidebar-items.ts:175');
+  });
+
+  it('and the CONTROL: the committed baseline, unmodified, produces no refusal', () => {
+    // Without this the case above passes for a gate that refuses every row.
+    const result = classifyAll({
+      targets: extractLiteralLinks(),
+      routes: REVIEWED_ROUTES,
+      baseline: BASELINE,
+      templates: extractTemplateLinks(),
+      deadShapes: normalizeShapeBaseline(baselineRaw),
+    });
+    expect(result.problems.join('\n')).not.toContain('PREFIX-CONSTANT CLASSIFICATION REFUSED');
+    expect(result.stats.prefixConstants).toBe(2);
+  });
+});
+
+describe('classifyAll — G-10: the shape ceiling obeys the same four rules', () => {
+  const cleanTargets = Object.values(ALIVE_SAMPLES)
+    .flat()
+    .map((t) => link(t));
+
+  const deadShapeRow = (pattern: string): TemplateRow => ({
+    raw: '/admin/guardians/${g.id}',
+    file: 'apps/web/src/app/admin/guardians/page.tsx',
+    line: 192,
+    kind: 'shape',
+    pattern,
+    vars: ['g.id'],
+  });
+
+  const aliveShapeRow: TemplateRow = {
+    raw: '/admin/students/${s.id}',
+    file: 'apps/web/src/app/admin/students/page.tsx',
+    line: 10,
+    kind: 'shape',
+    pattern: '/admin/students/*',
+    vars: ['s.id'],
+  };
+
+  const run = (templates: TemplateRow[], deadShapes: ShapeBaselineEntry[]) =>
+    classifyAll({ targets: cleanTargets, routes: ROUTES_AFTER, baseline: [], templates, deadShapes });
+
+  it('the control: a shape-alive pattern with no baseline row passes', () => {
+    const result = run([aliveShapeRow], []);
+    expect(result.problems).toEqual([]);
+    expect(result.stats.shapeChecked).toBe(1);
+    expect(result.stats.deadShapes).toBe(0);
+  });
+
+  it('fails an unbaselined shape-dead pattern', () => {
+    const result = run([deadShapeRow('/admin/guardians/*')], []);
+    expect(result.problems.join('\n')).toContain('DEAD LINK SHAPE');
+    expect(result.problems.join('\n')).toContain('/admin/guardians/*');
+    expect(result.problems.join('\n')).toContain('admin/guardians/page.tsx:192');
+  });
+
+  it('accepts it with a reason AND an owning finding', () => {
+    const result = run(
+      [deadShapeRow('/admin/guardians/*')],
+      [{ pattern: '/admin/guardians/*', finding: 'PF-98', reason: 'no /admin/guardians/[id] route' }],
+    );
+    expect(result.problems).toEqual([]);
+  });
+
+  it('fails it without a reason, and fails it without a finding', () => {
+    expect(
+      run([deadShapeRow('/admin/guardians/*')], [{ pattern: '/admin/guardians/*', finding: 'PF-98' }]).problems.length,
+    ).toBeGreaterThan(0);
+    expect(
+      run([deadShapeRow('/admin/guardians/*')], [{ pattern: '/admin/guardians/*', reason: 'known' }]).problems.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('fails a baselined shape that is ALIVE again — the ceiling only comes down', () => {
+    const result = run([aliveShapeRow], [{ pattern: '/admin/students/*', finding: 'PF-98', reason: 'stale' }]);
+    expect(result.problems.join('\n')).toContain('BASELINED SHAPE BUT ALIVE');
+  });
+
+  it('fails a baselined shape nothing produces any more', () => {
+    const result = run([aliveShapeRow], [{ pattern: '/gone/*', finding: 'PF-98', reason: 'nobody writes it' }]);
+    expect(result.problems.join('\n')).toContain('STALE BASELINE SHAPE');
+  });
+
+  it('an UNPARSED row is a structural failure, never a skip (DNC-08)', () => {
+    const result = run(
+      [{ raw: '/admin/${broken', file: 'apps/web/src/app/x/page.tsx', line: 3, kind: 'unparsed' }],
+      [],
+    );
+    expect(result.problems.join('\n')).toContain('UNPARSED TEMPLATE LITERAL');
+    expect(result.stats.unparsed).toBe(1);
+  });
+
+  it('a template row that reconciles to nothing is itself a failure (the anti-drop invariant)', () => {
+    // Driven by handing `classifyAll` a row with an unrecognised kind: the count of
+    // rows read no longer equals expanded + shape + unparsed, which is exactly the
+    // arithmetic that catches a future refactor quietly discarding sites.
+    const result = run([{ raw: '/x', file: 'f.tsx', line: 1, kind: 'dropped' } as unknown as TemplateRow], []);
+    expect(result.problems.join('\n')).toContain('TEMPLATE ROWS DO NOT RECONCILE');
+  });
+
+  it('reports every distinct shape back to the caller, on PASS as well as FAIL', () => {
+    // "Reported, never dropped" is only true if the report exists when nothing is
+    // wrong — a list that appears only on failure is not a disclosure.
+    const result = run([aliveShapeRow, deadShapeRow('/admin/guardians/*')], [
+      { pattern: '/admin/guardians/*', finding: 'PF-98', reason: 'no [id] route' },
+    ]);
+    expect(result.problems).toEqual([]);
+    expect(result.patterns?.map((p) => p.pattern).sort()).toEqual(['/admin/guardians/*', '/admin/students/*']);
+    expect(result.patterns?.find((p) => p.pattern === '/admin/students/*')?.verdict).toBe('shape-alive');
+    expect(result.patterns?.find((p) => p.pattern === '/admin/guardians/*')?.verdict).toBe('shape-dead');
+  });
+});
+
+describe('classifyAll — the real tree reconciles against the reviewed inventory', () => {
+  it('PASSES against scripts/web-route-baseline.json, and the numbers are the measured ones', () => {
+    // The end-to-end statement of the slice, deterministic (reviewed inventory, not
+    // `.next/`): after the widening and the shrink, nothing is unaccounted for.
+    const result = classifyAll({
+      targets: extractLiteralLinks(),
+      routes: REVIEWED_ROUTES,
+      baseline: BASELINE,
+      templates: extractTemplateLinks(),
+      deadShapes: normalizeShapeBaseline(baselineRaw),
+    });
+    expect(result.problems).toEqual([]);
+    // Dead debt came DOWN (24 → 16) while the extractor got WIDER — the direction is
+    // the acceptance criterion, so it is asserted as an inequality, not a constant.
+    expect(result.stats.dead).toBeLessThanOrEqual(18);
+    expect(result.stats.deadDebt).toBeLessThanOrEqual(16);
+    expect(result.stats.prefixConstants).toBe(2);
+    expect(result.stats.captures).toBe(0);
+    expect(result.stats.unparsed).toBe(0);
+    expect(result.stats.expanded).toBeGreaterThan(0);
+    expect(result.stats.shapeChecked).toBeGreaterThan(0);
+    expect(result.stats.templateRows).toBe(
+      (result.stats.expanded ?? 0) + (result.stats.shapeChecked ?? 0) + (result.stats.unparsed ?? 0),
+    );
+  });
+
+  it.each(CLOSED_BY_THIS_SLICE)(
+    'AC-6 bidirectional: leaving the closed row for %s in the baseline FAILS the gate',
+    (target) => {
+      // This is the evidence, and it is the pre-existing `BASELINED BUT ALIVE` rule
+      // doing the work: the seven rows cannot be left behind, because a baselined
+      // target that resolves again is a failure until its row is removed.
+      const result = classifyAll({
+        targets: extractLiteralLinks(),
+        routes: REVIEWED_ROUTES,
+        baseline: [...BASELINE, { target, finding: 'PF-93', reason: 'left behind on purpose' }],
+        templates: extractTemplateLinks(),
+        deadShapes: normalizeShapeBaseline(baselineRaw),
+      });
+      const text = result.problems.join('\n');
+      expect(result.problems.length).toBeGreaterThan(0);
+      expect(text).toContain('BASELINED BUT ALIVE');
+      expect(text).toContain(target);
+    },
+  );
 });
 
 /* ================================================================== *
@@ -587,6 +1436,76 @@ describe('scripts/link-integrity-baseline.json', () => {
     const findings = new Set(BASELINE.map((e) => e.finding));
     expect(findings).toContain('PF-91'); // 9 phantom auth routes exempted by middleware.ts
     expect(findings).toContain('PF-92'); // /parent/remediation has no index
+  });
+
+  /* ---------------------------------------------------------------- *
+   * G-11 — what S-E06-5 changed in the reviewed ceiling
+   * ---------------------------------------------------------------- */
+
+  it.each(CLOSED_BY_THIS_SLICE)('no longer holds %s — it resolves now (AC-6)', (target) => {
+    expect(BASELINED_TARGETS).not.toContain(target);
+    // Stated in the positive too, so the row's absence means "fixed" rather than
+    // "quietly dropped from the inventory".
+    expect(REVIEWED_ROUTES).toContain(target);
+  });
+
+  it('the ceiling SHRANK: fewer rows than the 24 S-E06-3 recorded, and 2 are prefix constants', () => {
+    expect(BASELINE.length).toBeLessThan(24);
+    const prefixConstants = BASELINE.filter((e) => e.class === 'prefix-constant').map((e) => e.target).sort();
+    expect(prefixConstants).toEqual(['/api/auth', '/favicon']);
+    // Dead DEBT — what someone still has to fix — is what actually came down.
+    expect(BASELINE.length - prefixConstants.length).toBeLessThanOrEqual(16);
+  });
+
+  it('a prefix-constant row is NOT exempt from carrying a reason and an owning finding', () => {
+    // The class must be a different way of COUNTING a row, never a quieter row. If
+    // it excused the provenance requirements it would be an amnesty with a label.
+    for (const entry of BASELINE.filter((e) => e.class === 'prefix-constant')) {
+      expect((entry.reason ?? '').trim().length).toBeGreaterThan(20);
+      expect(entry.finding ?? '').toMatch(/^(PF|R|VAL|D)-\d+$/);
+    }
+  });
+
+  it('does NOT tag /legal prefix-constant — it is D-08-blocked debt, not a false positive', () => {
+    // `/legal` is structurally eligible by exactly the same test as `/api/auth`: it
+    // is a `PUBLIC_PREFIXES` member consumed by `startsWith`. Tagging it would erase
+    // the only written record that `/legal/*` is blocked on decision D-08 (R-13: the
+    // routine may never author policy text), while its three children stay dead. A
+    // decision-blocked item must not be reclassified as a side effect.
+    const legal = BASELINE.find((e) => e.target === '/legal');
+    expect(legal).toBeDefined();
+    expect(legal?.class).toBeUndefined();
+    expect(legal?.finding).toBe('PF-38');
+    for (const child of ['/legal/privacy', '/legal/terms', '/legal/cookies']) {
+      expect(BASELINE.find((e) => e.target === child)?.class).toBeUndefined();
+    }
+  });
+
+  it('records PF-98 — the three link families the widening discovered — with an owner', () => {
+    const messaging = BASELINE.find((e) => e.target === '/teacher/messaging');
+    expect(messaging?.finding).toBe('PF-98');
+    // The reason must say WHY it is not simply retargeted, or the next reader "fixes"
+    // it by pointing the CTA at `/teacher/messages/new`, which ignores classSectionId
+    // and would compose an announcement for the wrong class — DNC-06 at a new address.
+    expect(messaging?.reason).toMatch(/classSectionId/);
+
+    const shapes = normalizeShapeBaseline(baselineRaw);
+    expect(shapes.map((s) => s.pattern).sort()).toEqual(['/admin/assessments/*', '/admin/guardians/*']);
+    for (const shape of shapes) {
+      expect(shape.finding).toBe('PF-98');
+      expect((shape.reason ?? '').trim().length).toBeGreaterThan(20);
+      expect(shape.reason).toMatch(/Owner:/);
+    }
+  });
+
+  it('every dead shape in the ceiling really is shape-dead against the reviewed inventory', () => {
+    // Same rule as "no baselined entry is actually a capture", one layer up: a shape
+    // sitting in the ceiling that already resolves is a stale amnesty.
+    const shapes = normalizeShapeBaseline(baselineRaw);
+    expect(shapes.length).toBeGreaterThan(0);
+    for (const shape of shapes) {
+      expect(classifyPattern(shape.pattern, REVIEWED_ROUTES)).toBe('shape-dead');
+    }
   });
 });
 
@@ -760,6 +1679,36 @@ describe('DNC-10 — there is no way to turn this gate off', () => {
     expect(runInChild(body, {}).status).toBe(1);
   });
 
+  it('G-12: the WIDENED code paths read no environment variable either', () => {
+    // The widening added a comment stripper, a union resolver, a template scanner and
+    // a shape classifier — four new places a bypass could be hidden. Executed, not
+    // read: the new exports are driven in a child process with every plausible escape
+    // variable set, and the verdicts must be identical.
+    const body = [
+      `const g = require(${JSON.stringify(SCRIPT_PATH)});`,
+      `const routes = ${JSON.stringify(ROUTES_AFTER)};`,
+      `const fixture = ${JSON.stringify("interface P { portal: 'admin' | 'teacher' }")};`,
+      `const union = g.resolveDeclaredUnion('portal', fixture) || [];`,
+      `const expanded = g.expandTemplateTarget('/\${portal}/profile', fixture);`,
+      `const dead = expanded.kind === 'expanded' && expanded.expansions.every((t) => g.classifyTarget(t, routes) === 'dead');`,
+      `const shape = g.classifyPattern('/*/profile', routes) === 'shape-dead';`,
+      `const stripped = !g.stripCommentsPreservingLines('// x').includes('x');`,
+      `process.exit(union.length === 2 && dead && shape && stripped ? 1 : 0);`,
+    ].join('\n');
+
+    // Exit 1 means "the gate still found the defect". The control first.
+    expect(runInChild(body, {}).status).toBe(1);
+    for (const escape of [
+      { SKIP_LINK_CHECK: '1' },
+      { ALLOW_DEAD_LINKS: '1' },
+      { ALLOW_TEMPLATE_LINKS: '1' },
+      { LINK_CHECK_TEMPLATES: '0' },
+      { NODE_ENV: 'production', CI: 'false', SKIP_LINK_CHECK: '1' },
+    ]) {
+      expect(runInChild(body, escape).status).toBe(1);
+    }
+  });
+
   it('requiring the module has no side effect — main() is guarded', () => {
     expect(executable).toMatch(/require\.main\s*===\s*module/);
     // A bare `main()` at module scope is what `web-artifact-check.js:381` does;
@@ -866,11 +1815,20 @@ describeWithBuild('the CLI verdict is the classifier verdict — no gap between 
       targets: extractLiteralLinks(),
       routes,
       baseline: BASELINE,
+      // The CLI now drives the template path too. Omitting it here would make the
+      // agreement hold for the wrong reason: two different evaluations that happen
+      // to agree on the exit code.
+      templates: extractTemplateLinks(),
+      deadShapes: normalizeShapeBaseline(baselineRaw),
     });
     const cli = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: REPO_ROOT, encoding: 'utf8' });
     expect(cli.status).toBe(evaluation.problems.length > 0 ? 1 : 0);
 
     const output = `${cli.stdout ?? ''}${cli.stderr ?? ''}`;
     expect(output).toMatch(/LINK INTEGRITY CHECK: (PASS|FAIL)/);
+    // "Reported, never dropped" has to be visible in what the run PRINTS, or the
+    // blind spot is still a blind spot — just one with a counter behind it.
+    expect(output).toMatch(/interpolated \(\d+ union-expanded · \d+ shape-checked/);
+    expect(output).toContain('interpolated href shapes');
   });
 });

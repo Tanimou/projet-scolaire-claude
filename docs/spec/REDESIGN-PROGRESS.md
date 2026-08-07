@@ -445,7 +445,7 @@ pnpm dev
 |---|---|---|---|
 | R0 | Audit + dépendances + smoke | ✅ Complet | 100% |
 | R1 | Design system + composants | ✅ 30 composants livrés (≥ plan) | 100% |
-| R2 | AppShell unifié + landing | ✅ AppShell (landing existant déjà polish) | 95% |
+| R2 | AppShell unifié + landing | ✅ AppShell (landing existant déjà polish) · **2026-08-07 (`S-E06-5`) : les liens morts du pied de page public deviennent de vraies pages** — `/pricing`, `/contact`, `/help` sur un `PublicInfoPage` partagé, plus les quatre racines de portail (`/admin`, `/teacher`, `/parent`, `/student`) qui redirigent vers `PORTAL_LANDING` au lieu de renvoyer un 404, et les trois entrées « Mon profil » qui pointaient dans le vide retirées du menu. **Non traité, mesuré :** quatre défauts d'accessibilité sur ces pages (imbrication des repères dans `<main>`, contraste des CTA à **2,77:1** contre SC 1.4.3, anneaux de focus à 1,51–1,68:1 contre SC 1.4.11, coupure de la barre à 320 px) — chiffrés avec leurs remplacements conformes et laissés à **R9**, pas corrigés ici | 95% |
 | R3 | Admin portal dashboard + 4 pages | ✅ Dashboard + 3 nouvelles pages | 95% |
 | R4 | Teacher portal image 6 | ✅ Dashboard pixel-correct | 90% (saisie inline simplifiée → R6) |
 | R5 | Parent portal image 7 | ✅ Dashboard pixel-correct | 90% (TeacherComment + alerts cards → R6) |

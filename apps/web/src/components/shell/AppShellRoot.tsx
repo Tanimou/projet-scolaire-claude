@@ -114,7 +114,14 @@ export async function AppShellRoot({
       items={sidebarItems}
       footer={
         portal === 'parent' || portal === 'student' ? (
-          <HelpSidebarCard />
+          // `ctaHref` is passed explicitly even though it is also the component's
+          // default. The link gate's source set is `apps/web/src` only
+          // (`scripts/link-integrity-check.js`), so an href written in
+          // `packages/ui` is invisible to it — and this card's CTA pointed at
+          // `/help` while `/help` did not exist, on every parent and student page,
+          // unseen (S-E06-5). Stating the target here puts it inside the scanned
+          // tree until the gate's root is widened.
+          <HelpSidebarCard ctaHref="/help" />
         ) : (
           <TipOfTheDayCard
             body="Planifiez vos évaluations à l'avance pour un meilleur suivi des apprentissages."

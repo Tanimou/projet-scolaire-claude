@@ -59,31 +59,53 @@ would claim the operator half was delivered. **`D-01` no longer blocks anything 
 | **`S-E06-2`** — enable a **nonce CSP** and close the branding stored-XSS path: the policy shipped and proven on a real response (every script carrying the response nonce, five requests → five distinct nonces), `force-dynamic` at the root layout so no prerendered document can carry an unnonced `<script>`, the branding write route re-scoped to the caller's tenant, and `scripts/csp-check.js` wired into both harnesses. Closes **`PF-45`**; found + closed **`PF-88`** (cross-tenant branding write); raised **`R-28`** | ✅ 2026-08-07 |
 | **`S-E06-3`** — ship `/admin/classes/new` (the admin classes page's primary CTA, and the only affordance a school with zero classes ever saw, pointed at a route that was **never emitted** — it resolved against `/admin/classes/[id]` with `id = "new"` and crashed), **and gate the class of defect**: a new `scripts/link-integrity-check.js` ratchet resolves every fully-literal internal link in `apps/web/src` against the **emitted** route inventory and fails on **DYNAMIC CAPTURE** (a literal that only matches because a single-segment `[param]` swallowed it) as well as on a dead target outside the reviewed ceiling, wired into **both** `scripts/ci-gate.sh` (stage 13) and `.github/workflows/ci.yml`, with a 24-entry `scripts/link-integrity-baseline.json` where every row carries a reason **and** an owning finding. Closes **`PF-19`**; **`PF-39`** inventoried, not fixed; raises **`PF-91`**…**`PF-94`** | ⚠️ 2026-08-07 — landed needing human review |
 | **`S-E06-6`** — **confirmation and explicit scope for a bulk, irreversible control**. "Importer les fériés (France)" wrote **22 `CalendarEvent` rows on one click**, asked nothing, named nothing, and stamped every row with the *active* academic year regardless of the date it carried. Now: `confirm: true` is required **server-side** (a `curl` is subject to it — the refusal throws before any read or write), `year` is **required** (the whole active-year→`new Date().getFullYear()` fallback cascade is **deleted, not kept** — the fallback *was* the stale-year half of the finding), `dryRun: true` returns the **same plan from the same code path** that writes and commits nothing, so the dialog's counts cannot be a second implementation of the scope (DNC-06 made structurally impossible, not re-read). The handler moved into a new `CalendarSeedService`: one `$transaction`, one `createMany`, one `AuditLog` row written **inside** it with a **derived** `actorRole` (a `super_admin` no longer audits as `school_admin`) plus sanitised IP/UA. The existence probe gained the `tenantId` it never had (a `PF-11`-family cross-tenant read), and each row's `academicYearId` is now the year **containing its own date**, or `null`. FE = a new `SeedHolidaysDrawer` that previews on open, states both civil years / 22 planned / already-present / per-academic-year attachment before enabling the confirm. **23 new tests** (`calendar-seed-holidays.spec.ts`, T1–T16 + extras). Closes **`PF-29`**; **advances `PF-31`** on one handler of ~20; fixes **`PF-51`** on this DTO only; **breaking request+response contract** on the endpoint (sole caller updated in the same PR) | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
-| `S-E06-4` | ⛔ blocked on decision **D-08** · `S-E06-5` not enumerated in `sprint-01` · `S-E06-7` (`PF-57`) referenced by the traceability matrix but **never enumerated** in `sprint-01` |
+| **`S-E06-5`** — the link gate **stops being blind to the shell's own menu**, and every dead target it can honestly close is closed. The slice set out to retire nine static rows of `S-E06-3`'s ratchet; it measured the extractor first and found `LITERAL_LINK`'s character class **excludes the backtick**, so *every* template-literal href in the app was invisible — and `` `/${portal}/profile` ``, expanded over the interpolated variable's *declared* union, is **0 of 3 alive**: **« Mon profil » 404'd on every authenticated page of the admin, teacher and parent portals** behind a green `LINK INTEGRITY CHECK: PASS`. That blindness is **`PF-97`**, closed here — the extractor resolves a template href over the declared union (three declaration forms, ≥2-member floor) and an interpolation it cannot resolve is **reported, never dropped**. On top of it, **`PF-93`** (four bare portal roots that 404) and **`PF-94`** (`/pricing` + `/contact` dead in the public footer) are closed by seven new routes: four roots redirecting through **one** exported `PORTAL_LANDING` in the new import-free, edge-safe `apps/web/src/lib/portals.ts` (`PORTAL_REQUIRED_ROLES: Record<PortalId, …>` makes a fifth portal a compile error rather than a drift; `PORTAL_SETTINGS_HREF` is `Partial`, so "no surface → no menu entry" is the typed default), plus `/pricing`, `/contact` and `/help` over a shared `PublicInfoPage` — all `force-dynamic` so the `S-E06-2` nonce CSP holds, every redirect key a **literal** lookup (no open-redirect surface), no invented copy, no price (`D-05` open), no « en cours de finalisation » (`DNC-09`). **`PF-39` advanced** (`/help` + the three dead profile entries; the teacher-copy halves untouched). **Two blockers were found by measuring the new lexer rather than reading it, and fixed at one root cause** — `'<'` made the scanner read a JSX **closing tag** as a regex opener, producing both a **silent** template drop (`PF-97`'s own shape inside the function written to close it) and an **unbaselineable** false `DYNAMIC CAPTURE`; both reproduced pre-fix against a guard-reverted copy and pinned by 6 new guard cases over throw-away trees. Raises **`PF-98`** (three link families only visible once the gate could see them), **`PF-99`** (no profile surface in any portal), **`PF-100`** (orphaned `UserMenu.tsx` duplicate), **`PF-101`** (two portal vocabularies of different sizes); the verify panel raised **`PF-102`** (a **pre-existing post-authentication open redirect** on all four login forms) and **`PF-103`** (the new lexer's own residuals — all latent today, in a blocking stage). All seven ids were **cited as owners before they existed** and are registered in the findings index by this land pass | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
+| `S-E06-4` | ⛔ blocked on decision **D-08** — **residual scope restated 2026-08-07: `/legal/privacy\|terms\|cookies` only**, because `/help` and `/contact` (which this row used to claim) shipped in `S-E06-5`, which deliberately links to no `/legal/*` · `S-E06-7` (`PF-57`) referenced by the traceability matrix but **never enumerated** in `sprint-01` |
 
 **`PF-54` is closed in code, not on the deployment.** The guard checks *presence*, not *strength*: the hosted
 Keycloak master account is still `admin`/`admin`, and rotating it (Keycloak master realm **then** `.env.prod`) is
 operator work this routine may not perform. Read the slice as "the silent default is gone", never as "the credential
 is safe".
 
-**`V3-E06` is `code-complete`, not `shipped` — and `sprint-01` is now exhausted.** With `S-E06-6` landed, every
-**enumerated, unblocked** story in this epic has shipped. What remains is not code the routine may write: `S-E06-4`
-stays ⛔ blocked on decision **D-08** (the routine may ship holding pages, never author policy text — risk `R-13`),
-`S-E06-5` was never enumerated, and `S-E06-7` (`PF-57`, the student portal's missing profile/settings) appears in
+**`V3-E06` is `code-complete`, not `shipped` — and `sprint-01` is exhausted again.** With `S-E06-5` landed, every
+**enumerated, unblocked** story in this epic has shipped. What remains is not code the routine may write: `S-E06-4`'s
+residual stays ⛔ blocked on decision **D-08** (the routine may ship holding pages, never author policy text — risk
+`R-13`), and `S-E06-7` (`PF-57`, the student portal's missing profile/settings) appears in
 `docs/daily-improvement-v3/traceability-matrix.md` but has **no story in `sprint-01`**. Calling the epic `shipped`
-would claim `PF-38`/`PF-39`/`PF-57` were delivered — same posture, and the same reason, as `V3-E02`.
+would claim `PF-38`/`PF-57` were delivered, and would bury the five findings `S-E06-5` itself queued
+(`PF-98`…`PF-101`, `PF-103`) — same posture, and the same reason, as `V3-E02`.
 
-**Next V3 slice → none is enumerated. The next run is a `sprint-02` authoring / `epic-spec` run for `V3-E04`
-(audit trail and governance surfaces — `PF-14`, `PF-31`, `PF-32`).** Checked rather than assumed:
-`docs/daily-improvement-v3/stories/` holds **only** `sprint-01.md`, and its last unblocked story was the one that just
-landed. `V3-E04` is the right next epic on the file's own sequencing rule (§3: *"`V3-E04` depends on `V3-E02` … and
-unblocks evidence for everything after it"*) — `V3-E02` is `code-complete`, so the dependency is satisfied — and
-`S-E06-6` has just made the case concrete: it wrote the **first** `AuditLog.ipAddress` in the codebase and derived
-`actorRole` from the JWT on **one** handler while ~20 others still hard-code `'school_admin'`. `V3-E04`'s first slice
-is that shared provenance interceptor, and it must **open with the `trust proxy` decision** the escalation panel
-raised here (see the `S-E06-6` row in `docs/spec/features/v3-e06/PROGRESS.md`): behind Traefik→nginx, `req.ip` is the
-proxy, and enabling blanket XFF trust makes the field client-forgeable — strictly worse than blank. There is no
-`docs/spec/features/v3-e04/` yet, so that run is **`epic-spec`**, not `epic-slice`.
+*(Corrected 2026-08-07, `S-E06-5` land pass. This paragraph and the `S-E06-4` row above both used to read
+"`S-E06-5` was never enumerated in `sprint-01`", and the pointer below declared the sprint exhausted on the evidence
+that `docs/daily-improvement-v3/stories/` held only `sprint-01.md` — which `S-E06-5`'s own diff falsified. Named here
+rather than quietly overwritten, because a ledger claim that the next autonomous run reads at Step 1 is exactly the
+kind of stale truth that makes it re-implement work that already shipped.)*
+
+**Next V3 slice → none is enumerated in this epic, and there are two candidates. Read `PF-102` first.**
+
+1. **`PF-102` — a post-authentication open redirect, `L0`, security, ~4 lines + four negative tests.**
+   `apps/web/src/components/PortalLoginForm.tsx:76` reads `callbackUrl` off the query string with **no same-origin
+   validation** and `:125` hands it to `router.push`, so `/parent/login?callbackUrl=https://evil.example/` shows the
+   genuine login page, authenticates the parent **for real**, then lands them off-site — on a platform whose users are
+   parents of minors. Pre-existing and outside the `S-E06-5` diff, but `S-E06-5` adds three new public, indexable entry
+   points into that flow, so the reachable surface grew this run. The same file also holds the fifth surviving copy of
+   the four portal landing paths (`DEFAULT_LANDING`), which the new `PORTAL_LANDING` guard cannot see because it
+   measures the *identifier*, not the invariant — so one small slice closes both. Owner `V3-E05`.
+2. **`V3-E04` — a `sprint-02` authoring / `epic-spec` run** (audit trail and governance surfaces — `PF-14`, `PF-31`,
+   `PF-32`). Still the right *epic* on the file's own sequencing rule (§3: *"`V3-E04` depends on `V3-E02` … and unlocks
+   evidence for everything after it"*) — `V3-E02` is `code-complete`, so the dependency is satisfied — and `S-E06-6`
+   made the case concrete: it wrote the **first** `AuditLog.ipAddress` in the codebase and derived `actorRole` from the
+   JWT on **one** handler while ~20 others still hard-code `'school_admin'`. `V3-E04`'s first slice is that shared
+   provenance interceptor, and it must **open with the `trust proxy` decision** the escalation panel raised (see the
+   `S-E06-6` row in `docs/spec/features/v3-e06/PROGRESS.md`): behind Traefik→nginx, `req.ip` is the proxy, and enabling
+   blanket XFF trust makes the field client-forgeable — strictly worse than blank. There is no
+   `docs/spec/features/v3-e04/` yet, so that run is **`epic-spec`**, not `epic-slice`.
+
+A **`V3-E06` follow-up** slice is also now enumerable rather than hypothetical, and would be the cheapest of the three:
+make `link-integrity-check.js` resolve a baseline row's finding id against `audit-findings-index.md` instead of against
+a regex (`/^(PF|R|VAL|D)-\d+$/` let three live rows cite an id that existed nowhere), and clear `PF-103`'s three
+lexer residuals — the `'}'` JSX-comment mis-read, the tautological anti-drop invariant, and the unbounded
+cross-product. All latent today, all in a **blocking** CI stage.
 
 **`S-E06-3` did not close the epic, and two of its own consequences are open.** The link gate is now a permanent CI
 stage, but it reads links **statically** — it does not drive a browser, so it can see neither a runtime error boundary
@@ -92,7 +114,11 @@ nor a 500 behind a route that exists (that crawl is `VAL-08`'s). And the slice *
 (`/parent/remediation` has no index while the admin and teacher siblings do), `PF-93` (the bare portal roots `/admin`,
 `/teacher`, `/parent`, `/student` have no index route) and `PF-94` (`/pricing` + `/contact` are dead links in the
 public landing footer). All four are **inventoried in the baseline with an owning id, not silenced** — the ratchet
-holds the ceiling, it does not lower it.
+holds the ceiling, it does not lower it. **Update 2026-08-07:** `S-E06-5` **closed `PF-93` and `PF-94`** and lowered the
+ceiling accordingly; `PF-91` (`V3-E05`) and `PF-92` (`V3-E07`, it needs a data read) stay inventoried. `S-E06-5` also
+answered the *"reads links statically"* limitation in the only honest direction available to a static gate — it widened
+what "a link" means (template literals, resolved over the declared union) rather than claiming coverage it lacks. The
+browser crawl is still `VAL-08`'s.
 
 This file carries the **pointer only** — it is not the V3 tracker. Per-slice status, evidence and the "not claimed"
 ledger live in **[`docs/spec/features/v3-e02/PROGRESS.md`](../docs/spec/features/v3-e02/PROGRESS.md)** and
