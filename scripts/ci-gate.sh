@@ -100,6 +100,38 @@ run_stage "production artefacts (string scan)" node scripts/production-artefact-
 # .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
 run_stage "compose invocation (documented command = documented stack)" node scripts/compose-invocation-check.js
 
+# Stage 0d — schema drift. Editing apps/api/prisma/schema.prisma WITHOUT writing
+# a migration passed every stage in this file. Stage 1 below runs `prisma
+# generate`, which happily generates a client for a schema no migration produces;
+# lint, typecheck, build and boot then all validate against that fiction, and
+# `infra/docker/migrate-entrypoint.sh` runs `migrate deploy` and only `migrate
+# deploy`, so the edit reaches no database ever. That is `db push`'s failure mode
+# arriving through the front door.
+#
+# It therefore runs BEFORE `prisma generate`, deliberately: the ledger must be
+# refused before a client is generated against a schema nothing can build.
+#
+# It creates a disposable scratch database, applies apps/api/prisma/migrations to
+# it, diffs THAT DATABASE against the datamodel, and drops it on every exit path.
+# NOT a text diff over the migrations directory: measured on this repository
+# unchanged, `migrate diff --from-migrations …` returns exit 2 and reports all
+# five PostgreSQL extensions as "[+] Added extensions" although 0_baseline creates
+# every one of them — a gate built that way is permanently red on correct code.
+#
+# PRECONDITION, NEW WITH THIS STAGE: `bash scripts/ci-gate.sh` now requires a
+# reachable PostgreSQL, under --quick too (it reads prisma/ and a database, never
+# dist/ or .next/, so skipping it under --quick would be the omission DNC-08
+# forbids). With the local stack down this stage FAILS rather than skipping, and
+# the remedy is to start the database, never to edit code:
+#   docker compose --env-file .env -f infra/docker-compose.yml up -d postgres
+# That precondition contradicts ADR-025 D1 and therefore ships with its own
+# decision record — docs/adr/ADR-027-schema-drift-gate-needs-a-database.md — which
+# draws the distinction that keeps both coherent: the operator drill needs a
+# SEEDED database (a state CI cannot have), this stage needs an EMPTY PostgreSQL
+# SERVER (a capability ci.yml's build job already provisions).
+# Kept in step with .github/workflows/ci.yml — they must not drift (S-E02-2 AC-4).
+run_stage "schema drift (the migration ledger reproduces schema.prisma)" node scripts/schema-drift-check.js
+
 # Stage 1 — Prisma client. Everything downstream (typecheck, tests, build) fails
 # with unresolvable types if the generated client is missing, which is precisely
 # how the audited worktree reported "tests cannot run".

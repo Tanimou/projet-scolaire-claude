@@ -2,10 +2,12 @@
 
 **Layer** L0 · **Closes** PF-03, PF-55, PF-56, VAL-01, VAL-03, VAL-10 (+ PF-58, PF-59, PF-60, PF-61 discovered in flight)
 **Spec** the story contracts in `docs/daily-improvement-v3/stories/sprint-01.md` are the spec-kit for this epic.
-**Status (2026-08-07, after `S-E02-3`)** `code-complete` — still **not `shipped`**. `S-E02-3` is now ✅ done, executed
-against the **local Docker stack**; `S-E02-1`'s residual and `S-E02-5` keep their hosted halves open, and those need
-hosted credentials and an operator. Recording this as `shipped` would claim the operator half was delivered, which is
-the exact overstatement this epic exists to end.
+**Status (2026-08-07, after `S-E02-5`)** `code-complete` — still **not `shipped`**. `S-E02-3` and `S-E02-5` are both
+now ✅ done, each executed against the **local Docker stack**. `S-E02-5` never had a hosted half: it is a *repository*
+invariant — the migration ledger reproduces `schema.prisma` — and the ledger row that called it "needs hosted access"
+was stale (see the re-scoping note in the slice table). **`S-E02-1`'s residual is the only open row**, and it is
+genuinely hosted: it needs hosted credentials and an operator. Recording this epic as `shipped` would claim that
+operator half was delivered, which is the exact overstatement this epic exists to end.
 
 > ### ⚠️ The paragraph this replaced was wrong on one point, and it is worth saying which
 >
@@ -31,7 +33,7 @@ the exact overstatement this epic exists to end.
 | **S-E02-2** | Make CI actually run | 🟢 done *(local gate)* | 2026-08-02 | suites executed for the first time — **568/588 passing**; 18 failures all baselined with owning finding ids; ratchet proven to block in **both** directions; **surfaced and fixed a live production P0 (`PF-62`)** |
 | **S-E02-3** | Timed backup → restore rehearsal, **executed against the LOCAL Docker stack** | ✅ done | 2026-08-07 | 78/78 new guard (**328/328** across 10 suites in `src/shared/quality`, was 250/250 across 9). The drill was **run, not asserted**: `PASS`, exit 0, **55 base tables / 13 550 rows** dumped, restored into a scratch database and verified on row counts **and** per-table checksums **and** schema — dump **1242 ms**, restore **7488 ms**, verify **4001 ms**, total **22 737 ms**. Six verdicts driven against the real database: `row_count_divergence` and `checksum_divergence` by deliberate divergence, `unreachable_source`, `unbaselined_ledger`, `tooling_unavailable`, and `--update` **refusing** to write from a failed run |
 | **S-E02-4** | Seed cannot run in production | ✅ done | 2026-08-03 | 34/34 jest; the guard was **executed** — all **7** seed scripts exit 1 `[refused-production]` under a production target *with the correct token*, and the allowed demo path crosses the guard and fails on the DB connection instead; `nest build` exit 0 |
-| **S-E02-5** | Reconcile source ↔ hosted schema drift | ⬜ todo | — | *(implied by S-E02-1; needs hosted access)* |
+| **S-E02-5** | The migration ledger must reproduce `schema.prisma` — and something says so *(row re-scoped 2026-08-07: it read "Reconcile source ↔ hosted schema drift · needs hosted access", which was **stale**. The slice is a **repository** invariant, proven against the LOCAL container; the hosted half belongs to S-E02-1's residual and stays open)* | ✅ done | 2026-08-07 | 94/94 new guard (**593/593** across 14 suites in `src/shared/quality`, was 499 across 13). The check was **run, not asserted**: `SCHEMA DRIFT CHECK: PASS`, exit 0, on the unmodified repository — a disposable scratch database created in `pilotage_postgres`, `0_baseline` applied into it, **55 base tables**, ledger row finished and not rolled back, `migrate diff` **exit 0 "No difference detected"**, scratch dropped, **≈17 s**. Four negative paths executed against the real database: a temp copy of the datamodel with one extra model → **exit 2, `[+] Added tables - DriftProbe`**; a temp migrations directory holding invalid SQL → `migrate deploy` **exit 1 (P3018)** → verdict `migrate_deploy_failed`; a dead address → **exit 1** naming all three routes (`prisma db execute`, host `psql`, `docker exec pilotage_postgres psql`); the same run with `SKIP_SCHEMA_DRIFT`/`ALLOW_SCHEMA_DRIFT`/`SCHEMA_DRIFT_CHECK=0`/`FORCE`/`CI=false`/`NODE_ENV=production` set, singly and together → **identical verdict**. Wired into `ci-gate.sh` (stage 0d) **and** `ci.yml` (`build` job); ships `ADR-027` |
 | **S-E02-6** | Release manifest made real; deploy gate compares it | ✅ done | 2026-08-03 | 19/19 jest; the gate was **executed** — exit 1 against the live drifted API, exit 0 on a conforming manifest, exit 1 on all four bad verdicts *and* on a manifest lying `match`; `nest build` exit 0 |
 | **S-E02-7** | The `lint` stage stops being fictional; `prisma/` enters both gates | ✅ done | 2026-08-03 | 26/26 jest; `pnpm lint --force` **13/13, 0 cached** (was 7 of 8 packages exiting 2); a deliberate error probe makes the stage exit 1 at package level *and* through turbo; `pnpm typecheck --force` 13/13 including `prisma/`; `pnpm build` exit 0 |
 | **S-E02-8** | Warning count becomes a ratchet; first cut taken only where it is safe | ✅ done | 2026-08-03 | 20/20 jest (46/46 with `lint-gate.spec.ts`); **996 → 44** warnings; ratchet exercised in four directions (increase → 1, back under → 0, ceiling left high → 1, package absent → 1); the DI-breaking autofix measured on emitted JS and refused; `pnpm build` exit 0 |
@@ -1153,6 +1155,14 @@ until `heartbeat` prints `no lock held` — by which point another run may alrea
 
 ### The pointer, as of 2026-08-07 — **next slice → `S-E06-2`**, and this time the epic really is out of unblocked work
 
+> **SUPERSEDED 2026-08-07 by `S-E02-5`, and for the second time in two runs by the same mistake.** This paragraph
+> called `S-E02-5` a *hosted* half needing production credentials. It is not, and never was: the story is a
+> **repository** invariant — the migration ledger reproduces `schema.prisma` — proven against the **local**
+> `pilotage_postgres` container, exactly like `S-E02-3`. It shipped this run as `scripts/schema-drift-check.js`, wired
+> into both harnesses, with `ADR-027`. What remains in `V3-E02` is **`S-E02-1`'s residual** alone. The lesson is now
+> twice-recorded: *an epic is not out of work because a ledger row says a story needs an operator* — re-read the story
+> before believing the pointer.
+
 `S-E02-3` shipped this run, which was the last story here that a run could execute. What remains in `V3-E02` is
 **`S-E02-1`'s residual** and **`S-E02-5`** — both the *hosted* half, both needing production credentials and an
 operator, neither buildable from this checkout. So the epic stays **`code-complete`, not `shipped`**; recording it as
@@ -1229,3 +1239,64 @@ published.
 **Do not repeat this pointer's mistake:** before declaring an epic out of work, re-read its `open` findings in
 `traceability-matrix.md` rather than its story list. `PF-86` had no story, which is exactly why the story list said the
 epic was empty.
+
+---
+
+## 2026-08-07 — `S-E02-5`: the migration ledger must reproduce `schema.prisma`, and something now says so
+
+**The pointer was wrong again, and in the same shape as last time.** Two consecutive runs read the slice table's
+`S-E02-5` row — *"Reconcile source ↔ hosted schema drift · needs hosted access"* — and routed away from this epic on
+the strength of it. The row was stale. Read the **story**, not the ledger row, and `S-E02-5` is a **repository**
+invariant: *the migrations, applied to an empty database, must build the schema `schema.prisma` describes*. That needs
+an empty PostgreSQL server, which the local stack and `ci.yml`'s build job both already have. No hosted credential, no
+operator, no decision. The lesson from run 20 (*"re-read the open findings, not the story list"*) now has a twin:
+**re-read the story, not the row that summarises it.**
+
+**The defect was structural, and every gate was complicit.** `apps/api/prisma/schema.prisma` could be edited without
+writing a migration and the whole harness stayed green: `ci-gate.sh` runs `prisma generate`, which happily produces a
+client for a schema **no migration builds**, and lint, typecheck, build and boot then all validate against that
+fiction. Meanwhile `infra/docker/migrate-entrypoint.sh` runs `migrate deploy` and only `migrate deploy` — so the edit
+reaches no database, ever. That is `db push`'s failure mode arriving through the front door, one slice after `db push`
+was removed. It is the residual half of `PF-03`.
+
+**What landed.** `scripts/schema-drift-check.js` (1248 lines) creates a disposable, name-guarded scratch database in a
+real PostgreSQL, applies `apps/api/prisma/migrations` into it with `migrate deploy`, diffs **that database** against
+the datamodel, and drops it on every exit path. Wired as stage **0d** of `scripts/ci-gate.sh` (after
+compose-invocation, before `prisma generate`, **outside** the `--quick` guard) and as a step of `ci.yml`'s `build`
+job — the only job declaring a `postgres:15-alpine` service. Ships `ADR-027`, because this is `ci-gate.sh`'s **first
+service-dependent stage** and it narrows `ADR-025 D1`; the distinction that keeps both decisions true is
+*capability* (an empty server, which CI can provision) versus *state* (the seeded application database, which it
+cannot and must not fabricate).
+
+**Executed, not asserted.** `SCHEMA DRIFT CHECK: PASS`, exit 0, on the unmodified repository — 55 base tables, ledger
+row finished and not rolled back, `migrate diff` exit 0 *"No difference detected"*, scratch dropped, ≈17 s. Four
+negative paths driven against the real database: a temp copy of the datamodel with one extra model → **exit 2**,
+`[+] Added tables - DriftProbe`; a temp migrations directory holding invalid SQL → **exit 1 (P3018)**, verdict
+`migrate_deploy_failed`; a dead address → **exit 1** naming all three routes tried; the same dead-address run with
+`SKIP_SCHEMA_DRIFT` / `ALLOW_SCHEMA_DRIFT` / `SCHEMA_DRIFT_CHECK=0` / `FORCE` / `CI=false` / `NODE_ENV=production` set
+singly and together → **identical verdict**. `--from-migrations` was measured first and **rejected** — it returns exit
+2 on this repository unchanged, reporting all five PostgreSQL extensions as `[+] Added` although `0_baseline` creates
+every one — and its absence is now pinned by test, so nobody re-discovers it as a "simplification". 94/94 new guard
+cases; `src/shared/quality` goes 499 → **593** across 14 suites.
+
+**Not claimed.** It proves the ledger *reproduces* and *executes*; it does **not** prove a migration is **safe** (a
+data-destroying `DROP COLUMN` passes), it never reads a **non-empty** or **deployed** database, and the `ci.yml` wiring
+is asserted rather than observed because Actions has been billing-locked since 2026-07-28 (`PF-59`). The only real
+execution is a local `bash scripts/ci-gate.sh`.
+
+**Two consequences a human should accept rather than discover.** (1) Every `ci-gate.sh` run on this machine now
+requires `pilotage_postgres` up; with the stack down the routine's gate fails at stage 0d. That is correct by design
+(ADR-027 D3), but it changes the routine's failure profile. (2) The guard spec's environment-guarded block creates and
+drops `schema_drift_%` databases on whatever `DATABASE_URL` names, so `pnpm --filter @pilotage/api test` became
+DB-touching too when a server answers — name-guarded and safe, never able to reach an application database, but new.
+
+### The pointer, as of 2026-08-07 — **next slice → `S-E06-6`**
+
+`V3-E02` is `code-complete` and **not `shipped`**: `S-E02-1`'s residual is the single open row and it is genuinely
+hosted (credentials + operator). The epic's other open findings — `PF-77`, `PF-80` — live in the routine's own files
+under `~/.claude/scheduled-tasks/` and `bmad/workflows/sprint.workflow.js`, outside this checkout.
+
+**Next slice → `S-E06-6`** in `V3-E06` — confirmation and explicit scope for bulk/irreversible controls (`PF-29`).
+`S-E06-1`, `S-E06-2` and `S-E06-3` have all landed; `S-E06-4` stays ⛔ blocked on decision **D-08** (the routine may
+ship holding pages, never author policy text — `R-13`); `S-E06-5` was never enumerated in `sprint-01`. `S-E06-6` is
+therefore the next **unblocked** story under the layer/dependency rule.

@@ -66,6 +66,14 @@ from an oversight, and the next maintainer's obvious "fix" is to wire it in.
 re-run. Its result is evidence with a date on it, not a continuously-enforced invariant. The guard spec
 holds the *apparatus*; only an executed run holds the *result*.
 
+> **Narrowed by [`ADR-027`](./ADR-027-schema-drift-gate-needs-a-database.md) (2026-08-07, `S-E02-5`).**
+> D1 stands for the drill, which needs the **seeded application database** — a *state* CI cannot have
+> and must not fabricate. What no longer holds is the blanket phrasing *"the gate needs no services"*:
+> `ci-gate.sh` stage 0d now requires an **empty PostgreSQL server** — a *capability* that `ci.yml`'s
+> build job already provisions and the local stack already runs. Read ADR-027 before wiring any other
+> service-dependent stage into the gate; the capability-versus-state distinction is what keeps both
+> decisions true at once.
+
 ### D2 — Binary exit codes; the verdict is the discriminator
 
 `evaluateDrill(input)` returns `{ verdict, exitCode, … }` with `exitCode ∈ {0, 1}` — `0` only for

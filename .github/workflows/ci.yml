@@ -142,6 +142,29 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '${{ env.NODE_VERSION }}', cache: 'pnpm' }
       - run: pnpm install --frozen-lockfile
+      # Schema drift (S-E02-5 / PF-03 residual). Editing
+      # apps/api/prisma/schema.prisma without writing a migration passed every
+      # other step here: `prisma generate` below would generate a client for a
+      # schema no migration produces, and lint, typecheck, build and boot would
+      # all validate against that fiction. This step creates a disposable scratch
+      # database in the `postgres` service above, applies
+      # apps/api/prisma/migrations to it, diffs THAT DATABASE against the
+      # datamodel, and drops it on every exit path — so it proves the migrations
+      # EXECUTE, in order, on a real PostgreSQL, not merely that two texts agree.
+      # A `--from-migrations` text diff was measured and rejected: on this
+      # repository unchanged it returns exit 2, reporting all five PostgreSQL
+      # extensions as added although 0_baseline creates every one of them.
+      #
+      # It runs HERE, before `prisma generate`, because the ledger must be
+      # refused before a client is generated against a schema nothing can build.
+      # It runs in THIS job because this is the only job that provisions a
+      # postgres service and a DATABASE_URL; it needs an empty PostgreSQL SERVER,
+      # not the project's data (docs/adr/ADR-027-schema-drift-gate-needs-a-database.md).
+      # Deleting the service above would turn this step red, so the guard spec
+      # asserts the service is still declared. No continue-on-error: a check that
+      # cannot run is a failure, never a skip (DNC-08). Kept in step with
+      # scripts/ci-gate.sh stage 0d — the two must not drift (S-E02-2 AC-4).
+      - run: node scripts/schema-drift-check.js
       - run: pnpm --filter @pilotage/api prisma generate
       - run: pnpm build
       # Every stage before this one proves the code compiles; not one of them

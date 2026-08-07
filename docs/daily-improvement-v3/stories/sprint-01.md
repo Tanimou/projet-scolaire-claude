@@ -767,6 +767,66 @@ is one-time and self-describing: compose names the missing variable.
 
 ---
 
+## S-E02-5 — The migration ledger must reproduce `schema.prisma`, and something must say so
+
+| | |
+|---|---|
+| **Epic** | V3-E02 · **Finding** PF-03 *(residual half)* · **Gates** G-MIGRATION, G-DNC |
+| **blockedBy** | — · **requiresDecision** — · **Size** M |
+
+**Why.** `S-E02-1` established the ledger and `S-E02-3` proved the restore. Neither prevents the *next* database from
+being a `db push` database at a new address. The residual recorded on `PF-03` says it exactly: *"nothing yet PREVENTS a
+`db push` database reappearing at a new address, which is the class `S-E02-5` owns."*
+
+The concrete, unguarded path today: edit `schema.prisma`, do not write a migration. **Every gate stays green.**
+`ci-gate.sh` runs `prisma generate` — so it will happily generate a client for a schema **no migration produces** — then
+lints and typechecks against that client. `infra/docker/migrate-entrypoint.sh` correctly runs `migrate deploy` and only
+`migrate deploy`, so the change reaches no database, ever. The application then queries columns that do not exist. That
+is `db push`'s failure mode arriving through the front door of the very machinery built to stop it: the source of truth
+and the ledger diverge, and nothing in the repository can say so.
+
+**Step 2 measured the premise, and the obvious implementation is wrong.** The reflex check is
+`prisma migrate diff --from-migrations ./prisma/migrations --to-schema-datamodel ./prisma/schema.prisma --exit-code`.
+Executed against this repository, unchanged, it returns **exit 2** and reports all five PostgreSQL extensions
+(`btree_gin`, `citext`, `pg_trgm`, `pgcrypto`, `uuid-ossp`) as `[+] Added`. They are **not** missing:
+`0_baseline/migration.sql` lines 2–14 create all five, and the shadow database *that same command builds* has all five
+plus 54 tables. Diffing **that database, by URL**, against the datamodel returns **`No difference detected`, exit 0**.
+So the `--from-migrations` path does not introspect extensions from the shadow it just built, and a gate written that
+way would be **permanently red on a correct repository** — the `catch-all` trap `S-E06-3` had to design around, where
+the only route back to green is to break correct code.
+
+**Design consequence.** The check must apply the migrations to a scratch database and then diff **that database by
+URL** against the datamodel. That is strictly stronger than a text comparison anyway: it proves the migrations
+**execute**, in order, on a real PostgreSQL — not merely that their SQL parses.
+
+**Implementation notes.**
+1. `scripts/schema-drift-check.js`: create a disposable scratch database in the local Postgres container, run
+   `prisma migrate deploy` into it, then `prisma migrate diff --from-url <scratch> --to-schema-datamodel --exit-code`.
+   Drop the scratch database on every exit path, including failure.
+2. **Unreachable tooling is a failure, never a skip** (DNC-08). No Postgres, no docker, no scratch database → exit
+   non-zero naming what was tried. A drift check that silently passes when it could not run is worse than none.
+3. Report the drift Prisma reports, verbatim, rather than "schemas differ".
+4. No `SKIP_*` / `ALLOW_*` / `--force` escape (DNC-10). The reviewed record is the migration file in the diff.
+5. Wire it into `ci-gate.sh` **and** `.github/workflows/ci.yml`, with a guard asserting both so they cannot drift —
+   reading comment-stripped executable content, so a comment can neither create nor destroy the wiring (`PF-83`).
+
+**Acceptance criteria.**
+1. Editing `schema.prisma` without a migration makes the check **fail**, naming the drifted object.
+2. The unmodified repository **passes** — the check is not red on correct code (the `--from-migrations` false positive
+   is not reproduced).
+3. A migration that does not execute on PostgreSQL fails the check.
+4. Tooling that cannot run fails; it never reports success by omission.
+5. The stage is wired into both `ci-gate.sh` and `ci.yml`, and a test fails if either wiring is removed.
+
+**Test.** `apps/api/src/shared/quality/schema-drift-gate.spec.ts`. Executed in **both** directions against the real
+script: a real field added to `schema.prisma` with no migration → exit 1; reverted → exit 0.
+
+**Out of scope.** Checking a *deployed* database against the ledger — `infra/docker/migrate-entrypoint.sh` already
+refuses an un-baselined non-empty database, and the running-database half is `restore-drill.js`'s seam. This story owns
+the **repository** invariant: the ledger reproduces the source of truth.
+
+---
+
 ## Sprint 01 exit criteria
 
 - `prisma migrate status` clean; no `db push` outside development; preflight blocks unapplied migrations.
