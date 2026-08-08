@@ -24,7 +24,7 @@ import { useState, type ComponentType } from 'react';
 
 
 import { AuditDetailDrawer, type AuditEntry } from './AuditDetailDrawer';
-import { humanizePortal, humanizeResourceType } from './AuditPageFilters';
+import { humanizePortal, humanizeResourceType } from './audit-labels';
 
 interface AuditTableProps {
   rows: AuditEntry[];

@@ -17,10 +17,6 @@
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; a password-reset email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."
     },
-    "/admin/reports": {
-      "finding": "PF-14",
-      "reason": "Sidebar item « Rapports » (components/shell/sidebar-items.ts:175). /teacher/reports exists; the admin page was never built. Owner: V3-E04."
-    },
     "/admin/reset-password": {
       "finding": "PF-91",
       "reason": "middleware.ts AUTH_ROUTES_BY_PORTAL exemption for a route that does not exist. Not a navigation link; a password-reset email lands on a 404 and the exemption list makes it look handled. Owner: V3-E05."

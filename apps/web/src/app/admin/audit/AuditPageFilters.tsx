@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
 
+import { humanizePortal, humanizeResourceType } from './audit-labels';
+
 export interface AuditPageFiltersProps {
   initialQ: string;
   initialResourceType: string;
@@ -16,42 +18,6 @@ export interface AuditPageFiltersProps {
   resourceTypeOptions: SelectOption[];
   portalOptions: SelectOption[];
   actorOptions: SelectOption[];
-}
-
-const RESOURCE_TYPE_LABELS: Record<string, string> = {
-  user_profile: 'Utilisateurs',
-  role: 'Rôles',
-  assessment: 'Évaluations',
-  academic_year: 'Année scolaire',
-  subject_coefficient: 'Coefficients',
-  import_batch: 'Imports',
-  enrollment: 'Inscriptions',
-  enrollment_request: 'Demandes',
-  student: 'Élèves',
-  class_section: 'Classes',
-  teacher_profile: 'Enseignants',
-  grade: 'Notes',
-  announcement: 'Annonces',
-};
-
-const PORTAL_LABELS: Record<string, string> = {
-  admin: 'Admin',
-  teacher: 'Professeur',
-  parent: 'Parent',
-};
-
-export function humanizeResourceType(rt: string): string {
-  return (
-    RESOURCE_TYPE_LABELS[rt] ??
-    rt
-      .replace(/_/g, ' ')
-      .replace(/^./, (c) => c.toUpperCase())
-  );
-}
-
-export function humanizePortal(p: string | null): string {
-  if (!p) return '—';
-  return PORTAL_LABELS[p] ?? p;
 }
 
 export function AuditPageFilters({

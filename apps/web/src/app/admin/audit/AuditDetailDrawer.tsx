@@ -5,7 +5,7 @@ import { Globe2, ShieldCheck, User2 } from 'lucide-react';
 import { useState } from 'react';
 
 
-import { humanizePortal, humanizeResourceType } from './AuditPageFilters';
+import { humanizePortal, humanizeResourceType } from './audit-labels';
 
 export interface AuditEntry {
   id: string;
