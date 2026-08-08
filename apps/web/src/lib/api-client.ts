@@ -1,8 +1,37 @@
+import { headers as incomingHeaders } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { auth } from '@/auth';
+import {
+  clientProvenanceHeaders,
+  stripClientProvenanceHeaders,
+  type ClientProvenanceSource,
+} from '@/lib/client-provenance';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:4000';
+
+/**
+ * En-têtes de la requête entrante, ou `null` hors d'une portée de requête.
+ *
+ * `headers()` lève lorsqu'aucune requête n'est en cours ; on tolère ce cas
+ * plutôt que de le propager — un helper de provenance ne doit jamais être la
+ * raison pour laquelle un rendu échoue. Sans en-têtes, aucune valeur n'est
+ * inventée : le relais se déclare seulement (voir `client-provenance.ts`).
+ *
+ * Coût en cache — **mesuré, pas supposé** (`PM-7`) : `api()` appelle déjà
+ * `auth()` à chaque invocation, qui lit les cookies, et `app/layout.tsx:39`
+ * porte `export const dynamic = 'force-dynamic'` pour la racine. Le rendu est
+ * donc déjà dynamique partout, et `init.revalidate` n'a **aucun appelant** dans
+ * `apps/web/src` (seule sa déclaration existe). Lire les en-têtes n'enlève donc
+ * ici aucune mise en cache réelle.
+ */
+async function requestHeadersOrNull(): Promise<ClientProvenanceSource | null> {
+  try {
+    return await incomingHeaders();
+  } catch {
+    return null;
+  }
+}
 
 export class ApiError extends Error {
   constructor(
@@ -46,6 +75,15 @@ export async function api<T = unknown>(
   };
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
+  // Provenance client (S-E04-3 · PF-128 · ADR-036). Appliquée **en dernier** et
+  // précédée d'un nettoyage : `init.headers` est étalé plus haut, donc sans
+  // cela un appelant pourrait poser lui-même un `x-pilotage-client-ip` et
+  // choisir ce que le journal d'audit retient de lui — le design que D1 refuse.
+  // La fusion écrase les clés que ce module émet ; le `strip` supprime celles
+  // qu'il n'émet pas (aucune adresse lisible), qui survivraient sinon.
+  stripClientProvenanceHeaders(headers);
+  Object.assign(headers, clientProvenanceHeaders(await requestHeadersOrNull()));
 
   const next =
     init.revalidate !== undefined ? ({ revalidate: init.revalidate } as const) : undefined;

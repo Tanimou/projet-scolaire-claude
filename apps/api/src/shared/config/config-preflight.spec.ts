@@ -22,17 +22,37 @@ const FULL_ENV: Record<string, string> = {
   KEYCLOAK_URL: 'http://keycloak:8080/auth',
   KEYCLOAK_ADMIN_USER: 'pilotage-admin',
   KEYCLOAK_ADMIN_PASSWORD: 'not-a-real-secret',
+  // S-E04-3 / ADR-036 D3 — le nombre de sauts de proxy inverse. La PRÉSENCE est
+  // exigée ici ; la VALEUR est validée par `parseTrustProxyHops`
+  // (`trust-proxy.spec.ts`), parce qu'un compte absent et un compte illisible
+  // sont deux erreurs d'opérateur différentes et méritent deux messages.
+  TRUST_PROXY_HOPS: '0',
 };
 
 describe('config preflight (S-E06-1 / PF-54)', () => {
-  it('declares exactly the three values the API cannot invent', () => {
+  it('declares exactly the four values the API cannot invent', () => {
     // Garde-fou du garde-fou : une liste vidée ferait passer tous les tests
     // ci-dessous à vide.
     expect([...REQUIRED_ENV]).toEqual([
       'KEYCLOAK_URL',
       'KEYCLOAK_ADMIN_USER',
       'KEYCLOAK_ADMIN_PASSWORD',
+      'TRUST_PROXY_HOPS',
     ]);
+  });
+
+  it('exige TRUST_PROXY_HOPS mais PAS AUDIT_FORWARD_TOKEN — l\'asymétrie est la décision', () => {
+    // ADR-036 D9. Un mauvais compte de sauts est *silencieusement faux* : il fait
+    // enregistrer une adresse plausible dans une piste de gouvernance. Un jeton
+    // de transfert absent est *fail-safe* : la provenance devient nulle et l'UI
+    // le dit. Exiger le second empêcherait de démarrer un opérateur qui n'a pas
+    // encore distribué le secret — exactement la pression qui a produit le
+    // `?? 'admin'` de PF-54.
+    expect([...REQUIRED_ENV]).toContain('TRUST_PROXY_HOPS');
+    expect([...REQUIRED_ENV]).not.toContain('AUDIT_FORWARD_TOKEN');
+    const env = { ...FULL_ENV };
+    delete env.AUDIT_FORWARD_TOKEN;
+    expect(() => assertRequiredConfig(env)).not.toThrow();
   });
 
   it('does not throw when every required variable is declared', () => {
@@ -120,6 +140,14 @@ describe('config preflight (S-E06-1 / PF-54)', () => {
       NODE_ENV: 'development',
       BYPASS_CONFIG_PREFLIGHT: '1',
       FORCE_START: '1',
+      // S-E04-3 / DNC-10 — les saboteurs de la nouvelle clé rejoignent la même
+      // table plutôt que d'ouvrir un second garde-fou ailleurs : la paire
+      // « règle + contrôle » de ce fichier est le moule, pas un précédent à
+      // dupliquer.
+      SKIP_TRUST_PROXY: '1',
+      ALLOW_PROXY_TRUST: 'true',
+      TRUST_PROXY: 'true',
+      TRUST_PROXY_HOPS_OVERRIDE: '2',
     };
     const previous = new Map<string, string | undefined>();
     for (const [key, value] of Object.entries(saboteurs)) {

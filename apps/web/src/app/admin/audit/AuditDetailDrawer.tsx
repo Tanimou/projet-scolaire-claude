@@ -1,11 +1,12 @@
 'use client';
 
 import { DetailDrawer, StatusBadge, formatDateLong } from '@pilotage/ui';
-import { Globe2, ShieldCheck, User2 } from 'lucide-react';
+import { CircleDashed, Fingerprint, Globe2, ShieldCheck, User2 } from 'lucide-react';
 import { useState } from 'react';
 
 
-import { humanizePortal, humanizeResourceType } from './audit-labels';
+import { AuditProvenance } from './AuditProvenance';
+import { humanizePortal, humanizeResourceType, humanizeUserAgent } from './audit-labels';
 
 export interface AuditEntry {
   id: string;
@@ -96,12 +97,15 @@ export function AuditDetailDrawer({ entry, onClose }: AuditDetailDrawerProps) {
             value={entry.actorName ?? '—'}
             hint={entry.actorRole ?? undefined}
           />
+          {/* L'adresse IP ne revient PAS ici en sous-libellé du portail : la
+              rendre ainsi affirme « cet administrateur a agi depuis cet
+              endroit », et elle disparaissait purement et simplement quand elle
+              était nulle. Elle a désormais sa propre section, toujours rendue. */}
           <InfoCard
             icon={Globe2}
             tone="violet"
             label="Portail"
             value={humanizePortal(entry.portal)}
-            hint={entry.ipAddress ?? undefined}
           />
         </section>
 
@@ -137,16 +141,53 @@ export function AuditDetailDrawer({ entry, onClose }: AuditDetailDrawerProps) {
           </section>
         )}
 
-        {entry.userAgent && (
-          <section>
-            <h4 className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              User Agent
-            </h4>
-            <p className="rounded-xl bg-slate-50 p-3 font-mono text-[11px] leading-snug text-slate-600 ring-1 ring-slate-200/60">
-              {entry.userAgent}
+        {/* Provenance — une seule section, **toujours** présente. L'ancien bloc
+            « User Agent » disparaissait quand la valeur était nulle : c'était la
+            case vide du tableau déplacée dans le tiroir. */}
+        <section className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200/60">
+          <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            <Fingerprint className="h-3.5 w-3.5" aria-hidden />
+            Provenance
+          </h4>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-slate-500">Adresse IP</div>
+              {entry.ipAddress ? (
+                <div className="break-all font-mono text-sm text-slate-700">{entry.ipAddress}</div>
+              ) : (
+                <AuditProvenance ip={null} ua={null} variant="block" />
+              )}
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-slate-500">Navigateur</div>
+              {entry.userAgent ? (
+                <>
+                  {humanizeUserAgent(entry.userAgent) && (
+                    <div className="text-sm text-slate-700">
+                      {humanizeUserAgent(entry.userAgent)}
+                    </div>
+                  )}
+                  {/* Le libellé court est une aide à la lecture posée au-dessus
+                      de la valeur réelle — il ne la remplace jamais. */}
+                  <div className="break-all font-mono text-[11px] leading-snug text-slate-600">
+                    {entry.userAgent}
+                  </div>
+                </>
+              ) : (
+                <AuditProvenance ip={null} ua={null} variant="block" />
+              )}
+            </div>
+          </div>
+          {!entry.ipAddress && !entry.userAgent && (
+            <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-snug text-slate-500">
+              <CircleDashed className="mt-px h-3 w-3 shrink-0" aria-hidden />
+              <span>
+                Cette entrée ne porte pas de provenance client. Une provenance absente est
+                enregistrée telle quelle — jamais remplacée par l&apos;adresse d&apos;un relais.
+              </span>
             </p>
-          </section>
-        )}
+          )}
+        </section>
 
         <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           <DiffPanel

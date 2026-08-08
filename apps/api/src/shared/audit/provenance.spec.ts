@@ -1,5 +1,6 @@
 import { type KeycloakJwtPayload } from '../auth/jwt.strategy';
 
+import { NO_CLIENT_HINTS } from './client-hints';
 import {
   MAX_USER_AGENT_LENGTH,
   deriveAlertActorProvenance,
@@ -17,9 +18,12 @@ import {
  * behaviour that was pinned before the move is still pinned after it.
  *
  * What is NEW here is the part the move made necessary:
- *  • `deriveAuditProvenance` returns `ipAddress`/`userAgent` `null` even when
- *    handed a request-shaped object carrying both — the executable form of
- *    `ADR-036` D4/D5 and the thing that catches a premature `S-E04-3`;
+ *  • `deriveAuditProvenance` PASSES THROUGH the already-extracted hints and
+ *    invents nothing — `S-E04-3` narrowed the second parameter from `unknown` to
+ *    `AuditClientHints`, so the case that used to assert « null even when handed
+ *    a request carrying both » is now restated over the invariant that survived:
+ *    the function reads no header itself, so a raw request-shaped object yields
+ *    NOTHING, while an extracted pair is carried verbatim;
  *  • `deriveAlertActorProvenance` AGREES with `deriveAuditProvenance` on every
  *    role and on the fallback — the delegation is asserted, not assumed. A
  *    re-implementation inside the delegate would be a second declaration.
@@ -130,16 +134,32 @@ describe('deriveAuditProvenance — the canonical derivation', () => {
     }
   });
 
-  it('T-5 / ADR-036 D4 — ipAddress and userAgent stay null even when the 2nd argument carries both', () => {
-    // The honest form of AC-6: this is the test that catches a premature
-    // S-E04-3 ("we were in there anyway"). The second parameter is DELIBERATELY
-    // unread until the forwarding chain exists and ADR-036's hop count is
-    // applied at a seam we control. A stored proxy address is a wrong value that
-    // looks right; the null is the decision executing.
+  it('S-E04-3 — carries the already-extracted hints VERBATIM, on both branches', () => {
+    const hints = { ipAddress: '92.184.7.14', userAgent: 'Mozilla/5.0 (Windows NT 10.0)' };
+    expect(deriveAuditProvenance(jwtWith(['school_admin']), hints)).toEqual({
+      actorRole: 'school_admin',
+      portal: 'admin',
+      ...hints,
+    });
+    // The unrecognised-role branch too — a value must not be dropped by the
+    // branch that already loses the portal (ADR-036 D8).
+    expect(deriveAuditProvenance(jwtWith(['offline_access']), hints)).toEqual({
+      actorRole: 'offline_access',
+      portal: null,
+      ...hints,
+    });
+  });
+
+  it('ADR-036 D5 — it reads NO header of its own: a raw request yields nothing', () => {
+    // This is what `S-E04-1`'s « null even when handed a request » case was
+    // really protecting, and it survives the narrowing intact. The extraction
+    // moved to `client-hints.ts`; the purity did not move with it. If this
+    // function ever grew a header read, THIS case would go green on the wrong
+    // value — so it asserts the null explicitly rather than by omission.
     const req = {
       ip: '203.0.113.7',
       headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64)', 'x-forwarded-for': '1.2.3.4' },
-    };
+    } as unknown as { ipAddress: string | null; userAgent: string | null };
 
     expect(deriveAuditProvenance(jwtWith(['school_admin']), req)).toEqual({
       actorRole: 'school_admin',
@@ -147,6 +167,34 @@ describe('deriveAuditProvenance — the canonical derivation', () => {
       ipAddress: null,
       userAgent: null,
     });
+  });
+
+  it('S-E04-3 — a PARTIAL capture is carried as-is; the two fields are independent', () => {
+    // A row where only one value survived the sanitiser is legal and must not be
+    // collapsed to « nothing »: `/admin/audit` renders each field separately.
+    expect(
+      deriveAuditProvenance(jwtWith(['teacher']), { ipAddress: null, userAgent: 'curl/8.5' }),
+    ).toEqual({ actorRole: 'teacher', portal: 'teacher', ipAddress: null, userAgent: 'curl/8.5' });
+    expect(
+      deriveAuditProvenance(jwtWith(['teacher']), { ipAddress: '2001:db8::1', userAgent: null }),
+    ).toEqual({
+      actorRole: 'teacher',
+      portal: 'teacher',
+      ipAddress: '2001:db8::1',
+      userAgent: null,
+    });
+  });
+
+  it('omitting the hints still yields an honest blank — never an invented value', () => {
+    expect(deriveAuditProvenance(jwtWith(['school_admin']))).toEqual({
+      actorRole: 'school_admin',
+      portal: 'admin',
+      ipAddress: null,
+      userAgent: null,
+    });
+    expect(deriveAuditProvenance(jwtWith(['school_admin']), NO_CLIENT_HINTS)).toEqual(
+      deriveAuditProvenance(jwtWith(['school_admin'])),
+    );
   });
 
   it('never throws on a malformed payload — the audit write is best-effort', () => {

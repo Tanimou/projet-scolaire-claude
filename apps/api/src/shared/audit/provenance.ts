@@ -2,6 +2,13 @@ import { isIP } from 'node:net';
 
 import { type KeycloakJwtPayload } from '../auth/jwt.strategy';
 
+// TYPE-ONLY, and that matters twice. `client-hints.ts` imports the two
+// sanitisers from this file, so a value import here would close a runtime
+// require() cycle; `import type` is erased entirely, so no cycle exists in the
+// emitted CJS. And it keeps this file's promise literally true — a type carries
+// no header read into scope.
+import type { AuditClientHints } from './client-hints';
+
 /**
  * S-E04-1 — THE single home of audit provenance for `apps/api`.
  *
@@ -109,7 +116,11 @@ const ROLE_PRECEDENCE = ['super_admin', 'school_admin', 'teacher', 'parent'] as 
 // test in this repository drives a real token, and an absent `azp` would need this
 // mapping as a fallback anyway — so adopting it now would add a second source of
 // truth without removing the first. Stated posture, not an unnoticed gap; see
-// `ADR-036` D6, and `S-E04-3` is the natural place to revisit it.
+// `ADR-036` D6. REVISITED BY `S-E04-3` and deliberately NOT adopted: that slice
+// makes the *client* provenance real (address, browser) — an observation of the
+// transport — while `azp` is an observation of the OIDC client, and adopting it
+// in the same diff would have coupled two unrelated corrections and still needed
+// this mapping as its fallback. Recorded in the `ADR-036` append, in writing.
 const ROLE_PORTAL: Record<(typeof ROLE_PRECEDENCE)[number], string> = {
   super_admin: 'admin',
   school_admin: 'admin',
@@ -124,36 +135,50 @@ const ROLE_PORTAL: Record<(typeof ROLE_PRECEDENCE)[number], string> = {
  * known roles, falls back to the first realm role string (or null) with a null
  * portal — never throws, so it is safe inside the best-effort audit path.
  *
- * `ipAddress` and `userAgent` are returned **`null`, unconditionally, by
- * decision — not as a stub and not as a defect** (`ADR-036` D4/D5). The API
- * cannot see the operator's address or browser today: `apps/api/src/main.ts`
- * sets no `trust proxy` (0 occurrences repo-wide), so Express `req.ip` is the
- * socket peer — and on every UI-driven write that peer is the **web container**,
- * one constant address shared by every actor forever, while undici sends no
- * user-agent of the operator's browser. Storing it would put a *wrong* value in
- * a governance trail that `/admin/audit` renders as « where the admin acted
- * from ». Null rather than wrong. **`S-E04-3` owns making them real**, by
- * forwarding them from `apps/web` and applying `ADR-036`'s pinned hop count.
+ * `ipAddress` and `userAgent` are **passed through, already extracted and
+ * already sanitised** (`ADR-036` D5). Until `S-E04-3` this parameter was typed
+ * `unknown` and deliberately unread, and both fields came back `null`
+ * unconditionally *by decision* — because the API could not see the operator at
+ * all: `main.ts` set no `trust proxy`, so `req.ip` was the socket peer, and on
+ * every UI-driven write that peer was the **web container**, one constant
+ * address shared by every actor forever. That is no longer the state of the
+ * world, and this docblock says so rather than asserting the opposite of the
+ * code beneath it: `S-E04-3` pinned the hop count from a refusing configuration
+ * key, and `apps/web` now forwards the operator's real address and browser from
+ * two shared seams.
  *
- * The second parameter exists so `S-E04-3` can narrow it (to the already-extracted
- * `{ ipAddress, userAgent }` hints of `ADR-036` D5) without re-signing every call
- * site. It is **deliberately unread** — the leading underscore is the repo's
- * ESLint `argsIgnorePattern`. `provenance.spec.ts` drives this function with a
- * value carrying both an IP and a user-agent and asserts both come back `null`;
- * that test is what makes the rule enforceable rather than aspirational.
+ * What did **not** change is why this function takes hints instead of a request.
+ * `shared/audit/client-hints.ts` is the one place that reads a header or a
+ * socket address; this file still reads none, so `DNC-10` remains a property of
+ * its *shape* — there is no switch to find because nothing switchable is in
+ * scope. Narrowing the second parameter was the one-line change `ADR-036` D5
+ * reserved it for, and **no call site re-signed**.
+ *
+ * Omitting the hints still yields `null`/`null`, which is the same honest blank
+ * as before and never an invented value. A caller that genuinely has no request
+ * in scope should pass `NO_CLIENT_HINTS` rather than nothing, so the absence is
+ * written down where the next reader can see it.
  */
-export function deriveAuditProvenance(jwt: KeycloakJwtPayload, _req?: unknown): AuditProvenance {
+export function deriveAuditProvenance(
+  jwt: KeycloakJwtPayload,
+  hints?: AuditClientHints,
+): AuditProvenance {
+  // `?? null` and nothing else: this function never invents, normalises or
+  // re-derives a provenance value — the sanitisers ran in the extraction seam,
+  // before the transaction opened (`S-E06-6`'s reason).
+  const ipAddress = hints?.ipAddress ?? null;
+  const userAgent = hints?.userAgent ?? null;
   const realmRoles = jwt.realm_access?.roles ?? [];
   const primary = ROLE_PRECEDENCE.find((role) => realmRoles.includes(role));
   if (primary) {
     return {
       actorRole: primary,
       portal: ROLE_PORTAL[primary],
-      ipAddress: null,
-      userAgent: null,
+      ipAddress,
+      userAgent,
     };
   }
-  return { actorRole: realmRoles[0] ?? null, portal: null, ipAddress: null, userAgent: null };
+  return { actorRole: realmRoles[0] ?? null, portal: null, ipAddress, userAgent };
 }
 
 /**

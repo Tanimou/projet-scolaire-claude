@@ -26,6 +26,14 @@ import { PERMISSIONS_META_KEY } from '../auth/requires-permission.decorator';
 import type { UserSyncService } from '../auth/user-sync.service';
 import type { PrismaService } from '../prisma/prisma.service';
 
+import {
+  PILOTAGE_CLIENT_IP_HEADER,
+  PILOTAGE_CLIENT_USER_AGENT_HEADER,
+  PILOTAGE_FORWARD_TOKEN_HEADER,
+  configureAuditClientHints,
+  resetAuditClientHintsPolicy,
+} from './client-hints';
+
 /**
  * S-E04-1 — the assertions that matter: the provenance that reaches
  * `prisma.auditLog.create` (or the widened service argument), driven through the
@@ -214,6 +222,24 @@ describe('RolesController.create — the derived actorRole reaches auditLog.crea
  * ================================================================== */
 
 describe('SubjectsController.upsertCoefficients — the derived value reaches tx.auditLog.create', () => {
+  /**
+   * S-E04-3 — a forwarded request, with the token the API is configured for. The
+   * policy is configured HERE rather than inherited, so the case states the
+   * configuration it proves; `afterEach` resets it so no other suite inherits it.
+   */
+  const FORWARD_TOKEN = 'callsites-forward-token';
+  const FORWARDED_REQUEST = {
+    ip: '172.20.0.9', // the web container — must NOT be what gets recorded
+    headers: {
+      [PILOTAGE_FORWARD_TOKEN_HEADER]: FORWARD_TOKEN,
+      [PILOTAGE_CLIENT_IP_HEADER]: '92.184.7.14',
+      [PILOTAGE_CLIENT_USER_AGENT_HEADER]: 'Mozilla/5.0 (Windows NT 10.0) Chrome/126.0',
+      'user-agent': 'undici',
+    },
+  };
+
+  afterEach(() => resetAuditClientHintsPolicy());
+
   it('T-6 — a teacher caller lands teacher/teacher in the transactional audit payload', async () => {
     const txAudit = jest.fn().mockResolvedValue({ id: 'audit-1' });
     const tx = {
@@ -236,6 +262,7 @@ describe('SubjectsController.upsertCoefficients — the derived value reaches tx
     await controller.upsertCoefficients(
       { entries: [{ gradeLevelId: 'gl-1', subjectId: 's-1', coefficient: 2 }] },
       jwt(['teacher']),
+      { ip: '10.0.0.5', headers: {} },
     );
 
     expect(txAudit).toHaveBeenCalledTimes(1);
@@ -248,6 +275,76 @@ describe('SubjectsController.upsertCoefficients — the derived value reaches tx
         }),
       }),
     );
+  });
+
+  it('S-E04-3 / AC-4 — the OPERATOR\'s address and browser reach the row, not the relay\'s', async () => {
+    // The whole slice, asserted at the boundary that writes: with the forward
+    // token configured, the row carries the browser's own address and user-agent
+    // — and specifically NOT `req.ip` (the web container, PF-31) and NOT
+    // `undici`, which is what the old per-call-site `@Headers('user-agent')`
+    // would have recorded on this path.
+    configureAuditClientHints({ trustedHops: 0, forwardToken: FORWARD_TOKEN });
+
+    const txAudit = jest.fn().mockResolvedValue({ id: 'audit-1' });
+    const tx = {
+      subjectCoefficient: { upsert: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: txAudit },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
+      academicYear: { findMany: jest.fn().mockResolvedValue([]) },
+      snapshotRecomputeTrigger: { upsert: jest.fn() },
+    };
+    const controller = new SubjectsController(
+      prisma as unknown as PrismaService,
+      usersMock() as unknown as UserSyncService,
+      { forTenant: jest.fn().mockResolvedValue({ schoolId: 'school-1' }) } as unknown as SchoolContextService,
+    );
+
+    await controller.upsertCoefficients(
+      { entries: [{ gradeLevelId: 'gl-1', subjectId: 's-1', coefficient: 2 }] },
+      jwt(['school_admin']),
+      FORWARDED_REQUEST,
+    );
+
+    const payload = (txAudit.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;
+    expect(payload.ipAddress).toBe('92.184.7.14');
+    expect(payload.userAgent).toBe('Mozilla/5.0 (Windows NT 10.0) Chrome/126.0');
+    expect(payload.ipAddress).not.toBe(FORWARDED_REQUEST.ip);
+    expect(payload.userAgent).not.toBe('undici');
+  });
+
+  it('AC-3 — a WRONG forward token blanks the row rather than recording the relay', async () => {
+    configureAuditClientHints({ trustedHops: 0, forwardToken: FORWARD_TOKEN });
+
+    const txAudit = jest.fn().mockResolvedValue({ id: 'audit-1' });
+    const tx = {
+      subjectCoefficient: { upsert: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: txAudit },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
+      academicYear: { findMany: jest.fn().mockResolvedValue([]) },
+      snapshotRecomputeTrigger: { upsert: jest.fn() },
+    };
+    const controller = new SubjectsController(
+      prisma as unknown as PrismaService,
+      usersMock() as unknown as UserSyncService,
+      { forTenant: jest.fn().mockResolvedValue({ schoolId: 'school-1' }) } as unknown as SchoolContextService,
+    );
+
+    await controller.upsertCoefficients(
+      { entries: [{ gradeLevelId: 'gl-1', subjectId: 's-1', coefficient: 2 }] },
+      jwt(['school_admin']),
+      { ...FORWARDED_REQUEST, headers: { ...FORWARDED_REQUEST.headers, [PILOTAGE_FORWARD_TOKEN_HEADER]: 'wrong' } },
+    );
+
+    const payload = (txAudit.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;
+    expect(payload.ipAddress).toBeNull();
+    expect(payload.userAgent).toBeNull();
+    // The row is still WRITTEN — an absent provenance never blocks the audit.
+    expect(txAudit).toHaveBeenCalledTimes(1);
+    expect(payload.actorRole).toBe('school_admin');
   });
 });
 

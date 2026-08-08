@@ -4,32 +4,45 @@
 **Depends on** `V3-E02` (`code-complete` 2026-08-08 — dependency satisfied) · **Blocks** `V3-E03`, `V3-E11`
 **Risks** `R-10` (accepted), `A-01` (permanent) · **Referenced, not fixed:** `PF-96`
 
-**Status (2026-08-08, after `S-E04-1`)** — **`in-progress`. 1 of 8 slices shipped.**
+**Status (2026-08-08, after `S-E04-3`)** — **`in-progress`. 3 of 8 slices shipped.**
 
 The `epic-spec` run wrote `spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `ux.md`, `tasks.md`,
 `quickstart.md` and this file, and touched no code. **`S-E04-1` then shipped** the shared provenance home, the eight
 `actorRole` literals, the nine `portal` write literals, the two anonymous inline copies, `ADR-036` and two new
-specs — evidence in § `S-E04-1` below. `S-E04-2`…`S-E04-8` remain **open**, and every gate they own is still
-described by **how it will be evidenced**, never as met.
+specs — evidence in § `S-E04-1` below. **`S-E04-2` shipped** the authenticated render (verdict: **HTTP 500**,
+`PF-14` reproduces) and its fix, plus the `/admin/reports` retirement. **`S-E04-3` shipped** `trust proxy`, the
+client-hints seam, the `apps/web` producer on **both** server seams, and the honest-blank UI — evidence in
+§ `S-E04-3` below. `S-E04-4`…`S-E04-8` remain **open**, and every gate they own is still described by **how it will
+be evidenced**, never as met.
 
-> ### ▶ Next slice → **`S-E04-2`** — `/admin/audit` measured under authentication; `/admin/reports` stops being a dead link
+> ### ▶ Next slice → **`S-E04-4`** — one canonical audit vocabulary, declared once, in `packages/contracts`
 >
-> `[web][nav]` · size **S** · `G-MIGRATION` **does not trigger** · no ADR · **blockedBy** nothing.
+> `[contracts][web][api][seed]` · size **M** · `G-MIGRATION` **does not trigger — deliberately** · ships **`ADR-037`**
+> · **blockedBy** `S-E04-2` ✅.
 >
-> Start at `tasks.md` § `S-E04-2`. Its headline is a **measurement**, not a fix: perform the authenticated render of
-> `/admin/audit` with the demo admin and record the verdict. `PF-14` is open **in both directions** — the static read
-> found no crash, which is not the same as finding it works — and `S-E04-1` did **not** settle it (it needs a running
-> stack, and this file's own ledger says so). Read `PF-119` first: `/admin/analytics` **exists** and has no sidebar
-> entry, while the `Rapports` entry two lines away points at a route that does not exist, so "implement
-> `/admin/reports`" may well be the wrong half of `AC-5`.
+> Start at `tasks.md` § `S-E04-4`. Two things `S-E04-3` handed it, neither of which it may silently re-decide:
+>
+> 1. **`audit-labels.ts` is now bigger, and it is still the wrong home.** `S-E04-2` created it (as the *neutral*
+>    module `PF-14` cost a 500 to establish) and `S-E04-3` added `PROVENANCE_UNAVAILABLE`, `hasNoProvenance` and
+>    `humanizeUserAgent` to it. That file's own header says it is an intermediate step inside the admin portal, not
+>    the canonical vocabulary — `S-E04-4` retires it into `packages/contracts`. Adding a *second* canonical home
+>    beside it would be the exact defect this epic is about.
+> 2. **There are two actor vocabularies in one column, and one of them is not a realm role.** `PF-122`
+>    (`child-claims.service.ts`) still writes `actorRole: 'admin'`. Declare the enum against what is **measured in
+>    the database**, not against what `ROLE_PRECEDENCE` can produce, or the enum is wrong on live rows the day it
+>    ships.
+>
+> Read § *The read side of `portal` was never inventoried* (below, raised by `S-E04-1`, untouched by `S-E04-2` and
+> `S-E04-3`) before touching the facet query: `analytics.service.ts:3358-3364` builds the portal facet
+> `where: { portal: { not: null } }`, so a `null`-portal row — which is what `PF-123` writes — is reachable by **no
+> offered filter value at all**. That is the half of `PF-32` a label map cannot fix.
 >
 > **Do not start with `S-E04-8`.** The chain is last by product ruling, not by convenience — see the ordering note
 > below. Run `quickstart.md` §5 before writing code: the measurement table is meant to be **falsified**, not trusted.
 >
-> **`S-E04-3` is now unblocked** (its `blockedBy` was `S-E04-1`), and it inherits `ADR-036` in full: the pinned
-> `N = 2` / `N = 0`, the refusal of blanket XFF, and D5's rule that the derivation seam takes **hints, never a
-> request**. It is the slice that makes `ipAddress`/`userAgent` non-null, and until it lands they are `null` **by
-> decision**.
+> **`S-E04-6` is also unblocked now** (its `blockedBy` was `S-E04-1` + `S-E04-3`, both shipped). It is the
+> transactionality slice, and `ADR-035` is its ADR — re-check the number against `docs/adr/` immediately before
+> creating the file (`PF-110`'s precedence rule).
 
 ---
 
@@ -111,14 +124,14 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 |---|---|---|---|---|---|
 | **`S-E04-1`** | Shared audit provenance: one home, one decision, one real actor role | **`shipped`** 2026-08-08 | — | no | **`ADR-036`** ✅ |
 | **`S-E04-2`** | `/admin/audit` measured under authentication; the dead admin reports link is retired | **`shipped`** 2026-08-08 | — | no | — |
-| `S-E04-3` | The operator's real IP and User-Agent reach the API — or the field stays blank | `todo` ◀ **next** | `S-E04-1` ✅ | no | — |
-| `S-E04-4` | One canonical audit vocabulary, declared once, in `packages/contracts` | `todo` | `S-E04-2` ✅ | no | **`ADR-037`** |
+| **`S-E04-3`** | The operator's real IP and User-Agent reach the API — or the field stays blank | **`shipped`** 2026-08-08 | `S-E04-1` ✅ | no | **`ADR-036`** *(amended: D9/D10)* |
+| `S-E04-4` | One canonical audit vocabulary, declared once, in `packages/contracts` | `todo` ◀ **next** | `S-E04-2` ✅ | no | **`ADR-037`** |
 | `S-E04-5` | The KPIs share the table's scope, and the `to` filter includes its own day | `todo` | `S-E04-4` | **YES** (`Tenant.timezone`) | — |
-| `S-E04-6` | Five privileged families write their audit row **in the same transaction** | `todo` | `S-E04-1`, `S-E04-3` | no | **`ADR-035`** |
+| `S-E04-6` | Five privileged families write their audit row **in the same transaction** | `todo` *(unblocked)* | `S-E04-1` ✅, `S-E04-3` ✅ | no | **`ADR-035`** |
 | `S-E04-7` | The remaining call sites move onto the seam, and a blocking gate keeps them there | `todo` | `S-E04-6` | no | — |
 | `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` | `S-E04-3`, `S-E04-6`, `S-E04-7` | **YES** | `ADR-035` *(amendment)* |
 
-**8 slices · 6 `todo` · 0 in progress · 2 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
+**8 slices · 5 `todo` · 0 in progress · 3 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
 (or `blocked`, with the blocking decision id). A slice moves to `shipped` only when its own acceptance criteria are
 evidenced in its PR — never because the code merged.
 
@@ -552,6 +565,229 @@ authoritative verdict rather than trusting the isolated pass (`R-23`, `PF-80`).
 | **`PF-125`** *(new, P3)* | The credentials login round-trip took **~30 s** on the local stack (`POST /api/auth/callback/credentials`), while a direct Keycloak password grant from the host returns in **1.1 s**. Cause not investigated; recorded as a measurement, not a diagnosis |
 
 ---
+
+## `S-E04-3` — shipped 2026-08-08 · the operator's real IP and User-Agent reach the API
+
+**Branch** `ci/2026-08-08-v3-E04-3-client-provenance` · **Risk** P0 · **Gates** `G-AUDIT` *(partial)*, `G-AUTHZ`,
+`G-DNC` · **`G-MIGRATION` did not trigger** · **Amends `ADR-036`** (D9/D10) · **Closes `PF-128`**
+
+### What landed
+
+| # | Change | Where |
+|---|---|---|
+| T-1 | `trust proxy`, pinned from a refusing key — the **only** `app.set('trust proxy', …)` in `apps/api` | new `apps/api/src/shared/config/trust-proxy.ts` (186 l) + `main.ts`; `TRUST_PROXY_HOPS` joins `REQUIRED_ENV` |
+| T-2 | The **only** header/socket read, two branches | new `apps/api/src/shared/audit/client-hints.ts` (318 l) |
+| T-3 | One `apps/web` producer, called from **both** server seams | new `apps/web/src/lib/client-provenance.ts` (350 l) ← `lib/api-client.ts` **and** `app/api/proxy/[...path]/route.ts` |
+| T-4 | The honest blank, stated per surface | new `apps/web/src/app/admin/audit/AuditProvenance.tsx` (97 l); `PROVENANCE_UNAVAILABLE` / `hasNoProvenance` / `humanizeUserAgent` in `audit-labels.ts` |
+| T-5 | Hints threaded to two write sites | `subjects.controller.ts:226`, `calendar.controller.ts:294` — **2 of ~13** `deriveAuditProvenance` call sites; see *Not claimed* |
+| T-6 | Two new configuration keys, declared in five files each | `infra/docker-compose.yml`, `infra/docker-compose.prod.yml`, `.env.example`, `.env.prod.example`, `apps/api/.env.example` |
+| T-7 | Four new specs | `client-hints.spec.ts` (307 l), `client-hints.supertest.spec.ts` (217 l), `trust-proxy.spec.ts` (206 l), `trust-proxy-dnc10-gate.spec.ts` (347 l) |
+
+**`applyTrustProxy` is called by `main.ts` *and* by the supertest harness**, deliberately: a test that configured
+`trust proxy` inline would prove a property of the test, not of the artefact that ships. That is the `S-E02-18` /
+`S-E02-19` lesson applied before it could be re-learned.
+
+### `PF-128` — the second seam, found by measuring rather than by reading
+
+`ADR-036`'s Context table named **one** `apps/web` server seam. There are **two**: `lib/api-client.ts` and
+`app/api/proxy/[...path]/route.ts`, the latter serving every client-component-driven write. A one-seam fix would have
+left that entire class of audited write blank **forever**, and the blank is indistinguishable from the designed-for
+blank — so nothing would ever have reported it. Closed here; the ADR's own Context table is corrected in the same
+diff. Registered in `docs/daily-improvement-v3/audit-findings-index.md`.
+
+### The two blockers the land pass fixed — and why they are one defect, not two
+
+Both were found by the gate and the escalation panel, **not** by the implementing agents, and both are the same
+shape: **the failure value and the designed-for value are the same `null`.**
+
+1. **`WEB_TRUST_PROXY_HOPS` was declared in exactly one file — the one that reads it.** A repo-wide grep returned
+   only `apps/web/src/lib/client-provenance.ts`. So `webTrustProxyHops()` always took its fallback branch and
+   returned `0`, `resolveClientAddress()` short-circuited at its first line (`if (hops < 1) return null`), and
+   `x-pilotage-client-ip` was **never emitted — in production as well as locally**. `AC-1` ("two audited actions
+   from two different client addresses produce two different `ip_address` values") was unsatisfiable **by
+   construction**, permanently, with one `console.warn` per web process as the only signal. Note the asymmetry that
+   let it through: `TRUST_PROXY_HOPS` was declared in five places *and* asserted by a declaration-parity block in
+   `trust-proxy-dnc10-gate.spec.ts` — the gate was pointed at the half that fails loudly.
+2. **`AUDIT_FORWARD_TOKEN` was byte-different on the two sides of the hop.** Repo-root `.env:80` carried
+   `local-dev-audit-forward-token` (fed to both containers through `x-app-env`); `apps/web/.env.local:40` carried
+   `dev-local-forward-token-not-a-secret` — read by the `next dev --port 3100` process the operator actually uses.
+   Branch 1 of `extractAuditClientHints` therefore returned `NO_CLIENT_HINTS` on every local UI-driven write, so
+   **both** `ip_address` and `user_agent` came back `null`, and the read-back evidence would have looked exactly
+   like the honest blank.
+
+**Fixed, and the durable half is the rule, not the four declarations.** `WEB_TRUST_PROXY_HOPS` is now declared in
+`infra/docker-compose.yml` (on the **`web` service**, not the `x-app-env` anchor — that anchor also reaches
+`migrator` and `seed`, which render no page and can claim no client; the file states this rule 30 lines below for
+`WEB_METRICS_PORT`), `infra/docker-compose.prod.yml` (`2`), `.env.example` (`0`), `.env.prod.example` (`2`), all in
+the **refusing** `${VAR:?}` form. The parity guard in `trust-proxy-dnc10-gate.spec.ts` gained 4 cases, and the
+load-bearing one is stated over the *shape* — **a key must be declared in a file other than the one that reads it** —
+not over the instance. The same pass **tightened a hole the slice itself had opened**: the two existing API
+assertions used an unanchored `/TRUST_PROXY_HOPS:\s*\$\{TRUST_PROXY_HOPS:\?/`, which the new `WEB_TRUST_PROXY_HOPS:`
+line satisfies, so the API key could have been deleted from both compose files with the block still green. Now
+`(?<![A-Z_])`.
+
+### ⚠️ Gitignored file edits — stated here because a reviewer cannot see them in the diff
+
+| File | Key | Value | Why |
+|---|---|---|---|
+| `.env` (repo root) | `WEB_TRUST_PROXY_HOPS` | `0` | **Required, not optional** — the refusing `${VAR:?}` form makes every local `docker compose` command fail without it |
+| `apps/web/.env.local` | `AUDIT_FORWARD_TOKEN` | `local-dev-audit-forward-token` | aligned **to** `.env:80` (was `dev-local-forward-token-not-a-secret`). That direction was chosen because `.env` feeds both containers through `x-app-env`, so editing it needs a container restart; editing the web file affects only `next dev` |
+
+### Executed, not asserted
+
+| Claim | Command | Observed |
+|---|---|---|
+| The tree typechecks | `pnpm typecheck` (repo root, once, 3m52s) | **13 successful / 13 total — GREEN.** `@pilotage/api`, `@pilotage/web`, `@pilotage/worker` all cache-**missed** and executed |
+| Diff hygiene | `git diff --check` | exit **0**; the 8 untracked new source files also checked individually via `--no-index` — no findings |
+
+The typecheck went **RED first**: 4 × `noUncheckedIndexedAccess` errors in the new
+`apps/web/src/lib/client-provenance.ts` (`:203`, `:204`, `:206`, `:212`), all one defect — regex-capture and
+`split()` indexing assigned to `string`. Fixed by porting the guarding style of the API twin
+(`shared/audit/client-hints.ts:246-262`), which compiles for exactly this reason. Recorded rather than smoothed over,
+because "the gate caught the thing the gate exists to catch" is the useful half.
+
+### ✅ MEASURED — `AC-13` / `AC-16`, executed by the routine after the sprint returned
+
+The sprint left this open ("no end-to-end audited write was driven, no row read back"). The routine closed it: one
+rationed `docker compose build api` — Step −1's condition held, because `pilotage_api` carried the image of
+2026-08-07 and `infra/docker-compose.yml` mounts no source into it, so a restart could not have picked the code up —
+then six probes against the running stack, each row **read back from Postgres**. The HTTP response was never the
+evidence.
+
+Boot log of the recreated container, quoted rather than paraphrased:
+
+```
+[Bootstrap] Preflight configuration OK — 4 variable(s) requise(s) déclarée(s) :
+            KEYCLOAK_URL, KEYCLOAK_ADMIN_USER, KEYCLOAK_ADMIN_PASSWORD, TRUST_PROXY_HOPS.
+[Bootstrap] Provenance d'audit — trust proxy pinné à 0 saut(s) (ADR-036 D2) ; jeton de transfert configuré.
+```
+
+**Baseline before the probes — the finding, reproduced one last time:** `select count(*), count(ip_address),
+count(user_agent) from audit_log` → **54 / 0 / 0**, matching `M-3` at the top of this file. After: **59 / 4 / 4**.
+
+Endpoint: `PUT /api/v1/subjects/coefficients/matrix` (`action='coefficient.upsert'`; the audit row is written
+**inside** the `$transaction`). Actor: `admin@pilotage.local` via a Keycloak direct-access grant on `portal-admin`.
+
+| # | Request | Branch | `ip_address` **stored** | `user_agent` **stored** | Proves |
+|---|---|---|---|---|---|
+| A | host → `localhost:4000`, no `x-pilotage-*` | 2 (`req.ip`, `N=0`) | `172.18.0.1` | `probe-A-host/1.0` | reference point |
+| B | from **inside** `pilotage_worker` → `api:4000` | 2 | **`172.18.0.5`** | `probe-B-worker-container/1.0` | **AC-1** — two client addresses, two different stored values |
+| C | host **+ forged** `X-Forwarded-For: 203.0.113.77` | 2 | `172.18.0.1` — **unchanged** | `probe-C-forged-xff/1.0` | **AC-2** — `203.0.113.77` appears nowhere in the table |
+| D | `x-pilotage-client-ip: 198.51.100.42` + **wrong** token | 1, refused | **`NULL`** | **`NULL`** | **AC-3** — forged address refused **and** no fall-back to the relay's own address |
+| E | same headers + **correct** token | 1, matched | `198.51.100.42` | `Mozilla/5.0 (Windows NT 10.0) RealOperatorBrowser/1.0` | **AC-4** |
+| F | valid forward token, **no** `Bearer` | — | — (no row written) | — | **G-AUTHZ** — `HTTP 401` |
+
+Row D is the one to read twice. It is the only new row that is blank, and it is blank **on both columns** — the whole
+security argument executing. Had branch 1 fallen back to `req.ip`, D would read `172.18.0.1` and *every other
+acceptance criterion above would still have passed*: A, B, C and E cannot distinguish the correct implementation from
+the one that silently records the relay. D is the only probe that can, which is why it exists.
+
+**F also closes the `AC-11` / `G-AUTHZ` residual** the sprint registered as missing ("no test drives a protected route
+with a valid `x-pilotage-forward-token` and no `Bearer`"). It is now measured behaviour, not a structural inference.
+
+**What this still does NOT prove, stated plainly.** Every probe drove the **API** directly. No write was driven
+through `apps/web`, because the `web` container cannot be rebuilt (`PF-126`) and its running image predates the seam.
+So `clientProvenanceHeaders()` — both web seams, and `PF-128`'s whole point — is proven by unit test and by the API
+accepting exactly the headers it emits (probe E replays them byte-for-byte), **not** by an executed
+browser → web → api round trip. Note also that locally `WEB_TRUST_PROXY_HOPS=0`, so even a working web container
+would forward **no** address by design (`ADR-036` D10): the honest local outcome is a null `ip_address` with a real
+`user_agent`. Named explicitly because that `null` is indistinguishable from the failure it would hide — the same
+shape as the two blockers above, and the reason this section quotes counts and a boot log rather than a verdict.
+
+### The gate caught one more thing, and it had been latent for months (`PF-133`)
+
+The full `scripts/ci-gate.sh` returned **`GATE: FAIL (4 stage(s))`** on the sprint's tree — while `pnpm typecheck`
+was **13/13 green**. Only one of the four was a real defect; `web artefact`, `csp` and `link integrity` all merely
+read `apps/web/.next/`, so they failed *because* the build emitted nothing. One defect, four red stages.
+
+```
+./src/lib/api-client.ts
+Error: You're importing a component that needs "next/headers".
+Import trace: ./src/lib/api-client.ts → ./src/components/notifications/NotificationCenter.tsx
+                                      → ./src/components/notifications/NotificationListItem.tsx
+```
+
+`NotificationListItem.tsx` is `'use client'` and imported the **value** `KIND_ICON` from `NotificationCenter.tsx`, a
+**server** component that imports `api` from `@/lib/api-client`. Importing a value across that boundary drags the
+whole server module into the browser graph. This was **already true before this slice** and silently tolerated: the
+server fetch helper was simply being bundled for the browser, useless but harmless. Adding `next/headers` — the one
+import that is *hard* server-only — turned a long-standing boundary violation into a build failure.
+
+Fixed at the boundary, not at the import: the client-safe vocabulary moved to
+`apps/web/src/components/notifications/notification-model.ts` (types + `KIND_ICON` + `KIND_LABEL`, no `api-client`),
+and the two `'use client'` files import **from there directly**. A re-export from `NotificationCenter` would *not*
+have worked — the import **specifier** decides the graph — and `await import('next/headers')` would have gone green
+while leaving a client component depending on a server module, i.e. hidden the defect rather than closed it.
+
+**Why it is a finding and not just a fix:** nothing in the repository asserts this invariant. `tsc` cannot see it,
+and `next build` only sees it once a hard server-only import exists — so any *other* `'use client'` file importing a
+value from a server module is still latent today, and will surface as a mystery build break in whichever unrelated
+slice next touches `api-client.ts`. Registered as **`PF-133`**, owner `V3-E02` (build/gate).
+
+#### …and fixing `PF-133` silently broke a different gate, which is the part worth reading
+
+The first fix moved the whole vocabulary out of `NotificationCenter.tsx` — including `type Portal`. Build went green,
+lint went green, and `test:api` reported **one new failure**: `link-integrity-gate.spec.ts` G-1, *"resolves the four
+real declarations this slice depends on"*.
+
+The cause is not local to that spec. `scripts/link-integrity-check.js` resolves a template's union **from the file
+that carries the link**, and `NotificationCenter.tsx:240` writes `` href={`/${portal}/notifications`} ``. With the
+alias moved, `resolveDeclaredUnion('portal', …)` returned `null`, so the template stopped expanding into
+`/admin/notifications`, `/teacher/notifications`, `/parent/notifications` and degraded to an unresolved shape —
+listed in the gate's own output as `« étoile »/notifications (3 sites) ← portal`.
+
+**And the link-integrity stage stayed `✓ PASS`**, because an unresolved shape is *tolerated* by design. Three routes
+stopped being checked, the stage that checks them reported success, and the only red anywhere in the repository was
+one floor assertion in a spec whose whole purpose is to be that floor. This is precisely the failure
+`resolveDeclaredUnion`'s own docblock names — *"picking the nearest one would under-approximate invisibly"* — observed
+from the other side: not a resolver picking wrongly, but a refactor removing what it resolves.
+
+**Correct fix, and it is narrower than the first one:** only **values** cross the server/client boundary harmfully. An
+`import type` is erased before bundling and creates no graph edge — which is why `next build`'s trace named
+`NotificationListItem.tsx` (imports the value `KIND_ICON`) and **not** `NotificationsFilters.tsx`, which was already
+importing `type Portal` from the same server module without consequence. So `KIND_ICON` / `KIND_LABEL` / the row types
+moved; `type Portal` moved **back**; the link expands again; both gates are green for the right reason. The constraint
+is written into both files at the two places someone would next reach for it.
+
+The transferable lesson, and the reason this is in `PROGRESS.md` rather than a commit message: **a green stage is not
+evidence of coverage.** `link integrity` passed in both runs — before the regression and during it. What caught it was
+a *floor* assertion pinned to a real declaration in a real file, the kind of test that looks redundant right up until
+a refactor walks past it. `AC-7`'s negative control in `S-E04-1` was the same shape, and `PF-127` is the same
+asymmetry a third time.
+
+### Residuals raised by this slice, registered rather than fixed
+
+| id / where | One line |
+|---|---|
+| **`PF-129`** — `apps/web/src/app/parent/register/actions.ts:25` | A **third** server-side fetch to the API that does not call `clientProvenanceHeaders`. Latent today (`RegisterController` writes no audit row), but the day it does, branch 2 records `req.ip` = the **web container** — `PF-31` rebuilt by the fix written to delete it. `PF-128`'s own failure mode, one file over, and **no web-side gate exists** — the invariant is asserted in prose only |
+| **`PF-130`** — `infra/nginx/conf.d/pilotage.conf:103` | `location /api/` does not clear the three `x-pilotage-*` headers, so they arrive from the internet. Any authenticated actor can blank **their own** provenance with one header (`x-pilotage-forward-token: junk` → branch 1 → token fails → `NO_CLIENT_HINTS`), and the row is indistinguishable from an honest blank with nothing logged. Fix: strip the three headers at the edge in every `location` proxying to `api_upstream` |
+| **`PF-131`** — `infra/nginx/conf.d/pilotage.conf:116` | `location /api/v1/notifications/stream` sets **no** `X-Forwarded-For`, so the real hop depth there is 1 while the API is pinned at 2. Latent (no `auditLog.create` reachable under that prefix) but it means the `N = 2` pin does not hold uniformly across the public surface |
+| **`PF-132`** — `.env.example:117` / `.env.prod.example` | The shipped `AUDIT_FORWARD_TOKEN` placeholders. An operator who copies the example file publishes a governance trail whose `ip_address` any anonymous caller can choose — strictly worse than shipping the feature off. Fix belongs where the value is **read** (`main.ts` → `configureAuditClientHints`): refuse to configure the seam on a shipped placeholder or a value under ~32 bytes, log the refusal by name, leave provenance null |
+| **`AC-11` / `G-AUTHZ`** | The **behavioural** half is missing: no test drives a `JwtAuthGuard`-protected route with a valid `x-pilotage-forward-token` and no `Bearer` and asserts **401**. Structurally verified (the header and env name appear in no guard, strategy, tenant resolver or role derivation), so this is missing evidence, not a live bypass — but the gate's stated purpose is to make a future author's mistake red, and a middleware that short-circuits the guard would satisfy the structural test |
+| **RGPD / retention** | Populating `ip_address` + `user_agent` on an **append-only** table with **no purge path anywhere** (`apps/api`, `apps/worker`, `packages/imports-core`) turns the audit trail into indefinite storage of parents' and teachers' personal data — and `exportAuditAction` ships it into MinIO behind a signed URL. "Minimal access + append-only audit" and "erasure on request" now conflict on the same rows. Wants a **decision** (retention window / IP truncation for aged rows), not code |
+| a11y — `AuditTable.tsx:96` | The audit row is **mouse-only** (`<tr onClick>`, no `tabIndex`/`onKeyDown`/`role`), and this slice makes drawer-only content load-bearing: the raw `user-agent` string and the « jamais remplacée par l'adresse d'un relais » sentence live **only** in the drawer. WCAG 2.2 SC 2.1.1, Level A. Compounded by `AuditProvenance.tsx:90`, where the full UA is exposed only through `title=` — not keyboard-reachable, not shown on touch |
+| copy — `AuditProvenance.tsx:80` | The absence phrase is rendered **per-row**, so in the state that will be the default everywhere (`ipAddress` null, `userAgent` real) the table shows « Provenance non disponible » on one line and the browser on the next, and the drawer renders « Adresse IP → Provenance non disponible » beside « Navigateur → Chrome sur Windows ». The component's own docblock says the two fields are independent; this rendering breaks that rule |
+| two `normaliseClientAddress` | Two exported functions, one name, one slice, different contracts — the web copy validates against IPv4/IPv6 regexes, the API copy strips decorations and defers to `sanitiseInetOrNull`. Not a correctness bug (the API re-validates) but it is the "second copy survives its own review" shape this slice spends paragraphs refusing elsewhere. Same for the duplicated `MAX_*_TRUST_PROXY_HOPS = 2` bound |
+| `client-provenance.ts:339` | The always-emitted **empty** token header is load-bearing and untested end-to-end: its arrival is the only thing keeping the API on branch 1. If any intermediary drops an empty-valued header, the API falls to branch 2 and records the web container's address. A non-empty sentinel removes the dependency |
+| `client-provenance.ts:261` | Fail-open branch: `hops === 1` with an empty chain trusts `x-real-ip`. Neither declared topology uses `W = 1`, so it is latent — but it is reachable only when the assumed single relay did not set XFF, i.e. exactly when the topology assumption is already false |
+
+### What this slice deliberately did NOT do
+
+- **It did not thread hints at every write site.** Only **2 of ~13** `deriveAuditProvenance` call sites pass them, and
+  no gate requires a new audited write to. `/admin/audit` therefore renders « Provenance non disponible » identically
+  for *"the write site never captures it"* and *"it was not resolvable"* — an auditor cannot tell a design gap from an
+  honest blank. Scope-consistent (`S-E04-7` owns the column-level rule) but **stated here rather than discovered
+  later**.
+- **It did not add a web-side unit runner.** `apps/web` has none — `package.json` carries dev/build/start/lint/
+  typecheck plus Playwright e2e, no jest, no vitest — so `resolveClientAddress` / `normaliseClientAddress`, the 350
+  lines that decide whether a browser can choose its own audit row, are **executed by no test**. Introducing a test
+  toolchain to a workspace that has none is a new architectural decision and out of scope for this slice. The
+  reachable form, recorded for whoever takes it: an `apps/api` quality spec that loads the web module through a
+  dynamic `require` (precedent: `csp-gate.spec.ts:36`, `link-integrity-gate.spec.ts:40`), since
+  `client-provenance.ts` has **zero** imports. A static `import` would break `apps/api`'s `rootDir` with `TS6059`.
+- **It did not touch the read side of `portal`**, the vocabulary, transactionality, or the hash chain.
+
+---
 ## Not claimed (kept honest — the whole point of this file)
 
 | Item | Why it is not claimed | Who can close it |
@@ -586,6 +822,11 @@ authoritative verdict rather than trusting the isolated pass (`R-23`, `PF-80`).
 | `PF-121` | **open** — raised and registered by `S-E04-1` | The two `tx.auditLog.create` calls in `packages/imports-core/src/engine.ts` still hard-code both provenance fields, on a call path with no JWT (the worker drains a BullMQ job). Deliberately out of `S-E04-1`'s scope: `AC-2` is scoped to `apps/api/src`, and a job-written row needs provenance captured at *enqueue* plus a ruling on what portal a job acted through. Owner `S-E04-7` |
 | **`PF-122`** | **open** — raised by the escalation panel, registered by this land pass | `child-claims.service.ts:722-729` is a **fourth decision site inside `apps/api/src`**: `actor: 'parent' \| 'admin' = 'parent'` → `actorRole: actor`, `portal: actor`, with the literal `'admin'` passed at `:522`/`:609`. A `super_admin` approving a guardianship claim is audited **`actorRole: 'admin'` — not a realm role at all**, so `/admin/audit`'s role facet carries a fifth orphan token no label map knows. Invisible to all four gate matchers by construction. Owner `S-E04-7` |
 | **`PF-123`** | **open** — raised by the escalation panel, registered by this land pass | `assessments.controller.ts:290` writes `assessment.publish` with **no `actorRole` and no `portal` key** — grade publication records no actor role, and a `null` portal is reachable by **no** offered `/admin/audit` filter value (the facet list is built `where: { portal: { not: null } }`, `analytics.service.ts:3358-3364`). Owner `S-E04-7` |
+| **`PF-128`** | **closed** by `S-E04-3` | `ADR-036`'s Context table named **one** `apps/web` server seam; there are **two** (`lib/api-client.ts` and `app/api/proxy/[...path]/route.ts`). A one-seam fix would have left every client-component-driven audited write blank forever, undetectably. Both seams now call the single `clientProvenanceHeaders` helper; the ADR's Context table is corrected in the same diff (`R-30`) |
+| **`PF-129`** | **open** — raised by `S-E04-3` | `apps/web/src/app/parent/register/actions.ts:25` is a **third** server-side fetch to the API that bypasses the helper. Latent (no audit row on that path today); becomes `PF-31` again the moment one is added. **No web-side gate exists** — "every server-side fetch to `API_URL` goes through `clientProvenanceHeaders`" is asserted in prose and enforced nowhere. Owner `S-E04-7` |
+| **`PF-130`** | **open** — raised by `S-E04-3` | `infra/nginx/conf.d/pilotage.conf:103` does not strip the three `x-pilotage-*` headers, so they are accepted from the public edge. One-header self-anonymisation by any authenticated actor, indistinguishable from an honest blank, nothing logged; and any leak of `AUDIT_FORWARD_TOKEN` becomes internet-facing forgery rather than an internal-network risk. Owner: infra / `S-E04-7` |
+| **`PF-131`** | **open** — raised by `S-E04-3` | `infra/nginx/conf.d/pilotage.conf:116` (`/api/v1/notifications/stream`) sets no `X-Forwarded-For`, so hop depth there is 1 against a pin of 2. Latent today; the `N = 2` pin is the security argument and it does not hold uniformly. Owner: infra |
+| **`PF-132`** | **open** — raised by `S-E04-3` | Both `.env` examples ship an `AUDIT_FORWARD_TOKEN` **placeholder**, the token is not in `REQUIRED_ENV`, no gate has a rule for it, and no test covers its value. A publicly-known token turns « null rather than wrong » into « plausible and wrong ». Fix belongs at the read site (`main.ts` → `configureAuditClientHints`), plus a one-way `production-artefact-check.js` row. Owner `S-E04-7` |
 | `R-10` / `A-01` | unchanged | Accepted; the gap is documented and must be rendered in-product by `S-E04-8` |
 
 ---

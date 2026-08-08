@@ -24,6 +24,7 @@ import { useState, type ComponentType } from 'react';
 
 
 import { AuditDetailDrawer, type AuditEntry } from './AuditDetailDrawer';
+import { AuditProvenance } from './AuditProvenance';
 import { humanizePortal, humanizeResourceType } from './audit-labels';
 
 interface AuditTableProps {
@@ -76,13 +77,15 @@ export function AuditTable({ rows }: AuditTableProps) {
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50">
             <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              <th className="px-4 py-3">Date & heure</th>
-              <th className="px-4 py-3">Utilisateur</th>
-              <th className="px-4 py-3">Action</th>
-              <th className="px-4 py-3">Ressource</th>
-              <th className="px-4 py-3">Détails</th>
-              <th className="px-4 py-3">Portail · IP</th>
-              <th className="w-10 px-4 py-3"></th>
+              <th scope="col" className="px-4 py-3">Date & heure</th>
+              <th scope="col" className="px-4 py-3">Utilisateur</th>
+              <th scope="col" className="px-4 py-3">Action</th>
+              <th scope="col" className="px-4 py-3">Ressource</th>
+              <th scope="col" className="px-4 py-3">Détails</th>
+              {/* « Portail · IP » promettait une valeur nulle sur 54 lignes sur
+                  54 : c'est l'en-tête, pas la cellule, qui ment en premier. */}
+              <th scope="col" className="px-4 py-3">Portail · provenance</th>
+              <th scope="col" className="w-10 px-4 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -143,10 +146,9 @@ export function AuditTable({ rows }: AuditTableProps) {
                         {humanizePortal(a.portal)}
                       </span>
                     )}
-                    {a.ipAddress && (
-                      <div className="mt-1 font-mono text-[11px] text-slate-400">{a.ipAddress}</div>
-                    )}
-                    {!a.portal && !a.ipAddress && <span className="text-slate-400">—</span>}
+                    {/* Jamais de tiret cadratin ici : l'absence de provenance
+                        est une propriété de la trace, elle s'énonce. */}
+                    <AuditProvenance ip={a.ipAddress} ua={a.userAgent} variant="cell" />
                   </td>
                   <td className="px-4 py-3 align-top text-right">
                     <span className="inline-flex h-6 w-6 items-center justify-center rounded-full text-slate-400 transition group-hover:bg-blue-100 group-hover:text-blue-600">
@@ -176,7 +178,7 @@ function ViewerHint() {
     <p className="border-t border-slate-100 bg-slate-50/40 px-4 py-2 text-[11px] text-slate-500">
       <span className="inline-flex items-center gap-1">
         <Eye className="h-3 w-3" />
-        Cliquez sur une ligne pour voir le détail complet (avant / après, IP, user agent).
+        Cliquez sur une ligne pour voir le détail complet (avant / après, provenance, user agent).
       </span>
     </p>
   );
