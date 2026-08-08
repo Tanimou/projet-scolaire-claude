@@ -10,9 +10,12 @@ import type { Metadata } from 'next';
 
 
 import type { AuditEntry } from './AuditDetailDrawer';
-import { AuditPageFilters, humanizePortal, humanizeResourceType } from './AuditPageFilters';
+import { AuditPageFilters } from './AuditPageFilters';
 import { AuditTable } from './AuditTable';
 import { exportAuditAction } from './actions';
+// Module neutre, jamais `'use client'` : cette page est un composant serveur et
+// **appelle** ces fonctions (PF-14 / S-E04-2). Voir `audit-labels.ts`.
+import { humanizePortal, humanizeResourceType } from './audit-labels';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';

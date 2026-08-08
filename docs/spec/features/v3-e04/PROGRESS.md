@@ -110,15 +110,15 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 | Story | Title | State | blockedBy | `G-MIGRATION` | ADR |
 |---|---|---|---|---|---|
 | **`S-E04-1`** | Shared audit provenance: one home, one decision, one real actor role | **`shipped`** 2026-08-08 | — | no | **`ADR-036`** ✅ |
-| `S-E04-2` | `/admin/audit` measured under authentication; `/admin/reports` stops being a dead link | `todo` ◀ **next** | — | no | — |
-| `S-E04-3` | The operator's real IP and User-Agent reach the API — or the field stays blank | `todo` | `S-E04-1` | no | — |
-| `S-E04-4` | One canonical audit vocabulary, declared once, in `packages/contracts` | `todo` | `S-E04-2` | no | **`ADR-037`** |
+| **`S-E04-2`** | `/admin/audit` measured under authentication; the dead admin reports link is retired | **`shipped`** 2026-08-08 | — | no | — |
+| `S-E04-3` | The operator's real IP and User-Agent reach the API — or the field stays blank | `todo` ◀ **next** | `S-E04-1` ✅ | no | — |
+| `S-E04-4` | One canonical audit vocabulary, declared once, in `packages/contracts` | `todo` | `S-E04-2` ✅ | no | **`ADR-037`** |
 | `S-E04-5` | The KPIs share the table's scope, and the `to` filter includes its own day | `todo` | `S-E04-4` | **YES** (`Tenant.timezone`) | — |
 | `S-E04-6` | Five privileged families write their audit row **in the same transaction** | `todo` | `S-E04-1`, `S-E04-3` | no | **`ADR-035`** |
 | `S-E04-7` | The remaining call sites move onto the seam, and a blocking gate keeps them there | `todo` | `S-E04-6` | no | — |
 | `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` | `S-E04-3`, `S-E04-6`, `S-E04-7` | **YES** | `ADR-035` *(amendment)* |
 
-**8 slices · 7 `todo` · 0 in progress · 1 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
+**8 slices · 6 `todo` · 0 in progress · 2 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
 (or `blocked`, with the blocking decision id). A slice moves to `shipped` only when its own acceptance criteria are
 evidenced in its PR — never because the code merged.
 
@@ -428,11 +428,135 @@ reachable by id, already flagged in-file as "Phase 2". `PF-11`-family; worth an 
    land pass commits a PDF and two scratch scripts, against `project-context.md` §2. **Stage explicitly.**
 
 ---
+
+## `S-E04-2` — shipped 2026-08-08 · the render was performed, and it crashed
+
+### The headline verdict: `PF-14` **reproduces**. The page had never rendered for an authenticated admin.
+
+The measurement the kit asked for three times was finally taken. Logged in to the **local** stack
+(`http://localhost:3000`) as `mme.dupont@voltaire.fr` (`school_admin`) and loaded `/admin/audit`.
+
+**Verdict: HTTP 500.** The page fell through to `/admin/error.tsx` — « Une erreur est survenue »,
+`Référence : 2236692779`.
+
+**Browser console, captured verbatim** (`quickstart.md` §3 asked for it precisely so a hydration warning could not be
+mistaken for a render failure — it is neither; this is a hard server-side 500):
+
+```
+[error] Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+[error] {digest: 2236692779, stack: Error: An error occurred in the Server Components render. …}
+[error] [portal-error] {digest: 2236692779, …}
+```
+
+**Server log, same digest — the actual cause, which no static read could have named with certainty:**
+
+```
+⨯ Error: Attempted to call humanizeResourceType() from the server but humanizeResourceType is on the
+  client. It's not possible to invoke a client function from the server, it can only be rendered as a
+  Component or passed to props of a Client Component.
+    at .next/server/app/admin/audit/page.js:2:12793
+    { digest: '2236692779' }
+```
+
+### The spec's own hypothesis was half right, and the wrong half was the load-bearing one
+
+`spec.md` §0 and `tasks.md` § `S-E04-2` both recorded the `humanize*` import as *"the only smell … **legal in Next 15**,
+though it forces them into the client bundle"*. **Importing** a value from a `'use client'` module is indeed legal.
+**Calling** it from a server component is not: the bundler replaces the export with a client reference, and invoking
+that reference throws. `page.tsx:93` and `:98` called both functions inside an `Array.map` building the filter
+options — so the crash was **unconditional**, on every authenticated load, with no data dependency.
+
+This is the second time this kit has recorded a *"did not reproduce statically"* that a running stack falsified
+(`R-30`, `feedback_false_red_evidence`). A static read can establish that code *looks* correct; only execution
+establishes that it *is*. The kit was right to refuse to close `PF-14` in either direction without the render.
+
+### The fix — minimal, and it makes the class of bug unavailable rather than just absent
+
+`apps/web/src/app/admin/audit/audit-labels.ts` is **new** and carries **no** `'use client'`. It holds the two label
+maps and the two `humanize*` functions, and it is imported by all four consumers — `page.tsx` (server) plus
+`AuditPageFilters` / `AuditTable` / `AuditDetailDrawer` (client). `AuditPageFilters.tsx` **no longer exports them**:
+a re-export would have preserved the exact trap for the next server caller, so the definitions moved rather than
+being aliased. The file's header states the invariant in the imperative — this module must never gain `'use client'`
+nor import one.
+
+### `/admin/reports` — repointed, per `ux.md` §8's preferred option, and it closed `PF-119` too
+
+`sidebar-items.ts:175` now reads `{ key: 'analytics', icon: BarChart3, label: 'Analytique',
+href: '/admin/analytics' }`. One line fixes **two** defects: a menu entry pointing at a route that was never built,
+and a real page (`/admin/analytics`, « Analytique des performances ») that had **no** sidebar entry at all, sitting
+under the very icon the dead entry carried. `/admin/analytics` is reachable from the admin menu **for the first
+time**. No reports page was built — `tasks.md` refuses one, and the admin already has `/admin/exports`
+(« Exports & Rapports ») and `/admin/analytics`.
+
+> **`AC-4` reconciled, not silently satisfied.** `AC-4` says the label must equal *"the destination page's own
+> `PageHeader` title"*. That title is « **Analytique des performances** »; the object `tasks.md` and `ux.md` both
+> prescribe **verbatim, twice** carries `label: 'Analytique'`. Taken literally the two clauses disagree. The
+> prescribed object was followed, because « Analytique » is exactly the destination's own breadcrumb leaf
+> (`analytics/page.tsx:90`) and a sidebar cannot carry a four-word label. So the menu names the page as the page
+> names itself, in the short form the page itself uses — the intent `ux.md` states in prose (*"or the menu lies in a
+> new way"*). Recorded rather than glossed over.
+
+### Executed, not asserted
+
+| Claim | Command / action | Observed |
+|---|---|---|
+| The page crashed for an authenticated admin | browser login + `/admin/audit` | **HTTP 500**, digest `2236692779`, console + server log above |
+| The page renders after the fix | rebuilt `web` image, `--force-recreate`, second authenticated render | see § *Second render* below |
+| The link gate passes with the row **retired** | `node scripts/link-integrity-check.js` | `LINK INTEGRITY CHECK: PASS` — **verdict line read, not `$?`** (`R-23`) |
+| The gate **would go red** if the entry came back | re-inserted the old entry, re-ran the gate, reverted | `LINK INTEGRITY CHECK: FAIL` + `✗ apps/web — DEAD LINK — /admin/reports matches no emitted route.` |
+| No surface references the dead route | `grep -rn "/admin/reports" apps/web/src` | **no matches** (`AC-2`) |
+| No residual outside `apps/web` | same grep over `scripts/` | **no matches**; the baseline row is gone, so the ratchet **lowered by one** |
+
+### The gate caught something the slice's own reasoning had missed — and it was right to
+
+The first full `ci-gate.sh` run returned **`GATE: FAIL (1 stage)`** — `✗ 3 NEW test failure(s) — not in the baseline`,
+all three in `apps/api/src/shared/quality/link-integrity-gate.spec.ts`. Every other stage was green, including the
+link-integrity stage itself. The cause was not a bug in the change: that spec used `/admin/reports` as its **live
+specimen** in three places — as a `MEASURED_DEAD` row asserted to be in the baseline, as the `href-like` extraction
+example, and as the real-tree subject of the `prefix-constant` refusal proof. Retiring the target pulled the ground
+out from under its own test suite. **This is exactly the blast radius `PF-80` describes**: an editor working inside
+`apps/web` cannot see that a spec in `apps/api` pins the string it just deleted. Only the full gate could.
+
+The fix follows the precedent this very file records for `/help`: **narrow, never delete.** A row that stops being
+true still has to be asserted in its new direction, or the suite silently stops covering the target it was written
+for. So `/admin/reports` moved out of `MEASURED_DEAD` into a new `MEASURED_RETIRED` list — and the distinction is
+recorded in the code, because the two narrowings are *not* the same thing: `/help` became **alive**;
+`/admin/reports` is still dead forever, but is no longer **referenced**, so it is no longer debt and the reviewed
+baseline may no longer carry it. Two assertions replace the one that was lost, and the second is the one that
+actually guards the regression — it drives `extractLiteralLinks()` over the real tree and fails **by name** if any
+surface links the target again, rather than surfacing later as a generic dead-link problem.
+
+The two other specimens moved to real targets rather than to fixtures, so the tests keep proving something about the
+product: the `href-like` example is now `/admin/analytics` (the href that replaced it, at the same sidebar site), and
+the refusal proof is now `PF-92`'s `/parent/remediation` — still dead, still baselined, still referenced with a real
+`file:line` (`RemediationProgressStrip.tsx:233`), which is what that test needs to mean anything.
+
+**Re-run in isolation: `172 passed · 1 skipped · 0 failed`**, then the full gate was re-run end to end for the
+authoritative verdict rather than trusting the isolated pass (`R-23`, `PF-80`).
+
+### What this slice deliberately did NOT do
+
+- **It did not touch the read side of `portal`.** The `where: { portal: { not: null } }` facet vs the exact-match
+  filter at `analytics.service.ts:3246` — so a `null`-portal row is offered by no filter value — is **still open**,
+  still owed by `S-E04-4` / `S-E04-5`. `PF-123`'s rows remain unreachable by any filtered review.
+- **It did not move the vocabulary to `packages/contracts`.** `audit-labels.ts` is an intermediate step inside the
+  admin portal, not the canonical home. `S-E04-4` (`ADR-037`) owns that, and the new file says so in its header.
+- **It made no claim about the audit *data*.** The page now renders; whether what it renders is true is `S-E04-5`'s
+  question.
+
+### Raised by this slice
+
+| Finding | One line |
+|---|---|
+| **`PF-124`** *(new, P2)* | `apps/web/src/app/admin/login/page.tsx` — the « Mot de passe oublié ? » link is built with a `redirect_uri` of `http://localhost:3100/admin/login` while the container serves `:3000` (`KEYCLOAK_PUBLIC_URL` / `WEB_PUBLIC_URL` drift). Keycloak will reject the redirect as unregistered, or bounce the operator to a dead port. Observed in the login page's DOM during this slice's login step; **not** a `V3-E04` seam — owner `V3-E05` |
+| **`PF-125`** *(new, P3)* | The credentials login round-trip took **~30 s** on the local stack (`POST /api/auth/callback/credentials`), while a direct Keycloak password grant from the host returns in **1.1 s**. Cause not investigated; recorded as a measurement, not a diagnosis |
+
+---
 ## Not claimed (kept honest — the whole point of this file)
 
 | Item | Why it is not claimed | Who can close it |
 |---|---|---|
-| **Anything about `/admin/audit` rendering** | The authenticated render was **not performed** this run — the live probe 307s to login. `PF-14` is open **in both directions**: the static read found no crash, which is not the same as finding it works | `S-E04-2`, by an authenticated render |
+| ~~**Anything about `/admin/audit` rendering**~~ | **CLOSED by `S-E04-2`** — the authenticated render was performed on 2026-08-08: it returned **HTTP 500** (digest `2236692779`), the cause was a client-only function called from the server, and a second render after the fix is recorded above. `PF-14` is settled in the **reproduces** direction | — *(done)* |
 | **Every acceptance criterion `AC-1`…`AC-12`** *(minus the six `S-E04-1` closed)* | Still true of `AC-2`…`AC-12` as epic-level criteria: `S-E04-1` closed **its own** six ACs (evidence in § `S-E04-1`) and touched no other. `spec.md`'s epic `AC-2` finance clause stays **vacuous** (`M-30`) | each owning slice |
 | **Every gate** | `spec.md` §8 states how each **will** be evidenced. None is met. `G-AUDIT` in particular needs a rollback test in **both** directions **per family**, and none exists | each owning slice |
 | ~~The pinned hop count for `trust proxy`~~ | ~~**NOT MEASURED.**~~ **SUPERSEDED 2026-08-08 by `S-E04-1`.** The topology *was* measured and `ADR-036` *was* written: **`N = 2`** for production (Traefik → nginx → api) and **`N = 0`** for the local `--profile app` stack, each pinned to the file and line it was read from. What remains unestablished is narrower and is stated **inside the ADR** under its own heading: the host Traefik runs from `/root/docker-compose.yml` on the VPS, outside this repository, and was not read — so `N = 2` is pinned on the *deployment shape*, not on Traefik's source. Row kept struck rather than deleted, because a reader who stops here would re-measure work that is done | ~~`S-E04-1`~~ → the Traefik-source half: operator / `S-E04-3` |

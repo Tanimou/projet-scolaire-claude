@@ -342,9 +342,16 @@ const PHANTOM_AUTH_ROUTES = [
  * `/api/auth` and `/favicon` also remain dead here and always will be: they are
  * still classified `dead` by the four-verdict classifier, and their
  * `class: 'prefix-constant'` changes only how the RECONCILER counts them (§4).
+ *
+ * `/admin/reports` used to head this list under `PF-14`. `S-E04-2` retired it, and
+ * it moves to `MEASURED_RETIRED` below rather than being deleted — the same
+ * narrowing `/help` got, for a DIFFERENT reason worth keeping straight. `/help`
+ * became **alive**; `/admin/reports` is still dead and always will be, but nothing
+ * references it any more, so it is no longer *debt* and the reviewed baseline may
+ * no longer carry it. Deleting the row outright would have left three assertions
+ * silently covering nothing.
  */
 const MEASURED_DEAD: Array<[string, string]> = [
-  ['/admin/reports', 'PF-14'],
   ['/legal/privacy', 'PF-38'],
   ['/legal/terms', 'PF-38'],
   ['/legal/cookies', 'PF-38'],
@@ -363,6 +370,23 @@ const MEASURED_DEAD: Array<[string, string]> = [
  * slice's bidirectional evidence (AC-6), and it only bites if the rows are gone.
  */
 const CLOSED_BY_THIS_SLICE = ['/admin', '/teacher', '/parent', '/student', '/pricing', '/contact', '/help'];
+
+/**
+ * Targets a slice took out of the ceiling by REMOVING the reference, not by
+ * building the route. Distinct from `CLOSED_BY_THIS_SLICE`, where the route came
+ * to exist.
+ *
+ * `/admin/reports` (`PF-14`, `S-E04-2`): the « Rapports » sidebar item was
+ * repointed to `/admin/analytics` — a real page that, until that slice, had no
+ * sidebar entry at all while sitting under the very same `BarChart3` icon
+ * (`PF-119`). So one edit removed a dead link and un-orphaned a live page.
+ *
+ * Both directions are asserted below, because each alone is satisfiable by a
+ * mistake: "still matches no route" stays true if someone re-adds the link, and
+ * "absent from the baseline" stays true if someone re-adds the link *and* forgets
+ * the baseline — which is precisely the regression the gate exists to catch.
+ */
+const MEASURED_RETIRED: Array<[string, string]> = [['/admin/reports', 'PF-14']];
 
 /**
  * Hand-listed live routes, one block per portal (G-PORTAL).
@@ -1025,9 +1049,12 @@ describe('extractTemplateLinks — G-3, G-7: over the real tree, and nothing dro
     // Floor: BOTH values actually occur, or the refusal below is untestable.
     expect(contexts).toEqual(new Set(['href-like', 'plain']));
 
-    const reports = references.filter((r) => r.target === '/admin/reports');
-    expect(reports.length).toBeGreaterThan(0);
-    expect(reports.every((r) => r.context === 'href-like')).toBe(true);
+    // Was `/admin/reports` until S-E04-2 retired it. `/admin/analytics` is the
+    // href that replaced it at the same sidebar site, so the specimen still comes
+    // from the real tree and still exercises the `href:`-key shape.
+    const hrefLike = references.filter((r) => r.target === '/admin/analytics');
+    expect(hrefLike.length).toBeGreaterThan(0);
+    expect(hrefLike.every((r) => r.context === 'href-like')).toBe(true);
 
     for (const target of ['/api/auth', '/favicon']) {
       const found = references.filter((r) => r.target === target);
@@ -1207,13 +1234,16 @@ describe('classifyAll — G-9: the prefix-constant class cannot hide a real href
     expect(result.stats.deadDebt).toBe(1);
   });
 
-  it('REFUSED against the real code: /admin/reports may not be tagged prefix-constant', () => {
+  it('REFUSED against the real code: /parent/remediation may not be tagged prefix-constant', () => {
     // The negative proof AC-5 asks for, driven from the REAL extractor over the REAL
-    // tree. `/admin/reports` is the « Rapports » sidebar item — `href: '/admin/reports'`
-    // at `components/shell/sidebar-items.ts:175` — so the mechanism must refuse it,
-    // and it must refuse it by name rather than merely fail somewhere.
+    // tree. This case used `/admin/reports` until S-E04-2 retired that target; the
+    // specimen had to move to another REFERENCED dead route, because the whole point
+    // is to drive the refusal from a real href with a real file:line. `PF-92`'s
+    // `/parent/remediation` is that route — `href="/parent/remediation"` in the
+    // parent dashboard's remediation strip. The mechanism must refuse it, and refuse
+    // it BY NAME rather than merely fail somewhere.
     const baseline = BASELINE.map((entry) =>
-      entry.target === '/admin/reports' ? { ...entry, class: 'prefix-constant' } : entry,
+      entry.target === '/parent/remediation' ? { ...entry, class: 'prefix-constant' } : entry,
     );
     const result = classifyAll({
       targets: extractLiteralLinks(),
@@ -1223,8 +1253,8 @@ describe('classifyAll — G-9: the prefix-constant class cannot hide a real href
       deadShapes: normalizeShapeBaseline(baselineRaw),
     });
     const text = result.problems.join('\n');
-    expect(text).toContain('PREFIX-CONSTANT CLASSIFICATION REFUSED — /admin/reports');
-    expect(text).toContain('components/shell/sidebar-items.ts:175');
+    expect(text).toContain('PREFIX-CONSTANT CLASSIFICATION REFUSED — /parent/remediation');
+    expect(text).toContain('RemediationProgressStrip.tsx:233');
   });
 
   it('and the CONTROL: the committed baseline, unmodified, produces no refusal', () => {
@@ -1407,6 +1437,25 @@ describe('scripts/link-integrity-baseline.json', () => {
     const entry = BASELINE.find((e) => e.target === target);
     expect(entry).toBeDefined();
     expect(entry?.finding).toBe(finding);
+  });
+
+  it.each(MEASURED_RETIRED)(
+    'no longer holds %s (%s) — the reference was removed, so the ceiling came down',
+    (target) => {
+      // Direction 1: the ceiling shrank. The gate itself FAILS on a baselined
+      // target nobody references any more, so leaving the row would have been red
+      // — this asserts the row was retired rather than re-reasoned.
+      expect(BASELINED_TARGETS).not.toContain(target);
+    },
+  );
+
+  it.each(MEASURED_RETIRED)('and nothing in apps/web references %s any more (%s)', (target) => {
+    // Direction 2, and the one that actually guards the regression: re-adding the
+    // sidebar entry would make this fail HERE, in a named test, rather than only
+    // as a generic dead-link problem. Driven from the real extractor over the real
+    // tree — not from the baseline, which is the thing being checked.
+    const referenced = extractLiteralLinks().filter((r) => r.target === target);
+    expect(referenced).toEqual([]);
   });
 
   it('baselines /legal/* rather than fixing it — S-E06-4 owns it, blocked on D-08', () => {

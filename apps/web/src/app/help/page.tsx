@@ -58,12 +58,16 @@ import { isPortalId, PORTAL_LANDING, type PortalId } from '@/lib/portals';
  * `packages/ui`, rendered on every parent and student page.
  *
  * Every route listed below was checked against the emitted route inventory
- * (`scripts/web-route-baseline.json`). Three neighbours are deliberately ABSENT
+ * (`scripts/web-route-baseline.json`). Two neighbours are deliberately ABSENT
  * because they are not emitted and a help page must not send anyone to a 404:
- *   • `/admin/reports`   — PF-14, owner V3-E04
  *   • `/parent/remediation` (index) — PF-92, owner V3-E07; only the per-plan
  *     `/parent/remediation/[planId]` route exists
  *   • `/student/settings`, `/student/notifications` — PF-57, owner L2
+ *
+ * A third used to be listed here — the admin « Rapports » route (PF-14). `S-E04-2`
+ * retired it: no surface links that target any more, because the sidebar entry now
+ * points at the real `/admin/analytics`, so there is nothing left for this page to
+ * avoid. The admin rows below stay a curated subset of the sidebar, not a mirror.
  *
  * The labels are the sidebar's own (`components/shell/sidebar-items.ts`), so each
  * row names the screen exactly as the application names it.

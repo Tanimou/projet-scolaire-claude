@@ -172,7 +172,21 @@ export const adminSidebarGroups: SidebarGroupConfig[] = [
         matches: /^\/admin\/integrations(\/|$)/,
       },
       { key: 'exports', icon: FileSpreadsheet, label: 'Exports', href: '/admin/exports' },
-      { key: 'reports', icon: BarChart3, label: 'Rapports', href: '/admin/reports' },
+      {
+        // S-E04-2 / PF-14 + PF-119. Cette entrée « Rapports » pointait sur une
+        // route admin de rapports qui n'a jamais existé — tandis que
+        // `/admin/analytics`, une page réelle, n'avait **aucune** entrée de menu,
+        // sous cette même icône. Un seul repointage corrige les deux défauts. Le
+        // libellé reprend le fil d'Ariane de la destination (« Analytique ») :
+        // aucun troisième nom. Ne pas ré-introduire l'ancienne cible morte —
+        // `scripts/link-integrity-check.js` repasserait au rouge (vérifié), et
+        // l'admin dispose déjà d'`/admin/exports` (« Exports & Rapports ») et
+        // d'`/admin/analytics`.
+        key: 'analytics',
+        icon: BarChart3,
+        label: 'Analytique',
+        href: '/admin/analytics',
+      },
       { key: 'audit', icon: History, label: 'Audit', href: '/admin/audit' },
     ],
   },
