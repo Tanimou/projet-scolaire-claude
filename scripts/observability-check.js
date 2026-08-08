@@ -142,6 +142,25 @@ const WEB_OBSERVABILITY_MODULE = 'apps/web/src/observability/web-observability.j
 const WORKER_QUEUE_METRICS_MODULE = 'apps/worker/dist/shared/observability/queue-metrics.js';
 
 /**
+ * The two OTHER built artefacts the queue readers open (S-E02-19 / PF-115 (a)).
+ *
+ * Named here rather than inlined at the `join()` site, because the failure
+ * message has to be able to say which file it actually read. It used to say
+ * `queue-metrics.js` for every cause — including the two causes whose unreadable
+ * file is one of these — so an operator followed the message into the wrong file
+ * at the exact moment a blocking stage had failed.
+ */
+const WORKER_METRICS_REGISTRY_MODULE = 'apps/worker/dist/shared/observability/metrics.registry.js';
+const WORKER_QUEUE_DEPTH_COLLECTOR_MODULE =
+  'apps/worker/dist/shared/observability/queue-depth.collector.js';
+
+/**
+ * The root `reflect-metadata` is resolved from. Named for the same reason: a
+ * resolution failure has to say WHERE the resolution was attempted.
+ */
+const REFLECT_METADATA_RESOLUTION_ROOT = 'apps/api';
+
+/**
  * The two modules that register the BullMQ queues, one per application.
  *
  * Neither is edited by S-E02-17 — they are this check's INPUT, not its output,
@@ -254,35 +273,49 @@ function metricNamesInExpr(expr) {
  *    this reader cannot parse must become a PROBLEM, never an accepted
  *    expression (DNC-08): a silently-skipped expression is how a blocking stage
  *    turns into a vacuous pass.
+ *
+ * S-E02-19 / PF-114 (c): the scan runs over a QUOTE-MASKED copy of the
+ * expression, so a `sum` living inside a label value — `x_total{job="sum"}`,
+ * `label_replace(x, "sum", …)` — is not read as an aggregation. It used to be,
+ * and it then failed to find an argument and returned `unbalanced: true`, i.e. a
+ * hard PROBLEM on a correct tree. The sibling `metricNamesInExpr` already blanks
+ * quoted spans; this is the same discipline, applied consistently. The mask is
+ * SAME-LENGTH, so every index below still addresses the original text and the
+ * returned argument is the real one, quotes included.
  */
 function sumAggregationArguments(expr) {
   if (typeof expr !== 'string') return { args: [], unbalanced: false };
 
+  const { masked: scan, unterminated } = scanQuotedSpans(expr);
   const args = [];
-  let unbalanced = false;
+  // S-E02-19 / PF-117: an expression that ends inside a quote has had its tail
+  // blanked by the mask, so every `sum` in that tail is invisible to the scan
+  // below. Reporting it as unbalanced is the only honest answer — returning the
+  // tokens we happened to see before the quote would be a silent partial read.
+  let unbalanced = unterminated;
   const token = /(^|[^a-zA-Z0-9_:])sum(?![a-zA-Z0-9_:])/g;
   let match;
 
-  while ((match = token.exec(expr)) !== null) {
+  while ((match = token.exec(scan)) !== null) {
     let at = match.index + match[0].length;
 
     const skipSpace = () => {
-      while (at < expr.length && /\s/.test(expr[at])) at += 1;
+      while (at < scan.length && /\s/.test(scan[at])) at += 1;
     };
 
     skipSpace();
     // Optional `by (...)` / `without (...)` modifier between `sum` and its
     // argument. Its own parentheses are consumed here so the balanced scan
     // below starts on the argument, not on the label list.
-    const modifier = /^(?:by|without)\b/.exec(expr.slice(at));
+    const modifier = /^(?:by|without)\b/.exec(scan.slice(at));
     if (modifier) {
       at += modifier[0].length;
       skipSpace();
-      if (expr[at] !== '(') {
+      if (scan[at] !== '(') {
         unbalanced = true;
         continue;
       }
-      const closed = matchingParen(expr, at);
+      const closed = matchingParen(scan, at);
       if (closed === -1) {
         unbalanced = true;
         continue;
@@ -291,11 +324,11 @@ function sumAggregationArguments(expr) {
       skipSpace();
     }
 
-    if (expr[at] !== '(') {
+    if (scan[at] !== '(') {
       unbalanced = true;
       continue;
     }
-    const closed = matchingParen(expr, at);
+    const closed = matchingParen(scan, at);
     if (closed === -1) {
       unbalanced = true;
       continue;
@@ -304,6 +337,317 @@ function sumAggregationArguments(expr) {
   }
 
   return { args, unbalanced };
+}
+
+/**
+ * A SAME-LENGTH copy of `expr` in which the CONTENT of every quoted span is
+ * blanked, the delimiters kept (S-E02-19 / PF-114 (c)).
+ *
+ * Same length is the whole point, and the reason this is not
+ * `metricNamesInExpr`'s `.replace(/"[^"]*"/g, ' ')`: every caller here slices the
+ * ORIGINAL expression by an index found in the masked one. A mask that shortened
+ * the text would return an argument that is off by however many characters the
+ * label values happened to contain — a silent corruption inside a blocking
+ * stage, which is worse than the false red it was written to remove.
+ */
+function maskQuotedSpans(expr) {
+  return scanQuotedSpans(expr).masked;
+}
+
+/**
+ * The one scanner both the mask and its callers read (S-E02-19 / PF-117).
+ *
+ * Returns `{ masked, unterminated }`. `unterminated` is true when the expression
+ * ends inside a quoted span.
+ *
+ * WHY THIS IS SEPARATE FROM `maskQuotedSpans`. The mask blanks everything after
+ * an opening quote that never closes, so an unterminated quote DELETES the rest
+ * of the expression from every scan that reads the masked text — including the
+ * `sum` tokens in it. `sumAggregationArguments('foo{a="b} + sum by (queue)
+ * (pilotage_queue_depth)')` therefore returned `{ args: [], unbalanced: false }`:
+ * a silent accept, in a blocking stage, on the exact expression the stage exists
+ * to reject. That is the fail-OPEN direction, which is strictly worse than the
+ * false red PF-114 removed — a gate that reds on correct work is annoying, a gate
+ * that greens on broken work is believed.
+ *
+ * It is a separate function rather than a changed return type so
+ * `maskQuotedSpans` keeps the string contract its tests pin, while both it and
+ * the failure signal come from ONE scan and cannot drift apart.
+ *
+ * DNC-08: callers must route `unterminated` into their PROBLEM path. An
+ * expression this reader cannot tokenise is a failure, never an accepted
+ * expression.
+ */
+function scanQuotedSpans(expr) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < expr.length; i += 1) {
+    const char = expr[i];
+    if (quote === null) {
+      if (char === '"' || char === "'" || char === '`') quote = char;
+      out += char;
+      continue;
+    }
+    if (char === '\\' && i + 1 < expr.length) {
+      out += '  ';
+      i += 1;
+      continue;
+    }
+    if (char === quote) {
+      quote = null;
+      out += char;
+      continue;
+    }
+    out += ' ';
+  }
+  return { masked: out, unterminated: quote !== null };
+}
+
+/**
+ * Label names that identify the PROCESS rather than the resource
+ * (S-E02-19 / PF-114).
+ *
+ * Named, exported and stated once, rather than inlined into the shield test: it
+ * is the list that decides whether an inner aggregation removed the replica
+ * dimension, so a reviewer has to be able to read it without reading the walk.
+ * Deliberately generous — `job` is a Prometheus scrape-job name, shared by the
+ * replicas of one service rather than unique to one; keeping it here makes the
+ * shield test REFUSE to shield on a grouping that retains it, which is the
+ * fail-closed direction.
+ */
+const REPLICA_LABELS = new Set([
+  'instance',
+  'pod',
+  'job',
+  'replica',
+  'container',
+  'kubernetes_pod_name',
+  'host',
+]);
+
+/**
+ * The PromQL operators that aggregate ACROSS SERIES, and can therefore collapse
+ * a replica dimension (S-E02-19 / PF-114).
+ *
+ * Everything absent from this set shields NOTHING — in particular every
+ * `*_over_time` range function, which aggregates one series' samples in TIME and
+ * leaves the number of series untouched. `max_over_time` is the trap: a shield
+ * keyed on the string `max` would accept
+ * `sum by (queue) (max_over_time(pilotage_queue_depth[5m]))`, which still
+ * double-counts every replica. The token scan below matches whole identifiers,
+ * so `max_over_time` never matches `max` in the first place — this set is the
+ * second, explicit line of defence.
+ */
+const ACROSS_SERIES_AGGREGATIONS = [
+  'count_values',
+  'bottomk',
+  'stddev',
+  'stdvar',
+  'quantile',
+  'group',
+  'count',
+  'topk',
+  'avg',
+  'min',
+  'max',
+  'sum',
+];
+
+/**
+ * The subset of `ACROSS_SERIES_AGGREGATIONS` that actually COLLAPSES a replica
+ * dimension, i.e. that is idempotent over N replicas publishing the same value
+ * (S-E02-19 / PF-116).
+ *
+ * PARSING AND SHIELDING ARE DIFFERENT QUESTIONS, and conflating them is how this
+ * slice's first implementation opened five holes in its own gate. Every operator
+ * in `ACROSS_SERIES_AGGREGATIONS` must still be PARSED and CONSUMED, or the walk
+ * mis-reads the nesting and the residual scan sees text it should not. Only the
+ * operators here may SHIELD what is inside them.
+ *
+ * Idempotent over identical replicas → may shield:
+ *  - `max`, `min`, `avg` — N copies of v give v;
+ *  - `group` — always 1 per group;
+ *  - `quantile` — any quantile of N copies of v is v.
+ *
+ * NOT idempotent → must never shield, each for its own reason:
+ *  - `sum`   — adds the replicas. It is the very defect (PF-108);
+ *  - `count` / `count_values` — return N, so the outer sum counts processes;
+ *  - `stddev` / `stdvar` — return 0 across identical replicas, which is not the
+ *    resource's value at all;
+ *  - `topk` / `bottomk` — SELECTORS, not reducers. They return k of the ORIGINAL
+ *    series with every original label intact, `instance` included. `topk(3, x)`
+ *    over two replicas still carries both, so summing it still double-counts.
+ *    This is the trap that makes the rule "is it an aggregation?" wrong and the
+ *    rule "is it idempotent over replicas?" right.
+ *
+ * Fail-closed by construction: an operator absent from this set shields nothing,
+ * so a PromQL operator added to the language later is treated as unsafe until
+ * someone deliberately proves otherwise.
+ */
+const REPLICA_IDEMPOTENT_AGGREGATIONS = new Set(['max', 'min', 'avg', 'group', 'quantile']);
+
+/** `sum`, `max by (...)`, … as a whole token. Longest name first — leftmost-first alternation. */
+const AGGREGATION_TOKEN_SOURCE = `(^|[^a-zA-Z0-9_:])(${ACROSS_SERIES_AGGREGATIONS.join('|')})(?![a-zA-Z0-9_:])`;
+
+/**
+ * Does an aggregation with this grouping modifier remove every replica label?
+ *
+ * Stated over the MODIFIER, never over the operator name or the metric name:
+ * what makes the outer `sum` correct is that the inner aggregation emits one
+ * series per resource, and the modifier is the only thing that says so.
+ *
+ *  - no modifier at all → the aggregation collapses to a single series, so there
+ *    is no label left to duplicate → shielded;
+ *  - `by (...)`      → shielded IFF the kept list names NO replica label;
+ *  - `without (...)` → shielded IFF the removed list names AT LEAST ONE. A
+ *    `without` that does not name one keeps everything it did not remove,
+ *    `instance` included.
+ */
+function groupingRemovesReplicas(kind, labelList) {
+  if (kind === null) return true;
+  const labels = String(labelList)
+    .split(',')
+    .map((label) => label.trim())
+    .filter((label) => label.length > 0);
+  if (kind === 'by') return labels.every((label) => !REPLICA_LABELS.has(label));
+  if (kind === 'without') return labels.some((label) => REPLICA_LABELS.has(label));
+  return false;
+}
+
+/**
+ * The gauge-typed families a `sum` argument reads that are NOT already shielded
+ * by an enclosing across-series aggregation (S-E02-19 / PF-114).
+ *
+ * WHY THIS EXISTS. Check 10 used to call `metricNamesInExpr` on the `sum`
+ * argument and flag every gauge in it, one level, no structure. That flags
+ * `sum by (queue) (max by (queue, state) (pilotage_queue_depth))` — which is
+ * correct PromQL, and is the exact idiom check 10's own error message
+ * recommends. `max by (queue, state)` already emits ONE series per
+ * (queue, state); the replica dimension is gone before the `sum` runs, and
+ * summing the remaining states is ordinary arithmetic. A gate that reds on the
+ * correction it recommends teaches people to skip it — the same injury as a gate
+ * that cannot go red, which is the defect S-E02-18 spent a slice closing.
+ *
+ * WHAT IT IS NOT. It is not a special case for `pilotage_queue_depth`: the walk
+ * never looks at a metric name, only at `types[family] === 'gauge'` and at the
+ * grouping modifiers between that reference and the top of the argument. The
+ * rule stays stated over the declared `# TYPE`, so it still catches the class.
+ *
+ * DNC-08. Anything the walk cannot scan to a matching parenthesis sets
+ * `unscannable`, and the caller turns that into a PROBLEM. There is no
+ * "cannot tell, assume safe" branch, because that branch is how a blocking stage
+ * becomes a vacuous pass.
+ *
+ * Returns `{ families: string[], unscannable: boolean }`.
+ */
+function unshieldedGaugeReferences(argument, types) {
+  const families = new Set();
+  let unscannable = false;
+  const lookup = types && typeof types === 'object' && !Array.isArray(types) ? types : {};
+
+  /**
+   * @param text     the expression at this nesting level, ORIGINAL characters
+   * @param shielded true when some enclosing aggregation already removed the
+   *                 replica dimension for everything inside `text`
+   */
+  const walk = (text, shielded) => {
+    if (typeof text !== 'string' || text.length === 0) return;
+
+    const { masked: scan, unterminated } = scanQuotedSpans(text);
+    // S-E02-19 / PF-117: same reasoning as `sumAggregationArguments`. The tail is
+    // blanked, so neither the aggregation tokens nor the metric references in it
+    // can be seen. DNC-08 — say so, do not shrug.
+    if (unterminated) unscannable = true;
+    const consumed = [];
+    const token = new RegExp(AGGREGATION_TOKEN_SOURCE, 'g');
+    let match;
+
+    while ((match = token.exec(scan)) !== null) {
+      const start = match.index + match[1].length;
+      // Tokens inside an aggregation already consumed at this level belong to
+      // the recursion, not to this one.
+      if (consumed.some(([from, to]) => start >= from && start < to)) continue;
+
+      let at = start + match[2].length;
+      const skipSpace = () => {
+        while (at < scan.length && /\s/.test(scan[at])) at += 1;
+      };
+
+      let kind = null;
+      let labelList = '';
+      skipSpace();
+
+      const leading = /^(by|without)\s*\(/.exec(scan.slice(at));
+      if (leading) {
+        const open = at + leading[0].length - 1;
+        const closed = matchingParen(scan, open);
+        if (closed === -1) {
+          unscannable = true;
+          continue;
+        }
+        kind = leading[1];
+        labelList = scan.slice(open + 1, closed);
+        at = closed + 1;
+        skipSpace();
+      }
+
+      if (scan[at] !== '(') {
+        // An aggregation operator with no argument is not something this reader
+        // can reason about. DNC-08: say so, do not shrug.
+        unscannable = true;
+        continue;
+      }
+      const argOpen = at;
+      const argClose = matchingParen(scan, argOpen);
+      if (argClose === -1) {
+        unscannable = true;
+        continue;
+      }
+      let end = argClose + 1;
+
+      if (leading === null) {
+        // PromQL also allows the modifier AFTER the argument: `sum(x) by (q)`.
+        let after = end;
+        while (after < scan.length && /\s/.test(scan[after])) after += 1;
+        const trailing = /^(by|without)\s*\(/.exec(scan.slice(after));
+        if (trailing) {
+          const open = after + trailing[0].length - 1;
+          const closed = matchingParen(scan, open);
+          if (closed === -1) {
+            unscannable = true;
+            continue;
+          }
+          kind = trailing[1];
+          labelList = scan.slice(open + 1, closed);
+          end = closed + 1;
+        }
+      }
+
+      consumed.push([start, end]);
+      // S-E02-19 / PF-116: consuming an operator is not the same as trusting it.
+      // Only a replica-IDEMPOTENT operator may shield; every other one is parsed
+      // (so the nesting is read correctly) and then shields nothing.
+      const collapses =
+        REPLICA_IDEMPOTENT_AGGREGATIONS.has(match[2]) && groupingRemovesReplicas(kind, labelList);
+      walk(text.slice(argOpen + 1, argClose), shielded || collapses);
+    }
+
+    if (shielded) return;
+
+    // What is left once every nested aggregation has been handed to the
+    // recursion: metric references at THIS shield level.
+    let residual = scan;
+    for (const [from, to] of consumed) {
+      residual = residual.slice(0, from) + ' '.repeat(to - from) + residual.slice(to);
+    }
+    for (const referenced of metricNamesInExpr(residual)) {
+      const family = baseMetricName(referenced);
+      if (lookup[family] === 'gauge') families.add(family);
+    }
+  };
+
+  walk(argument, false);
+  return { families: [...families], unscannable };
 }
 
 /** Index of the `)` matching the `(` at `open`, or -1. Quotes are respected. */
@@ -760,9 +1104,18 @@ function evaluateObservability(input) {
  *    histogram, resolved through `baseMetricName`;
  *  - a bare gauge with no aggregation at all (`nodejs_eventloop_lag_p99_seconds`).
  *
+ * And, since S-E02-19 / PF-114, the idiom this check's own message recommends:
+ *  - `sum by (queue) (max by (queue, state) (pilotage_queue_depth))` — the inner
+ *    `max by` already emits one series per (queue, state), so the replica
+ *    dimension is gone before the `sum` runs. See `unshieldedGaugeReferences`
+ *    for the walk, and for the two shapes that must still be flagged: a `by`
+ *    list that RETAINS a replica label, and `max_over_time`, which aggregates in
+ *    time and removes no series at all.
+ *
  * DNC-08: a missing, empty or non-object type map is a FAILURE. With no types
  * to look up, every expression below would be accepted — a blocking stage that
- * passes vacuously is worse than no stage, because it is believed.
+ * passes vacuously is worse than no stage, because it is believed. The shield
+ * walk inherits the same posture: an argument it cannot scan is a PROBLEM.
  */
 function evaluateGaugeAggregation(input, problems, notes) {
   const problemsBefore = problems.length;
@@ -798,9 +1151,19 @@ function evaluateGaugeAggregation(input, problems, notes) {
 
         for (const argument of args) {
           checked += 1;
-          for (const referenced of metricNamesInExpr(argument)) {
-            const family = baseMetricName(referenced);
-            if (types[family] !== 'gauge') continue;
+          // S-E02-19 / PF-114: a gauge reference already collapsed by an inner
+          // across-series aggregation is NOT double-counted by this sum, so it
+          // is not a problem — but anything the walk cannot read still is.
+          const { families, unscannable } = unshieldedGaugeReferences(argument, types);
+          if (unscannable) {
+            problems.push(
+              `${dashboard.file}: panel "${panel.title}" contains an aggregation this check ` +
+                `cannot scan to a matching parenthesis ("${expr}"). An expression the rule ` +
+                'cannot read is a failure, not an accepted expression.',
+            );
+            continue;
+          }
+          for (const family of families) {
             problems.push(
               `${dashboard.file}: panel "${panel.title}" aggregates the GAUGE "${family}" with ` +
                 'sum(). A gauge of a shared resource is not additive across process replicas: ' +
@@ -821,6 +1184,68 @@ function evaluateGaugeAggregation(input, problems, notes) {
   }
 }
 
+/**
+ * Why the instrumented queue set could not be read, per cause (S-E02-19 / AC-8).
+ *
+ * One sentence per `return { ok: false, reason }` site of the two readers. Not a
+ * cosmetic improvement: the single message this replaced named
+ * `queue-metrics.js` for ALL of them — including the five causes whose
+ * unreadable file is `queue-depth.collector.js` and the three whose file is
+ * `metrics.registry.js` — so an operator opened the wrong file at the exact
+ * moment a blocking stage had failed.
+ */
+const QUEUE_READER_REASONS = {
+  'queue-metrics-module-absent': 'the built queue-instrumentation module is absent',
+  'metrics-registry-absent': 'the built worker metrics registry is absent',
+  'instrumented-queues-not-an-array': 'INSTRUMENTED_QUEUES is absent or is not an array',
+  'queue-metrics-api-missing':
+    'the module exports no usable registerQueueDepthSources / observeJobCompleted / ' +
+    'JOB_NAMES_BY_QUEUE, so the write path cannot be driven',
+  'registry-export-missing': 'the registry module exports no `registry`',
+  'driven-write-path-threw': 'driving the real write path threw',
+  'registry-not-restored':
+    'the driven write path was NOT fully undone — the shared prom-client registry still ' +
+    'carries what this check wrote, which every later reader in this process would treat as ' +
+    'real queue traffic',
+  'registry-restore-unverifiable':
+    'the registry could not be re-rendered after the restore, so the restore could not be verified',
+  'collector-module-absent': 'the built queue-depth collector is absent',
+  'reflect-metadata-unresolvable':
+    'reflect-metadata could not be resolved, so the collector’s injected tokens cannot be read',
+  'collector-module-unloadable': 'the built queue-depth collector could not be required',
+  'collector-export-missing': 'the collector module exports no QueueDepthCollector class',
+  'collector-paramtypes-missing':
+    'QueueDepthCollector carries no `self:paramtypes`, so its @InjectQueue tokens cannot be read',
+  'collector-no-queue-token':
+    'QueueDepthCollector injects no BullQueue_* token, so no queue drive set can be derived',
+};
+
+/**
+ * The message for a failed instrumented-queue read.
+ *
+ * Fails closed on its OWN enum (DNC-08): a reason this map does not know, or a
+ * result with no reason at all, is still a PROBLEM — and says which reason it
+ * did not recognise, so the next person fixes the map rather than the gate.
+ */
+function instrumentationFailureMessage(result) {
+  const reason = result && typeof result === 'object' ? result.reason : undefined;
+  const known = typeof reason === 'string' ? QUEUE_READER_REASONS[reason] : undefined;
+  const file = result && typeof result === 'object' && result.file ? String(result.file) : null;
+  const detail = result && typeof result === 'object' && result.detail ? String(result.detail) : null;
+
+  const cause = known
+    ? `${known} (${file || 'file not reported'})`
+    : `the reader reported ${
+        typeof reason === 'string' ? `an unrecognised reason "${reason}"` : 'no reason at all'
+      }${file ? ` for ${file}` : ''}, which this check does not know how to interpret`;
+
+  return (
+    `the instrumented queue set could not be read: ${cause}` +
+    `${detail ? ` — ${detail}` : ''}. That is a failure, not a skip: with nothing to ` +
+    'compare against, a queue nobody instruments would pass unnoticed.'
+  );
+}
+
 /** Sorted, de-duplicated, string-only — so set comparisons cannot lie about order. */
 function normalizeQueueSet(value) {
   if (!Array.isArray(value)) return null;
@@ -838,7 +1263,11 @@ function normalizeQueueSet(value) {
  * Six rules, and each of them exists because its absence is a way to pass
  * without checking anything:
  *
- *  1. either input `null` → a failure, never a skip (DNC-08);
+ *  1. either input unreadable → a failure, never a skip (DNC-08). Since
+ *     S-E02-19 the instrumented side arrives as a discriminated result, so the
+ *     message names the CAUSE and the file that was actually read — and an
+ *     unrecognised or absent reason is itself a failure
+ *     (`instrumentationFailureMessage`);
  *  2. a registered set below the floor → a failure, because an extraction that
  *     returned nothing would make every rule below vacuous;
  *  3. api ≠ worker → a failure naming the side that lacks the queue. Not a
@@ -863,12 +1292,12 @@ function evaluateQueueInstrumentation(input, problems, notes) {
   const instrumented = input.instrumentedQueues;
   const registered = input.registeredQueues;
 
-  if (!instrumented || !instrumented.declared) {
-    problems.push(
-      'the instrumented queue set could not be read from ' +
-        `${WORKER_QUEUE_METRICS_MODULE}. That is a failure, not a skip: with nothing to ` +
-        'compare against, a queue nobody instruments would pass unnoticed.',
-    );
+  if (!instrumented || typeof instrumented !== 'object' || instrumented.ok === false) {
+    problems.push(instrumentationFailureMessage(instrumented));
+    return;
+  }
+  if (!Array.isArray(instrumented.declared)) {
+    problems.push(instrumentationFailureMessage(null));
     return;
   }
   if (!registered) {
@@ -1211,45 +1640,73 @@ async function readExposedMetricNames() {
  * processor is subscribed — check 9's rules 3/4/5 read the resolved
  * registrations for the first, and nothing here reaches the last two.
  *
- * The registry is restored on the way out (`finally`), so a later
- * `registry.metrics()` in this process is not collecting against synthetic
- * sources.
+ * The registry is restored on the way out (`finally`), and — since S-E02-19 /
+ * PF-115 (b) — the restore is VERIFIED rather than assumed: the registry is
+ * re-rendered afterwards and `registryResidue` looks for the three things this
+ * function wrote. A leak here would fabricate queue traffic that every later
+ * `registry.metrics()` in this process, including a future check, would treat as
+ * real — the "green and false" shape this epic exists to close, relocated into
+ * the mechanism written to close it. Residue is reported BEFORE a drive error: a
+ * poisoned registry misleads every later reader, which is strictly worse than
+ * one failed read.
  *
- * Returns null on any failure. The caller turns that into a failure, never a
- * skip.
+ * Returns a DISCRIMINATED result — `{ ok: true, declared, rendered }` or
+ * `{ ok: false, reason, file, detail? }` — never a bare `null`. Every distinct
+ * failure carries its own reason and names the file it actually read. The caller
+ * turns any of them into a failure, never a skip.
  */
 async function readInstrumentedQueues() {
   const modulePath = join(REPO_ROOT, WORKER_QUEUE_METRICS_MODULE);
-  const registryPath = join(REPO_ROOT, 'apps/worker/dist/shared/observability/metrics.registry.js');
-  if (!existsSync(modulePath) || !existsSync(registryPath)) return null;
+  const registryPath = join(REPO_ROOT, WORKER_METRICS_REGISTRY_MODULE);
+  if (!existsSync(modulePath)) {
+    return { ok: false, reason: 'queue-metrics-module-absent', file: WORKER_QUEUE_METRICS_MODULE };
+  }
+  if (!existsSync(registryPath)) {
+    return { ok: false, reason: 'metrics-registry-absent', file: WORKER_METRICS_REGISTRY_MODULE };
+  }
 
   const mod = require(modulePath);
   const declared = Array.isArray(mod && mod.INSTRUMENTED_QUEUES)
     ? [...mod.INSTRUMENTED_QUEUES]
     : null;
-  if (!declared) return null;
+  if (!declared) {
+    return {
+      ok: false,
+      reason: 'instrumented-queues-not-an-array',
+      file: WORKER_QUEUE_METRICS_MODULE,
+    };
+  }
 
   const registryModule = require(registryPath);
-  if (!registryModule || !registryModule.registry) return null;
+  if (!registryModule || !registryModule.registry) {
+    return { ok: false, reason: 'registry-export-missing', file: WORKER_METRICS_REGISTRY_MODULE };
+  }
 
-  const driveSet = readCollectorBoundQueues();
-  if (driveSet === null) return null;
+  const collector = readCollectorBoundQueues();
+  // The collector's own reason travels UP unchanged. Collapsing it into a
+  // reason of this function's own is exactly how the wrong filename got emitted.
+  if (collector.ok !== true) return collector;
+  const driveSet = collector.queues;
+
   if (
     typeof mod.registerQueueDepthSources !== 'function' ||
     typeof mod.observeJobCompleted !== 'function' ||
     !mod.JOB_NAMES_BY_QUEUE
   ) {
-    return null;
+    return { ok: false, reason: 'queue-metrics-api-missing', file: WORKER_QUEUE_METRICS_MODULE };
   }
 
   let exposition;
+  let driveError = null;
+  const drivenOutcomes = [];
   try {
     mod.registerQueueDepthSources(
       driveSet.map((queue) => ({
         queue,
         // A distinctive, non-zero count: a zero would be indistinguishable from
-        // an unwritten gauge for anyone reading this by hand.
-        getJobCounts: async () => ({ waiting: 17 }),
+        // an unwritten gauge for anyone reading this by hand — and it is what
+        // `registryResidue` looks for once the restore has run.
+        getJobCounts: async () => ({ waiting: DRIVEN_DEPTH_SENTINEL }),
       })),
     );
     for (const queue of driveSet) {
@@ -1257,15 +1714,57 @@ async function readInstrumentedQueues() {
       // No allow-listed name → do not drive it. Driving it anyway would record
       // `job="<other>"`, i.e. the sentinel would become the proof.
       if (!Array.isArray(allowed) || typeof allowed[0] !== 'string') continue;
+      // S-E02-19 / PF-118: recorded BEFORE the write that produces it, never
+      // after. `observeJobCompleted` can throw mid-write, and a tuple pushed
+      // afterwards would then be missing from `drivenOutcomes` for a sample that
+      // may already exist — so `registryResidue` would not look for the residue
+      // this drive is most likely to have left. The intent to write is what the
+      // residue check needs; whether the write finished is exactly the unknown.
+      drivenOutcomes.push({ queue, job: allowed[0] });
       mod.observeJobCompleted(queue, { name: allowed[0] });
     }
     exposition = await registryModule.registry.metrics();
+  } catch (error) {
+    driveError = error;
   } finally {
+    // Total: it runs on the throw path too, which is the only reason verifying
+    // it afterwards is meaningful.
     mod.registerQueueDepthSources([]);
     if (mod.queueDepth && typeof mod.queueDepth.reset === 'function') mod.queueDepth.reset();
     if (mod.queueJobsTotal && typeof mod.queueJobsTotal.reset === 'function') {
       mod.queueJobsTotal.reset();
     }
+  }
+
+  let afterRestore;
+  try {
+    afterRestore = await registryModule.registry.metrics();
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'registry-restore-unverifiable',
+      file: WORKER_METRICS_REGISTRY_MODULE,
+      detail: String((error && error.message) || error),
+    };
+  }
+
+  const residue = registryResidue(afterRestore, drivenOutcomes);
+  if (residue.length > 0) {
+    return {
+      ok: false,
+      reason: 'registry-not-restored',
+      file: WORKER_METRICS_REGISTRY_MODULE,
+      detail: residue.join(' · '),
+    };
+  }
+
+  if (driveError !== null) {
+    return {
+      ok: false,
+      reason: 'driven-write-path-threw',
+      file: WORKER_QUEUE_METRICS_MODULE,
+      detail: String((driveError && driveError.message) || driveError),
+    };
   }
 
   // EXACT family names, followed immediately by `{`. Not a prefix test:
@@ -1276,7 +1775,71 @@ async function readInstrumentedQueues() {
   const outcomeLabels = queueLabelsOfFamily(exposition, 'pilotage_queue_jobs_total');
   const rendered = [...depthLabels].filter((name) => outcomeLabels.has(name));
 
-  return { declared, rendered };
+  return { ok: true, declared, rendered };
+}
+
+/**
+ * The depth value the drive above writes, and the only value `registryResidue`
+ * treats as evidence of a leak. Distinctive and non-zero on purpose.
+ */
+const DRIVEN_DEPTH_SENTINEL = 17;
+
+/**
+ * What the drive above left behind in a rendered exposition, in words
+ * (S-E02-19 / PF-115 (b) · AC-10).
+ *
+ * A PURE function of an exposition string, so the guarantee is testable without
+ * `apps/worker/dist`: the spec can hand it a clean exposition, an exposition
+ * carrying the depth sentinel, one carrying the driven outcome, and one carrying
+ * a still-bound depth source, and see each named. Driving the real reader would
+ * only ever demonstrate that the restore worked TODAY.
+ *
+ * Three things, one per thing the drive writes:
+ *  1. a `pilotage_queue_depth` sample carrying the sentinel value;
+ *  2. a `pilotage_queue_jobs_total` sample for a `(queue, job)` pair that was
+ *     driven — matched on the pair, not on the family, so ordinary traffic
+ *     recorded by something else is not mistaken for residue;
+ *  3. a non-zero `pilotage_queue_depth_sources_bound`, i.e. a synthetic source
+ *     still bound to the module.
+ *
+ * Empty array = nothing left behind. Any entry is a PROBLEM at the caller.
+ */
+function registryResidue(exposition, drivenOutcomes = []) {
+  const residue = [];
+  const driven = Array.isArray(drivenOutcomes) ? drivenOutcomes : [];
+
+  for (const line of String(exposition).split('\n')) {
+    const text = line.trim();
+    if (text.length === 0 || text.startsWith('#')) continue;
+    const match = /^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+(\S+)$/.exec(text);
+    if (!match) continue;
+    const name = match[1];
+    const labels = match[2] || '';
+    const value = Number(match[3]);
+
+    if (name === 'pilotage_queue_depth' && value === DRIVEN_DEPTH_SENTINEL) {
+      residue.push(
+        `pilotage_queue_depth still carries the driven sentinel ${DRIVEN_DEPTH_SENTINEL} (${text})`,
+      );
+      continue;
+    }
+    if (
+      name === 'pilotage_queue_jobs_total' &&
+      driven.some(
+        (entry) =>
+          entry &&
+          labels.includes(`queue="${entry.queue}"`) &&
+          labels.includes(`job="${entry.job}"`),
+      )
+    ) {
+      residue.push(`pilotage_queue_jobs_total still carries a driven outcome (${text})`);
+      continue;
+    }
+    if (name === 'pilotage_queue_depth_sources_bound' && Number.isFinite(value) && value > 0) {
+      residue.push(`pilotage_queue_depth_sources_bound still reports a bound source (${text})`);
+    }
+  }
+  return residue;
 }
 
 /** The `queue` label values one EXACT metric family carries in an exposition. */
@@ -1304,29 +1867,61 @@ function queueLabelsOfFamily(exposition, family) {
  * `@nestjs/bullmq`, `@nestjs/common` and `queue-metrics`, and the queues are
  * built by Nest DI at bootstrap, which does not happen here.
  *
- * Returns null on any failure — a failure, never a skip.
+ * Returns a DISCRIMINATED result — `{ ok: true, queues }` or
+ * `{ ok: false, reason, file, detail? }` — a failure, never a skip, and never a
+ * bare `null`: six distinct causes used to collapse into one `null` that the
+ * caller rendered as a single message naming a DIFFERENT file (S-E02-19 /
+ * PF-115 (a)).
+ *
+ * `collectorPath` is a TESTABILITY SEAM, not a flag. DNC-10 forbids adding a
+ * bypass — a CLI flag, an env var, an argument that turns any of this off. A
+ * default-valued parameter that only changes WHICH file is read, cannot be
+ * reached from the command line (`main()` calls this with no argument, through
+ * `readInstrumentedQueues`, which also calls it with none), and cannot make any
+ * check pass, adds nothing to the script's flag surface. It is what lets the
+ * gate spec drive all six causes against throw-away fixture files instead of
+ * leaving this function with the zero executed coverage it had.
  */
-function readCollectorBoundQueues() {
-  const path = join(REPO_ROOT, 'apps/worker/dist/shared/observability/queue-depth.collector.js');
-  if (!existsSync(path)) return null;
+function readCollectorBoundQueues(collectorPath = join(REPO_ROOT, WORKER_QUEUE_DEPTH_COLLECTOR_MODULE)) {
+  const file = describeRepoPath(collectorPath);
+  if (!existsSync(collectorPath)) {
+    return { ok: false, reason: 'collector-module-absent', file };
+  }
 
-  const req = (spec) => require(require.resolve(spec, { paths: [join(REPO_ROOT, 'apps/api')] }));
+  const req = (spec) =>
+    require(require.resolve(spec, {
+      paths: [join(REPO_ROOT, REFLECT_METADATA_RESOLUTION_ROOT)],
+    }));
   try {
     req('reflect-metadata');
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'reflect-metadata-unresolvable',
+      file: REFLECT_METADATA_RESOLUTION_ROOT,
+      detail: String((error && error.message) || error),
+    };
   }
 
   let mod;
   try {
-    mod = require(path);
-  } catch {
-    return null;
+    mod = require(collectorPath);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'collector-module-unloadable',
+      file,
+      detail: String((error && error.message) || error),
+    };
   }
-  if (!mod || typeof mod.QueueDepthCollector !== 'function') return null;
+  if (!mod || typeof mod.QueueDepthCollector !== 'function') {
+    return { ok: false, reason: 'collector-export-missing', file };
+  }
 
   const injected = Reflect.getMetadata('self:paramtypes', mod.QueueDepthCollector);
-  if (!Array.isArray(injected) || injected.length === 0) return null;
+  if (!Array.isArray(injected) || injected.length === 0) {
+    return { ok: false, reason: 'collector-paramtypes-missing', file };
+  }
 
   const names = new Set();
   for (const entry of injected) {
@@ -1335,7 +1930,16 @@ function readCollectorBoundQueues() {
     const match = /^BullQueue_(.+)$/.exec(token);
     if (match) names.add(match[1]);
   }
-  return names.size === 0 ? null : [...names];
+  if (names.size === 0) {
+    return { ok: false, reason: 'collector-no-queue-token', file };
+  }
+  return { ok: true, queues: [...names] };
+}
+
+/** A path as a message should name it: repo-relative inside the repo, absolute outside it. */
+function describeRepoPath(path) {
+  const rel = relative(REPO_ROOT, path).replace(/\\/g, '/');
+  return rel.length > 0 && !rel.startsWith('..') ? rel : String(path).replace(/\\/g, '/');
 }
 
 /**
@@ -1527,8 +2131,12 @@ async function main() {
         ? 'REGISTRATION UNREADABLE'
         : `${(input.registeredQueues.worker || []).length} registered`
     } / ${
-      input.instrumentedQueues === null
-        ? 'INSTRUMENTATION UNREADABLE'
+      !input.instrumentedQueues || input.instrumentedQueues.ok !== true
+        ? `INSTRUMENTATION UNREADABLE${
+            input.instrumentedQueues && input.instrumentedQueues.reason
+              ? ` (${input.instrumentedQueues.reason})`
+              : ''
+          }`
         : `${(input.instrumentedQueues.declared || []).length} instrumented`
     }`,
   );
@@ -1554,14 +2162,25 @@ module.exports = {
   collectFromRepo,
   metricNamesInExpr,
   sumAggregationArguments,
+  maskQuotedSpans,
+  scanQuotedSpans,
+  unshieldedGaugeReferences,
+  registryResidue,
+  readCollectorBoundQueues,
   baseMetricName,
   serviceListenPort,
   serviceListenPorts,
   splitTarget,
   WEB_OBSERVABILITY_MODULE,
   WORKER_QUEUE_METRICS_MODULE,
+  WORKER_METRICS_REGISTRY_MODULE,
+  WORKER_QUEUE_DEPTH_COLLECTOR_MODULE,
   QUEUE_MODULES,
   REGISTERED_QUEUE_FLOOR,
+  REPLICA_LABELS,
+  ACROSS_SERIES_AGGREGATIONS,
+  REPLICA_IDEMPOTENT_AGGREGATIONS,
+  DRIVEN_DEPTH_SENTINEL,
 };
 
 if (require.main === module) {

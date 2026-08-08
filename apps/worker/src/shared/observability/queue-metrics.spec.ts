@@ -676,14 +676,27 @@ describe('stalled jobs (S-E02-18 / PF-104)', () => {
     await expect(registry.metrics()).resolves.toContain('pilotage_queue_stalled_total');
   });
 
-  it('T-STALL-6 — G-TENANT: the identifier the event carries reaches no label', async () => {
-    // `observeJobStalled` takes no job id AT ALL — the signature is what makes
-    // this structural rather than merely untaken. Driven anyway with the values
-    // BullMQ really hands the handler, so the assertion is over the exposition.
+  it('T-STALL-6 — G-TENANT: an identifier fed to the one parameter reaches no label', async () => {
+    // What is proven here, and no more (DNC-06). `observeJobStalled` has arity
+    // 1 and that parameter is the QUEUE name, so a job-id LABEL is
+    // unrepresentable rather than merely untaken — that half is structural, and
+    // the arity assertion below is what pins it.
+    //
+    // The identifier is therefore driven through the only seam that can carry
+    // it: as the queue name. The build-time whitelist must collapse it to the
+    // `<other>` sentinel, so it never reaches the exposition. Removing that
+    // whitelist makes this case RED — which is the property the previous
+    // version lacked: it declared the cuid and then drove `'exports'`, so the
+    // final assertion was over a value the system had never seen.
+    //
+    // This is T-STALL-4's mechanism driven with a tenant-shaped input; the
+    // added value is the input, not a new mechanism. The end-to-end driven
+    // G-TENANT proof is case C9 in `queue-depth.collector.spec.ts`.
     const JOB_ID = 'clx9q7r4t0001wxyz5678ijkl';
-    observeJobStalled('exports');
+    observeJobStalled(JOB_ID);
 
     const exposition = await registry.metrics();
+    expect(sample(exposition, 'pilotage_queue_stalled_total', { queue: OTHER_JOB })).toBe(1);
     expect(exposition).not.toContain(JOB_ID);
     expect(observeJobStalled.length).toBe(1);
   });
