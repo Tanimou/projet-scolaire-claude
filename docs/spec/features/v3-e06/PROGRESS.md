@@ -10,7 +10,16 @@
 `S-E06-5` raised four follow-ups of its own (`PF-98`…`PF-101`) plus the gate's residual `PF-103`.
 **Next run → a `sprint-02` authoring / `epic-spec` run for `V3-E04`** (audit trail and governance surfaces), whose
 first slice is the shared audit-provenance interceptor `S-E06-6` just prototyped on one handler — and which must open
-with the `trust proxy` decision recorded below. **`PF-102` no longer competes with that sequencing — it is `CLOSED`
+with the `trust proxy` decision recorded below. **✅ Done 2026-08-08 (run 28):** `docs/spec/features/v3-e04/` exists,
+and `S-E04-1` is exactly the slice this line asked for — the shared provenance home, the `trust proxy` ADR, and the 8
+hard-coded `actorRole` sites — ordered **first**, with the hash chain ordered **last** (a chain over wrong provenance
+is worse than no chain). All three items this file handed forward were carried across verbatim and are now scoped by
+measurement rather than by description: the `trust proxy` decision (still **0** occurrences across `apps/api/src` +
+`infra/`, `main.ts:37` still a bare `NestFactory.create`), the `sanitiseInetOrNull` / `truncateUserAgent` /
+`MAX_USER_AGENT_LENGTH` relocation out of `modules/calendar/`, and `resourceType: 'calendar_event'`'s absence from
+`RESOURCE_TYPE_LABELS` — which run 28 found to be far larger than one missing label: the map declares **13** keys,
+**7** of which no call site writes, and its intersection with the resource types actually in the database is **0**.
+**`PF-102` no longer competes with that sequencing — it is `CLOSED`
 (2026-08-07, `S-E05-12`, `docs/spec/features/v3-e05/PROGRESS.md`).** The `S-E06-5` "not claimed" row below stays as
 written, because it was true when the slice shipped; note only that its *"~4 lines plus four negative tests"* estimate
 was wrong in one direction — the rule this file recommended was measured and found **exploitable on four inputs**, so
