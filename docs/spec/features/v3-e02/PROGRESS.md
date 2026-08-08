@@ -1973,3 +1973,22 @@ is no `docs/spec/features/v3-e04/` yet, so it is an `epic-spec` run, and it must
 recorded on the `S-E06-6` row of `docs/spec/features/v3-e06/PROGRESS.md`. `V3-E02` stays **`code-complete`**, not
 `shipped`: `S-E02-1`'s residual is a capability gap (`PF-111` — nothing detects a container older than the code), and
 `PF-113` is blocked on a decision (is horizontal scaling in scope?) rather than on code.
+
+> **Discharged 2026-08-08 (run 28).** The `V3-E04` `epic-spec` run happened: `docs/spec/features/v3-e04/` now exists
+> (8 files, 8 run-sized slices `S-E04-1`…`S-E04-8`), it opens with the `trust proxy` decision as instructed, and
+> `V3-E04`'s own ledger carries the pointer from here on. **Two corrections this file owes its readers, both found by
+> run 28 rather than asserted by it:**
+>
+> 1. **The earlier pointer at §*"next slice → `S-E02-20`, then the `V3-E04` `epic-spec` run"* is spent, and this file
+>    said so in two places at once.** `S-E02-20` existed to close `PF-116` + `PF-117` + `PF-118`; `S-E02-19` closed all
+>    three itself at its own Step 5. Run 28 verified that against the shipped code, not against either ledger:
+>    `scanQuotedSpans` returns `{masked, unterminated}` and both callers route it into their PROBLEM path
+>    (`scripts/observability-check.js:289`/`:295`/`:403`), and `topk`/`bottomk` are held out of the shielding set as
+>    SELECTORS (`:443`/`:449`/`:477`).
+> 2. **`docs/daily-improvement-v3/audit-findings-index.md` disagreed with `traceability-matrix.md` for a full run** —
+>    the index still carried `PF-116`/`PF-117`/`PF-118` as `TECH_DEBT` while the matrix already read `closed`. Corrected
+>    in run 28 by reading the code rather than by picking a ledger. Named here because a pointer that says *"next slice
+>    → `S-E02-20`"* beside an index that says its findings are open is exactly the stale truth that makes the next
+>    autonomous run redo finished work.
+>
+> `V3-E02` remains **`code-complete`**, unchanged: `PF-111` and `PF-113` are still the two residuals, and neither moved.

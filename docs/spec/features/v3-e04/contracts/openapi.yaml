@@ -1,0 +1,572 @@
+openapi: 3.1.0
+info:
+  title: Pilotage Scolaire — V3-E04 · Audit trail and governance surfaces
+  version: 0.1.0-spec
+  description: >
+    Contrats REST de l'épic V3-E04 (Winston / Architect, run epic-spec du 2026-08-08).
+    DEUX points d'entrée existants changent de forme, UN point d'entrée est ajouté, AUCUN n'est supprimé.
+    Toutes les décisions et toutes les mesures qui les fondent sont dans ../data-model.md — ce fichier
+    n'est pas auto-suffisant, il en est la projection HTTP.
+
+    RAPPEL DE POSTURE : ce document décrit la forme CIBLE. Aucun de ces changements n'est livré.
+    Les shapes sont réconciliées contre le code mesuré (analytics.controller.ts:224-260,
+    analytics.service.ts:3200-3415) et non contre un audit antérieur.
+
+    NON REVENDIQUÉ ici, et à ne pas déduire du fichier :
+      - que /admin/audit rende correctement aujourd'hui (AC-1 est une MESURE OUVERTE — voir ../data-model.md §0) ;
+      - que ipAddress/userAgent soient peuplés avant que HOP-1 n'ait épinglé le nombre de sauts (../data-model.md §4) ;
+      - que les 54 lignes antérieures au genesis soient chaînées — elles ne le seront jamais (risque A-01).
+
+    Toutes les routes sont sous /api/v1.
+servers:
+  - url: /api/v1
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: audit
+    description: >
+      Surface d'audit — admin uniquement, permission `audit.read` sur CHAQUE point d'entrée.
+      `tenantId` est TOUJOURS dérivé du porteur du jeton (`users.ensureUser(jwt).tenantId`),
+      jamais fourni par le client — c'est la totalité du tenant-scoping disponible aujourd'hui :
+      RLS n'existe nulle part dans le dépôt (mesure M-24), ADR-032 / V3-E01 porte ce travail.
+
+paths:
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # EXISTANT — CHANGE DE FORME (slice « filtres + KPI », puis slice « vocabulaire »)
+  # ══════════════════════════════════════════════════════════════════════════
+  /analytics/audit:
+    get:
+      tags: [audit]
+      operationId: auditList
+      summary: Journal d'audit filtré + KPI (route INCHANGÉE, réponse CASSANTE)
+      description: >
+        Route et méthode inchangées. Trois changements de comportement, chacun rattaché à un critère
+        d'acceptation :
+
+        AC-4 (a) — `to` DEVIENT INCLUSIF. Mesuré : `analytics.service.ts:3251` fait `lte: new Date(to)`,
+        donc `to=2026-08-08` devient 2026-08-08T00:00:00Z et toute la journée est perdue. La borne
+        devient `createdAt < début du jour suivant`, calculée dans le fuseau du TENANT (nouvelle colonne
+        `Tenant.timezone`, défaut `Europe/Paris` — ../data-model.md §3.3). Le fuseau résolu est RENVOYÉ
+        dans `filters.timezone`. Il n'est JAMAIS accepté du client : deux admins verraient sinon des
+        comptes différents pour le même filtre, ce qui est exactement le défaut G-TRUTH corrigé ici.
+
+        AC-4 (b) — LES QUATRE KPI SONT CALCULÉS SUR LE FILTRE ACTIF. Mesuré : ils étaient calculés sur un
+        `where` qui ignore from/to/action/resourceType/portal/actorId (analytics.service.ts:3310-3326),
+        soit trois compteurs all-time posés à côté d'un tableau filtré. Chaque KPI transporte désormais
+        sa PORTÉE (`scope`), pour qu'une exception délibérée soit visible et non implicite.
+
+        AC-4 (c) — `adminLogins` EST SUPPRIMÉ, remplacé par `distinctActors`. Mesuré : `adminLogins` vaut
+        0 et vaudra structurellement toujours 0, parce qu'aucun site de l'API n'écrit de ligne d'audit de
+        connexion (mesure M-20). Une carte qui ne peut afficher que 0 est une contre-vérité de produit.
+
+        CHANGEMENT CASSANT DE RÉPONSE, assumé : `kpis` passe de quatre nombres nus à quatre enveloppes, et
+        la clé `adminLogins` disparaît. L'unique consommateur est
+        `apps/web/src/app/admin/audit/page.tsx:26-31` ; il atterrit dans la MÊME PR (même schéma que
+        S-E06-6). L'enveloppe est MINIMALE ET LOCALE : `architecture-impact.md` §4 réserve ADR-034
+        (« KPI envelope ») à V3-E03 — cet épic offre une entrée à cette décision, il ne la revendique pas.
+      parameters:
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+        - { $ref: '#/components/parameters/ActorId' }
+        - { $ref: '#/components/parameters/Action' }
+        - { $ref: '#/components/parameters/ResourceType' }
+        - { $ref: '#/components/parameters/Portal' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          description: Page de journal + KPI, tous deux calculés sur le MÊME filtre.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditListResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenAuditRead' }
+      x-permission: audit.read
+      x-tenant-scope: >
+        `tenantId` dérivé du jeton. Aucun paramètre ne permet de viser un autre tenant.
+        Test G-TENANT : un `actorId` appartenant à un autre tenant ne doit ramener AUCUNE ligne
+        (et non une 403 — le filtre est simplement vide, ce qui ne fuit rien).
+      x-tests:
+        - "G-TRUTH — fixture unique : `kpis.eventsInRange.value === total` pour tout filtre (assertion, pas remarque)."
+        - "G-TRUTH — frontière : une ligne écrite à 23:59:59 dans le fuseau du tenant EST comptée quand `to` vaut ce jour."
+        - "G-TRUTH — chaque KPI porte un `scope` ; les quatre valent `filtered`."
+        - "G-TRUTH — `criticalChanges` compte via AUDIT_CRITICAL_ACTIONS (contracts), jamais via une liste littérale."
+        - "Capacité d'échec : en revenant à `lte: new Date(to)`, le test de frontière DOIT devenir rouge."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # EXISTANT — CHANGE DE FORME (slice « vocabulaire »)
+  # ══════════════════════════════════════════════════════════════════════════
+  /analytics/audit-facets:
+    get:
+      tags: [audit]
+      operationId: auditFacets
+      summary: Facettes des filtres (route INCHANGÉE, réponse CASSANTE)
+      description: >
+        Route et méthode inchangées. La réponse passe de quatre listes de chaînes brutes à des listes
+        d'ENTRÉES `{code, label, vocabulary}`.
+
+        Le défaut mesuré : les colonnes structurelles de la base portent des chaînes d'affichage
+        FRANÇAISES (`Professeur`, `Note`, `Suppression`, …) tandis que les 30 sites d'écriture écrivent
+        des codes machine (`role`, `role.create`) — et le label-map du front
+        (`AuditPageFilters.tsx:21-35`) ne couvre AUCUN des 8 types réellement présents : intersection = 0
+        (mesures M-11 à M-17). La liste déroulante offre donc des chaînes françaises qui traversent le
+        label-map inchangées.
+
+        Le correctif : le vocabulaire canonique est déclaré UNE FOIS dans `packages/contracts/src/audit/`
+        (ADR-037), le libellé français est attaché AU CODE, et les facettes renvoient le code observé +
+        son libellé résolu + son vocabulaire.
+
+        Les codes restent PILOTÉS PAR LES DONNÉES (`distinct` sur le tenant), afin que la liste n'offre
+        jamais un filtre qui ne ramènerait rien. Seul le LIBELLÉ vient du registre.
+
+        DNC-08 : un code observé absent du registre est renvoyé TEL QUEL avec `vocabulary: "unknown"` et
+        `label` égal au code brut. Il n'est JAMAIS écarté en silence — ce qui ne peut pas être classé doit
+        rester visible.
+      responses:
+        '200':
+          description: Facettes, groupables par `vocabulary` dans l'UI.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditFacetsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenAuditRead' }
+      x-permission: audit.read
+      x-tests:
+        - "Un code présent en base et absent du registre ressort avec `vocabulary: \"unknown\"` — jamais absent."
+        - "`resourceType: 'calendar_event'` (absent de RESOURCE_TYPE_LABELS aujourd'hui — v3-e06/PROGRESS.md ligne 378) ressort avec un libellé français."
+        - "Aucun libellé français n'est lu depuis la colonne `resource_type` : une ligne héritée ressort `vocabulary: \"legacy\"` avec sa chaîne brute."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # NOUVEAU — slice « chaîne » (la DERNIÈRE ; voir l'ordre imposé en ../data-model.md §7)
+  # ══════════════════════════════════════════════════════════════════════════
+  /analytics/audit-chain:
+    get:
+      tags: [audit]
+      operationId: auditChainStatus
+      summary: État et vérification de la chaîne d'audit (NOUVEAU)
+      description: >
+        Vérifie la chaîne de hachage du tenant à partir de son GENESIS DÉCLARÉ (`AuditChainAnchor`) et
+        renvoie un verdict.
+
+        Ce que la chaîne couvre : les lignes dont `seq >= anchor.genesisSeq`. Ce qu'elle NE couvre PAS :
+        les lignes antérieures — 54 sur la base locale mesurée — qui ne sont pas chaînées et ne le seront
+        JAMAIS (le backfill est impossible, risque A-01). Le trou est DÉCLARÉ, jamais fabriqué : l'ancrage
+        stocke `legacyRowCount`, et la réponse le remonte tel quel dans `genesis.legacyRowCount`.
+
+        Ce que `legacyRowCount` détecte : une insertion ou une suppression de lignes antérieures au
+        genesis (le compte ne correspond plus). Ce qu'il NE détecte PAS : une modification du CONTENU
+        d'une ligne héritée. Écrit ici pour qu'on ne lise pas « les anciennes lignes sont protégées ».
+
+        DNC-08 — RÈGLE CENTRALE DE CE POINT D'ENTRÉE : une vérification qui ne peut pas s'exécuter doit
+        ÉCHOUER, jamais être sautée. Ancrage absent, algorithme inconnu, ligne illisible, borne atteinte
+        avant la fin : chacun produit `ok: false` et un `verdict` NOMMÉ. Il n'existe aucune valeur de
+        retour signifiant « non vérifié, donc probablement bon ».
+
+        COÛT : la vérification est une marche linéaire. Par défaut elle vérifie la QUEUE (les `limit`
+        dernières lignes) et le raccordement au genesis ; `?full=true` marche la chaîne entière et doit
+        être considéré comme une opération coûteuse et journalisée.
+      parameters:
+        - name: full
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: >
+            `false` (défaut) — vérifie les `limit` dernières lignes ET le raccordement de la première
+            ligne canonique au `genesisHash`. `true` — marche la chaîne entière ; coûteux, à réserver aux
+            contrôles ponctuels.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+          description: Nombre de lignes de queue vérifiées quand `full=false`. Ignoré si `full=true`.
+      responses:
+        '200':
+          description: >
+            Verdict rendu. ATTENTION — `200` signifie « la vérification a produit un verdict », PAS
+            « la chaîne est saine ». La santé se lit dans `ok`. Un client qui ne teste que le code HTTP
+            est en défaut.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditChainStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ForbiddenAuditRead' }
+      x-permission: audit.read
+      x-authz-negative-tests:
+        - "JWT `teacher`      → 403"
+        - "JWT `parent`       → 403"
+        - "JWT `student`      → 403"
+        - "JWT `school_admin` d'un AUTRE tenant → ne voit que SA chaîne (jamais celle du tenant visé) ; aucun paramètre ne permet de viser un tenant"
+        - "JWT `school_admin` / `super_admin` du bon tenant → 200"
+      x-tests:
+        - "DNC-08 — ancrage supprimé ⇒ `ok:false`, `verdict:\"anchor_missing\"`. JAMAIS `ok:true`."
+        - "DNC-08 — `algorithm` inconnu dans l'ancrage ⇒ `ok:false`, `verdict:\"unknown_algorithm\"`."
+        - "Altération : modifier `after` d'une ligne canonique ⇒ `verdict:\"hash_mismatch\"` + `brokenAt` renseigné."
+        - "Suppression : retirer une ligne canonique ⇒ `verdict:\"chain_break\"` (le `prevHash` du successeur ne raccorde plus)."
+        - "Tenant neuf, zéro ligne héritée ⇒ `ok:true`, `verdict:\"verified\"`, `genesis.legacyRowCount: 0`."
+        - "Capacité d'échec : chaque cas ci-dessus doit être démontré rouge AVANT le correctif, sinon l'assertion est vide."
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Jeton Keycloak. Le rôle d'acteur des lignes d'audit est le rôle RÉEL du porteur (précédence super_admin > school_admin > teacher > parent), jamais un littéral (PF-31).
+
+  parameters:
+    From:
+      name: from
+      in: query
+      required: false
+      schema: { type: string, format: date, examples: ['2026-08-01'] }
+      description: Borne basse INCLUSIVE, interprétée au début de journée dans le fuseau du tenant.
+    To:
+      name: to
+      in: query
+      required: false
+      schema: { type: string, format: date, examples: ['2026-08-08'] }
+      description: >
+        Borne haute INCLUSIVE — toute la journée sélectionnée est comprise. Implémentation :
+        `createdAt < début du jour suivant`, dans le fuseau du tenant. C'est le correctif AC-4 (a) ;
+        l'ancien `lte: new Date(to)` perdait la journée entière.
+    ActorId:
+      name: actorId
+      in: query
+      required: false
+      schema: { type: string, format: uuid }
+    Action:
+      name: action
+      in: query
+      required: false
+      schema: { type: string }
+      description: >
+        Correspondance insensible à la casse sur la colonne `action` (comportement actuel conservé).
+        Sur les lignes canoniques cela vise un code (`role.create`) ; sur les 54 lignes héritées cela
+        vise une chaîne française (`Suppression`). Les deux restent atteignables — c'est délibéré : un
+        auditeur doit pouvoir retrouver une ligne ancienne.
+    ResourceType:
+      name: resourceType
+      in: query
+      required: false
+      schema: { type: string }
+      description: Égalité exacte. Les codes proposés viennent de `/analytics/audit-facets`.
+    Portal:
+      name: portal
+      in: query
+      required: false
+      schema: { type: string, enum: [admin, teacher, parent, student] }
+      description: >
+        Quatre membres (ADR-037 / D-16). `packages/contracts` déclare aujourd'hui `PORTALS` à TROIS
+        membres alors que `apps/web/src/lib/portals.ts` en déclare quatre : c'est PF-101, OUVERT,
+        référencé ici et NON corrigé par cet épic.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      description: Plafonné à 200 côté serveur (comportement actuel conservé).
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema: { type: integer, minimum: 0, default: 0 }
+
+  responses:
+    BadRequest:
+      description: Paramètre invalide (date non parsable, `limit`/`offset` non numérique).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/NestError' }
+    Unauthorized:
+      description: Jeton absent ou invalide.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/NestError' }
+    ForbiddenAuditRead:
+      description: >
+        Permission `audit.read` absente. G-AUTHZ : un test négatif PAR RÔLE
+        (teacher / parent / student) est exigé sur chaque point d'entrée de ce fichier.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/NestError' }
+
+  schemas:
+
+    NestError:
+      type: object
+      description: Enveloppe d'erreur NestJS par défaut — convention du projet, inchangée.
+      properties:
+        statusCode: { type: integer }
+        message: { oneOf: [{ type: string }, { type: array, items: { type: string } }] }
+        error: { type: string }
+      required: [statusCode, message]
+
+    Vocabulary:
+      type: string
+      enum: [canonical, legacy, unknown]
+      description: >
+        `canonical` — la ligne (ou le code) est postérieure au genesis et exprimée dans le vocabulaire
+        déclaré en `packages/contracts`.
+        `legacy`    — la ligne est ANTÉRIEURE au genesis du tenant : ses colonnes `action` /
+                      `resourceType` portent des chaînes d'affichage françaises. Rendue TELLE QUELLE,
+                      jamais traduite après coup — traduire serait fabriquer (`Suppression` ne dit pas
+                      CE QUI a été supprimé).
+        `unknown`   — postérieure au genesis mais portant un code absent du registre. Signalée plutôt
+                      qu'écartée (DNC-08) : c'est le symptôme d'une dérive à corriger, pas un détail à
+                      masquer.
+
+    KpiScope:
+      type: string
+      enum: [filtered, all_time]
+      description: >
+        Portée du calcul. G-TRUTH exige qu'elle soit ÉTIQUETÉE, pas devinée. Les quatre KPI valent
+        `filtered` aujourd'hui ; `all_time` existe pour qu'une exception délibérée soit représentable
+        ET VISIBLE, jamais implicite.
+
+    Kpi:
+      type: object
+      required: [value, scope]
+      properties:
+        value: { type: integer, minimum: 0 }
+        scope: { $ref: '#/components/schemas/KpiScope' }
+
+    AuditKpis:
+      type: object
+      required: [eventsInRange, criticalChanges, sensitiveExports, distinctActors]
+      description: >
+        Quatre KPI, définitions EXÉCUTOIRES (../data-model.md §3.6). `adminLogins` a disparu :
+        mesuré 0 et structurellement toujours 0, parce qu'aucun site n'écrit de ligne d'audit de
+        connexion. Le produire demanderait un event-listener SPI Keycloak ou un ping `/auth/session` —
+        une nouvelle surface d'intégration, avec son propre ADR : hors périmètre.
+      properties:
+        eventsInRange:
+          allOf: [{ $ref: '#/components/schemas/Kpi' }]
+          description: "`count(*)` sur le where filtré COMPLET. Invariant testé : `eventsInRange.value === total`."
+        criticalChanges:
+          allOf: [{ $ref: '#/components/schemas/Kpi' }]
+          description: >
+            filtre ∩ `action ∈ AUDIT_CRITICAL_ACTIONS` (registre `packages/contracts`). Remplace
+            `['delete','Suppression','Révision','revise']`, qui enjambait DEUX vocabulaires : mesuré 9,
+            atteint uniquement par le français `Suppression`, tandis que `Révision`/`revise`/`delete` ne
+            correspondaient à RIEN.
+        sensitiveExports:
+          allOf: [{ $ref: '#/components/schemas/Kpi' }]
+          description: >
+            filtre ∩ `resourceType = 'export_job'` — critère STRUCTUREL. Remplace
+            `action contains 'Export'` (mesuré 7), qui dépendait d'une casse et d'une langue.
+        distinctActors:
+          allOf: [{ $ref: '#/components/schemas/Kpi' }]
+          description: "`count(distinct actor_id)` sur le filtre, `actor_id` non nul. Remplace `adminLogins`."
+
+    AppliedFilters:
+      type: object
+      required: [timezone]
+      description: Écho du filtre RÉSOLU côté serveur, pour que l'UI puisse énoncer ce qu'elle montre.
+      properties:
+        timezone:
+          type: string
+          examples: ['Europe/Paris']
+          description: >
+            Fuseau du tenant (`Tenant.timezone`, colonne additive de cet épic). RÉSOLU CÔTÉ SERVEUR ET
+            JAMAIS ACCEPTÉ DU CLIENT : sinon deux admins obtiendraient des comptes différents pour le
+            même filtre — précisément le défaut G-TRUTH corrigé ici.
+        from: { type: [string, 'null'], format: date }
+        to:   { type: [string, 'null'], format: date }
+        actorId: { type: [string, 'null'], format: uuid }
+        action: { type: [string, 'null'] }
+        resourceType: { type: [string, 'null'] }
+        portal: { type: [string, 'null'] }
+
+    AuditRow:
+      type: object
+      required:
+        [id, createdAt, actorId, actorName, actorRole, portal, action, actionLabel,
+         resourceType, resourceTypeLabel, resourceId, detail, ipAddress, userAgent,
+         before, after, vocabulary, chained]
+      properties:
+        id: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        actorId: { type: [string, 'null'], format: uuid }
+        actorName: { type: [string, 'null'] }
+        actorRole:
+          type: [string, 'null']
+          description: >
+            Rôle RÉEL du porteur du jeton au moment de l'écriture, résolu par précédence
+            (super_admin > school_admin > teacher > parent). Mesuré avant correctif : 8 sites codaient
+            `'school_admin'` en dur (PF-31), 53 des 54 lignes existantes le portent. Les lignes
+            héritées gardent la valeur écrite à l'époque — elle n'est PAS réécrite.
+        portal: { type: [string, 'null'], enum: [admin, teacher, parent, student, null] }
+        action: { type: string, description: "Valeur BRUTE de la colonne. Jamais remplacée par un libellé." }
+        actionLabel:
+          type: string
+          description: >
+            Libellé français DÉRIVÉ du code via le registre. Si `vocabulary` vaut `legacy` ou `unknown`,
+            vaut la chaîne brute — jamais une traduction inventée.
+        resourceType: { type: string }
+        resourceTypeLabel: { type: string, description: "Même règle que `actionLabel`." }
+        resourceId: { type: [string, 'null'], format: uuid }
+        detail: { type: [string, 'null'], description: "Dérivé de `after.detail` / `after.summary` — comportement actuel conservé." }
+        ipAddress:
+          type: [string, 'null']
+          description: >
+            `null` tant que HOP-1 n'a pas épinglé le nombre de sauts et que `apps/web` ne transmet pas
+            explicitement l'IP client (ADR-036). C'est DÉLIBÉRÉ : « une provenance absente, jamais une
+            provenance fausse ». Avant correctif, la valeur stockée serait l'adresse du CONTENEUR WEB,
+            identique pour tout acteur — et la confiance aveugle en `X-Forwarded-For` la rendrait
+            FORGEABLE PAR LE CLIENT, strictement pire que vide.
+        userAgent:
+          type: [string, 'null']
+          description: "Tronqué à MAX_USER_AGENT_LENGTH (512). `null` sur toute écriture pilotée par l'UI tant qu'ADR-036 n'est pas livré (undici n'envoie pas d'UA)."
+        before: { type: [object, 'null'], additionalProperties: true }
+        after:  { type: [object, 'null'], additionalProperties: true }
+        vocabulary: { $ref: '#/components/schemas/Vocabulary' }
+        chained:
+          type: boolean
+          description: >
+            `true` si la ligne participe à la chaîne (`seq >= anchor.genesisSeq`). `false` pour les
+            lignes antérieures au genesis — 54 sur la base locale mesurée. L'UI DOIT le rendre visible :
+            une ligne non chaînée ne porte pas la même garantie, et le taire serait la fausseté que
+            l'épic corrige.
+
+    AuditListResponse:
+      type: object
+      required: [data, total, kpis, filters]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AuditRow' } }
+        total: { type: integer, minimum: 0, description: "Nombre de lignes correspondant au filtre. Invariant : `total === kpis.eventsInRange.value`." }
+        kpis: { $ref: '#/components/schemas/AuditKpis' }
+        filters: { $ref: '#/components/schemas/AppliedFilters' }
+
+    FacetEntry:
+      type: object
+      required: [code, label, vocabulary]
+      properties:
+        code: { type: string, description: "Valeur observée en base — c'est CE QUE le filtre enverra." }
+        label: { type: string, description: "Libellé français du registre ; égal au code si `vocabulary` ≠ `canonical`." }
+        vocabulary: { $ref: '#/components/schemas/Vocabulary' }
+
+    ActorFacet:
+      type: object
+      required: [id, name, role]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        role: { type: [string, 'null'] }
+
+    AuditFacetsResponse:
+      type: object
+      required: [resourceTypes, actions, portals, actors]
+      description: >
+        Codes PILOTÉS PAR LES DONNÉES (`distinct` sur le tenant) — la liste n'offre jamais un filtre qui
+        ne ramènerait rien. Seul le LIBELLÉ vient du registre. L'UI peut grouper par `vocabulary`
+        (« Vocabulaire courant » / « Format historique »).
+      properties:
+        resourceTypes: { type: array, items: { $ref: '#/components/schemas/FacetEntry' } }
+        actions: { type: array, items: { $ref: '#/components/schemas/FacetEntry' } }
+        portals: { type: array, items: { $ref: '#/components/schemas/FacetEntry' } }
+        actors: { type: array, items: { $ref: '#/components/schemas/ActorFacet' } }
+
+    AuditChainVerdict:
+      type: string
+      enum:
+        - verified
+        - anchor_missing
+        - unknown_algorithm
+        - hash_mismatch
+        - chain_break
+        - genesis_mismatch
+        - legacy_count_mismatch
+        - unreadable_row
+      description: >
+        Verdicts NOMMÉS. Il n'existe volontairement AUCUN membre signifiant « non vérifié » ou
+        « sauté » : DNC-08 — une vérification qui ne peut pas s'exécuter doit ÉCHOUER.
+
+        `verified`              — chaîne vérifiée depuis le genesis sur l'étendue demandée.
+        `anchor_missing`        — pas de `AuditChainAnchor` pour ce tenant. Échec, jamais « ok ».
+        `unknown_algorithm`     — l'ancrage déclare un algorithme que ce binaire ne sait pas calculer.
+        `hash_mismatch`         — une ligne ne reproduit pas son propre `hash` : contenu altéré.
+        `chain_break`           — le `prevHash` d'une ligne ne correspond pas au `hash` de son prédécesseur : ligne supprimée ou insérée.
+        `genesis_mismatch`      — la première ligne canonique ne raccorde pas au `genesisHash`, ou le `genesisHash` n'est pas reproductible depuis la ligne d'ancrage.
+        `legacy_count_mismatch` — le nombre de lignes antérieures au genesis diffère du `legacyRowCount` déclaré : insertion ou suppression dans la zone héritée.
+        `unreadable_row`        — une ligne n'a pas pu être canonicalisée (JSON non représentable). Échec explicite plutôt que saut silencieux.
+
+    AuditChainGenesis:
+      type: object
+      required: [declaredAt, genesisSeq, algorithm, vocabularyVersion, legacyRowCount]
+      properties:
+        declaredAt: { type: string, format: date-time }
+        genesisSeq: { type: string, description: "BigInt sérialisé en chaîne (précision > Number.MAX_SAFE_INTEGER)." }
+        genesisHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        algorithm: { type: string, examples: ['sha256-jcs-v1'] }
+        vocabularyVersion: { type: integer }
+        legacyRowCount:
+          type: integer
+          minimum: 0
+          description: >
+            Nombre de lignes ANTÉRIEURES au genesis, mesuré au moment de la déclaration — 54 sur la base
+            locale. Le trou est ainsi un NOMBRE STOCKÉ, pas une phrase dans un document. Il détecte une
+            insertion/suppression dans la zone héritée ; il ne détecte PAS une modification de contenu.
+            Ces lignes ne seront jamais chaînées (A-01).
+        note: { type: [string, 'null'] }
+
+    AuditChainStatus:
+      type: object
+      required: [ok, verdict, genesis, verifiedRows, scope]
+      properties:
+        ok:
+          type: boolean
+          description: >
+            LA seule lecture valable de la santé de la chaîne. Le code HTTP 200 signifie « un verdict a
+            été produit », pas « la chaîne est saine ». Un client qui ne teste que le statut HTTP est en
+            défaut.
+        verdict: { $ref: '#/components/schemas/AuditChainVerdict' }
+        genesis: { $ref: '#/components/schemas/AuditChainGenesis' }
+        scope:
+          type: string
+          enum: [tail, full]
+          description: "`tail` — les `limit` dernières lignes + le raccordement au genesis. `full` — chaîne entière."
+        verifiedRows: { type: integer, minimum: 0 }
+        chainedRows: { type: integer, minimum: 0, description: "Lignes du tenant à partir du genesis." }
+        legacyRows: { type: integer, minimum: 0, description: "Lignes antérieures au genesis, OBSERVÉES maintenant (à comparer à `genesis.legacyRowCount`)." }
+        brokenAt:
+          type: [object, 'null']
+          description: "Renseigné dès que `ok` est `false` ET que la cause est localisable sur une ligne."
+          properties:
+            id: { type: string, format: uuid }
+            seq: { type: string }
+            createdAt: { type: string, format: date-time }
+            expectedPrevHash: { type: [string, 'null'] }
+            actualPrevHash: { type: [string, 'null'] }
+        checkedAt: { type: string, format: date-time }
+
+# ════════════════════════════════════════════════════════════════════════════
+# SURFACES NON MODIFIÉES ICI, mais qui touchent le même vocabulaire
+# ════════════════════════════════════════════════════════════════════════════
+x-adjacent-surfaces:
+  - path: POST /exports  (kind = audit_csv)
+    note: >
+      TROISIÈME consommateur du vocabulaire, mesuré et facile à oublier :
+      `apps/worker/src/modules/exports/generators/audit-csv.generator.ts:16` lit `auditLog` et exporte la
+      colonne `action` BRUTE. Le point d'entrée n'est pas modifié par ce fichier, mais la slice
+      « vocabulaire » doit soit lui appliquer le registre, soit énoncer explicitement qu'elle ne le fait
+      pas. Le laisser tacite produirait un export en désaccord avec l'écran qui le déclenche.
+      Déclencheur : `apps/web/src/app/admin/audit/actions.ts:18` (`kind: 'audit_csv'`).
+  - path: GET /admin/reports  (page web, pas une API)
+    note: >
+      AUCUN point d'entrée API n'est créé. Mesuré : aucune page
+      (`apps/web/src/app/admin/reports` n'existe pas), un lien VIVANT dans
+      `apps/web/src/components/shell/sidebar-items.ts:175`, déjà inventorié comme mort dans
+      `scripts/link-integrity-baseline.json`. AC-5 se satisfait en RETIRANT l'entrée de navigation et sa
+      ligne de baseline ; `scripts/link-integrity-check.js` (stage 13, déjà bloquant) le prouve.
+      Non revendiqué : que le besoin « rapports » n'existe pas — seulement qu'il n'appartient pas à cet épic.
+  - path: apps/web/src/app/admin/audit/page.tsx
+    note: >
+      SEUL consommateur des deux réponses modifiées. AC-1 (« /admin/audit rend ») reste une MESURE
+      OUVERTE : le crash ne se reproduit pas statiquement, et la sonde live renvoie 307 vers le login,
+      donc le rendu authentifié n'a PAS été observé. Ce fichier ne tranche pas la question dans un sens
+      ni dans l'autre ; elle se ferme par un rendu authentifié, pas par de la lecture de code.
