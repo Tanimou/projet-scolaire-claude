@@ -9,11 +9,17 @@ import './shared/tracing/tracing.bootstrap';
 
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { type NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
+import {
+  AUDIT_FORWARD_TOKEN_ENV,
+  configureAuditClientHints,
+} from './shared/audit/client-hints';
 import { assertRequiredConfig } from './shared/config/config-preflight';
+import { applyTrustProxy } from './shared/config/trust-proxy';
 import { assertMigrationsClean } from './shared/migrations/migration-preflight';
 import { PrismaService } from './shared/prisma/prisma.service';
 import { assertReleaseMatches } from './shared/release/release-preflight';
@@ -34,7 +40,40 @@ async function bootstrap() {
   // de migrations ici.
   assertRequiredConfig(process.env, logger);
 
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+
+  // Provenance client (S-E04-3 / PF-31, ADR-036 D1/D2/D3/D9) — DEUX lignes, et
+  // les deux sont des applications d'une décision écrite, jamais une valeur
+  // choisie ici.
+  //
+  // 1. Le nombre de proxys inverses `N` est PINNÉ depuis une clé de
+  //    configuration qui refuse de démarrer si elle est absente ou illisible
+  //    (`TRUST_PROXY_HOPS`, dans `REQUIRED_ENV`). Jamais `true`, jamais `'*'` :
+  //    ces formes disent à Express de croire l'entrée la plus à gauche de
+  //    `X-Forwarded-For` de N'IMPORTE QUEL appelant, donc n'importe qui choisit
+  //    ce que la piste de gouvernance enregistre à son sujet (ADR-036 D1, refusé
+  //    par écrit). L'unique appel à `app.set('trust proxy', …)` de tout
+  //    `apps/api` est dans `shared/config/trust-proxy.ts` — la même fonction que
+  //    le harnais supertest exécute, pour qu'un test prouve l'artefact livré et
+  //    non une réimplémentation de l'artefact.
+  //
+  // 2. Le `N` appliqué et le jeton de transfert partagé sont passés au SEUL
+  //    point d'extraction (`shared/audit/client-hints.ts`) par argument. Ce
+  //    fichier-ci est donc le seul endroit où `AUDIT_FORWARD_TOKEN` est lu, et
+  //    la valeur ne quitte jamais le processus : elle est immédiatement
+  //    condensée en empreinte, et seule la PRÉSENCE est journalisée. Une
+  //    rotation qui met à jour l'API avant le web produit une fenêtre où toute
+  //    provenance redevient nulle — la bonne direction, mais invisible ; cette
+  //    ligne de log est ce qui la rend découvrable.
+  const trustedHops = applyTrustProxy(app, process.env);
+  const forwardTokenConfigured = configureAuditClientHints({
+    trustedHops,
+    forwardToken: process.env[AUDIT_FORWARD_TOKEN_ENV],
+  });
+  logger.log(
+    `Provenance d'audit — trust proxy pinné à ${trustedHops} saut(s) (ADR-036 D2) ; ` +
+      `jeton de transfert ${forwardTokenConfigured ? 'configuré' : 'NON configuré (provenance client nulle, ADR-036 D4)'}.`,
+  );
 
   // Preflight schéma (S-E02-1 / PF-03) : ne jamais servir de trafic contre un
   // schéma inconnu. Lève et fait sortir le process en cas de migration absente,

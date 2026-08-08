@@ -76,6 +76,15 @@ services:
       # non exécutée par cette story.
       KEYCLOAK_ADMIN_USER: ${KEYCLOAK_ADMIN_USER:?requis depuis S-E06-1 — declarez-le dans .env.prod}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?requis depuis S-E06-1 — declarez-le dans .env.prod}
+      # S-E04-3 / ADR-036 D2-D3 — `N = 2` ICI et nulle part ailleurs : Traefik
+      # (hôte, TLS) → nginx (conteneur) → api. Même forme refusante, même raison :
+      # un compte de sauts faux ne plante pas, il enregistre l'adresse d'un relais
+      # comme celle de l'opérateur, pour toujours et pour tout le monde.
+      #
+      # Si l'arête change (un CDN devant Traefik, nginx retiré du chemin),
+      # re-dérouler la procédure D7 et réenregistrer la valeur DANS l'ADR — pas
+      # dans un commentaire à côté du code.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:?requis depuis S-E04-3 — ADR-036 D3, declarez-le dans .env.prod (2 = Traefik -> nginx -> api)}
 
   # ---- Worker: same issuer wiring + public web origin for email deep-links ----
   worker:
@@ -107,6 +116,24 @@ services:
       AUTH_URL: ${PUBLIC_BASE_URL}
       AUTH_TRUST_HOST: "true"
       AUTH_SECRET: ${AUTH_SECRET}
+      # S-E04-3 / ADR-036 D10 — `W = 2` : Traefik (hôte, TLS) → nginx (conteneur)
+      # → web. `location /` (infra/nginx/conf.d/pilotage.conf) pose bien
+      # `X-Forwarded-For`, donc la chaîne de profondeur 2 est réelle.
+      #
+      # Clé DISTINCTE de `TRUST_PROXY_HOPS` (service `api` ci-dessus) : ici le
+      # `NEXT_PUBLIC_API_URL` du web est l'origine publique, donc les deux seams
+      # serveur repassent par Traefik → nginx. Les deux chemins se comptent
+      # séparément ; une clé unique en rendrait un des deux silencieusement faux.
+      #
+      # Même forme refusante, même raison qu'ailleurs — sauf que l'échec qu'elle
+      # prévient n'est pas un crash : sans elle, `webTrustProxyHops()` retombe sur
+      # `0`, aucun `x-pilotage-client-ip` n'est jamais émis, et
+      # `AuditLog.ipAddress` reste NULL sur toute écriture pilotée par l'UI — une
+      # fonctionnalité livrée inerte, dont le seul signal est un `console.warn`.
+      #
+      # Si l'arête change, re-dérouler la procédure ADR-036 D7 et réenregistrer la
+      # valeur DANS l'ADR, pas dans un commentaire à côté du code.
+      WEB_TRUST_PROXY_HOPS: ${WEB_TRUST_PROXY_HOPS:?requis depuis S-E04-3 — ADR-036 D10, declarez-le dans .env.prod (2 = Traefik -> nginx -> web)}
 
   # ---- Migrator: applique les migrations revues (prisma migrate deploy) ----
   # La commande est héritée de docker-compose.yml : l'entrypoint sûr

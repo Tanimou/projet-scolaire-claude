@@ -502,18 +502,48 @@ describe('G-5 / AC-9 — the old homes do not exist, and nothing re-exports them
     expect(declarationRegex('resolveAcademicYearId').test(source)).toBe(true);
   });
 
-  it('AC-10 — calendar.controller.ts still captures a REAL @Ip()/@Headers(user-agent) and sanitises it', () => {
-    // This slice must not REDUCE what any site records. The calendar seed is the
-    // only write today that captures a real client value; routing it through
-    // `deriveAuditProvenance` (which returns null by decision) would have replaced
-    // a captured value with a blank one. Only its imports were repointed.
+  it('AC-10 (S-E04-3 restatement) — calendar.controller.ts reaches provenance through the SEAM', () => {
+    // RESTATED, NOT DELETED. `S-E04-1` pinned the literal decorators `@Ip()` /
+    // `@Headers('user-agent')` because at that moment they were the only real
+    // client capture in the repository, and routing them through a function that
+    // returned null by decision would have REDUCED what the site records. That
+    // promise — this slice must not reduce what any site records — is the
+    // invariant, and it survives the move; the decorators were only ever its
+    // implementation. `S-E04-3` replaces them with `extractAuditClientHints`,
+    // which returns MORE than `@Ip()` did on the UI-driven path (the operator's
+    // address instead of the web container's) and never less.
+    //
+    // So the rule is now stated over the property: the handler still derives
+    // BOTH fields from the shared seam, still hands the service a pre-sanitised
+    // pair (the `S-E06-6` reason: a failed `inet` cast must not roll back the
+    // transaction it audits), and the old per-call-site header reads are GONE —
+    // asserted in the negative, because a leftover `@Ip()` beside the seam would
+    // be a second, contradicting capture.
     const controller = EXECUTABLE.get('apps/api/src/modules/calendar/calendar.controller.ts') ?? '';
     expect(controller).not.toBe('');
-    expect(controller).toMatch(/@Ip\(\)/);
-    expect(controller).toMatch(/@Headers\('user-agent'\)/);
-    expect(controller).toMatch(/ipAddress: sanitiseInetOrNull\(/);
-    expect(controller).toMatch(/userAgent: truncateUserAgent\(/);
-    expect(controller).toMatch(/from '\.\.\/\.\.\/shared\/audit\/provenance'/);
+    expect(controller).toMatch(/extractAuditClientHints\(req\)/);
+    expect(controller).toMatch(/from '\.\.\/\.\.\/shared\/audit\/client-hints'/);
+    expect(controller).toMatch(/ipAddress,/);
+    expect(controller).toMatch(/userAgent,/);
+    // The per-call-site capture the ADR wanted replaced by ONE seam.
+    expect(controller).not.toMatch(/@Ip\(\)/);
+    expect(controller).not.toMatch(/@Headers\('user-agent'\)/);
+  });
+
+  it('AC-4 — a SECOND, /admin-reachable UI-driven write now carries provenance end-to-end', () => {
+    // One site proves the seam compiles; it does not prove the slice is usable.
+    // `PUT /api/v1/subjects/coefficients/matrix` is driven from
+    // `apps/web/src/app/admin/subjects/actions.ts` through the shared server
+    // seam, with the demo admin credentials and no new UI — so AC-4's "UI-driven
+    // audited write" is reachable by a human, not only by a test.
+    const subjects =
+      EXECUTABLE.get('apps/api/src/modules/school-structure/subjects.controller.ts') ?? '';
+    expect(subjects).not.toBe('');
+    expect(subjects).toMatch(/extractAuditClientHints\(req\)/);
+    expect(subjects).toMatch(/deriveAuditProvenance\(\s*jwt,/);
+    expect(subjects).toMatch(/auditLog\.create/);
+    expect(subjects).toMatch(/ipAddress,/);
+    expect(subjects).toMatch(/userAgent,/);
   });
 });
 
@@ -531,22 +561,49 @@ describe('G-6 / AC-6 / DNC-10 — nothing can change what deriveAuditProvenance 
     },
   );
 
-  it('reads no request, no header and no socket address — the null is structural (ADR-036 D5)', () => {
+  it('reads no request, no header and no socket address — the purity is structural (ADR-036 D5)', () => {
+    // THESE FOUR ARE THE INVARIANT THAT SURVIVES S-E04-3, VERBATIM. The
+    // extraction moved to `client-hints.ts`; the purity did not move with it.
+    // `provenance.ts` is the one place every audit write funnels through, and if
+    // a request were in scope there the next author would wire `req.ip` in — the
+    // option ADR-036 D5 refuses structurally rather than by convention.
     const s = source();
     expect(s).not.toMatch(/\breq\.ip\b/);
     expect(s).not.toMatch(/x-forwarded-for/i);
     expect(s).not.toMatch(/\bheaders\b/);
     expect(s).not.toMatch(/trust proxy/);
-    // The second parameter is present (so S-E04-3 need not re-sign 9+ call sites)
-    // and UNREAD (leading underscore, ESLint argsIgnorePattern '^_').
-    expect(s).toMatch(/deriveAuditProvenance\(jwt: KeycloakJwtPayload, _req\?: unknown\)/);
-    expect(s).not.toMatch(/\b_req\./);
   });
 
-  it('returns ipAddress and userAgent as literal nulls on BOTH branches', () => {
+  it('AC-10 — the second parameter is NARROWED to AuditClientHints, never widened back', () => {
+    // RESTATED, NOT DELETED. Until S-E04-3 this pinned the literal
+    // `(jwt: KeycloakJwtPayload, _req?: unknown)` — a shape whose whole point was
+    // that nothing switchable was in scope. The narrowing is the one-line change
+    // ADR-036 D5 reserved the parameter for, and the rule is pinned again on the
+    // NEW shape so that a future widening back to `unknown` (or, worse, to
+    // `Request`) is a RED test rather than a quiet regression.
     const s = source();
-    expect((s.match(/ipAddress: null/g) ?? []).length).toBeGreaterThanOrEqual(2);
-    expect((s.match(/userAgent: null/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(s).toMatch(/deriveAuditProvenance\(\s*jwt: KeycloakJwtPayload,\s*hints\?: AuditClientHints,?\s*\)/);
+    expect(s).not.toMatch(/_req\?: unknown/);
+    expect(s).not.toMatch(/hints\?: unknown/);
+    expect(s).not.toMatch(/:\s*Request\b/);
+    // The type arrives as a TYPE, so no runtime require() cycle is closed and no
+    // header read is carried into scope with it.
+    expect(s).toMatch(/import type \{ AuditClientHints \} from '\.\/client-hints'/);
+  });
+
+  it('AC-10 — provenance.ts never INVENTS a value: the only producers are `hints?.x ?? null`', () => {
+    // RESTATED, NOT DELETED. The old form counted `ipAddress: null` twice, which
+    // was the executable shape of "returned null unconditionally by decision".
+    // Both branches now carry the hints, so the surviving property is the one
+    // that actually mattered: this file neither reads, normalises, defaults nor
+    // guesses a provenance value — it forwards what the seam already sanitised.
+    const s = source();
+    expect(s).toMatch(/const ipAddress = hints\?\.ipAddress \?\? null;/);
+    expect(s).toMatch(/const userAgent = hints\?\.userAgent \?\? null;/);
+    // No second source: no literal address, no sanitiser call, no fallback.
+    expect(s).not.toMatch(/sanitiseInetOrNull\(\s*hints/);
+    expect(s).not.toMatch(/ipAddress:\s*['"]/);
+    expect(s).not.toMatch(/ipAddress:\s*hints\?\.ipAddress \?\? [^n]/);
   });
 
   it('exports EXACTLY the four public functions — no *Unsafe sibling can appear unnoticed', () => {
@@ -682,9 +739,127 @@ describe('ADR-036 — pinned hop count, blanket XFF refused, S-E04-3 named as ow
     expect(text).toMatch(/S-E04-3/);
   });
 
-  it('AC-11 — this slice sets no trust proxy: apps/api/src/main.ts has none', () => {
+  it('AC-11 (S-E04-3 inversion) — main.ts applies the hop count ONCE, from the shared applier', () => {
+    // INVERTED, NOT DELETED. `S-E04-1` asserted `main.ts` contains no
+    // `trust proxy` — true of the slice that wrote the ADR, and the assertion
+    // this slice exists to falsify. The surviving invariant is the one the
+    // absence was standing in for: the hop count is never chosen HERE. `main.ts`
+    // calls the one exported applier, which reads the declared key; it holds no
+    // literal, no `true`, no `'*'`.
     const main = EXECUTABLE.get('apps/api/src/main.ts') ?? '';
     expect(main).not.toBe('');
-    expect(main).not.toMatch(/trust proxy|trustProxy|set\(['"]trust/);
+    expect(main).toMatch(/applyTrustProxy\(app, process\.env\)/);
+    expect((main.match(/applyTrustProxy\(/g) ?? []).length).toBe(1);
+    // The decision is not re-taken here: no `app.set('trust proxy', …)` in main.
+    expect(main).not.toMatch(/set\(\s*['"]trust proxy['"]/);
+    expect(main).not.toMatch(/trust proxy['"],\s*(?:true|'\*'|"\*")/);
+  });
+
+  it('AC-6 — the hop count is read from a DECLARED, boot-refusing key, never coerced', () => {
+    const preflight = EXECUTABLE.get('apps/api/src/shared/config/config-preflight.ts') ?? '';
+    expect(preflight).toMatch(/'TRUST_PROXY_HOPS'/);
+    const parser = EXECUTABLE.get('apps/api/src/shared/config/trust-proxy.ts') ?? '';
+    expect(parser).not.toBe('');
+    // ADR-036 D3's forbidden shape, in every spelling it could take.
+    for (const forbidden of [
+      /Number\(\s*process\.env/,
+      /process\.env\.TRUST_PROXY_HOPS\s*\?\?/,
+      /TRUST_PROXY_HOPS\]\s*\?\?/,
+      /\?\?\s*['"]?\d/,
+      /\|\|\s*['"]?\d/,
+    ]) {
+      expect(parser).not.toMatch(forbidden);
+    }
+    // Strict, and bounded — an unbounded count is `trust proxy: true` by another
+    // name, because Express pads and the leftmost (caller-chosen) entry wins.
+    expect(parser).toMatch(/\^\\d\+\$/);
+    expect(parser).toMatch(/MAX_TRUST_PROXY_HOPS/);
+  });
+});
+
+/* ================================================================== *
+ * S-E04-3 — the mirror guards for the NEW extraction seam
+ * ================================================================== */
+
+describe('S-E04-3 / DNC-10 — client-hints.ts is the ONE seam, and it has no off switch', () => {
+  const CLIENT_HINTS_REL = 'apps/api/src/shared/audit/client-hints.ts';
+  const TRUST_PROXY_REL = 'apps/api/src/shared/config/trust-proxy.ts';
+  const seam = () => EXECUTABLE.get(CLIENT_HINTS_REL) ?? '';
+
+  it('exists and is not empty — the vacuity floor for every rule below', () => {
+    expect(seam().length).toBeGreaterThan(500);
+    expect((EXECUTABLE.get(TRUST_PROXY_REL) ?? '').length).toBeGreaterThan(500);
+  });
+
+  it.each(['process.env', 'ConfigService', 'NODE_ENV', 'featureFlag', 'getFlag(', 'SKIP_', 'ALLOW_', 'BYPASS_', 'FORCE_'])(
+    'client-hints.ts contains no %s',
+    (needle) => {
+      // Stated as ZERO env reads, which is stronger than the "exactly one key"
+      // the design allowed for: the hop count AND the forward token are handed
+      // to this file by argument from `main.ts`, so there is no key to override
+      // here and no second source of truth for N.
+      expect(seam()).not.toContain(needle);
+    },
+  );
+
+  it('does not decide the hop count — the seam knows nothing about N', () => {
+    // The blanket-form and hop-literal absences live in ONE home,
+    // `trust-proxy-dnc10-gate.spec.ts`, with their companion red control. Two
+    // homes for one rule is exactly the shape S-E04-1 spent a slice collapsing.
+    expect(seam()).not.toMatch(/trust proxy/);
+    expect(seam()).not.toMatch(/TRUST_PROXY/);
+    const setters = PRODUCTION.filter(([, s]) => /\.set\(\s*['"]trust proxy['"]/.test(s)).map(
+      ([path]) => path,
+    );
+    expect(setters).toEqual([TRUST_PROXY_REL]);
+  });
+
+  it('G-AUTHZ (structural) — the seam is not reachable from the guard chain', () => {
+    // The behavioural half (valid forward token + no Bearer ⇒ 401) lives with the
+    // auth suite. This is the half a behavioural test cannot give: the token
+    // CANNOT influence authorisation, tenant resolution or role derivation,
+    // because the only files that import the seam are HTTP handlers — invoked
+    // AFTER the guards have already decided.
+    const importers = PRODUCTION.filter(([, s]) =>
+      /(?:from|require\()\s*['"][^'"]*audit\/client-hints['"]/.test(s),
+    ).map(([path]) => path);
+    expect(importers.length).toBeGreaterThan(0);
+    for (const path of importers) {
+      expect(path).not.toMatch(/\/shared\/auth\//);
+      expect(path).not.toMatch(/\.guard\.ts$/);
+      expect(path).not.toMatch(/\.strategy\.ts$/);
+      expect(path).not.toMatch(/\.middleware\.ts$/);
+      expect(path).not.toMatch(/\.interceptor\.ts$/);
+    }
+    // No interceptor was built (the standing ruling at calendar.controller.ts).
+    expect(seam()).not.toMatch(/NestInterceptor|@Injectable\(\)/);
+  });
+
+  it('G-AUTHZ — the forward token never becomes an output: no log, no message, no echo', () => {
+    const s = seam();
+    expect(s).not.toMatch(/console\./);
+    expect(s).not.toMatch(/logger/i);
+    expect(s).not.toMatch(/setAttribute|span\./);
+    // The configured token is kept as a DIGEST, never as the raw string, so it
+    // is not a value that can be echoed by accident.
+    expect(s).toMatch(/forwardTokenDigest/);
+    expect(s).toMatch(/timingSafeEqual/);
+    // main.ts logs the PRESENCE, never the value: the raw token is read at
+    // exactly one place, and that place is the argument of the configure call.
+    const main = EXECUTABLE.get('apps/api/src/main.ts') ?? '';
+    expect(main).not.toMatch(/\$\{[^}]*AUDIT_FORWARD_TOKEN[^}]*\}/);
+    expect((main.match(/process\.env\[AUDIT_FORWARD_TOKEN_ENV\]/g) ?? []).length).toBe(1);
+    expect(main).toMatch(/forwardToken: process\.env\[AUDIT_FORWARD_TOKEN_ENV\],/);
+    // Only the boolean derived from it is ever interpolated into a message.
+    expect(main).toMatch(/\$\{forwardTokenConfigured \?/);
+  });
+
+  it('AC-3 — the token branch NEVER falls back to the relay: req.ip and x-real-ip are refused there', () => {
+    const s = seam();
+    // `req.ip` appears exactly once in this file, and it is on branch 2 (the
+    // no-forwarder branch). `x-real-ip` is never read at all — it is the subtler
+    // trap, because nginx sets it on every request including the prod hairpin.
+    expect((s.match(/req\.ip/g) ?? []).length).toBe(1);
+    expect(s).not.toMatch(/['"]x-real-ip['"]/);
   });
 });

@@ -68,6 +68,32 @@ x-app-env: &app-env
   KEYCLOAK_ADMIN_CLIENT_ID: portal-admin
   KEYCLOAK_TEACHER_CLIENT_ID: portal-teacher
   KEYCLOAK_PARENT_CLIENT_ID: portal-parent
+  # ---- Provenance client (S-E04-3 / PF-31, ADR-036) -------------------------
+  #
+  # Nombre de proxys inverses entre le socket de l'API et le client. C'est une
+  # propriété du DÉPLOIEMENT, pas du code : 0 ici (profil `app` — nginx porte
+  # `profiles: ["prod"]` et ne tourne donc pas), 2 en production
+  # (Traefik → nginx → api). Un littéral en source serait silencieusement faux
+  # dans l'un des deux, et la panne d'un mauvais compte de sauts n'est pas un
+  # crash : c'est une adresse *plausible* stockée dans une piste de gouvernance.
+  #
+  # Forme refusante `${VAR:?}` (précédent KEYCLOAK_PUBLIC_URL / PF-86) : compose
+  # refuse la commande en nommant la clé, plutôt que de démarrer un conteneur qui
+  # bouclerait sur un crash au preflight (la clé est dans REQUIRED_ENV).
+  TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:?TRUST_PROXY_HOPS manquant — ADR-036 D3, le nombre de proxys est une propriete du deploiement (0 en local, 2 en prod)}
+  #
+  # Secret partagé `web` ↔ `api` : il autorise les deux seams serveur d'apps/web
+  # à DÉCLARER l'adresse et le navigateur réels de l'opérateur. Volontairement
+  # PERMISSIF (`:-`) là où le compte de sauts est refusant, et l'asymétrie EST la
+  # décision (ADR-036 D9) : un compte de sauts absent est *silencieusement faux*,
+  # un jeton absent est *fail-safe* — la provenance devient nulle et l'UI le dit.
+  # L'exiger empêcherait de démarrer un opérateur qui n'a pas encore distribué le
+  # secret, exactement la pression qui a produit le `?? 'admin'` de PF-54.
+  #
+  # Déclaré UNE SEULE FOIS, sur l'ancre partagée : il doit être identique octet
+  # pour octet dans `api` et dans `web`, et deux déclarations divergent.
+  # JAMAIS `NEXT_PUBLIC_*` — Next inline ces variables dans le bundle navigateur.
+  AUDIT_FORWARD_TOKEN: ${AUDIT_FORWARD_TOKEN:-}
   S3_ENDPOINT: http://minio:9000
   S3_REGION: us-east-1
   S3_BUCKET: pilotage
@@ -440,6 +466,29 @@ services:
     environment:
       <<: *app-env
       PORT: "3000"
+      # ---- Provenance client, moitié WEB (S-E04-3 / PF-31, ADR-036 D3/D10) ----
+      #
+      # Compte les relais devant **Next**, et c'est une clé DISTINCTE de
+      # `TRUST_PROXY_HOPS` (ancre `x-app-env`, qui compte ceux devant l'API) : les
+      # deux chemins n'ont pas la même profondeur, et une clé unique en aurait
+      # rendu un des deux silencieusement faux.
+      #
+      # Posée ICI et pas sur l'ancre, pour la raison déjà écrite plus bas à propos
+      # de `WEB_METRICS_PORT` : sur l'ancre elle retomberait sur `migrator` et
+      # `seed`, qui ne rendent aucune page.
+      #
+      # Forme refusante `${VAR:?}`, comme son jumeau API — et c'est précisément
+      # parce que le lecteur, lui, ne refuse PAS. `webTrustProxyHops()` retombe sur
+      # `0` (blanc honnête) plutôt que de lever au RENDU d'une requête, ce qui
+      # rendrait la page entière en 500. Cette retombée sûre est aussi ce qui rend
+      # une clé absente INVISIBLE : la fonctionnalité serait livrée inerte, sans
+      # autre signal qu'un `console.warn`. Le refus se produit donc là où il ne
+      # coûte rien — dans le terminal de l'opérateur, à la commande compose.
+      #
+      # `0` en local (profil `app`) : `nginx` porte `profiles: ["prod"]` et ne
+      # tourne pas, donc aucun relais L7 n'est devant Next et tout
+      # `x-forwarded-for` reçu vient du client — il est jeté (ADR-036 D1/D4).
+      WEB_TRUST_PROXY_HOPS: ${WEB_TRUST_PROXY_HOPS:?WEB_TRUST_PROXY_HOPS manquant — ADR-036 D10, le nombre de relais devant Next est une propriete du deploiement (0 en local, 2 en prod) et n'est PAS TRUST_PROXY_HOPS}
       # Même attente que l'API (S-E02-10 / PF-68). Le web est l'artefact que les
       # utilisateurs voient : c'est sur lui qu'une dérive est le plus coûteuse, et
       # c'était l'un des deux tiers du déploiement que la gate n'interrogeait pas.

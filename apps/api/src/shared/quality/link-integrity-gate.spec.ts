@@ -862,6 +862,24 @@ describe('resolveDeclaredUnion — G-1: read the declaration, or say you cannot'
     // P1-C8 / R-30: three portals, NOT four. A resolver that guessed "the four
     // portals" would invent `/student/notifications` — a dead target correct code
     // cannot produce (PF-57 is out of scope and its href does not exist).
+    //
+    // S-E04-3 / PF-133 — THIS LINE IS A LOAD-BEARING FLOOR, and run 31 proved it
+    // the hard way. `NotificationCenter.tsx` had to be split: it is a server
+    // component (it imports `@/lib/api-client`, hence `next/headers`), and
+    // `NotificationListItem.tsx` is `'use client'` and imported the VALUE
+    // `KIND_ICON` from it, dragging the server module into the browser graph and
+    // failing `next build`. The first fix moved `type Portal` out along with the
+    // values — and `resolveDeclaredUnion` reads the union **from the file that
+    // carries the link**, which for `/${portal}/notifications` is
+    // `NotificationCenter.tsx:240`. The resolver returned `null`, the template
+    // degraded to the unresolved shape `/*` + `/notifications (3 sites)`, **the
+    // gate stayed GREEN** — an unresolved shape is tolerated — and three routes
+    // silently stopped being checked. Only THIS assertion went red. `Portal` was
+    // moved back; an `import type` is erased before bundling and creates no graph
+    // edge, so keeping it here costs the build nothing.
+    //
+    // So: values may leave that file, the `portal` union may not — not without
+    // moving the link with it, or teaching the resolver to follow an import.
     expect(resolveDeclaredUnion('portal', read('components', 'notifications', 'NotificationCenter.tsx'))).toEqual([
       'admin',
       'teacher',

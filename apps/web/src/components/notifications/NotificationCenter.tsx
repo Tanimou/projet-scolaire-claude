@@ -10,63 +10,44 @@ import {
   AlertTriangle,
   Bell,
   CheckCheck,
-  ClipboardCheck,
   Inbox,
-  Info,
   Megaphone,
-  PenTool,
-  UserPlus,
 } from 'lucide-react';
 import Link from 'next/link';
 
 import { MarkAllReadButton } from './MarkAllReadButton';
 import { NotificationListItem } from './NotificationListItem';
 import { NotificationsFilters } from './NotificationsFilters';
+import {
+  KIND_LABEL,
+  type NotificationKind,
+  type NotificationRow,
+  type NotificationSeverity,
+} from './notification-model';
 
 import { api, ApiError } from '@/lib/api-client';
 
+// Les **valeurs** du vocabulaire (`KIND_ICON`, `KIND_LABEL`) et les types de la
+// ligne vivent dans `./notification-model` et NON ici : `NotificationListItem`
+// est `'use client'` et consomme `KIND_ICON`, or importer une **valeur** depuis
+// ce fichier-ci tire `@/lib/api-client` — donc `next/headers` depuis S-E04-3 —
+// dans le graphe client, ce qui casse `next build` (PF-133). Un `import type`,
+// lui, est effacé avant le bundling et ne crée aucune arête : c'est pourquoi
+// `NotificationsFilters.tsx` importe `type Portal` d'ici sans conséquence.
+//
+// Les consommateurs `'use client'` importent `./notification-model`
+// DIRECTEMENT pour les valeurs : une simple ré-exportation ne suffirait pas,
+// car c'est le **spécificateur d'import** qui décide du graphe —
+// `from './NotificationCenter'` tire ce module entier, ré-export ou pas.
+export { KIND_ICON, KIND_LABEL } from './notification-model';
+
+// `Portal` est déclaré ICI, et doit y rester : `scripts/link-integrity-check.js`
+// résout l'union DANS LE FICHIER QUI PORTE LE LIEN, et c'est `:240` ci-dessous
+// qui écrit `/${portal}/notifications`. Déplacé dans `notification-model.ts`, le
+// gabarit retombe en forme non résolue, la gate reste VERTE, et trois routes
+// cessent d'être vérifiées en silence — mesuré, pas supposé. Voir l'en-tête de
+// `notification-model.ts`.
 export type Portal = 'admin' | 'teacher' | 'parent';
-
-export type NotificationKind =
-  | 'announcement'
-  | 'alert'
-  | 'grade_published'
-  | 'enrollment_status'
-  | 'lesson_published'
-  | 'system';
-
-export type NotificationSeverity = 'info' | 'success' | 'warning' | 'danger';
-
-export interface NotificationRow {
-  id: string;
-  kind: NotificationKind;
-  severity: NotificationSeverity;
-  title: string;
-  body: string | null;
-  link: string | null;
-  sourceType: string | null;
-  sourceId: string | null;
-  createdAt: string;
-  readAt: string | null;
-}
-
-const KIND_LABEL: Record<NotificationKind, string> = {
-  announcement: 'Annonce',
-  alert: 'Alerte',
-  grade_published: 'Note publiée',
-  enrollment_status: 'Inscription',
-  lesson_published: 'Cours publié',
-  system: 'Système',
-};
-
-export const KIND_ICON: Record<NotificationKind, typeof Bell> = {
-  announcement: Megaphone,
-  alert: AlertTriangle,
-  grade_published: PenTool,
-  enrollment_status: UserPlus,
-  lesson_published: ClipboardCheck,
-  system: Info,
-};
 
 const PORTAL_BREADCRUMB: Record<Portal, { label: string; href: string }> = {
   admin: { label: 'Tableau de bord', href: '/admin/dashboard' },
