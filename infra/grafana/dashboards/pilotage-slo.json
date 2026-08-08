@@ -1,5 +1,5 @@
 {
-  "__comment": "Tableau de bord SLO Pilotage (S-E02-13 / PF-56, étendu au troisième artefact par S-E02-15 / PF-79). Les quatre panneaux sont les quatre signaux dont un SLO a besoin — débit, taux d'erreur, latence p95, vivacité. TOUT regroupement HTTP porte désormais la dimension `app`, et ce n'est pas cosmétique : les trois registres (api, worker, web) publient DÉLIBÉRÉMENT les mêmes noms de métriques — une seule famille de noms, une étiquette qui distingue, sinon chaque panneau devrait être forké — mais sans `by (app, …)` les séries de l'API et celles du rendu SSR de Next se seraient confondues en une seule ligne et le taux de 5xx aurait moyenné deux artefacts. Vert, silencieux, faux : exactement la panne que cette épique passe son temps à trouver, à une adresse de plus. Les expressions ne citent que des métriques réellement enregistrées (apps/api/src/modules/metrics/metrics.registry.ts, apps/worker/src/shared/observability/metrics.registry.ts, apps/web/src/observability/web-observability.js) ; scripts/observability-check.js échoue sur toute métrique qu'aucun des trois registres ne déclare.",
+  "__comment": "Tableau de bord SLO Pilotage (S-E02-13 / PF-56, étendu au troisième artefact par S-E02-15 / PF-79). Les quatre panneaux sont les quatre signaux dont un SLO a besoin — débit, taux d'erreur, latence p95, vivacité. TOUT regroupement HTTP porte désormais la dimension `app`, et ce n'est pas cosmétique : les trois registres (api, worker, web) publient DÉLIBÉRÉMENT les mêmes noms de métriques — une seule famille de noms, une étiquette qui distingue, sinon chaque panneau devrait être forké — mais sans `by (app, …)` les séries de l'API et celles du rendu SSR de Next se seraient confondues en une seule ligne et le taux de 5xx aurait moyenné deux artefacts. Vert, silencieux, faux : exactement la panne que cette épique passe son temps à trouver, à une adresse de plus. Les expressions ne citent que des métriques réellement enregistrées (apps/api/src/modules/metrics/metrics.registry.ts, apps/worker/src/shared/observability/metrics.registry.ts, apps/web/src/observability/web-observability.js) ; scripts/observability-check.js échoue sur toute métrique qu'aucun des trois registres ne déclare. S-E02-17 ajoute quatre panneaux de files (ids 5-8) : profondeur, échecs réintentables vs terminaux, débit, durée p95. Ils ne portent AUCUN seuil — ni `thresholds.steps`, ni `max`, ni bloc `alert` — parce que ce que « trop profond » ou « trop lent » veut dire est une décision produit que ce slice laisse ouverte (PF-56 reste ouvert pour elle) ; un seuil peint en rouge est un seuil, simplement affirmé en couleur plutôt qu'en YAML. Aucun titre, aucune description et aucune légende ne nomme un mécanisme de mise au rebut des jobs (une file de lettres mortes) : BullMQ n'en a pas — un job qui épuise ses tentatives reste dans l'ensemble `failed` — et le contrôle de cohérence ne lit que les expressions, donc la prose est la seule couche où cette erreur pourrait rentrer sans que rien la voie. La question qu'un tel panneau pose réellement est `outcome=\"failed_terminal\"`. Les légendes n'interpolent que des étiquettes d'un ensemble fermé, jamais `{{__name__}}` ni `{{}}`, qui rendraient TOUTES les étiquettes d'une série sur un tableau de bord non authentifié.",
   "uid": "pilotage-slo",
   "title": "Pilotage — SLO",
   "tags": ["pilotage", "slo"],
@@ -68,6 +68,70 @@
           "refId": "A",
           "expr": "nodejs_eventloop_lag_p99_seconds",
           "legendFormat": "{{app}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Profondeur de file par état",
+      "description": "Publiée par le worker seul : la profondeur est une propriété de la file, pas du process, et deux sources pour un même nombre donnent un graphe qui se contredit (D1). Deux lectures à ne pas confondre. `completed` mesure la RÉTENTION, pas le débit — chaque site d'enqueue pose `removeOnComplete`, donc la série plafonne à la limite de rétention et un plateau n'est pas un blocage ; le débit se lit sur le panneau « Débit des jobs ». Et pendant une panne Redis les séries de profondeur se figent ou disparaissent tandis que les séries de process continuent : cette asymétrie EST le signal de diagnostic, et `pilotage_queue_depth_collection_failures_total` la nomme. Aucun seuil n'est déclaré ici : ce que « trop profond » veut dire est une décision produit, pas un panneau.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (queue, state) (pilotage_queue_depth)",
+          "legendFormat": "{{queue}} · {{state}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Échecs — réintentables vs terminaux, par file",
+      "description": "`failed_retryable` = BullMQ va rejouer le job ; `failed_terminal` = les tentatives sont épuisées (ou le job a été écarté, ou l'erreur était irrécupérable) et le job reste dans l'ensemble `failed`. C'est la question qu'un opérateur pose réellement, et elle est écrite en toutes lettres dans la légende plutôt que portée par la seule couleur — une distinction encodée uniquement par la couleur ne se lit pas pour ~8 % des astreintes. Cette famille est vide tant qu'aucun job n'a échoué ; la présence des lignes de profondeur au-dessus atteste que le worker est bien scrapé.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (queue, outcome) (rate(pilotage_queue_jobs_total{outcome=~\"failed_.*\"}[5m]))",
+          "legendFormat": "{{queue}} · {{outcome}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Débit des jobs par file et type de travail",
+      "description": "Le vrai débit, à lire ici et non sur l'état `completed` du panneau de profondeur. L'étiquette `job` provient d'une liste blanche figée au build (apps/worker/src/shared/observability/queue-metrics.ts) : un nom hors liste est agrégé sous `<other>`. C'est délibéré et c'est le contrôle de sécurité — l'exposition n'est pas authentifiée, et un nom de job non filtré est une cardinalité non bornée choisie par l'appelant. Vide tant qu'aucun job n'a été traité.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (queue, job) (rate(pilotage_queue_jobs_total[5m]))",
+          "legendFormat": "{{queue}} · {{job}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Durée p95 des jobs par file et type de travail",
+      "description": "Miroir exact du panneau de latence HTTP, avec des seaux plus larges : un `report_card_pdf` n'est pas une requête, et le plafond à 10 s de l'API mettrait tout export réel dans `+Inf`. Une durée n'est observée que si BullMQ a fourni `processedOn` ET `finishedOn` — une borne manquante ne produit AUCUNE observation, jamais un zéro, parce qu'un seau à zéro seconde déplacerait le p95 vers le bas.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, queue, job) (rate(pilotage_queue_job_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{queue}} · {{job}}"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }

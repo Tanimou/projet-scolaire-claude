@@ -56,6 +56,18 @@
  *         `location /` proxies everything unmatched to the web upstream, so an
  *         `app/metrics/route.ts` would be public without one line of nginx
  *         changing. This is the only assertion that would notice
+ *  9. the set of INSTRUMENTED queues equals the set of REGISTERED queues, and
+ *     the api side and the worker side agree on that set (S-E02-17 / PF-56)
+ *       → metrics that exist today and silently miss the fourth queue added
+ *         next quarter are worth less than a gate. This is also the assertion
+ *         that finally compares the two queue-name constant blocks nobody
+ *         compared: `apps/api/src/shared/queue/queue.module.ts` and
+ *         `apps/worker/src/shared/queue/queue.module.ts` each carried a comment
+ *         pointing at the other and nothing read either one. "Registered" here
+ *         means the RESOLVED `BullModule.registerQueue` registration — the
+ *         `BullQueue_<name>` provider tokens on the built module's metadata —
+ *         not the exported constant, because a constant exported and never
+ *         passed to `registerQueue` is not a registered queue
  *
  * SINCE S-E02-15 THERE ARE THREE OBSERVED ARTEFACTS, NOT TWO
  * ----------------------------------------------------------
@@ -104,6 +116,43 @@ const REPO_ROOT = resolve(__dirname, '..');
  * qui tourne. Voir l'en-tête du fichier.
  */
 const WEB_OBSERVABILITY_MODULE = 'apps/web/src/observability/web-observability.js';
+
+/**
+ * The BullMQ instrumentation module (S-E02-17).
+ *
+ * Read for two things: the `INSTRUMENTED_QUEUES` constant it declares, and the
+ * side effect of requiring it — it registers its metric families onto the
+ * worker registry, which is how check 6 gets to see their `# TYPE` lines.
+ * `metrics.registry.js` deliberately does NOT import it (that would be a cycle),
+ * so this module has to be named here rather than arriving transitively.
+ *
+ * It imports `prom-client` and nothing else, on purpose: this script requires
+ * it into its OWN process and then has to exit.
+ */
+const WORKER_QUEUE_METRICS_MODULE = 'apps/worker/dist/shared/observability/queue-metrics.js';
+
+/**
+ * The two modules that register the BullMQ queues, one per application.
+ *
+ * Neither is edited by S-E02-17 — they are this check's INPUT, not its output,
+ * which is what keeps that slice out of PF-80's blast radius.
+ */
+const QUEUE_MODULES = {
+  api: 'apps/api/dist/shared/queue/queue.module.js',
+  worker: 'apps/worker/dist/shared/queue/queue.module.js',
+};
+
+/**
+ * The smallest registered-queue count that is not evidence of a broken read.
+ *
+ * Three queues exist (`exports`, `notifications-email`, `imports`). A reader
+ * that returns fewer has almost certainly failed to resolve the registration
+ * rather than found a shrunken system, and an empty extraction would make
+ * `instrumented ≡ registered` degenerate into `{} ≡ {}` — a vacuous pass, which
+ * is the escape-by-omission this file has had to close at four addresses
+ * already. Lower it only alongside a real removal.
+ */
+const REGISTERED_QUEUE_FLOOR = 3;
 
 /* ------------------------------------------------------------------ *
  * Pure evaluation
@@ -571,7 +620,164 @@ function evaluateObservability(input) {
     }
   }
 
+  /* -- 9. instrumented queues ≡ registered queues -------------------- */
+
+  evaluateQueueInstrumentation(input, problems, notes);
+
   return { problems, notes };
+}
+
+/** Sorted, de-duplicated, string-only — so set comparisons cannot lie about order. */
+function normalizeQueueSet(value) {
+  if (!Array.isArray(value)) return null;
+  return [...new Set(value.filter((name) => typeof name === 'string' && name.length > 0))].sort();
+}
+
+/**
+ * Check 9 — the durable half of S-E02-17 (D5).
+ *
+ * The gauges are the demo; this is the acceptance criterion. Instrumenting the
+ * three processors one by one and skipping this check would be green today and
+ * silently missing the fourth queue next quarter — which is the sentence the
+ * worker registry's own header used to have to write about itself.
+ *
+ * Six rules, and each of them exists because its absence is a way to pass
+ * without checking anything:
+ *
+ *  1. either input `null` → a failure, never a skip (DNC-08);
+ *  2. a registered set below the floor → a failure, because an extraction that
+ *     returned nothing would make every rule below vacuous;
+ *  3. api ≠ worker → a failure naming the side that lacks the queue. Not a
+ *     union: unioning the two sides before comparing is exactly how a queue
+ *     registered on ONE side only would keep passing, and producer-without-
+ *     consumer is the defect the two comments warn about;
+ *  4. registered \ instrumented → invisible on the dashboard while looking healthy;
+ *  5. instrumented \ registered → a series permanently at zero, which reads as
+ *     an idle queue;
+ *  6. the DECLARED instrumented set must equal the one that really RENDERS. A
+ *     check that read only an exported constant would reproduce the very defect
+ *     it exists to close: a declaration nobody executes.
+ */
+function evaluateQueueInstrumentation(input, problems, notes) {
+  // Local, so an unrelated earlier failure cannot suppress this check's note —
+  // and so this check's own note cannot claim a pass it did not produce.
+  const problemsBefore = problems.length;
+  const instrumented = input.instrumentedQueues;
+  const registered = input.registeredQueues;
+
+  if (!instrumented || !instrumented.declared) {
+    problems.push(
+      'the instrumented queue set could not be read from ' +
+        `${WORKER_QUEUE_METRICS_MODULE}. That is a failure, not a skip: with nothing to ` +
+        'compare against, a queue nobody instruments would pass unnoticed.',
+    );
+    return;
+  }
+  if (!registered) {
+    problems.push(
+      'the registered queue set could not be read from the built queue modules ' +
+        `(${QUEUE_MODULES.api}, ${QUEUE_MODULES.worker}). That is a failure, not a skip.`,
+    );
+    return;
+  }
+
+  const declared = normalizeQueueSet(instrumented.declared);
+  const rendered = normalizeQueueSet(instrumented.rendered);
+  const apiSet = normalizeQueueSet(registered.api);
+  const workerSet = normalizeQueueSet(registered.worker);
+
+  if (!declared || !apiSet || !workerSet) {
+    problems.push(
+      'the instrumented or registered queue set is not a list of names. That is a failure, ' +
+        'not a skip.',
+    );
+    return;
+  }
+
+  for (const [side, names] of [
+    ['apps/api', apiSet],
+    ['apps/worker', workerSet],
+  ]) {
+    if (names.length < REGISTERED_QUEUE_FLOOR) {
+      problems.push(
+        `${side} registers only ${names.length} queue(s) (${names.join(', ') || 'none'}), below the ` +
+          `floor of ${REGISTERED_QUEUE_FLOOR}. A truncated or empty extraction must fail rather ` +
+          'than pass vacuously: with an empty set, "instrumented ≡ registered" is {} ≡ {}.',
+      );
+      return;
+    }
+  }
+
+  // 3. The two constant blocks nobody compared.
+  const onlyApi = apiSet.filter((name) => !workerSet.includes(name));
+  const onlyWorker = workerSet.filter((name) => !apiSet.includes(name));
+  if (onlyApi.length > 0 || onlyWorker.length > 0) {
+    for (const name of onlyApi) {
+      problems.push(
+        `queue "${name}" is registered by ${QUEUE_MODULES.api} but NOT by ` +
+          `${QUEUE_MODULES.worker}: apps/worker lacks it, so the API produces jobs nothing ` +
+          'consumes. The two blocks are declared independently and each carries a comment ' +
+          'pointing at the other; this is the assertion that reads them.',
+      );
+    }
+    for (const name of onlyWorker) {
+      problems.push(
+        `queue "${name}" is registered by ${QUEUE_MODULES.worker} but NOT by ` +
+          `${QUEUE_MODULES.api}: apps/api lacks it, so the worker waits on a queue nothing ` +
+          'produces.',
+      );
+    }
+    return;
+  }
+
+  const registeredSet = apiSet;
+
+  for (const name of registeredSet.filter((queue) => !declared.includes(queue))) {
+    problems.push(
+      `queue "${name}" is registered by both applications but instrumented by nothing. It ` +
+        'publishes no depth, no outcome and no duration, so it is invisible on the dashboard ' +
+        `while the dashboard looks healthy. Add it to INSTRUMENTED_QUEUES in ` +
+        `${WORKER_QUEUE_METRICS_MODULE.replace('/dist/', '/src/').replace(/\.js$/, '.ts')}.`,
+    );
+  }
+
+  for (const name of declared.filter((queue) => !registeredSet.includes(queue))) {
+    problems.push(
+      `queue "${name}" is instrumented but registered by neither queue module. Its series are ` +
+        'permanently zero, which on a dashboard is indistinguishable from an idle queue.',
+    );
+  }
+
+  // 6. Declared must equal rendered — a constant nobody executes is the defect.
+  //
+  // An EMPTY rendered set is the realistic shape of that failure, not `null`:
+  // the constant would still be exported and still be read, and only the series
+  // would be missing. It is therefore the same failure, not a softer one.
+  if (rendered === null || rendered.length === 0) {
+    problems.push(
+      'the worker registry rendered no queue-labelled series, so INSTRUMENTED_QUEUES could not ' +
+        'be confirmed against the real exposition. That is a failure, not a skip: a constant ' +
+        'that nothing executes is the defect this check exists to close.',
+    );
+  } else {
+    const missing = declared.filter((name) => !rendered.includes(name));
+    const extra = rendered.filter((name) => !declared.includes(name));
+    if (missing.length > 0 || extra.length > 0) {
+      problems.push(
+        `INSTRUMENTED_QUEUES declares [${declared.join(', ')}] but the rendered worker ` +
+          `exposition carries queue labels [${rendered.join(', ')}]. The declaration and what ` +
+          'the process really publishes must be the same set.',
+      );
+    }
+  }
+
+  if (problems.length === problemsBefore) {
+    notes.push(
+      `instrumented queues ≡ registered queues (${registeredSet.join(', ')}), agreed on by ` +
+        `${QUEUE_MODULES.api} and ${QUEUE_MODULES.worker}, and confirmed against the rendered ` +
+        'worker exposition',
+    );
+  }
 }
 
 /**
@@ -694,8 +900,23 @@ function listFiles(dir, extensions) {
  */
 async function readExposedMetricNames() {
   const registries = [
-    join(REPO_ROOT, 'apps/api/dist/modules/metrics/metrics.registry.js'),
-    join(REPO_ROOT, 'apps/worker/dist/shared/observability/metrics.registry.js'),
+    { registry: 'apps/api/dist/modules/metrics/metrics.registry.js', sideEffects: [] },
+    {
+      registry: 'apps/worker/dist/shared/observability/metrics.registry.js',
+      // S-E02-17. The BullMQ metric families register THEMSELVES onto the
+      // worker registry from a separate module, and `metrics.registry.js`
+      // deliberately does not import it back (that would be an import cycle).
+      // So the module has to be required here for its registration side effect,
+      // or the `# TYPE` lines for `pilotage_queue_*` would be absent and check 6
+      // would call four correct dashboard panels broken.
+      //
+      // Requiring it is safe by construction and that is not an assumption: the
+      // module imports `prom-client` and nothing else, opens no connection, and
+      // its depth collector is a no-op until Nest binds queues to it — which
+      // never happens in this process. Measured on prom-client 15.1.3: a metric
+      // with zero samples still emits its `# HELP`/`# TYPE` lines.
+      sideEffects: [WORKER_QUEUE_METRICS_MODULE],
+    },
     // apps/web is read from SOURCE, and that is not an inconsistency to fix
     // later — it is the whole reason the module is plain CommonJS. apps/web has
     // no `dist/`: its only compiler is a nine-minute `next build`, so a
@@ -703,11 +924,17 @@ async function readExposedMetricNames() {
     // The plain module that ships verbatim is the most resolved artefact that
     // exists. `tracing-check.js` covers the other half by asserting the EMITTED
     // instrumentation bundle carries these same metric names.
-    join(REPO_ROOT, WEB_OBSERVABILITY_MODULE),
+    { registry: WEB_OBSERVABILITY_MODULE, sideEffects: [] },
   ];
 
   const names = new Set();
-  for (const path of registries) {
+  for (const entry of registries) {
+    for (const relative of entry.sideEffects) {
+      const sidePath = join(REPO_ROOT, relative);
+      if (!existsSync(sidePath)) return null;
+      require(sidePath);
+    }
+    const path = join(REPO_ROOT, entry.registry);
     if (!existsSync(path)) return null;
     const mod = require(path);
     if (!mod || !mod.registry) return null;
@@ -715,6 +942,108 @@ async function readExposedMetricNames() {
     for (const match of exposition.matchAll(/^# TYPE (\S+) /gm)) names.add(match[1]);
   }
   return [...names];
+}
+
+/**
+ * The queues the worker really instruments (S-E02-17 / D5, AC-5).
+ *
+ * Returns BOTH halves, because either one alone is a weaker claim than it
+ * looks:
+ *   • `declared` — the exported `INSTRUMENTED_QUEUES` constant;
+ *   • `rendered` — the `queue="…"` label values that actually appear in the
+ *     worker's rendered exposition, with no Redis reachable.
+ *
+ * A check that read only the constant would reproduce the defect it exists to
+ * close — a declaration nobody executes. The rendered half is possible because
+ * `pilotage_queue_depth_collection_failures_total` is zero-initialised for
+ * every instrumented queue at import, so it carries the labels honestly with an
+ * unreachable Redis.
+ *
+ * Returns null on any failure. The caller turns that into a failure, never a
+ * skip.
+ */
+async function readInstrumentedQueues() {
+  const modulePath = join(REPO_ROOT, WORKER_QUEUE_METRICS_MODULE);
+  const registryPath = join(REPO_ROOT, 'apps/worker/dist/shared/observability/metrics.registry.js');
+  if (!existsSync(modulePath) || !existsSync(registryPath)) return null;
+
+  const mod = require(modulePath);
+  const declared = Array.isArray(mod && mod.INSTRUMENTED_QUEUES)
+    ? [...mod.INSTRUMENTED_QUEUES]
+    : null;
+  if (!declared) return null;
+
+  const registryModule = require(registryPath);
+  if (!registryModule || !registryModule.registry) return null;
+  const exposition = await registryModule.registry.metrics();
+
+  const rendered = new Set();
+  for (const match of exposition.matchAll(/^pilotage_queue_[a-z_]*\{[^}]*queue="([^"]*)"/gm)) {
+    rendered.add(match[1]);
+  }
+
+  return { declared, rendered: [...rendered] };
+}
+
+/**
+ * The queues each application really REGISTERS (S-E02-17 / D5, AC-5).
+ *
+ * Read as the **resolved** registration, not as the exported constant: a
+ * constant exported and never passed to `BullModule.registerQueue` is not a
+ * registered queue, and a regex over source would find nothing at all here —
+ * the registration site is `registerQueue({ name: QUEUE_EXPORTS })`, an
+ * indirection through a constant. `BullModule.registerQueue` evaluates at module
+ * load and yields provider tokens of the form `BullQueue_<name>`; those tokens
+ * on the module's own `imports` metadata ARE the resolved value (R-26 rule (a)).
+ *
+ * Measured before being relied on: requiring a built queue module with
+ * `reflect-metadata` loaded opens **no** Redis connection and leaves **no** open
+ * handle — `forRoot`/`registerQueue` build metadata, and the connection is made
+ * by Nest DI at bootstrap, which does not happen here. That matters because
+ * this script must exit; an open handle would make stage 9 print PASS and hang.
+ *
+ * Reading the modules' resolved metadata is also what keeps S-E02-17 out of
+ * PF-80's blast radius: neither `queue.module.ts` has to be edited to be read.
+ *
+ * Returns null on any failure — a failure, never a skip.
+ */
+function readRegisteredQueues() {
+  const req = (spec) => require(require.resolve(spec, { paths: [join(REPO_ROOT, 'apps/api')] }));
+  try {
+    req('reflect-metadata');
+  } catch {
+    return null;
+  }
+
+  const result = {};
+  for (const [side, relative] of Object.entries(QUEUE_MODULES)) {
+    const path = join(REPO_ROOT, relative);
+    if (!existsSync(path)) return null;
+
+    let mod;
+    try {
+      mod = require(path);
+    } catch {
+      return null;
+    }
+    if (!mod || typeof mod.QueueModule !== 'function') return null;
+
+    const imported = Reflect.getMetadata('imports', mod.QueueModule);
+    if (!Array.isArray(imported)) return null;
+
+    const names = new Set();
+    for (const entry of imported) {
+      if (!entry || typeof entry !== 'object' || !Array.isArray(entry.providers)) continue;
+      for (const provider of entry.providers) {
+        const token = provider && provider.provide;
+        if (typeof token !== 'string') continue;
+        const match = /^BullQueue_(.+)$/.exec(token);
+        if (match) names.add(match[1]);
+      }
+    }
+    result[side] = [...names];
+  }
+  return result;
 }
 
 function readWorkerMetricsPath() {
@@ -815,6 +1144,8 @@ async function collectFromRepo() {
     webMetricsPath: readWebMetricsPath(),
     webRoutes: readWebRoutes(),
     exposedMetrics: await readExposedMetricNames(),
+    instrumentedQueues: await readInstrumentedQueues(),
+    registeredQueues: readRegisteredQueues(),
     nginxConfs,
   };
 }
@@ -826,6 +1157,18 @@ async function main() {
   console.log(
     `▶ registered metrics: ${
       input.exposedMetrics === null ? 'BUILD OUTPUT ABSENT' : input.exposedMetrics.length
+    }`,
+  );
+
+  console.log(
+    `▶ queues            : ${
+      input.registeredQueues === null
+        ? 'REGISTRATION UNREADABLE'
+        : `${(input.registeredQueues.worker || []).length} registered`
+    } / ${
+      input.instrumentedQueues === null
+        ? 'INSTRUMENTATION UNREADABLE'
+        : `${(input.instrumentedQueues.declared || []).length} instrumented`
     }`,
   );
 
@@ -854,6 +1197,9 @@ module.exports = {
   serviceListenPorts,
   splitTarget,
   WEB_OBSERVABILITY_MODULE,
+  WORKER_QUEUE_METRICS_MODULE,
+  QUEUE_MODULES,
+  REGISTERED_QUEUE_FLOOR,
 };
 
 if (require.main === module) {

@@ -187,4 +187,26 @@ describe('MetricsController — the exposition itself', () => {
     expect(body).not.toContain('clx8k2m1p0000abcd1234efgh');
     expect(body).toContain('/api/v1/students/:id');
   });
+
+  /**
+   * D1 / DNC-01, asserted in the negative (S-E02-17).
+   *
+   * The API is a BullMQ **producer**: it holds a connection to all three queues
+   * and could publish depth just as easily as the worker does. It must not.
+   * Depth is a property of the queue, not of the process, so exactly one
+   * process reports it — two scrape sources for one number produce a graph that
+   * disagrees with itself, and a graph that disagrees with itself teaches
+   * operators to distrust the graph.
+   *
+   * This test is what makes "the API keeps only what describes itself" an
+   * enforced boundary rather than a paragraph. See
+   * `docs/adr/ADR-028-queue-metrics-single-collector.md`.
+   */
+  it('publishes NO queue series — depth belongs to the worker alone', async () => {
+    const body = await new MetricsController().metrics();
+    expect(body).not.toContain('pilotage_queue_');
+    // …and the assertion is not vacuous: the API exposition is non-empty and
+    // does carry its own `pilotage_` families.
+    expect(body).toContain('pilotage_http_requests_total');
+  });
 });
