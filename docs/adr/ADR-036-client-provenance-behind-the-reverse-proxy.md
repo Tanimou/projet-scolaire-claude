@@ -207,6 +207,137 @@ visibly not a portal role, so it reads as the anomaly it is.
 If a later slice disagrees, the change is one line plus the one asserting spec — but it must be made
 here, in writing, not as a refactor.
 
+### D9 — The forwarder declares itself with a shared token, and the asymmetry is the whole argument
+
+*Added 2026-08-08 by `S-E04-3`, the implementing story, per this ADR's own instruction to record
+rather than comment. This is a genuinely new cross-cutting trust primitive: until now the only
+credential crossing the app boundary was the Keycloak-issued JWT (`ADR-004`). It is amended into this
+ADR rather than minted as a separate one, because the subject matter is identical — client provenance
+behind the reverse proxy — and splitting one decision across two registers is the drift `PF-110`'s
+precedence rule exists to prevent.*
+
+`apps/web` attaches three headers to every API call it makes on an operator's behalf:
+`x-pilotage-client-ip`, `x-pilotage-client-user-agent`, `x-pilotage-forward-token`. The API's single
+extraction seam (`apps/api/src/shared/audit/client-hints.ts`) applies one rule, in this order:
+
+1. **Any** pilotage header present ⇒ a forwarder claims to be in the path. Then, and only then: if a
+   token is configured **and** the presented token matches it under a constant-time comparison of
+   sha256 digests, the forwarded pair is taken. Otherwise **both** fields are `null`. On this branch
+   the seam never consults `req.ip` **or `x-real-ip`** — the second is named explicitly because nginx
+   sets it on every request including the production web→api hairpin, so an `x-real-ip` fallback would
+   store the relay's address through the very seam written to prevent that (`D4`).
+2. No pilotage header ⇒ nobody claims anything, so the address is `req.ip` under the pinned `N` and
+   the user-agent is the request's own.
+
+**Why this is not the blanket trust `D1` refuses.** An absent or wrong token can only make provenance
+**more null, never less**. It relaxes no check, grants no access, resolves no tenant and derives no
+role, and it cannot cause a value to be recorded that would otherwise be blank. `D1`'s refused design
+is the opposite: it lets any caller **choose** the recorded value.
+
+**The residual, stated in both halves rather than hidden.**
+- *Outsider.* A caller can send a garbage token to force **its own** row to `null` — a downgrade to
+  honest-unknown, the safe direction, visible to an auditor as an absence rather than as evidence.
+- *Insider.* Anyone who can read the web container's environment can mint the token and forge an
+  arbitrary provenance. The asymmetry above is true for an outsider and **not** true for an insider
+  with environment access: this reinstates `D1`'s refused property, now gated on secret custody rather
+  than absent. It is accepted because the alternative — blanket `X-Forwarded-For` — is forgeable by
+  *everyone*, and because the production topology makes the exposure concrete: `NEXT_PUBLIC_API_URL`
+  is `${PUBLIC_BASE_URL}`, so the web→api call hairpins through the public edge and the header pair is
+  therefore accepted from the internet. The token is the only thing between an outsider and a forged
+  row. Stated, not discovered.
+
+**Shape constraints that are load-bearing, not cosmetic.**
+- **Hyphens, never underscores.** nginx drops headers containing underscores by default
+  (`underscores_in_headers off`), so `x_pilotage_client_ip` would be silently stripped and every
+  production row would blank with no error anywhere. `infra/nginx/conf.d/pilotage.conf` needs **no
+  edit**: `location /api/` sets only `Host` / `X-Real-IP` / `X-Forwarded-For` / `X-Forwarded-Proto`
+  and passes all other client headers through unchanged.
+- **`AUDIT_FORWARD_TOKEN` is OPTIONAL**, and that asymmetry against `TRUST_PROXY_HOPS` is deliberate.
+  A wrong hop count is *silently wrong*; an absent token is *fail-safe*. Requiring it would stop an
+  operator who has not yet distributed the secret from booting at all — the exact pressure that
+  produced `PF-54`'s `?? 'admin'`. Compose therefore carries `${TRUST_PROXY_HOPS:?…}` (refusing) and
+  `${AUDIT_FORWARD_TOKEN:-}` (permissive-empty). Getting these two forms the wrong way round inverts
+  both decisions.
+- **Never `NEXT_PUBLIC_*`.** Next inlines those into the browser bundle, which would publish the
+  secret to every visitor.
+- **The token is never authentication.** It is read from configuration in exactly one place
+  (`main.ts`), held only as a digest, never logged, never echoed, never attached to a span. A request
+  carrying a valid token and no valid `Bearer` is still `401`, and the seam is structurally
+  unreachable from the guard chain (no file under `shared/auth/`, no `*.guard.ts`, no `*.strategy.ts`
+  imports it).
+- **Rotation is a silent all-null window.** Updating the api before the web blanks every row until
+  both restart — the safe direction, and invisible, so the API logs once at boot whether a token is
+  configured (never its value).
+
+### D10 — What `S-E04-3` shipped, and two corrections to this ADR's own text
+
+*Added 2026-08-08 by `S-E04-3`.*
+
+- **The configuration key.** `TRUST_PROXY_HOPS`, added to `REQUIRED_ENV` so an absent key is named at
+  boot by the same one-shot message as the three Keycloak keys, and parsed by `parseTrustProxyHops`
+  (`apps/api/src/shared/config/trust-proxy.ts`): `/^\d+$/` after a trim, **bounded** by
+  `MAX_TRUST_PROXY_HOPS = 2`, throwing `InvalidConfigError` by name and by *shape* — never the value.
+  `D3`'s forbidden `Number(process.env.TRUST_PROXY_HOPS ?? 2)` appears nowhere, in any spelling.
+  The bound is part of the decision, not tidiness: `TRUST_PROXY_HOPS=99` is operationally identical to
+  `trust proxy: true` on every real chain, so an unbounded strict parse would ship the blanket trust
+  `D1` refuses, through the key `D3` required.
+- **The SECOND configuration key, and why there are two.** `WEB_TRUST_PROXY_HOPS` counts the relays in
+  front of **Next**, not in front of the API. It is a distinct key rather than a reuse of
+  `TRUST_PROXY_HOPS` because the two paths are not the same depth, and because in production
+  `NEXT_PUBLIC_API_URL` is the *public* origin (`infra/docker-compose.prod.yml`) — the web seams call
+  the API back out through Traefik → nginx, so the two counts are independent facts about two chains.
+  One shared literal would have been silently correct in one of them and silently wrong in the other,
+  which is `D3`'s argument applied a second time. Values: `W = 0` local (`--profile app`: nginx carries
+  `profiles: ["prod"]`, so no L7 relay is in front of Next and every observed `x-forwarded-for` is
+  client-written and discarded), `W = 2` prod (Traefik → nginx → web; `location /` does set
+  `X-Forwarded-For`). Bounded by `MAX_WEB_TRUST_PROXY_HOPS = 2` for `D1`'s reason: nobody disables this
+  with a `SKIP_*`, they write `99`.
+- **The web reader warns and falls back to `0` where the API refuses to boot — a deliberate deviation
+  from `D3`, and the declaration form is what pays for it.** A throw in `webTrustProxyHops()` would
+  happen while *rendering a request*, so the whole page would 500; the API's throw happens at boot. The
+  fallback is the safe direction (`0` = trust no hop = an honest blank, never a relay address), so it
+  cannot record a wrong value — but it is **invisible**, and that is the failure mode `S-E04-3` actually
+  shipped: the key was declared in **exactly one file, the source that reads it**, so
+  `x-pilotage-client-ip` was never emitted in any containerised deployment, `AuditLog.ipAddress` stayed
+  `NULL` on every UI-driven write, and the only signal was a single `console.warn`. A feature delivered
+  inert is not caught by any gate that watches for wrongness. The correction is therefore *not* to make
+  the reader throw: the key is declared in the **refusing** `${WEB_TRUST_PROXY_HOPS:?…}` form on the
+  `web` service of **both** compose files, plus `.env.example` (`0`) and `.env.prod.example` (`2`), so
+  the failure lands in the operator's terminal at the compose command, where it costs nothing. It is
+  declared on the `web` **service**, never on the shared `x-app-env` anchor, where it would also reach
+  `migrator` and `seed` — services that render no page and can claim no client. Parity is held by
+  `apps/api/src/shared/quality/trust-proxy-dnc10-gate.spec.ts`, whose rule is stated as *« declared in
+  a file other than the one that reads it »* — the shape of the defect, not the instance.
+- **One applier, one seam.** `applyTrustProxy(app, env)` is called by `main.ts` **and by the supertest
+  harness**, so the test proves the artefact that ships rather than a re-implementation of it.
+- **`D4` gained a case Express cannot express.** A numeric `trust proxy: N` **pads**: given a chain
+  *shorter* than `N`, `proxyaddr` runs out of trusted hops and returns the leftmost — caller-chosen —
+  entry with full confidence. `D4` already ruled that a shorter chain yields `null`; the seam now
+  counts the observed chain depth to enforce it. The forged-beyond-`N` case and the
+  forged-short-chain case are different failures and only the first is handled by Express.
+- **`PF-128` — this ADR's Context table was incomplete.** It named `apps/web/src/lib/api-client.ts` as
+  *the* server-side seam. `apps/web` has **two**: the second is
+  `apps/web/src/app/api/proxy/[...path]/route.ts`, the route handler through which client components
+  (including every teacher- and parent-portal one) reach the API. A one-seam fix would have left every
+  client-component-driven audited write blank forever, silently, while the change claimed provenance
+  was real. Both seams forward, through one shared helper. Measured, then the document corrected —
+  not inherited (`R-30`).
+- **`D6` revisited, and `azp` is still NOT adopted.** `S-E04-3` was named as the natural place to
+  revisit it; it was, and the answer is no. This slice makes the *client* provenance real — an
+  observation of the transport — while `azp` is an observation of the OIDC client; adopting it in the
+  same diff would couple two unrelated corrections and would still need the role mapping as its
+  fallback. `portal` remains an attribution, stated.
+- **`D7` step 2 is wrong as written and is corrected here.** It says "the `location` block serving
+  `/api/`". There are **two**: `infra/nginx/conf.d/pilotage.conf`'s `location /api/` sets
+  `X-Forwarded-For`, and `location /api/v1/notifications/stream` sets **no** forwarded headers at all
+  (only `Connection`, buffering and timeout), so the chain on that path is one hop shallower. SSE is a
+  read and writes no audit row today, so no stored value is affected — but the re-derivation procedure
+  must read **every** `location` matching `/api/`, not one.
+- **`D7` step 5, the empirical half, is owned by the implementing PR**, not by this file: whether
+  Next.js 15 populates `x-forwarded-for` on the incoming request in this stack is a claim until a
+  header is observed. Where no valid client address can be read, nothing is forwarded, the API stores
+  `null`, and `/admin/audit` says so. An honest blank satisfies `AC-8`; a plausible value does not.
+
 ## What this ADR does **not** establish
 
 - **Traefik's own forwarded-headers configuration.** It runs from `/root/docker-compose.yml` on the
@@ -219,8 +350,18 @@ here, in writing, not as a refactor.
   operator who changes the edge must be forced to restate `N`.
 - **Any claim that the audit IP is correct today.** It is not written at all. `S-E04-1` writes this
   decision and the derivation seam; nothing in it makes `ipAddress` or `userAgent` non-null.
+  *(**Corrected 2026-08-08 by `S-E04-1`'s implementing story.** This bullet was true of `S-E04-1` and
+  is false as of `S-E04-3`, which forwards both fields from `apps/web` and stores them. It is left
+  standing with its correction rather than deleted, because the next reader needs to know the claim
+  existed and when it stopped being true — `D7` step 4's instruction to record rather than overwrite.
+  See `D9` and `D10` below for what actually shipped.)*
 - **`trust proxy` being set anywhere.** `S-E04-1` sets it nowhere. `apps/api/src/main.ts` is unchanged
   by the story that ships this ADR.
+  *(**Corrected 2026-08-08.** Also false as of `S-E04-3`: `apps/api/src/main.ts` now calls
+  `applyTrustProxy(app, process.env)` exactly once, and `apps/api/src/shared/config/trust-proxy.ts` is
+  the only file in `apps/api` that calls `app.set('trust proxy', …)`. `audit-provenance-gate.spec.ts`'s
+  `AC-11` case, which used to assert this absence, was **inverted rather than deleted** — it now
+  asserts the presence of the delegating call and the absence of any literal, `true` or `'*'`.)*
 - **A retention or legal-hold posture** for provenance data (`D-08`-adjacent; `R-13` forbids this
   routine authoring policy text).
 

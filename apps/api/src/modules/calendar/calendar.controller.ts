@@ -4,13 +4,12 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
-  Ip,
   NotFoundException,
   Param,
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -30,10 +29,10 @@ import {
 } from 'class-validator';
 
 import {
-  deriveAlertActorProvenance,
-  sanitiseInetOrNull,
-  truncateUserAgent,
-} from '../../shared/audit/provenance';
+  type ClientHintsRequest,
+  extractAuditClientHints,
+} from '../../shared/audit/client-hints';
+import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -266,20 +265,25 @@ export class CalendarController {
    * - `year` est requis (plus aucun repli sur l'année scolaire active),
    * - tout l'import + UNE ligne d'audit tiennent dans une seule transaction.
    *
-   * IP / user-agent sont capturés ici avec les décorateurs Nest natifs `@Ip()` /
-   * `@Headers()` et ASSAINIS **avant** l'ouverture de la transaction (cf.
-   * `sanitiseInetOrNull`). Aucun intercepteur partagé n'est construit : ce
-   * chantier est PF-31 / V3-E04, et cette slice l'AVANCE sur un handler sans le
-   * clore (~20 autres sites d'audit continuent de coder `'school_admin'` en dur
-   * et n'écrivent ni IP ni user-agent).
+   * IP / user-agent — S-E04-3. Ce handler capturait `@Ip()` + `@Headers('user-agent')`
+   * lui-même : sur le chemin piloté par l'UI, `@Ip()` valait l'adresse du
+   * conteneur `web` (identique pour tous les acteurs, à jamais — PF-31) et
+   * `undici` n'envoyait aucun user-agent du navigateur. Les deux valeurs passent
+   * désormais par L'UNIQUE point d'extraction `extractAuditClientHints`, qui
+   * applique la règle d'ADR-036 (jeton de transfert vérifié en temps constant,
+   * ou `null` — jamais l'adresse du relais) et rend des valeurs DÉJÀ assainies :
+   * le service reçoit la même forme qu'avant, donc un cast `inet` raté ne peut
+   * toujours pas faire rouler en arrière la transaction qu'il audite (S-E06-6).
+   *
+   * Aucun intercepteur partagé n'est construit : la décision de S-E04-1 tient,
+   * chaque site appelle le seam explicitement, et l'ensemble reste greppable.
    */
   @Post('events/seed-french-holidays')
   @RequiresPermission('calendar.write')
   async seedFrenchHolidays(
     @Body() body: SeedHolidaysDto,
     @CurrentJwt() jwt: KeycloakJwtPayload,
-    @Ip() ip: string,
-    @Headers('user-agent') userAgent?: string,
+    @Req() req: ClientHintsRequest,
   ) {
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forTenant(me.tenantId);
@@ -287,6 +291,7 @@ export class CalendarController {
     // messaging / remediation / *-exports) — jamais le rôle « admin d'école »
     // codé en dur des autres sites d'audit : un super_admin s'audite super_admin.
     const { actorRole, portal } = deriveAlertActorProvenance(jwt);
+    const { ipAddress, userAgent } = extractAuditClientHints(req);
 
     return this.seed.seedFrenchHolidays({
       tenantId: me.tenantId,
@@ -297,8 +302,8 @@ export class CalendarController {
       year: body.year,
       confirm: body.confirm === true,
       dryRun: body.dryRun === true,
-      ipAddress: sanitiseInetOrNull(ip),
-      userAgent: truncateUserAgent(userAgent),
+      ipAddress,
+      userAgent,
     });
   }
 

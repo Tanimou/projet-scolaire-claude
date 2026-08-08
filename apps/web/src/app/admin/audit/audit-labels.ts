@@ -65,3 +65,68 @@ export function humanizePortal(p: string | null): string {
   if (!p) return '—';
   return PORTAL_LABELS[p] ?? p;
 }
+
+/**
+ * Phrase unique employée partout où la provenance client est absente
+ * (`S-E04-3`, `ADR-036 D4`). Elle est **déclarée ici et nulle part ailleurs**
+ * pour que la table et le tiroir ne puissent pas diverger.
+ *
+ * Elle ne nomme **aucune cause** : la même absence couvre une ligne héritée,
+ * un chemin qui ne relaie pas encore, et un jeton de transfert refusé. Toute
+ * formulation causale (« entrée antérieure au suivi », « requête relayée »)
+ * serait fausse sur une partie des lignes — et une explication fausse dans une
+ * surface de gouvernance est pire qu'une absence énoncée.
+ */
+export const PROVENANCE_UNAVAILABLE = 'Provenance non disponible';
+
+/**
+ * Vrai quand l'entrée ne porte **aucune** provenance client.
+ *
+ * Déclarée dans ce module neutre — et non à côté du composant — parce que
+ * `page.tsx` (serveur) l'**appelle** : une valeur importée depuis un module
+ * client est légale, l'invoquer depuis le serveur ne l'est pas. C'est la règle
+ * que `PF-14` / `S-E04-2` a coûté une page en HTTP 500 pour établir.
+ */
+export function hasNoProvenance(entry: {
+  ipAddress: string | null;
+  userAgent: string | null;
+}): boolean {
+  return !entry.ipAddress && !entry.userAgent;
+}
+
+const BROWSER_TOKENS: Array<[RegExp, string]> = [
+  // L'ordre est porteur : Edge et Opera annoncent aussi `Chrome`, et Chrome
+  // annonce aussi `Safari`. Un ordre inversé enregistrerait chaque session Edge
+  // comme Chrome — une fausseté légère, mais exactement la classe d'erreur que
+  // cet épic existe pour supprimer.
+  [/\bEdg[A-Z]?\//, 'Edge'],
+  [/\bOPR\//, 'Opera'],
+  [/\bChrome\//, 'Chrome'],
+  [/\bFirefox\//, 'Firefox'],
+  [/\bSafari\//, 'Safari'],
+];
+
+const OS_TOKENS: Array<[RegExp, string]> = [
+  [/Windows NT/, 'Windows'],
+  [/\bMac OS X\b/, 'macOS'],
+  [/\bAndroid\b/, 'Android'],
+  [/\b(iPhone|iPad|iPod)\b/, 'iOS'],
+  [/\bLinux\b/, 'Linux'],
+];
+
+/**
+ * Libellé court d'un `User-Agent` — « Chrome sur Windows ».
+ *
+ * Renvoie `null` quand rien ne correspond : l'appelant affiche alors la chaîne
+ * brute. On ne devine jamais, et on n'écrit jamais « Navigateur inconnu » — ce
+ * libellé n'est qu'une aide à la lecture posée **au-dessus** de la valeur
+ * réelle, jamais un remplacement de celle-ci.
+ */
+export function humanizeUserAgent(ua: string | null): string | null {
+  if (!ua) return null;
+  const browser = BROWSER_TOKENS.find(([re]) => re.test(ua))?.[1] ?? null;
+  const os = OS_TOKENS.find(([re]) => re.test(ua))?.[1] ?? null;
+  if (browser && os) return `${browser} sur ${os}`;
+  if (browser) return browser;
+  return null;
+}

@@ -6,8 +6,8 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 
 
-import { KIND_ICON, type NotificationKind, type NotificationSeverity } from './NotificationCenter';
 import { markReadAction } from './actions';
+import { KIND_ICON, type NotificationKind, type NotificationSeverity } from './notification-model';
 
 const SEVERITY_BG: Record<NotificationSeverity, string> = {
   info: 'bg-sky-50 text-sky-700',

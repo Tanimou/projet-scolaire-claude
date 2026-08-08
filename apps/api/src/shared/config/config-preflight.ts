@@ -59,8 +59,30 @@
  * défaut sur une constante produit est une valeur par défaut ; un défaut sur une
  * URL ou un identifiant d'administration est un secret implicite. Seuls les
  * seconds sont exigés ici.
+ *
+ * `TRUST_PROXY_HOPS` rejoint la liste avec S-E04-3 (ADR-036 D3) pour la MÊME
+ * raison, appliquée à une propriété du déploiement plutôt qu'à un secret : le
+ * nombre de proxys inverses vaut 2 en production (Traefik → nginx → api) et 0
+ * en local (`--profile app`, nginx porte `profiles: ["prod"]`). Un littéral
+ * serait donc silencieusement faux dans l'un des deux — et la panne d'un mauvais
+ * compte de sauts n'est pas un crash : c'est une adresse *plausible* stockée
+ * dans une piste d'audit et rendue à un auditeur comme le lieu où une personne
+ * se trouvait. La VALEUR est validée par `parseTrustProxyHops`
+ * (`shared/config/trust-proxy.ts`) ; ici on n'exige que sa DÉCLARATION, pour que
+ * l'oubli soit nommé par le même message d'un seul jet que les trois autres.
+ *
+ * `AUDIT_FORWARD_TOKEN` n'y figure PAS, délibérément (ADR-036 D9) : son absence
+ * est *fail-safe* — la provenance devient nulle et l'UI le dit — là où un mauvais
+ * compte de sauts est silencieusement faux. L'exiger empêcherait de démarrer un
+ * opérateur qui n'a pas encore distribué le secret, ce qui est exactement la
+ * pression qui a produit le `?? 'admin'` de PF-54.
  */
-export const REQUIRED_ENV = ['KEYCLOAK_URL', 'KEYCLOAK_ADMIN_USER', 'KEYCLOAK_ADMIN_PASSWORD'] as const;
+export const REQUIRED_ENV = [
+  'KEYCLOAK_URL',
+  'KEYCLOAK_ADMIN_USER',
+  'KEYCLOAK_ADMIN_PASSWORD',
+  'TRUST_PROXY_HOPS',
+] as const;
 
 export type RequiredEnvName = (typeof REQUIRED_ENV)[number];
 
@@ -81,8 +103,10 @@ export class MissingConfigError extends Error {
         missing.map((name) => `  ${name} : non déclarée, vide, ou uniquement des espaces`).join('\n') +
         `\n` +
         `L'API REFUSE de retomber sur des identifiants d'administration par défaut ` +
-        `(S-E06-1 / PF-54). Un défaut silencieux fait tourner la production sur le compte ` +
-        `d'amorçage de Keycloak sans que rien ne le dise.\n` +
+        `(S-E06-1 / PF-54), ni sur un nombre de proxys inverses deviné ` +
+        `(S-E04-3 / ADR-036 D3). Un défaut silencieux fait tourner la production sur le compte ` +
+        `d'amorçage de Keycloak — ou fait enregistrer l'adresse d'un relais comme celle de ` +
+        `l'opérateur — sans que rien ne le dise.\n` +
         `Déclarez ces variables : infra/docker-compose.yml (ancre x-app-env), ` +
         `infra/docker-compose.prod.yml (service api) et .env.prod. ` +
         `Aucune variable d'environnement ne peut désactiver ce contrôle (DNC-10).`,

@@ -5,7 +5,15 @@ import {
   Pagination,
   type SelectOption,
 } from '@pilotage/ui';
-import { Download, Eye, FileSearch, History, ShieldCheck, UserCheck } from 'lucide-react';
+import {
+  CircleDashed,
+  Download,
+  Eye,
+  FileSearch,
+  History,
+  ShieldCheck,
+  UserCheck,
+} from 'lucide-react';
 import type { Metadata } from 'next';
 
 
@@ -15,7 +23,7 @@ import { AuditTable } from './AuditTable';
 import { exportAuditAction } from './actions';
 // Module neutre, jamais `'use client'` : cette page est un composant serveur et
 // **appelle** ces fonctions (PF-14 / S-E04-2). Voir `audit-labels.ts`.
-import { humanizePortal, humanizeResourceType } from './audit-labels';
+import { hasNoProvenance, humanizePortal, humanizeResourceType } from './audit-labels';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
@@ -198,6 +206,19 @@ export default async function AuditPage({
           </>
         )}
       </section>
+
+      {/* Quand AUCUNE ligne de la page ne porte de provenance, on l'énonce
+          **une fois** plutôt que vingt. C'est le résultat honnête attendu tant
+          qu'aucun relais L7 ne se trouve devant Next (local, `--profile app`) :
+          la ligne par ligne reste exacte, mais un auditeur mérite de savoir que
+          c'est la page entière, pas une entrée isolée. Pas de teinte d'alerte —
+          une provenance non enregistrée n'est pas une erreur (`ADR-036 D4`). */}
+      {audit.data.length > 0 && audit.data.every(hasNoProvenance) && (
+        <p className="mt-4 flex items-start gap-1.5 text-xs text-slate-500">
+          <CircleDashed className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+          <span>Aucune entrée de cette page ne porte de provenance client.</span>
+        </p>
+      )}
 
       <p className="mt-4 inline-flex items-center gap-1.5 text-xs text-slate-500">
         <Eye className="h-3 w-3" />

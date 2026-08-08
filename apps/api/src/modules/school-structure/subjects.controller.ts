@@ -11,6 +11,7 @@ import {
   Patch,
   Post,
   Put,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -29,6 +30,10 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import {
+  type ClientHintsRequest,
+  extractAuditClientHints,
+} from '../../shared/audit/client-hints';
 import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -198,14 +203,30 @@ export class SubjectsController {
     };
   }
 
+  /**
+   * S-E04-3 / AC-4 — le second site d'écriture porté sur le seam de provenance,
+   * et il est choisi pour être PROUVABLE de bout en bout : il est piloté depuis
+   * `apps/web/src/app/admin/subjects/actions.ts` via le seam serveur partagé
+   * `lib/api-client.ts`, avec les identifiants de l'administratrice de démo, et
+   * n'exige aucune UI nouvelle. Le seed de calendrier ne suffisait pas : c'est un
+   * bouton d'exploitation, pas une écriture d'usage courant.
+   *
+   * Les deux valeurs sont extraites AVANT `$transaction` — assainies hors de la
+   * transaction, comme au site calendrier, pour la raison de S-E06-6 : un cast
+   * `inet` raté ne doit pas annuler l'enregistrement qu'il trace.
+   */
   @Put('coefficients/matrix')
   @RequiresPermission('subjects.write')
   async upsertCoefficients(
     @Body() body: BulkCoefficientDto,
     @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Req() req: ClientHintsRequest,
   ) {
     const me = await this.users.ensureUser(jwt);
-    const { actorRole, portal } = deriveAuditProvenance(jwt);
+    const { actorRole, portal, ipAddress, userAgent } = deriveAuditProvenance(
+      jwt,
+      extractAuditClientHints(req),
+    );
     if (!Array.isArray(body.entries) || body.entries.length === 0) {
       throw new BadRequestException('Aucune entrée à enregistrer.');
     }
@@ -231,6 +252,8 @@ export class SubjectsController {
           action: 'coefficient.upsert',
           resourceType: 'subject_coefficient',
           after: { count: body.entries.length },
+          ipAddress,
+          userAgent,
         },
       });
     });
