@@ -82,7 +82,13 @@ const ARG_EPIC = argStr('epic')
 const ARG_SLICE = argStr('slice')
 
 log(`args: type=${typeof args} mode=${ARG_MODE} epic=${ARG_EPIC || '(none)'} slice=${ARG_SLICE ? ARG_SLICE.slice(0, 60) : '(none)'} hint=${HINT.length}c`)
-const GUARD = `ALWAYS read ${WT}/bmad/project-context.md, ${WT}/bmad/agents.md and ${WT}/bmad/roadmap.md FIRST and obey them as hard constraints. Work ONLY inside ${WT}. NEVER run any build/rebuild (pnpm build, next build, docker build/compose build, infra/pilotage.sh update|rebuild|reset). Do NOT run 'pnpm typecheck' (only the test-architect agent runs it, to protect CPU/RAM). NEVER touch unrelated areas or remove working features.`
+// GUARD — the constraint broadcast every agent receives.
+//
+// It used to name project-context.md (11.6 KB) + agents.md (7.8 KB) + roadmap.md (158 KB) = ~177 KB, read IN FULL by
+// every one of ~15-20 agents, every run — ~3 MB of identical re-reading before any work happened. bmad/GUARDRAILS.md
+// is the distilled, complete set of those hard constraints (~6 KB); the two big files remain authoritative and are
+// read ON DEMAND, not reflexively. No constraint was dropped — see GUARDRAILS.md §"What this file is".
+const GUARD = `ALWAYS read ${WT}/bmad/GUARDRAILS.md FIRST and obey it as hard constraints — it is the complete constraint set (north star, architecture invariants, pinned stack, ADR rule, resource budget, working rules). Read ${WT}/bmad/agents.md for your persona. Read ${WT}/bmad/project-context.md, ${WT}/bmad/roadmap.md or docs/spec/features/<epic>/ ONLY when your task actually needs that detail — do NOT read them reflexively. Work ONLY inside ${WT}. NEVER run any build/rebuild (pnpm build, next build, docker build/compose build, infra/pilotage.sh update|rebuild|reset). Do NOT run 'pnpm typecheck' (only the test-architect agent runs it, to protect CPU/RAM). NEVER touch unrelated areas or remove working features.`
 
 const INTAKE_SCHEMA = {
   type: 'object',
