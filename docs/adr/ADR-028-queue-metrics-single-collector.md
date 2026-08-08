@@ -5,6 +5,12 @@
 - **Slice**: `S-E02-17` (V3-E02, finding `PF-56`, queue third)
 - **Supersedes / narrows**: nothing. Adds a rule `ADR-025` and `ADR-027` do not cover — they are
   about gate *stages*, this is about what a Prometheus registry is allowed to do when it is rendered.
+- **Amended**: `S-E02-18` (V3-E02, findings `PF-104`/`PF-106`) — see the amendment section at the end.
+- **Numbering**: this file holds `ADR-028`. `docs/daily-improvement-v3/architecture-impact.md` §4 *also*
+  reserved `ADR-028`, for a V3-E04 audit decision that had not been written when this one was
+  (`PF-110`). The collision is reconciled **in that table**, not here: the reserved decisions renumber
+  from `ADR-032`, and this file is deliberately **not** renumbered — a shipped ADR keeps its number, so
+  every reference to it stays true. §4 also now carries the missing rule about which register wins.
 
 ## Context
 
@@ -140,3 +146,41 @@ will never happen, inside the metric written to avoid exactly that.
   drift guard tautological (one source cannot disagree with itself), it would not even fix the real
   invariant (which is `registerQueue`, not the constant), and it would drag the api and web runtimes
   into a worker-only concern (`PF-80`).
+
+## Amendment (S-E02-18) — `stalled` is its own family, and the collector's binding is observable
+
+Two additions, recorded here rather than in a new ADR because a reader arriving at "why isn't
+`stalled` an `outcome`?" arrives at Decision 3, and Decision 3 currently answers only the DLQ
+question. (A new number would also have repeated `PF-110` inside the PR that reconciles it.)
+
+**`pilotage_queue_stalled_total{queue}` is a separate family, not a fourth `outcome`.** Measured
+against the installed `bullmq@5.76.8`: `dist/cjs/classes/worker.js:659` is the only
+`emit('failed', job, err)` and is reached only from `handleFailed`, i.e. only when the processor
+threw *in this process*; `worker.js:908` emits `('stalled', jobId, 'active')` for every id
+`moveStalledJobsToWait` returns; and the Lua script `moveStalledJobsToWait-8` lines 154-162 moves a
+job past `maxStalledCount` into the **failed set** with reason *"job stalled more than allowable
+limit"* while still emitting only `stalled`. So an OOM-killed or SIGKILLed worker leaves the outcome
+counter flat at zero exactly when the worker is broken. It is not folded into `JOB_OUTCOMES` for two
+reasons the event itself imposes: it carries a **bare jobId with no job name**, so a `job` label
+would be `<other>` for 100 % of points; and it **does not distinguish** "moved back to `wait`" from
+"moved to `failed`", so calling it an outcome would assert a terminality the event cannot support.
+It follows that the series is neither a subset nor a superset of `pilotage_queue_jobs_total` — below
+`maxStalledCount` the job is requeued and counted again later, above it the outcome counter never
+sees it — and the two must therefore never be added on a panel. The counter is deliberately **not**
+zero-seeded, so "no data" reads as "never happened". `observeJobStalled(queue)` takes no job id at
+all: G-TENANT is then structural rather than merely untaken.
+
+**`pilotage_queue_depth_sources_bound{queue}` makes a PARTIAL binding observable.** This is
+Decision 1's second sentence one dimension over: depth is a property of the queue, but *which sources
+this process bound* is a property of the process, so it is published by the process that binds them.
+`QueueDepthCollector.onModuleInit` silently drops a queue failing its `typeof
+queue.getJobCounts === 'function'` filter, and the zero-seeded failure counter then renders that
+queue as perfectly healthy. The gauge is written from **exactly one place** —
+`registerQueueDepthSources`, already the single binding point and already the function that knows the
+shortfall — and it resets to zero for every instrumented queue before setting the bound ones, so it
+replaces rather than stacks. A **counter** incremented once at boot was rejected: it is flat forever
+after, so `rate(...[5m])` returns zero within five minutes and the shortfall becomes invisible again
+(`PF-107`'s own shape), and it would conflate "never bound" with "bound and failing". Because it is a
+gauge, it must never be aggregated with `sum()` on a dashboard — check 10 of
+`scripts/observability-check.js` now enforces that class, for the reason recorded in `PF-108`: a gauge
+of a shared resource is not additive across replicas, a counter `rate()` is.

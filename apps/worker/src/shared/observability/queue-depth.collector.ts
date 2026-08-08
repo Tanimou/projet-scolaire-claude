@@ -8,7 +8,11 @@ import {
   QUEUE_NOTIFICATIONS_EMAIL,
 } from '../queue/queue.module';
 
-import { registerQueueDepthSources, type QueueDepthSource } from './queue-metrics';
+import {
+  registerQueueDepthSources,
+  unboundInstrumentedQueues,
+  type QueueDepthSource,
+} from './queue-metrics';
 
 /**
  * Le seul endroit du dépôt où une file BullMQ rencontre le registre Prometheus
@@ -76,5 +80,24 @@ export class QueueDepthCollector implements OnModuleInit {
       `Profondeur de file instrumentée pour ${sources.length} file(s) : ` +
         `${sources.map((source) => source.queue).join(', ')}`,
     );
+
+    // S-E02-18 / PF-106 (résiduel). Le filtre ci-dessus laisse tomber une file
+    // en silence, et le compte ci-dessus n'était comparé à rien. Le manque est
+    // désormais lisible dans l'exposition
+    // (`pilotage_queue_depth_sources_bound`) ET nommé ici — un `log` de
+    // survivants ne dit pas laquelle manque, et c'est la seule information dont
+    // dispose celui qui doit la rebrancher.
+    //
+    // Le manque n'est PAS recalculé ici : il est lu de la seule fonction qui
+    // connaît les sources branchées (DNC-01).
+    const missing = unboundInstrumentedQueues();
+    if (missing.length > 0) {
+      this.logger.error(
+        `Profondeur NON branchée pour ${missing.length} file(s) instrumentée(s) : ` +
+          `${missing.join(', ')}. Ces files publient une profondeur périmée ou absente ` +
+          'alors que leur compteur d’échecs de collecte reste à zéro — donc saines à ' +
+          'la lecture. Voir `pilotage_queue_depth_sources_bound`.',
+      );
+    }
   }
 }

@@ -16,12 +16,15 @@ import {
   observeJobCompleted,
   observeJobFailed,
   observeJobOutcome,
+  observeJobStalled,
   queueDepth,
   queueDepthCollectionFailures,
   queueDepthSourceCount,
   queueJobDuration,
   queueJobsTotal,
+  queueStalledTotal,
   registerQueueDepthSources,
+  unboundInstrumentedQueues,
   type QueueDepthSource,
 } from './queue-metrics';
 
@@ -98,6 +101,9 @@ beforeEach(() => {
   // the counter is honest at zero, and the gate reads its `queue` labels.
   queueDepthCollectionFailures.reset();
   for (const queue of INSTRUMENTED_QUEUES) queueDepthCollectionFailures.inc({ queue }, 0);
+  // S-E02-18. NOT re-seeded, deliberately — the family must be absent until a
+  // stall really happens (see `T-STALL-3`).
+  queueStalledTotal.reset();
 });
 
 afterEach(() => {
@@ -574,10 +580,111 @@ describe('the instrumented set the gate reads', () => {
     expect([...INSTRUMENTED_QUEUES].sort()).toEqual(['exports', 'imports', 'notifications-email']);
   });
 
+  it('names the queues whose depth source is NOT bound (S-E02-18 / AC-2)', () => {
+    // The collector must not recompute the shortfall a second time — this is
+    // the one subtraction, and it is asserted here rather than in the logger.
+    expect(unboundInstrumentedQueues().sort()).toEqual([...INSTRUMENTED_QUEUES].sort());
+
+    registerQueueDepthSources([staticSource('exports', fullCounts(1))]);
+    expect(unboundInstrumentedQueues().sort()).toEqual(['imports', 'notifications-email']);
+
+    registerQueueDepthSources(
+      INSTRUMENTED_QUEUES.map((queue) => staticSource(queue, fullCounts(1))),
+    );
+    expect(unboundInstrumentedQueues()).toEqual([]);
+  });
+
   it('names no dead-letter mechanism anywhere in what it publishes (DNC-06)', async () => {
     const exposition = await registry.metrics();
     expect(exposition.toLowerCase()).not.toContain('dlq');
     expect(exposition.toLowerCase()).not.toContain('dead letter');
     expect(exposition.toLowerCase()).not.toContain('dead_letter');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * S-E02-18 / PF-104 — a job that fails by STALLING
+ *
+ * Measured against the installed bullmq@5.76.8:
+ *   • worker.js:659  — the ONLY emit('failed', job, err), reached only from
+ *     handleFailed, i.e. only when the processor threw IN THIS PROCESS;
+ *   • worker.js:908  — emits ('stalled', jobId, 'active') for every id
+ *     moveStalledJobsToWait returns;
+ *   • moveStalledJobsToWait-8:154-162 — past maxStalledCount the Lua script
+ *     moves the job into the FAILED set and STILL emits only 'stalled'.
+ *
+ * So an OOM-killed or SIGKILLed worker leaves the outcome counter flat at zero
+ * while the depth gauge's `failed` state climbs. These cases pin the separate
+ * counter that closes that gap, and pin the two properties that keep it honest:
+ * it is not an `outcome`, and it carries no identifier.
+ * ------------------------------------------------------------------ */
+
+describe('stalled jobs (S-E02-18 / PF-104)', () => {
+  it('T-STALL-1 — records one point per stall, labelled by queue and nothing else', async () => {
+    observeJobStalled('exports');
+    observeJobStalled('exports');
+    observeJobStalled('imports');
+
+    const exposition = await registry.metrics();
+    expect(sample(exposition, 'pilotage_queue_stalled_total', { queue: 'exports' })).toBe(2);
+    expect(sample(exposition, 'pilotage_queue_stalled_total', { queue: 'imports' })).toBe(1);
+
+    // The label set is EXACTLY {queue} (plus the registry's own `app`). A `job`
+    // label here would be `<other>` for 100 % of points — a column that
+    // distinguishes nothing — and a job id would be a leak.
+    for (const line of samplesOf(exposition, 'pilotage_queue_stalled_total')) {
+      const labels = [...line.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)="/g)].map((m) => m[1]).sort();
+      expect(labels).toEqual(['app', 'queue']);
+    }
+  });
+
+  it('T-STALL-2 — it is NOT a fourth `outcome` on pilotage_queue_jobs_total', async () => {
+    observeJobStalled('exports');
+    const exposition = await registry.metrics();
+
+    // The event distinguishes neither "moved back to wait" from "moved to
+    // failed" nor one job name from another, so folding it into the outcome
+    // enum would assert a terminality it cannot support.
+    expect([...JOB_OUTCOMES]).toEqual(['completed', 'failed_retryable', 'failed_terminal']);
+    expect(exposition).not.toContain('outcome="stalled"');
+    expect(samplesOf(exposition, 'pilotage_queue_jobs_total')).toEqual([]);
+  });
+
+  it('T-STALL-3 — the family is absent until the first stall (NOT zero-seeded)', async () => {
+    const before = await registry.metrics();
+    expect(samplesOf(before, 'pilotage_queue_stalled_total')).toEqual([]);
+
+    observeJobStalled('notifications-email');
+
+    const after = await registry.metrics();
+    expect(sample(after, 'pilotage_queue_stalled_total', { queue: 'notifications-email' })).toBe(1);
+  });
+
+  it('T-STALL-4 — an unknown queue collapses to <other>, it never becomes its own series', async () => {
+    observeJobStalled('a-queue-nobody-registered');
+    const exposition = await registry.metrics();
+    expect(sample(exposition, 'pilotage_queue_stalled_total', { queue: OTHER_JOB })).toBe(1);
+    expect(exposition).not.toContain('a-queue-nobody-registered');
+  });
+
+  it('T-STALL-5 — it never throws, whatever it is handed', async () => {
+    // A throw inside a BullMQ event listener is an unhandled rejection in the
+    // worker process: instrumentation would become a cause of outage.
+    expect(() => observeJobStalled(undefined as unknown as string)).not.toThrow();
+    expect(() => observeJobStalled(null as unknown as string)).not.toThrow();
+    expect(() => observeJobStalled({ toString: () => 'x' } as unknown as string)).not.toThrow();
+    await expect(registry.metrics()).resolves.toContain('pilotage_queue_stalled_total');
+  });
+
+  it('T-STALL-6 — G-TENANT: the identifier the event carries reaches no label', async () => {
+    // `observeJobStalled` takes no job id AT ALL — the signature is what makes
+    // this structural rather than merely untaken. Driven anyway with the values
+    // BullMQ really hands the handler, so the assertion is over the exposition.
+    const JOB_ID = 'clx9q7r4t0001wxyz5678ijkl';
+    observeJobStalled('exports');
+
+    const exposition = await registry.metrics();
+    expect(exposition).not.toContain(JOB_ID);
+    expect(observeJobStalled.length).toBe(1);
   });
 });

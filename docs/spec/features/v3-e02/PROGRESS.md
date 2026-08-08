@@ -2,10 +2,12 @@
 
 **Layer** L0 · **Closes** PF-03, PF-55, PF-56, VAL-01, VAL-03, VAL-10 (+ PF-58, PF-59, PF-60, PF-61 discovered in flight)
 **Spec** the story contracts in `docs/daily-improvement-v3/stories/sprint-01.md` are the spec-kit for this epic.
-**Status (2026-08-07, after `S-E02-17`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5` and
-`S-E02-17` are all ✅ done. `S-E02-17` (the queue third of `PF-56` — BullMQ instrumented, check 9 comparing
-`instrumented ≡ registered`) is the **last enumerated story in `sprint-01` for this epic**, and it queued seven
-findings of its own (`PF-104`…`PF-110`) which the next slice, `S-E02-18`, is pointed at. **`PF-56` does not close**:
+**Status (2026-08-08, after `S-E02-18`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`
+and `S-E02-18` are all ✅ done. `S-E02-18` closed the seven findings `S-E02-17` queued (`PF-104`…`PF-110`, plus the
+`PF-112` register renumber): the gate that slice made blocking **can now fail**, its wiring is **executed** by a test
+rather than asserted, and the dashboard stops under-reporting a stalled worker. It queued **one** residual of its own,
+`S-E02-19` — two false-red paths and two untested readers **inside the same blocking stage** (see the pointer at the
+bottom of this file). **`PF-56` does not close**:
 the alert-rules / SLO-threshold half is a product decision. `S-E02-3` and `S-E02-5` were each executed against the
 **local Docker stack**; `S-E02-5` never had a hosted half: it is a *repository*
 invariant — the migration ledger reproduces `schema.prisma` — and the ledger row that called it "needs hosted access"
@@ -48,6 +50,7 @@ operator half was delivered, which is the exact overstatement this epic exists t
 | **S-E02-13** | The observability profile stops being a claim | ✅ done | 2026-08-03 | 33/33 jest (124/124 across `src/shared/quality`) + 13/13 metrics + 6/6 on a **real worker socket**; the profile measured **unable to start** — all 3 of its bind-mount sources absent; the check run against that exact state **fails** naming all three |
 | **S-E02-14** | The trace pipeline stops being a dead address: spans are emitted, and the gate runs the thing | ✅ done | 2026-08-04 | 17/17 tracing + 21/21 gate guard (112/112 across `src/shared/quality`); **api 2 spans, worker 2 spans** from a real request against the **built** `dist/`, where the number was 0 in all three applications before; the collector declaration measured at **five** services, not the three the finding named; 3 negative paths driven through the real script |
 | **S-E02-17** | Job processing stops being invisible: BullMQ is instrumented, and a gate observes it | ✅ done | 2026-08-07 | **39/39** new worker observability tests (`queue-metrics.spec.ts` + the extended `metrics-server.spec.ts`) + **58/58** observability guard (was 42) + 15/15 API metrics including the D1 negative. Executed, not asserted: `prom-client@15.1.3` measured to **reject** on a throwing `collect()` (→ HTTP 500 through `version-server.ts`) and to **hang** on a never-settling one, and **both** shapes then driven through the real `node:http` socket → **200 with a body**, process series intact. Every negative shown able to fail: `jobLabel` made a pass-through turns T-SEC-1/T-SEC-2 **red**; the deadline removed makes both never-settling cases **time out**; check 9 removed turns **11/11** of its cases red. `readRegisteredQueues()` run against the real repository reads **3 registered queues** off the built modules' `BullQueue_*` provider tokens and the process **exits 0** — no Redis connection, no open handle. Ships **`ADR-028`** |
+| **S-E02-18** | The queue gate can fail, its wiring is executed, and the dashboard stops under-reporting | ✅ done | 2026-08-08 | **53/53** worker observability (`queue-depth.collector.spec.ts` **new, 427 lines** + `queue-metrics.spec.ts`) + **71/71** api-side observability guard (`observability-gate.spec.ts`, +277 lines). `pnpm typecheck` **13/13, exit 0** — `@pilotage/api` and `@pilotage/worker` both **cache misses that executed** (the prior run's api verdict did not exist: turbo cancelled it); `git diff --check` exit 0. **`PF-106` closed by execution, not assertion**: C7/C9 call the three new `@OnWorkerEvent('stalled')` handlers **off the real processor prototypes** with a cuid jobId *and* a `{data:{tenantId}}` receiver, then assert the rendered exposition contains neither, with an anti-vacuity `sample(...) === 2` so it cannot pass on an implementation that recorded nothing; C11 reads `ObservabilityModule`'s **resolved** Nest `imports` metadata. **`PF-105` closed**: rule 6's `rendered` is now `pilotage_queue_depth` ∩ `pilotage_queue_jobs_total` (neither zero-seeded), driven from the collector's **own** resolved `self:paramtypes` — the independence is what turns `A ≡ A` into a comparison. **⚠️ `scripts/observability-check.js` exits 1 on this checkout** — `apps/worker/dist` still holds `S-E02-17`'s bytes (0 occurrences of `pilotage_queue_stalled_total`), so the gate's own green lines are evidence about the **previous** slice. **The PF-105 fix has never been executed against its own source.** Rebuild + re-run is the merge precondition; see the section below |
 | **S-E02-15** | `apps/web` becomes the third observed artefact: metrics on its own socket, spans through the one redacting exporter | ✅ done | 2026-08-04 | **41/41** new web-observability guard + 40/40 tracing guard + 42/42 observability guard (**218/218** across 8 suites in `src/shared/quality`, was 124 — the sprint predicted 213; 218 is what the routine actually executed, and the difference is the runtime-guard-form test added when the build failed). Whole gate: **`GATE: PASS`, 12/12, exit 0**, after a first run of **`GATE: FAIL (3 stages)`** — build, web artefact, and `test:api (ratchet)`; see "What running it found" below. The gap measured first — `grep -rniE 'prom-client\|opentelemetry\|/metrics' apps/web/src` returned **0 hits** while `observability-check.js` exited **0** on that exact state; the probe yields **1 span** and a histogram **sample** labelled `route="/parent/students/[id]/grades"`, with the cuid and `tenantId` absent from both the exported payload and the exposition; 11 negative directions driven through the two pure evaluators; the anti-drift guard exercised in the negative (**4 failures** with both stages replaced by `true`, clean on restore) |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
@@ -1494,16 +1497,172 @@ Two residuals stay **recorded, not id'd**: `collectOne` folds an uninstrumented 
 `getJobCounts` read without cancelling the ioredis command, so a Redis stall leaves ~3 pending commands per scrape
 (bounded by outage duration, unbounded in principle).
 
-### The pointer, as of 2026-08-07 (run 24) — **next slice → `S-E02-18`**, a `V3-E02` follow-up
+## S-E02-18 — done 2026-08-08 (run 26)
 
-`sprint-01` is exhausted **again**: with `S-E02-17` landed, `S-E02-1`'s hosted residual and `S-E06-4` (⛔ `D-08`) are
-the only enumerated rows left, and neither is code the routine may write. The pointer at the bottom of this file that
-named `S-E06-6`, and the roadmap's that named `PF-102`, are both **superseded** by this line.
+The gate `S-E02-17` made blocking can now fail, and the seven findings that slice queued against itself are closed.
 
-The next slice is **`S-E02-18`** — `PF-106`, `PF-105`, `PF-104`, then `PF-107`/`PF-108` — and it goes ahead of
-`PF-102` for one reason: `S-E02-17` wired a **blocking** stage into `ci-gate.sh` and `ci.yml` and a live SLO dashboard,
-and three of the seven findings say that stage and those panels cannot currently see the failure they were written for.
-A gate that cannot fail is the single defect this programme has had to re-close in `PF-83`, `PF-97`, `PF-103` and now
-here — closing it while the code is one run old is cheaper than closing it after something drifts behind it.
-`PF-102` (open redirect, `V3-E05`) stays the pick immediately after; the `V3-E04` `epic-spec` run is unchanged and
+**What each closure actually is** — the distinction that matters is *executed* vs *asserted*, and it is not uniform
+across the nine acceptance criteria:
+
+| Finding | Closed by | Executed? |
+|---|---|---|
+| `PF-106` — nothing runs the wiring | `queue-depth.collector.spec.ts` (**new**, 427 lines): C7/C9 invoke the three `@OnWorkerEvent('stalled')` handlers **off the real processor prototypes**; C11 reads `ObservabilityModule`'s resolved Nest `imports` | ✅ **53/53 executed** |
+| `PF-105` — rule 6 is `A ≡ A` | `rendered` becomes `pilotage_queue_depth` ∩ `pilotage_queue_jobs_total` (neither zero-seeded), driven from the collector's own resolved `self:paramtypes` rather than from `INSTRUMENTED_QUEUES` | ⚠️ **fixture-only** — see the stale-`dist` note below |
+| `PF-104` — a stalled job reaches no counter | `pilotage_queue_stalled_total{queue}`, a **separate family** (not a fourth `outcome`), + three one-line handlers | ✅ driven, incl. G-TENANT |
+| `PF-107` — the failure counter is plotted nowhere | new panel 9 "Jobs bloqués (stalled) par file" | ⚠️ **partially** — see the deviation below |
+| `PF-108` — a gauge is `sum`-med across replicas | every gauge query `sum by` → `max by`, plus **new blocking check 10** stated over the declared `# TYPE` | ✅ 71/71 fixture cases |
+| `PF-109` — a `DNC-06` guard defeated by a French plural | plural added **with** a companion case proving the guard can go red (T17b2) | ✅ shown red |
+| `PF-110` — `ADR-028` takes a reserved number | the *shipped* ADR keeps its number; the **reservations** move to `ADR-032`…`035`; a **written precedence rule** now says `docs/adr/` is the register of record | ✅ (docs) |
+| `PF-112` — the `PF-104` id collision | renumbered in the findings index + traceability matrix | ✅ (docs) |
+
+**The security shape is structural, not conventional, and that is the point.** BullMQ's `stalled` event is the one
+that hands the listener a raw job identifier as its first and only argument (`worker.js:908` emits
+`('stalled', jobId, 'active')`). The symmetric API — `observeJobStalled(queue, job)`, matching its two neighbours —
+would have put a cuid one missing `jobLabel()` call away from an **unauthenticated** exposition, on a platform whose
+queues carry `tenantId`, `exportJobId`, `requestedBy` and guardian email addresses. What shipped is
+`observeJobStalled(queue: string)`, **arity 1**: the identifier is *unrepresentable*, so labelling by job would require
+changing the signature — a visible review decision rather than a silent omission.
+
+**The counter is deliberately not zero-seeded** (C10), so panel 9's "No data" reads as *never happened* rather than
+*not wired*. Two consequences follow, and both are recorded rather than smoothed over: prom-client 15.1.3 still emits
+`# HELP`/`# TYPE` for an unincremented counter (measured), which is what lets checks 6 and 10 resolve the family at
+all; and the `beforeEach` `.reset()` in both spec files means the two assertions whose stated claim is *"it is NOT
+zero-seeded"* currently pass either way — an R-26 vacuity carried to `S-E02-19`.
+
+### ⚠️ The gate this slice hardens is RED on this checkout, and the reason is not in the source
+
+`node scripts/observability-check.js` → **exit 1**:
+
+```
+✗ pilotage-slo.json: panel "Jobs bloqués (stalled) par file" queries
+  "pilotage_queue_stalled_total", which no application registers.
+OBSERVABILITY CHECK: FAIL (1 problem(s))
+```
+
+`apps/worker/dist/shared/observability/queue-metrics.js` contains **0** occurrences of `pilotage_queue_stalled_total`,
+`queueDepthSourcesBound` or `unboundInstrumentedQueues` — it is `S-E02-17`'s build. The gate reads `dist`, so **every
+green line it printed is evidence about the previous slice's bytes**, including this slice's two headline claims
+(check 10's `9 sum() aggregation(s)`, and the `PF-105` rule-6 rewrite). **The `PF-105` fix has never once been executed
+against its own source.** Same class as the known Prisma-generate RED gate: mechanical, not a redesign — but not yet
+proven, and stated that way.
+
+**This is a merge precondition, and it has one correct fix.** Rebuild `apps/worker` (orchestrator, per §4b — agents do
+not build), then re-run the check; it must print `OBSERVABILITY CHECK: PASS`. The two *incorrect* fixes both silently
+undo the slice: **zero-seeding `queueStalledTotal`** destroys the "No data ⇒ never happened" property panel 9's
+description promises, and **deleting panel 9** re-opens `PF-104`. The fixture in `observability-gate.spec.ts` hardcodes
+the name into `exposedMetrics`, so **no unit test can catch this** — only the real run can.
+
+### Two deviations from the story spec, named rather than quietly accepted
+
+1. **AC-4 asked for the stalled series as a second target on panel 6**; the diff ships a **new panel 9**, and panel 6
+   keeps its title (only its description was updated). The split is defensible — the series is neither subset nor
+   superset of `pilotage_queue_jobs_total`, and stacking non-additive series on one axis is the read-projection lie
+   this epic exists to close — but the story spec shipped in the same PR still states the panel-6 requirement, so the
+   contract and the artefact disagree. `DNC-06` should be re-read against the panel the series actually landed on.
+2. **The gauge was renamed** `pilotage_queue_depth_bound` → `pilotage_queue_depth_sources_bound` (architect condition
+   C2). Documented in `queue-metrics.ts` and in the `ADR-028` amendment; **not** annotated in `S-E02-18.md`, which
+   names the old identifier at three places (`:145`, `:159`, `:414`) — a reader grepping the spec's name finds zero
+   hits in code.
+
+### What this slice raised and did **not** fix — carried to `S-E02-19`
+
+All four are **latent today** and all four sit inside the **blocking** stage 9:
+
+- **`sumAggregationArguments()` scans the raw expression**, so a `sum` token inside a quoted label value returns
+  `unbalanced: true` → a hard PROBLEM. Measured: `sum by (q) (rate(a{note="sum"}[5m]))` → `unbalanced: true`;
+  `label_replace(sum by (q)(a), "x", "sum", "q", "(.*)")` → same. `metricNamesInExpr()`, the sibling reader **in the
+  same file**, already blanks quoted spans for exactly this reason — the file contains the fix, applied inconsistently.
+- **Check 10 rejects the canonical replica-de-duplication idiom** `sum by (queue) (max by (queue, state)
+  (pilotage_queue_depth))` — the *correct* expression, and the one check 10's own message recommends. Measured against
+  the shipped evaluator.
+- **`readCollectorBoundQueues()` has no test** and `return null`s on six distinct causes that collapse into one message
+  naming the **wrong file** (`queue-metrics.js`, when the unreadable file is `queue-depth.collector.js`).
+- **`readInstrumentedQueues()` writes to the shared prom-client registry** and restores it in a `finally` nothing
+  asserts. A leak there fabricates queue traffic that every later `registry.metrics()` reader in the process — a future
+  check included — treats as real: the "green and false" shape this epic exists to close, relocated into the mechanism
+  written to close it.
+
+Plus two smaller ones, both R-26 vacuity in this slice's own tests: `T-STALL-6` declares a `JOB_ID` it never passes to
+anything, so its `not.toContain(JOB_ID)` cannot fail (the genuine driven proof is C9 in the collector spec, and the
+comment claims otherwise); and the `beforeEach` `.reset()` noted above. Also non-blocking: check 10 walks
+`input.dashboards` only, so a future Prometheus **alerting rule** that `sum()`s the gauge is outside the gate, and the
+type map merges the api/worker/web registries into one flat name→type map (no collision exists today).
+
+### What the ROUTINE executed after the sprint returned — the half a sprint cannot reach
+
+The sprint proved this slice against specs and against `dist/`. The routine then proved it against **running
+containers**, per Step −1, and three of those results are things no row in this epic could previously claim.
+
+**Verdict line first (`R-23`).** `bash scripts/ci-gate.sh` → **`GATE: PASS`, exit 0, 17/17 stages**, including the one
+`pnpm build`. Reported as the verdict, not as a selection of stages that happened to be watched.
+
+**1. The worker was rebuilt, because the running one predated the code.** `pilotage_worker` was serving an image built
+at 20:42 the previous evening; its exposition carried 24 depth samples, **0** `pilotage_queue_stalled_total` and **0**
+`pilotage_queue_depth_sources_bound`. That measurement is what makes the after meaningful, and it is `PF-111`'s shape
+appearing again one run later. After `docker compose … build worker` + `up -d --force-recreate worker`, the collector
+logged « Profondeur de file instrumentée pour 3 file(s) : exports, notifications-email, imports » and the exposition
+carried `pilotage_queue_depth_sources_bound{queue=…} 1` for **all three** queues — `AC-2` observed in the real process
+rather than in a testing module, and `PF-106`'s seam executed where it actually runs.
+
+**2. A real SIGKILL produced a real `stalled` event.** `pilotage_postgres` was paused so the exports processor would
+block on its first Prisma write; one job was enqueued, logged « `[audit_csv] … — start` », and `getJobCounts` confirmed
+`active: 1`; then `docker kill -s SIGKILL pilotage_worker` — a genuine death mid-job, leaving the job in `active` with
+a lock nobody would renew. Postgres unpaused, worker restarted, and **55 s later**:
+`pilotage_queue_stalled_total{queue="exports",app="worker"} 1`. **The documented nuance held in the same run**, which
+is why the claim is trustworthy rather than merely green: `stalledCount` was 1, not `> maxStalledCount`, so BullMQ
+returned the job to `wait`, the worker re-ran it and it failed normally — so the exposition shows the stall **and** a
+`failed_terminal` as two separate facts that do not sum, exactly as `queue-metrics.ts` and panel 9 say they must not.
+**G-TENANT against the live artefact:** the probe carried `tenantId="probe-tenant-stall"`,
+`exportJobId="nonexistent-stall-probe-id"` and `requestedBy="routine-run-26"`, with a non-allow-listed job name
+`stall-probe`; `grep -c` for each of the four in the 14 721-byte exposition returns **0**, and the name rendered as
+`<other>`.
+
+**3. Both new gate rules were executed red, on real files.** `PF-105`: a fourth queue added to the **built**
+`INSTRUMENTED_QUEUES` → **exit 1**, *« Declared with NO write path: [drift-probe-queue] »* — the queue is **named** —
+against **exit 0** on the unmodified artefact, restored afterwards. `PF-108`: panel 5's expression reverted to the
+pre-slice `sum by (queue, state) (pilotage_queue_depth)` → **exit 1** naming the panel, the metric and the remedy;
+restored → **exit 0**.
+
+**4. It was ingested — the first time in this programme.** `--profile obs` was started and **all four Prometheus scrape
+targets report `up`** with no `lastError`. Every dashboard expression this slice touched was then resolved against the
+real TSDB, and Grafana returns « Pilotage — SLO » with **nine** panels including the new *Jobs bloqués*, on a
+provisioned datasource that resolves. That retires the *"proven coherent, never ingested"* residual `PF-56` has carried
+since run 15 — recorded on its row, without closing it, because alert rules and SLO thresholds are still undefined.
+
+**5. `PF-108`'s replica arithmetic was demonstrated, and its own reproduction command was found not to exist.** At one
+replica `sum` and `max` agree, so a single-instance check proves nothing; injecting a second `instance` label gives
+`sum by (queue,state)` → **4** and `max by (queue,state)` → **2** against a real depth of **2**. The prescribed
+reproduction, `--scale worker=2`, is **refused**: `worker` declares `container_name`, and so do **16 of the 21**
+services. Recorded as **`PF-113`** — the fix is proven by a weaker demonstration than the finding's own text implies,
+and saying so is the point.
+
+**Stack left up and healthy**, with the `obs` profile running. Probe jobs removed; the drill wrote nothing outside
+Redis and the local queue state, which is expendable (Step −1).
+
+**Two of the sprint's four self-reported residuals now carry ids** — **`PF-114`** (check 10 rejects the correct
+de-duplication idiom; the routine confirmed it by driving the shipped evaluator rather than accepting the panel's
+claim, `R-30`) and **`PF-115`** (the three smaller gaps). They were prose in this file and are now traceable rows.
+
+### The pointer, as of 2026-08-08 (run 26) — **next slice → `S-E02-19`**, a `V3-E02` follow-up
+
+`sprint-01` stays exhausted: `S-E02-1`'s hosted residual and `S-E06-4` (⛔ `D-08`) are the only enumerated rows left,
+and neither is code the routine may write. **The previous pointer named `S-E02-18` and then `PF-102`; both are now
+stale** — `S-E02-18` landed this run, and `PF-102` was closed by `S-E05-12` (run 25, `9f5085b`). Named rather than
+overwritten, for the reason this file keeps repeating: a pointer the next autonomous run reads at Step 1 is exactly
+the kind of stale truth that makes it re-implement shipped work.
+
+The next slice is **`S-E02-19`** — **`PF-114`** then **`PF-115`**, the four residuals above, now carrying ids rather
+than living as prose in this file — and it goes first for the mirror image of last run's reason. `S-E02-18` closed
+"a gate that cannot go red"; `PF-114` is "a gate that goes red on a correct tree", and
+`scripts/observability-check.js`'s own header says why that is equally corrosive: *it teaches people to skip the gate*.
+It is **confirmed, not suspected**: the routine drove the shipped evaluator and
+`sum by (queue) (max by (queue, state) (pilotage_queue_depth))` — correct PromQL, and the idiom check 10's own message
+recommends — is flagged, while the bare `sum` of the gauge and the counter `rate()` classify correctly. Nothing is red
+today, which is exactly why it should be closed while the code is one run old rather than after someone writes the
+correct expression and wedges stage 9 for everyone.
+
+**`PF-113` is deliberately NOT part of that slice.** It is not a defect to fix but a question to answer — is horizontal
+scaling in scope? — and `container_name` is doing useful work locally. It belongs after a decision, not before one.
+
+The `V3-E04` `epic-spec` run (audit trail and governance — `PF-14`, `PF-31`, `PF-32`) is the pick immediately after,
 still gated on nothing but sequencing.

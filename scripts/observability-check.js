@@ -68,6 +68,16 @@
  *         `BullQueue_<name>` provider tokens on the built module's metadata —
  *         not the exported constant, because a constant exported and never
  *         passed to `registerQueue` is not a registered queue
+ * 10. no dashboard expression aggregates a GAUGE-typed metric family with
+ *     `sum(...)` (S-E02-18 / PF-108)
+ *       → a gauge of a shared resource is not additive across replicas. Queue
+ *         depth is a property of the QUEUE, not of the process: every worker
+ *         replica reports the same absolute number, so `--scale worker=2`
+ *         doubles every line on the panel while the queue itself is unchanged.
+ *         A counter `rate()` IS additive, which is exactly why the panels beside
+ *         it are correct as written. The rule is stated over the metric's
+ *         DECLARED TYPE — read from the same `# TYPE` lines check 6 uses — so it
+ *         catches the class and not only the one line that was wrong
  *
  * SINCE S-E02-15 THERE ARE THREE OBSERVED ARTEFACTS, NOT TWO
  * ----------------------------------------------------------
@@ -222,6 +232,99 @@ function metricNamesInExpr(expr) {
     names.add(name);
   }
   return [...names];
+}
+
+/**
+ * The direct arguments of every `sum(...)` aggregation in a PromQL expression
+ * (S-E02-18 / PF-108).
+ *
+ * Returns `{ args, unbalanced }`. `args` are the expression texts INSIDE each
+ * `sum`, `sum by (...)` or `sum without (...)`; `unbalanced` is true when a
+ * `sum` token could not be scanned to a matching close paren.
+ *
+ * Three things it deliberately does:
+ *
+ *  - it matches `sum` as a whole token, so `sum_over_time(...)`,
+ *    `..._sum` and a label literally called `sum` are not aggregations;
+ *  - it returns only the DIRECT argument, so `histogram_quantile(0.95, sum by
+ *    (le) (rate(x_bucket[5m])))` yields `rate(x_bucket[5m])` — the `sum` is
+ *    inside `histogram_quantile`, but what matters is what the `sum` itself
+ *    reads;
+ *  - it reports failure to scan rather than returning nothing. An expression
+ *    this reader cannot parse must become a PROBLEM, never an accepted
+ *    expression (DNC-08): a silently-skipped expression is how a blocking stage
+ *    turns into a vacuous pass.
+ */
+function sumAggregationArguments(expr) {
+  if (typeof expr !== 'string') return { args: [], unbalanced: false };
+
+  const args = [];
+  let unbalanced = false;
+  const token = /(^|[^a-zA-Z0-9_:])sum(?![a-zA-Z0-9_:])/g;
+  let match;
+
+  while ((match = token.exec(expr)) !== null) {
+    let at = match.index + match[0].length;
+
+    const skipSpace = () => {
+      while (at < expr.length && /\s/.test(expr[at])) at += 1;
+    };
+
+    skipSpace();
+    // Optional `by (...)` / `without (...)` modifier between `sum` and its
+    // argument. Its own parentheses are consumed here so the balanced scan
+    // below starts on the argument, not on the label list.
+    const modifier = /^(?:by|without)\b/.exec(expr.slice(at));
+    if (modifier) {
+      at += modifier[0].length;
+      skipSpace();
+      if (expr[at] !== '(') {
+        unbalanced = true;
+        continue;
+      }
+      const closed = matchingParen(expr, at);
+      if (closed === -1) {
+        unbalanced = true;
+        continue;
+      }
+      at = closed + 1;
+      skipSpace();
+    }
+
+    if (expr[at] !== '(') {
+      unbalanced = true;
+      continue;
+    }
+    const closed = matchingParen(expr, at);
+    if (closed === -1) {
+      unbalanced = true;
+      continue;
+    }
+    args.push(expr.slice(at + 1, closed));
+  }
+
+  return { args, unbalanced };
+}
+
+/** Index of the `)` matching the `(` at `open`, or -1. Quotes are respected. */
+function matchingParen(expr, open) {
+  let depth = 0;
+  let quote = null;
+  for (let i = open; i < expr.length; i += 1) {
+    const char = expr[i];
+    if (quote) {
+      if (char === '\\') i += 1;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') quote = char;
+    else if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 /** Strips the suffixes Prometheus derives from a histogram or summary. */
@@ -624,7 +727,98 @@ function evaluateObservability(input) {
 
   evaluateQueueInstrumentation(input, problems, notes);
 
+  /* -- 10. no gauge is aggregated with sum() ------------------------- */
+
+  evaluateGaugeAggregation(input, problems, notes);
+
   return { problems, notes };
+}
+
+/**
+ * Check 10 — a GAUGE aggregated with `sum()` across replicas (S-E02-18 / PF-108).
+ *
+ * The defect that motivated it: `infra/grafana/dashboards/pilotage-slo.json`
+ * plotted `sum by (queue, state) (pilotage_queue_depth)`. Depth is a property of
+ * the QUEUE, not of the process — every worker replica publishes the same
+ * absolute number — so `docker compose up --scale worker=2` doubles every line
+ * while nothing about the queue changed. The panel would then be read as a
+ * backlog twice its real size, which is the exact class of read-projection lie
+ * this epic keeps finding.
+ *
+ * Why the rule is stated over the DECLARED TYPE rather than over that one line:
+ * a rule that named `pilotage_queue_depth` would be a fix wearing a gate's
+ * clothes. `# TYPE <name> gauge` is what makes the arithmetic wrong, and it is
+ * already read (check 6 reads the same lines for the names).
+ *
+ * What it must NOT flag, each one present in the real dashboard today:
+ *  - `max by (queue, state) (pilotage_queue_depth)` — the correction itself;
+ *  - `sum by (queue) (rate(pilotage_queue_depth_collection_failures_total[5m]))`
+ *    — a COUNTER whose name is a prefix-superset of the gauge's, which is why
+ *    the resolution goes through `metricNamesInExpr` + exact type lookup and
+ *    never through `startsWith`;
+ *  - `histogram_quantile(0.95, sum by (le, …) (rate(x_bucket[5m])))` — a
+ *    histogram, resolved through `baseMetricName`;
+ *  - a bare gauge with no aggregation at all (`nodejs_eventloop_lag_p99_seconds`).
+ *
+ * DNC-08: a missing, empty or non-object type map is a FAILURE. With no types
+ * to look up, every expression below would be accepted — a blocking stage that
+ * passes vacuously is worse than no stage, because it is believed.
+ */
+function evaluateGaugeAggregation(input, problems, notes) {
+  const problemsBefore = problems.length;
+  const types = input.exposedMetricTypes;
+
+  if (!types || typeof types !== 'object' || Array.isArray(types) || Object.keys(types).length === 0) {
+    problems.push(
+      'the declared TYPE of each registered metric could not be read from the build output. ' +
+        'That is a failure, not a skip: with no types to look up, a gauge summed across replicas ' +
+        'would be accepted silently.',
+    );
+    return;
+  }
+
+  const dashboards = Array.isArray(input.dashboards) ? input.dashboards : [];
+  let checked = 0;
+
+  for (const dashboard of dashboards) {
+    for (const panel of (dashboard.doc && dashboard.doc.panels) || []) {
+      for (const target of (panel && panel.targets) || []) {
+        const expr = target && target.expr;
+        if (typeof expr !== 'string' || expr.length === 0) continue;
+
+        const { args, unbalanced } = sumAggregationArguments(expr);
+        if (unbalanced) {
+          problems.push(
+            `${dashboard.file}: panel "${panel.title}" has a sum() this check cannot scan to a ` +
+              `matching parenthesis ("${expr}"). An expression the rule cannot read is a ` +
+              'failure, not an accepted expression.',
+          );
+          continue;
+        }
+
+        for (const argument of args) {
+          checked += 1;
+          for (const referenced of metricNamesInExpr(argument)) {
+            const family = baseMetricName(referenced);
+            if (types[family] !== 'gauge') continue;
+            problems.push(
+              `${dashboard.file}: panel "${panel.title}" aggregates the GAUGE "${family}" with ` +
+                'sum(). A gauge of a shared resource is not additive across process replicas: ' +
+                'every replica publishes the same absolute number, so running two workers ' +
+                'doubles every line while the resource is unchanged. Use max by (...) — a ' +
+                'counter rate() beside it stays sum(), because a rate IS additive.',
+            );
+          }
+        }
+      }
+    }
+  }
+
+  if (problems.length === problemsBefore) {
+    notes.push(
+      `${checked} sum() aggregation(s) on the dashboards read no gauge-typed metric family`,
+    );
+  }
 }
 
 /** Sorted, de-duplicated, string-only — so set comparisons cannot lie about order. */
@@ -654,9 +848,13 @@ function normalizeQueueSet(value) {
  *  4. registered \ instrumented → invisible on the dashboard while looking healthy;
  *  5. instrumented \ registered → a series permanently at zero, which reads as
  *     an idle queue;
- *  6. the DECLARED instrumented set must equal the one that really RENDERS. A
- *     check that read only an exported constant would reproduce the very defect
- *     it exists to close: a declaration nobody executes.
+ *  6. the DECLARED instrumented set must equal the one that survives a DRIVEN
+ *     write path to the rendered exposition. A check that read only an exported
+ *     constant would reproduce the very defect it exists to close: a
+ *     declaration nobody executes — and so, measurably, would a check that
+ *     scraped labels the module zero-seeds FROM that same constant, which is
+ *     what this rule did until S-E02-18 (PF-105). See `readInstrumentedQueues`
+ *     for what is driven and what that does and does not prove.
  */
 function evaluateQueueInstrumentation(input, problems, notes) {
   // Local, so an unrelated earlier failure cannot suppress this check's note —
@@ -748,7 +946,15 @@ function evaluateQueueInstrumentation(input, problems, notes) {
     );
   }
 
-  // 6. Declared must equal rendered — a constant nobody executes is the defect.
+  // 6. Declared must equal DRIVEN-AND-RENDERED — a constant nobody executes is
+  // the defect (S-E02-18 / PF-105).
+  //
+  // `rendered` is no longer scraped from labels the module zero-seeds FROM
+  // `INSTRUMENTED_QUEUES` — that made `declared ≡ rendered` true by
+  // construction, i.e. `A ≡ A`, and rule 6 could not fail. It is now the
+  // intersection of two families neither of which is zero-seeded, produced by
+  // driving a depth source and an allow-listed job outcome for each queue the
+  // worker's own WIRING names. See `readInstrumentedQueues`.
   //
   // An EMPTY rendered set is the realistic shape of that failure, not `null`:
   // the constant would still be exported and still be read, and only the series
@@ -764,9 +970,12 @@ function evaluateQueueInstrumentation(input, problems, notes) {
     const extra = rendered.filter((name) => !declared.includes(name));
     if (missing.length > 0 || extra.length > 0) {
       problems.push(
-        `INSTRUMENTED_QUEUES declares [${declared.join(', ')}] but the rendered worker ` +
-          `exposition carries queue labels [${rendered.join(', ')}]. The declaration and what ` +
-          'the process really publishes must be the same set.',
+        `INSTRUMENTED_QUEUES declares [${declared.join(', ')}] but only [${rendered.join(', ')}] ` +
+          'survived a driven write path to the rendered worker exposition. Declared with NO ' +
+          `write path: [${missing.join(', ') || 'none'}]. Rendered but NOT declared: ` +
+          `[${extra.join(', ') || 'none'}]. A queue named in the constant that no collector binds ` +
+          'and no processor records is a series permanently absent — on a dashboard, ' +
+          'indistinguishable from an idle queue.',
       );
     }
   }
@@ -774,8 +983,8 @@ function evaluateQueueInstrumentation(input, problems, notes) {
   if (problems.length === problemsBefore) {
     notes.push(
       `instrumented queues ≡ registered queues (${registeredSet.join(', ')}), agreed on by ` +
-        `${QUEUE_MODULES.api} and ${QUEUE_MODULES.worker}, and confirmed against the rendered ` +
-        'worker exposition',
+        `${QUEUE_MODULES.api} and ${QUEUE_MODULES.worker}, and each one driven through a real ` +
+        'write path to the rendered worker exposition',
     );
   }
 }
@@ -897,6 +1106,15 @@ function listFiles(dir, extensions) {
  *
  * Returns null when the build output is absent. The caller turns that into a
  * failure, never a skip.
+ *
+ * S-E02-18 widens it ADDITIVELY: it now returns `{ names, types }`, and
+ * `collectFromRepo` keeps `input.exposedMetrics` a `string[]` byte-for-byte
+ * while putting the map on a NEW `input.exposedMetricTypes`. Reshaping
+ * `exposedMetrics` would have been the tidy refactor and it would have been a
+ * silent disaster: check 6 does `new Set(exposed || [])` and then
+ * `if (exposedSet.size === 0) break`, so an object where an array was expected
+ * makes every dashboard query pass vacuously inside a BLOCKING stage, and
+ * nothing in the repository would have noticed.
  */
 async function readExposedMetricNames() {
   const registries = [
@@ -928,6 +1146,7 @@ async function readExposedMetricNames() {
   ];
 
   const names = new Set();
+  const types = {};
   for (const entry of registries) {
     for (const relative of entry.sideEffects) {
       const sidePath = join(REPO_ROOT, relative);
@@ -939,25 +1158,62 @@ async function readExposedMetricNames() {
     const mod = require(path);
     if (!mod || !mod.registry) return null;
     const exposition = await mod.registry.metrics();
-    for (const match of exposition.matchAll(/^# TYPE (\S+) /gm)) names.add(match[1]);
+    // `\S+` twice and NO `$` anchor: a `$`-anchored parse would silently return
+    // an empty map against CRLF line endings, which — check 10 failing closed —
+    // would turn the whole gate red on a correct tree. A false red is as
+    // corrosive as a false pass; it teaches people to skip the gate.
+    for (const match of exposition.matchAll(/^# TYPE (\S+) (\S+)/gm)) {
+      names.add(match[1]);
+      types[match[1]] = match[2];
+    }
   }
-  return [...names];
+  return { names: [...names], types };
 }
 
 /**
- * The queues the worker really instruments (S-E02-17 / D5, AC-5).
+ * The queues the worker really instruments (S-E02-17 / D5 · S-E02-18 / PF-105).
  *
  * Returns BOTH halves, because either one alone is a weaker claim than it
  * looks:
  *   • `declared` — the exported `INSTRUMENTED_QUEUES` constant;
- *   • `rendered` — the `queue="…"` label values that actually appear in the
- *     worker's rendered exposition, with no Redis reachable.
+ *   • `rendered` — the `queue="…"` label values that appear in the worker's
+ *     exposition after a real write path has been DRIVEN for each queue the
+ *     worker's own WIRING names.
  *
- * A check that read only the constant would reproduce the defect it exists to
- * close — a declaration nobody executes. The rendered half is possible because
- * `pilotage_queue_depth_collection_failures_total` is zero-initialised for
- * every instrumented queue at import, so it carries the labels honestly with an
- * unreachable Redis.
+ * WHAT THIS DOES AND WHAT IT DOES NOT PROVE — stated precisely, because the
+ * sentence that used to sit here ("what the process really publishes") was
+ * false, and a false claim in a gate's own header is how PF-105 survived a
+ * review. It is driven, in this process, with no Redis:
+ *
+ *   1. the DRIVE SET is read from the wiring, NOT from `INSTRUMENTED_QUEUES`:
+ *      the `BullQueue_<name>` tokens `QueueDepthCollector` really injects, off
+ *      `Reflect.getMetadata('self:paramtypes', …)` on the BUILT collector. This
+ *      is the whole point. Driving the set under test would make `rendered`
+ *      a function of `declared` and rule 6 would reduce to `A ≡ A` one layer
+ *      deeper than before — wearing a header comment claiming otherwise;
+ *   2. for each queue in that drive set, a synthetic depth source is bound
+ *      through the module's own `registerQueueDepthSources`, and one
+ *      ALLOW-LISTED job name (the first entry of `JOB_NAMES_BY_QUEUE`) is passed
+ *      to `observeJobCompleted`. Allow-listed on purpose: driving with an
+ *      unlisted name would render `job="<other>"`, and then the `<other>`
+ *      sentinel — not the queue's own label — would be what "proved" the label;
+ *   3. `rendered` is the INTERSECTION of the `queue` labels carried by
+ *      `pilotage_queue_depth` AND `pilotage_queue_jobs_total`. Neither family is
+ *      zero-seeded, so a label in both can only come from a write that happened.
+ *      The zero-seeded families (`…_depth_collection_failures_total`,
+ *      `…_depth_sources_bound`) are EXCLUDED by exact-name matching — they carry
+ *      the declared labels for free, which is precisely what made the old
+ *      prefix-matching version tautological.
+ *
+ * It therefore proves: the declared queue can be bound as a depth source and
+ * can record an outcome, and its label survives to the exposition. It does NOT
+ * prove that a real BullMQ queue exists, that Redis answers, or that a
+ * processor is subscribed — check 9's rules 3/4/5 read the resolved
+ * registrations for the first, and nothing here reaches the last two.
+ *
+ * The registry is restored on the way out (`finally`), so a later
+ * `registry.metrics()` in this process is not collecting against synthetic
+ * sources.
  *
  * Returns null on any failure. The caller turns that into a failure, never a
  * skip.
@@ -975,14 +1231,111 @@ async function readInstrumentedQueues() {
 
   const registryModule = require(registryPath);
   if (!registryModule || !registryModule.registry) return null;
-  const exposition = await registryModule.registry.metrics();
 
-  const rendered = new Set();
-  for (const match of exposition.matchAll(/^pilotage_queue_[a-z_]*\{[^}]*queue="([^"]*)"/gm)) {
-    rendered.add(match[1]);
+  const driveSet = readCollectorBoundQueues();
+  if (driveSet === null) return null;
+  if (
+    typeof mod.registerQueueDepthSources !== 'function' ||
+    typeof mod.observeJobCompleted !== 'function' ||
+    !mod.JOB_NAMES_BY_QUEUE
+  ) {
+    return null;
   }
 
-  return { declared, rendered: [...rendered] };
+  let exposition;
+  try {
+    mod.registerQueueDepthSources(
+      driveSet.map((queue) => ({
+        queue,
+        // A distinctive, non-zero count: a zero would be indistinguishable from
+        // an unwritten gauge for anyone reading this by hand.
+        getJobCounts: async () => ({ waiting: 17 }),
+      })),
+    );
+    for (const queue of driveSet) {
+      const allowed = mod.JOB_NAMES_BY_QUEUE[queue];
+      // No allow-listed name → do not drive it. Driving it anyway would record
+      // `job="<other>"`, i.e. the sentinel would become the proof.
+      if (!Array.isArray(allowed) || typeof allowed[0] !== 'string') continue;
+      mod.observeJobCompleted(queue, { name: allowed[0] });
+    }
+    exposition = await registryModule.registry.metrics();
+  } finally {
+    mod.registerQueueDepthSources([]);
+    if (mod.queueDepth && typeof mod.queueDepth.reset === 'function') mod.queueDepth.reset();
+    if (mod.queueJobsTotal && typeof mod.queueJobsTotal.reset === 'function') {
+      mod.queueJobsTotal.reset();
+    }
+  }
+
+  // EXACT family names, followed immediately by `{`. Not a prefix test:
+  // `pilotage_queue_depth_collection_failures_total` starts with
+  // `pilotage_queue_depth`, and counting it as the depth family is exactly the
+  // way this check was vacuous before.
+  const depthLabels = queueLabelsOfFamily(exposition, 'pilotage_queue_depth');
+  const outcomeLabels = queueLabelsOfFamily(exposition, 'pilotage_queue_jobs_total');
+  const rendered = [...depthLabels].filter((name) => outcomeLabels.has(name));
+
+  return { declared, rendered };
+}
+
+/** The `queue` label values one EXACT metric family carries in an exposition. */
+function queueLabelsOfFamily(exposition, family) {
+  const labels = new Set();
+  for (const line of String(exposition).split('\n')) {
+    if (!line.startsWith(`${family}{`)) continue;
+    const match = /\{[^}]*queue="([^"]*)"/.exec(line);
+    if (match) labels.add(match[1]);
+  }
+  return labels;
+}
+
+/**
+ * The queues the worker's DEPTH COLLECTOR really injects — the wiring, read
+ * resolved (S-E02-18 / PF-105).
+ *
+ * `@InjectQueue(name)` is `Inject(getQueueToken(name))`, and Nest records that
+ * on the class as `self:paramtypes` = `[{ index, param: 'BullQueue_<name>' }]`.
+ * Reading it is the same discipline `readRegisteredQueues` uses one function
+ * below, and it is what makes the drive set INDEPENDENT of the constant this
+ * check is testing.
+ *
+ * Requiring the built collector is cheap and opens nothing: it pulls
+ * `@nestjs/bullmq`, `@nestjs/common` and `queue-metrics`, and the queues are
+ * built by Nest DI at bootstrap, which does not happen here.
+ *
+ * Returns null on any failure — a failure, never a skip.
+ */
+function readCollectorBoundQueues() {
+  const path = join(REPO_ROOT, 'apps/worker/dist/shared/observability/queue-depth.collector.js');
+  if (!existsSync(path)) return null;
+
+  const req = (spec) => require(require.resolve(spec, { paths: [join(REPO_ROOT, 'apps/api')] }));
+  try {
+    req('reflect-metadata');
+  } catch {
+    return null;
+  }
+
+  let mod;
+  try {
+    mod = require(path);
+  } catch {
+    return null;
+  }
+  if (!mod || typeof mod.QueueDepthCollector !== 'function') return null;
+
+  const injected = Reflect.getMetadata('self:paramtypes', mod.QueueDepthCollector);
+  if (!Array.isArray(injected) || injected.length === 0) return null;
+
+  const names = new Set();
+  for (const entry of injected) {
+    const token = entry && entry.param;
+    if (typeof token !== 'string') continue;
+    const match = /^BullQueue_(.+)$/.exec(token);
+    if (match) names.add(match[1]);
+  }
+  return names.size === 0 ? null : [...names];
 }
 
 /**
@@ -1134,6 +1487,10 @@ async function collectFromRepo() {
     text: readFileSync(path, 'utf8'),
   }));
 
+  // Read ONCE — the registries must not be rendered twice, and the two fields
+  // below are two views of the same read.
+  const exposed = await readExposedMetricNames();
+
   return {
     composeFiles,
     prometheus,
@@ -1143,7 +1500,11 @@ async function collectFromRepo() {
     workerMetricsPath: readWorkerMetricsPath(),
     webMetricsPath: readWebMetricsPath(),
     webRoutes: readWebRoutes(),
-    exposedMetrics: await readExposedMetricNames(),
+    // ADDITIVE, deliberately: `exposedMetrics` keeps its `string[]` shape and
+    // the types land beside it. See `readExposedMetricNames` for why reshaping
+    // it would have turned check 6 into a vacuous pass.
+    exposedMetrics: exposed === null ? null : exposed.names,
+    exposedMetricTypes: exposed === null ? null : exposed.types,
     instrumentedQueues: await readInstrumentedQueues(),
     registeredQueues: readRegisteredQueues(),
     nginxConfs,
@@ -1192,6 +1553,7 @@ module.exports = {
   evaluateObservability,
   collectFromRepo,
   metricNamesInExpr,
+  sumAggregationArguments,
   baseMetricName,
   serviceListenPort,
   serviceListenPorts,

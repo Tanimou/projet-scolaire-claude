@@ -6,6 +6,7 @@ import { MailerService } from '../../shared/mail/mailer.service';
 import {
   observeJobCompleted,
   observeJobFailed,
+  observeJobStalled,
 } from '../../shared/observability/queue-metrics';
 import { QUEUE_NOTIFICATIONS_EMAIL } from '../../shared/queue/queue.module';
 
@@ -51,5 +52,16 @@ export class NotificationsEmailProcessor extends WorkerHost {
   @OnWorkerEvent('failed')
   onFailed(job: Job<NotificationEmailJob> | undefined, error: Error): void {
     observeJobFailed(QUEUE_NOTIFICATIONS_EMAIL, job, error);
+  }
+
+  /**
+   * S-E02-18 / PF-104 — `failed` above does not cover a job that fails by
+   * stalling (see `ExportsProcessor.onStalled` and `queue-metrics.ts`). The
+   * bare jobId BullMQ carries is deliberately never labelled — on this queue
+   * the recipient address is in the payload, so the rule is doubly load-bearing.
+   */
+  @OnWorkerEvent('stalled')
+  onStalled(_jobId: string): void {
+    observeJobStalled(QUEUE_NOTIFICATIONS_EMAIL);
   }
 }

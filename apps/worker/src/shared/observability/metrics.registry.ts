@@ -28,7 +28,15 @@ import { Registry, collectDefaultMetrics } from 'prom-client';
  *  - `pilotage_queue_job_duration_seconds{queue,job}` — durée de traitement ;
  *  - `pilotage_queue_depth_collection_failures_total{queue}` — les collectes
  *    de profondeur qui ont échoué, pour qu'une panne Redis ne se rende pas
- *    comme un système en bonne santé.
+ *    comme un système en bonne santé ;
+ *  - `pilotage_queue_stalled_total{queue}` (S-E02-18) — les jobs signalés
+ *    **bloqués**. L'événement `failed` de BullMQ ne les couvre pas : un worker
+ *    tué laisse le compteur d'échecs plat à zéro. Voir `./queue-metrics.ts`
+ *    pour les trois sites mesurés (`worker.js:659`, `worker.js:908`, le Lua
+ *    `moveStalledJobsToWait-8:154-162`) ;
+ *  - `pilotage_queue_depth_sources_bound{queue}` (S-E02-18) — `1` si une
+ *    source de profondeur est branchée pour cette file, `0` sinon. Un
+ *    branchement partiel était jusque-là silencieux.
  *
  * **Il n'y a pas de série « DLQ », et ce n'est pas un manque** : BullMQ n'a pas
  * de dead-letter queue, un job qui épuise ses `attempts` reste dans l'ensemble
