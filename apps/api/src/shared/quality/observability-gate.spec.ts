@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
@@ -53,21 +54,51 @@ interface Evaluation {
   notes: string[];
 }
 
+/** The discriminated result the two queue readers return since S-E02-19 (AC-8). */
+type ReaderFailure = { ok: false; reason: string; file: string; detail?: string };
+type CollectorResult = { ok: true; queues: string[] } | ReaderFailure;
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 const {
   evaluateObservability,
   metricNamesInExpr,
   sumAggregationArguments,
+  maskQuotedSpans,
+  scanQuotedSpans,
+  unshieldedGaugeReferences,
+  registryResidue,
+  readCollectorBoundQueues,
   serviceListenPort,
   serviceListenPorts,
   splitTarget,
+  REPLICA_LABELS,
+  REPLICA_IDEMPOTENT_AGGREGATIONS,
+  ACROSS_SERIES_AGGREGATIONS,
+  DRIVEN_DEPTH_SENTINEL,
+  WORKER_QUEUE_DEPTH_COLLECTOR_MODULE,
 } = require(SCRIPT_PATH) as {
   evaluateObservability: (input: unknown) => Evaluation;
   metricNamesInExpr: (expr: string) => string[];
   sumAggregationArguments: (expr: string) => { args: string[]; unbalanced: boolean };
+  maskQuotedSpans: (expr: string) => string;
+  scanQuotedSpans: (expr: string) => { masked: string; unterminated: boolean };
+  unshieldedGaugeReferences: (
+    argument: string,
+    types: Record<string, string>,
+  ) => { families: string[]; unscannable: boolean };
+  registryResidue: (
+    exposition: string,
+    drivenOutcomes?: { queue: string; job: string }[],
+  ) => string[];
+  readCollectorBoundQueues: (collectorPath?: string) => CollectorResult;
   serviceListenPort: (service: unknown) => number | null;
   serviceListenPorts: (service: unknown) => number[];
   splitTarget: (target: string) => { host: string; port: number } | null;
+  REPLICA_LABELS: Set<string>;
+  REPLICA_IDEMPOTENT_AGGREGATIONS: Set<string>;
+  ACROSS_SERIES_AGGREGATIONS: string[];
+  DRIVEN_DEPTH_SENTINEL: number;
+  WORKER_QUEUE_DEPTH_COLLECTOR_MODULE: string;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -1095,6 +1126,631 @@ describe('observability gate — a gauge must not be summed across replicas', ()
     expect(exprs).toContain('sum by (queue) (rate(pilotage_queue_stalled_total[5m]))');
     expect(exprs.join('\n')).not.toContain('outcome=~"stalled');
   });
+
+  /* ---------------------------------------------------------------- *
+   * S-E02-19 / PF-114 — check 10 must stop rejecting correct PromQL.
+   *
+   * Every case below was RED before the shield walk landed: `T20`, `T20f` and
+   * `T20g` reported a problem on a correct expression, and `T20e` reported none
+   * on one the reader cannot parse. `T20b`, `T20c` and `T20d` are the ones that
+   * keep the rule a rule — if a widening makes any of them green, the gate has
+   * been deleted rather than fixed.
+   * ---------------------------------------------------------------- */
+
+  it('T20 — AC-1: accepts the replica-safe idiom its OWN message recommends', () => {
+    // `max by (queue, state)` emits ONE series per (queue, state): the replica
+    // dimension is gone before the sum runs, so summing the states is ordinary
+    // arithmetic. This is the expression check 10's error text tells you to
+    // write, and it used to be flagged.
+    const { problems } = evaluateObservability(
+      withExpr('sum by (queue) (max by (queue, state) (pilotage_queue_depth))'),
+    );
+    expect(problems).toEqual([]);
+  });
+
+  it('T20b — AC-2: `sum by (queue) (gauge)` is STILL a problem, naming metric and panel', () => {
+    // The load-bearing criterion. This is the PF-108 defect the rule exists for.
+    const { problems } = evaluateObservability(withExpr('sum by (queue) (pilotage_queue_depth)'));
+    const joined = problems.join('\n');
+    expect(joined).toContain('aggregates the GAUGE "pilotage_queue_depth" with sum()');
+    expect(joined).toContain('Profondeur de file par état');
+  });
+
+  it('T20c — AC-4: an inner `by` list that RETAINS a replica label is still flagged', () => {
+    // `max by (queue, state, instance)` keeps one series per replica, so the
+    // outer sum still double-counts. Shielding on the operator name alone would
+    // wrongly accept this.
+    const { problems } = evaluateObservability(
+      withExpr('sum by (queue) (max by (queue, state, instance) (pilotage_queue_depth))'),
+    );
+    expect(problems.join('\n')).toContain('aggregates the GAUGE "pilotage_queue_depth" with sum()');
+  });
+
+  it('T20d — AC-4: `max_over_time` shields nothing, and is still flagged', () => {
+    // The trap. `max_over_time` aggregates one series' samples in TIME; it
+    // removes no series at all, so every replica survives into the sum. A fix
+    // keyed on the string `max` accepts this.
+    const { problems } = evaluateObservability(
+      withExpr('sum by (queue) (max_over_time(pilotage_queue_depth[5m]))'),
+    );
+    expect(problems.join('\n')).toContain('aggregates the GAUGE "pilotage_queue_depth" with sum()');
+  });
+
+  it('T20e — AC-5: DNC-08 extends to the NEW parse — an unscannable inner agg FAILS', () => {
+    // The outer sum scans fine; the inner `max by (queue)` has no argument. The
+    // shield walk must say so rather than concluding "cannot tell, assume safe",
+    // which is how a blocking stage becomes a vacuous pass.
+    const { problems } = evaluateObservability(
+      withExpr('sum by (queue) (max by (queue) pilotage_queue_depth)'),
+    );
+    expect(problems.join('\n')).toContain('cannot scan to a matching parenthesis');
+  });
+
+  it('T20f — AC-7: a `sum` inside a LABEL VALUE is not an aggregation', () => {
+    // `sumAggregationArguments` scanned the raw text, found the `sum` in
+    // `job="sum"`, failed to find an argument for it and returned
+    // `unbalanced: true` — a hard PROBLEM on a correct tree.
+    const { problems } = evaluateObservability(
+      withExpr('sum by (queue) (rate(pilotage_queue_jobs_total{job="sum"}[5m]))'),
+    );
+    expect(problems).toEqual([]);
+  });
+
+  it('T20g — AC-7: nor is a `sum` inside a label_replace() string argument', () => {
+    const { problems } = evaluateObservability(
+      withExpr(
+        'sum by (queue) (label_replace(rate(pilotage_queue_jobs_total[5m]), "sum", "$1", "queue", "(.*)"))',
+      ),
+    );
+    expect(problems).toEqual([]);
+  });
+});
+
+/**
+ * S-E02-19 / PF-114 — the shield walk, driven directly.
+ *
+ * The cases above prove the RULE; these prove the mechanism, one property per
+ * case, so a regression names which property broke rather than "check 10 is
+ * red".
+ */
+describe('observability gate — the replica shield walk', () => {
+  const TYPES: Record<string, string> = {
+    pilotage_queue_depth: 'gauge',
+    pilotage_queue_depth_collection_failures_total: 'counter',
+    pilotage_queue_jobs_total: 'counter',
+    pilotage_queue_job_duration_seconds: 'histogram',
+    nodejs_eventloop_lag_p99_seconds: 'gauge',
+  };
+
+  it('T21 — an aggregation with NO grouping modifier shields: it collapses to one series', () => {
+    expect(unshieldedGaugeReferences('max(pilotage_queue_depth)', TYPES)).toEqual({
+      families: [],
+      unscannable: false,
+    });
+  });
+
+  it('T21b — `by (...)` shields iff it names no replica label', () => {
+    expect(
+      unshieldedGaugeReferences('max by (queue, state) (pilotage_queue_depth)', TYPES).families,
+    ).toEqual([]);
+    expect(
+      unshieldedGaugeReferences('max by (queue, instance) (pilotage_queue_depth)', TYPES).families,
+    ).toEqual(['pilotage_queue_depth']);
+  });
+
+  it('T21c — `without (...)` shields ONLY when it explicitly removes a replica label', () => {
+    // A `without` keeps everything it does not name, `instance` included, so
+    // "it is a without, therefore it aggregated" is exactly the wrong reading.
+    expect(
+      unshieldedGaugeReferences('max without (instance) (pilotage_queue_depth)', TYPES).families,
+    ).toEqual([]);
+    expect(
+      unshieldedGaugeReferences('max without (state) (pilotage_queue_depth)', TYPES).families,
+    ).toEqual(['pilotage_queue_depth']);
+  });
+
+  it('T21d — the shield is inherited outward-in, not per level', () => {
+    // The OUTER `avg by (queue)` already removes `instance`, so the inner
+    // `max by (queue, instance)` does not need to.
+    expect(
+      unshieldedGaugeReferences(
+        'avg by (queue) (max by (queue, instance) (pilotage_queue_depth))',
+        TYPES,
+      ).families,
+    ).toEqual([]);
+  });
+
+  it('T21e — a counter and a histogram are never reported, whatever the shielding', () => {
+    expect(
+      unshieldedGaugeReferences(
+        'rate(pilotage_queue_depth_collection_failures_total[5m])',
+        TYPES,
+      ).families,
+    ).toEqual([]);
+    expect(
+      unshieldedGaugeReferences('rate(pilotage_queue_job_duration_seconds_bucket[5m])', TYPES)
+        .families,
+    ).toEqual([]);
+  });
+
+  it('T21f — `instance` and `pod` are named in one exported constant, not inlined', () => {
+    // The list decides every verdict above; a reviewer has to be able to read it
+    // without reading the walk.
+    for (const label of ['instance', 'pod', 'job', 'replica', 'container', 'host']) {
+      expect(REPLICA_LABELS.has(label)).toBe(true);
+    }
+    expect(REPLICA_LABELS.has('queue')).toBe(false);
+    expect(REPLICA_LABELS.has('state')).toBe(false);
+  });
+
+  it('T21g — the quote mask preserves LENGTH, so every index still addresses the original', () => {
+    // Not cosmetic: `sumAggregationArguments` slices the ORIGINAL expression by
+    // an index found in the masked one. A mask that shortened the text would
+    // return an argument off by however many characters the label values held.
+    for (const expr of [
+      'x_total{job="sum"}',
+      'label_replace(x, "a\\"b", "$1", "q", "(.*)")',
+      "y{k='sum'}",
+      'sum by (queue) (x)',
+    ]) {
+      expect(maskQuotedSpans(expr)).toHaveLength(expr.length);
+    }
+    expect(maskQuotedSpans('x_total{job="sum"}')).toBe('x_total{job="   "}');
+  });
+});
+
+/**
+ * S-E02-19 / PF-116 + PF-117 — the two directions in which this slice's OWN
+ * first implementation opened the gate it was written to sharpen.
+ *
+ * Why these deserve their own block rather than a line in the one above: every
+ * residual this epic has recorded before was fail-CLOSED — a gate too strict,
+ * which is annoying and self-announcing. These two were fail-OPEN — a blocking
+ * stage that went green on expressions `HEAD` reddened. A gate nobody can trust
+ * to go red is the exact defect S-E02-18 spent a whole slice closing, so a
+ * regression of that shape, introduced by the slice that follows it, is the one
+ * thing this epic cannot ship.
+ *
+ * Each case is driven through `evaluateObservability` — the real entry point,
+ * with a real dashboard shape — rather than through the walk, because what must
+ * not regress is the VERDICT, not the intermediate.
+ */
+describe('observability gate — an operator may shield only if it is replica-idempotent', () => {
+  const TYPES: Record<string, string> = {
+    pilotage_queue_depth: 'gauge',
+    pilotage_queue_jobs_total: 'counter',
+  };
+
+  /** The gauge-aggregation verdict for one panel expression. */
+  function verdictFor(expr: string): 'flagged' | 'accepted' {
+    const evaluation = evaluateObservability({
+      exposedMetricTypes: TYPES,
+      dashboards: [{ file: 'probe.json', doc: { panels: [{ title: 'p', targets: [{ expr }] }] } }],
+    });
+    const fired = evaluation.problems.filter((problem) =>
+      /aggregates the GAUGE|cannot scan|cannot read/i.test(problem),
+    );
+    return fired.length > 0 ? 'flagged' : 'accepted';
+  }
+
+  // Each row is `[expression, verdict, why]`. The `why` is the point: a bare
+  // matrix of strings would tell a future reader WHAT broke and never why the
+  // answer is what it is.
+  const CASES: [string, 'flagged' | 'accepted', string][] = [
+    // --- the rule this check exists for, and the false red PF-114 removed ---
+    ['sum by (queue) (pilotage_queue_depth)', 'flagged', 'PF-108: the bare gauge, summed'],
+    [
+      'sum by (queue) (max by (queue, state) (pilotage_queue_depth))',
+      'accepted',
+      'PF-114: the idiom the message itself recommends',
+    ],
+    // --- NOT idempotent over replicas: must never shield (PF-116) ---
+    [
+      'sum by (queue) (topk(3, pilotage_queue_depth))',
+      'flagged',
+      'topk SELECTS k original series, every label incl. instance intact',
+    ],
+    [
+      'sum by (queue) (bottomk(1, pilotage_queue_depth))',
+      'flagged',
+      'bottomk is a selector for the same reason',
+    ],
+    [
+      'sum by (queue) (count by (queue, state) (pilotage_queue_depth))',
+      'flagged',
+      'count returns N replicas, so the outer sum counts processes',
+    ],
+    [
+      'sum by (queue) (count_values("v", pilotage_queue_depth))',
+      'flagged',
+      'count_values is a count, not a reduction to the value',
+    ],
+    [
+      'sum by (queue) (stddev by (queue) (pilotage_queue_depth))',
+      'flagged',
+      'stddev of identical replicas is 0 — not the resource value',
+    ],
+    [
+      'sum by (queue) (stdvar by (queue) (pilotage_queue_depth))',
+      'flagged',
+      'stdvar, same reasoning as stddev',
+    ],
+    [
+      'sum by (queue) (sum by (queue, state) (pilotage_queue_depth))',
+      'flagged',
+      'a nested sum ADDS the replicas — it is the defect, not a shield',
+    ],
+    // --- idempotent over replicas: may shield ---
+    ['sum by (queue) (avg by (queue, state) (pilotage_queue_depth))', 'accepted', 'avg of v..v is v'],
+    ['sum by (queue) (min by (queue, state) (pilotage_queue_depth))', 'accepted', 'min of v..v is v'],
+    [
+      'sum by (queue) (group by (queue, state) (pilotage_queue_depth))',
+      'accepted',
+      'group is always one series per group',
+    ],
+    // --- the grouping modifier still decides, inside an idempotent operator ---
+    [
+      'sum by (queue) (max by (queue, state, instance) (pilotage_queue_depth))',
+      'flagged',
+      'max kept instance, so the replicas survive into the sum',
+    ],
+    [
+      'sum by (queue) (max without (instance) (pilotage_queue_depth))',
+      'accepted',
+      'without explicitly removes the replica label',
+    ],
+    [
+      'sum by (queue) (max without (state) (pilotage_queue_depth))',
+      'flagged',
+      'without keeps everything it does not name, instance included',
+    ],
+    // --- neither an aggregation nor a gauge ---
+    [
+      'sum by (queue) (max_over_time(pilotage_queue_depth[5m]))',
+      'flagged',
+      'a range function reduces samples in time, not series',
+    ],
+    [
+      'sum by (queue) (rate(pilotage_queue_jobs_total[5m]))',
+      'accepted',
+      'a counter rate IS additive across replicas',
+    ],
+    // --- PF-117: the mask must not swallow the expression it is masking ---
+    [
+      'foo{a="b} + sum by (queue) (pilotage_queue_depth)',
+      'flagged',
+      'PF-117: an unterminated quote blanked the tail, hiding the sum',
+    ],
+    [
+      'sum by (queue) (max by (queue, state) (pilotage_queue_depth{tenant="a"}))',
+      'accepted',
+      'a TERMINATED quote is still masked, not reported',
+    ],
+  ];
+
+  it.each(CASES)('%s → %s (%s)', (expr, expected) => {
+    expect(verdictFor(expr)).toBe(expected);
+  });
+
+  it('T22 — the shielding set is a strict, named SUBSET of the parsed set', () => {
+    // Parsing and shielding are different questions, and conflating them is
+    // precisely what opened the five holes above: every operator must still be
+    // PARSED (or the walk mis-reads the nesting), only some may SHIELD.
+    for (const operator of REPLICA_IDEMPOTENT_AGGREGATIONS) {
+      expect(ACROSS_SERIES_AGGREGATIONS).toContain(operator);
+    }
+    expect([...REPLICA_IDEMPOTENT_AGGREGATIONS].sort()).toEqual([
+      'avg',
+      'group',
+      'max',
+      'min',
+      'quantile',
+    ]);
+    // Fail-closed, stated as an assertion rather than left to the reader: an
+    // operator absent from the shielding set shields nothing, so a PromQL
+    // operator added to the language later is unsafe until someone proves it.
+    for (const unsafe of ['sum', 'count', 'count_values', 'stddev', 'stdvar', 'topk', 'bottomk']) {
+      expect(REPLICA_IDEMPOTENT_AGGREGATIONS.has(unsafe)).toBe(false);
+    }
+  });
+
+  it('T23 — the unterminated-quote signal comes from the SAME scan as the mask', () => {
+    // Two scanners would drift: one gets a new quote character, the other does
+    // not, and the mask silently disagrees with the failure signal.
+    expect(scanQuotedSpans('x_total{job="sum"}')).toEqual({
+      masked: 'x_total{job="   "}',
+      unterminated: false,
+    });
+    const open = scanQuotedSpans('foo{a="b} + sum by (queue) (pilotage_queue_depth)');
+    expect(open.unterminated).toBe(true);
+    expect(open.masked).toHaveLength('foo{a="b} + sum by (queue) (pilotage_queue_depth)'.length);
+    expect(maskQuotedSpans('x_total{job="sum"}')).toBe(scanQuotedSpans('x_total{job="sum"}').masked);
+  });
+
+  it('T24 — an unterminated quote reaches the caller as unbalanced, not as no-tokens', () => {
+    // The failure mode was silent: the tail was blanked, so the `sum` in it was
+    // never seen, and `{ args: [], unbalanced: false }` reads exactly like a
+    // panel that contains no sum at all.
+    expect(sumAggregationArguments('foo{a="b} + sum by (queue) (pilotage_queue_depth)')).toEqual({
+      args: [],
+      unbalanced: true,
+    });
+    expect(unshieldedGaugeReferences('max by (queue) (x{a="b)', TYPES).unscannable).toBe(true);
+  });
+});
+
+/**
+ * S-E02-19 / PF-115 (b) — the restore guarantee, AC-10.
+ *
+ * `readInstrumentedQueues` drives the REAL write path against the process-wide
+ * prom-client registry and restores it in a `finally` that, until this slice,
+ * nothing asserted. A leak there fabricates queue traffic every later reader in
+ * the process treats as real — the "green and false" shape this epic exists to
+ * close, relocated into the mechanism written to close it.
+ *
+ * The predicate is driven here rather than the reader, deliberately: driving the
+ * reader can only ever demonstrate that the restore worked TODAY, and it needs
+ * `apps/worker/dist`. These four cases demonstrate that a residue would be SEEN.
+ */
+describe('observability gate — the driven registry must be left clean', () => {
+  const CLEAN = [
+    '# TYPE pilotage_queue_depth gauge',
+    '# TYPE pilotage_queue_jobs_total counter',
+    'pilotage_queue_depth_sources_bound{queue="exports",app="worker"} 0',
+    'pilotage_queue_depth_collection_failures_total{queue="exports",app="worker"} 0',
+    '',
+  ].join('\n');
+
+  const DRIVEN = [{ queue: 'exports', job: 'export.generate' }];
+
+  it('T22 — a clean exposition reports no residue', () => {
+    expect(registryResidue(CLEAN, DRIVEN)).toEqual([]);
+  });
+
+  it('T22b — a depth sample carrying the driven sentinel is named', () => {
+    const residue = registryResidue(
+      `${CLEAN}pilotage_queue_depth{queue="exports",state="waiting",app="worker"} ${DRIVEN_DEPTH_SENTINEL}\n`,
+      DRIVEN,
+    );
+    expect(residue).toHaveLength(1);
+    expect(residue.join('\n')).toContain('pilotage_queue_depth still carries the driven sentinel');
+  });
+
+  it('T22c — a jobs_total sample for the DRIVEN (queue, job) pair is named', () => {
+    const residue = registryResidue(
+      `${CLEAN}pilotage_queue_jobs_total{queue="exports",job="export.generate",outcome="completed",app="worker"} 1\n`,
+      DRIVEN,
+    );
+    expect(residue.join('\n')).toContain('pilotage_queue_jobs_total still carries a driven outcome');
+
+    // Matched on the PAIR, not on the family: traffic recorded by something
+    // else is not this check's residue, and calling it residue would make the
+    // reader fail on a healthy process.
+    expect(
+      registryResidue(
+        `${CLEAN}pilotage_queue_jobs_total{queue="imports",job="import.apply",outcome="completed",app="worker"} 1\n`,
+        DRIVEN,
+      ),
+    ).toEqual([]);
+  });
+
+  it('T22d — a still-bound synthetic depth source is named', () => {
+    const residue = registryResidue(
+      `${CLEAN}pilotage_queue_depth_sources_bound{queue="imports",app="worker"} 1\n`,
+      DRIVEN,
+    );
+    expect(residue.join('\n')).toContain('pilotage_queue_depth_sources_bound still reports');
+  });
+
+  it('T22e — a depth sample at some OTHER value is not the sentinel, and is not residue', () => {
+    // The sentinel is what this check wrote. Reporting every depth sample would
+    // make the reader red on a worker that is legitimately collecting.
+    expect(
+      registryResidue(
+        `${CLEAN}pilotage_queue_depth{queue="exports",state="waiting",app="worker"} 3\n`,
+        DRIVEN,
+      ),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * S-E02-19 / PF-115 (a) — `readCollectorBoundQueues`, AC-9.
+ *
+ * It had ZERO executed coverage anywhere in the repository, while six distinct
+ * causes collapsed into one `null` that the caller rendered as a message naming
+ * `queue-metrics.js` — a file none of those six causes is about.
+ *
+ * The optional path argument is a TESTABILITY SEAM, not a flag (DNC-10): it
+ * cannot be reached from the command line, it changes only WHICH file is read,
+ * and it cannot make any check pass. `T23g` pins that the default is the real
+ * artefact.
+ */
+describe('observability gate — the collector reader names the file it read', () => {
+  let dir = '';
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'pilotage-obs-gate-'));
+  });
+
+  afterAll(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A throw-away CommonJS module, uniquely named so `require`'s cache cannot alias two cases. */
+  function fixture(name: string, source: string): string {
+    const path = join(dir, `${name}.js`);
+    writeFileSync(path, source, 'utf8');
+    return path;
+  }
+
+  it('T23 — an absent collector artefact names the COLLECTOR, not queue-metrics.js', () => {
+    const result = readCollectorBoundQueues(join(dir, 'nothing-here.js'));
+    expect(result.ok).toBe(false);
+    expect((result as ReaderFailure).reason).toBe('collector-module-absent');
+    expect((result as ReaderFailure).file).toContain('nothing-here.js');
+  });
+
+  it('T23b — a module that throws on require reports the cause AND the error text', () => {
+    const path = fixture('throws-on-require', "throw new Error('collector exploded');\n");
+    const result = readCollectorBoundQueues(path) as ReaderFailure;
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('collector-module-unloadable');
+    expect(result.file).toContain('throws-on-require.js');
+    expect(result.detail).toContain('collector exploded');
+  });
+
+  it('T23c — a module exporting no QueueDepthCollector is its own cause', () => {
+    const path = fixture('no-export', 'module.exports = { somethingElse: 1 };\n');
+    const result = readCollectorBoundQueues(path) as ReaderFailure;
+    expect(result.reason).toBe('collector-export-missing');
+    expect(result.file).toContain('no-export.js');
+  });
+
+  it('T23d — a class with no `self:paramtypes` is its own cause', () => {
+    const path = fixture(
+      'no-paramtypes',
+      'class QueueDepthCollector {}\nmodule.exports = { QueueDepthCollector };\n',
+    );
+    const result = readCollectorBoundQueues(path) as ReaderFailure;
+    expect(result.reason).toBe('collector-paramtypes-missing');
+  });
+
+  it('T23e — injected params carrying no BullQueue_* token is its own cause', () => {
+    // The realistic drift: `@InjectQueue` replaced by a plain constructor
+    // dependency. The drive set would silently become empty, and rule 6 would
+    // compare against nothing.
+    const path = fixture(
+      'no-queue-token',
+      [
+        'class QueueDepthCollector {}',
+        "Reflect.defineMetadata('self:paramtypes', [{ index: 0, param: 'SomeOtherToken' }], QueueDepthCollector);",
+        'module.exports = { QueueDepthCollector };',
+      ].join('\n'),
+    );
+    const result = readCollectorBoundQueues(path) as ReaderFailure;
+    expect(result.reason).toBe('collector-no-queue-token');
+  });
+
+  it('T23f — the happy path returns the injected queue names, in declaration order', () => {
+    const path = fixture(
+      'happy',
+      [
+        'class QueueDepthCollector {}',
+        "Reflect.defineMetadata('self:paramtypes', [",
+        "  { index: 0, param: 'BullQueue_exports' },",
+        "  { index: 1, param: 'BullQueue_notifications-email' },",
+        "  { index: 2, param: 'BullQueue_imports' },",
+        '], QueueDepthCollector);',
+        'module.exports = { QueueDepthCollector };',
+      ].join('\n'),
+    );
+    const result = readCollectorBoundQueues(path);
+    expect(result.ok).toBe(true);
+    expect((result as { ok: true; queues: string[] }).queues).toEqual([
+      'exports',
+      'notifications-email',
+      'imports',
+    ]);
+  });
+
+  it('T23g — the DEFAULT argument is the real collector artefact (DNC-10: a seam, not a flag)', () => {
+    // Driven as an equality rather than asserted over source text, and it holds
+    // whether or not `apps/worker/dist` is present in this environment.
+    expect(readCollectorBoundQueues()).toEqual(
+      readCollectorBoundQueues(join(REPO_ROOT, WORKER_QUEUE_DEPTH_COLLECTOR_MODULE)),
+    );
+  });
+});
+
+/**
+ * S-E02-19 / PF-115 (a) — the caller's half of AC-8: reason → message.
+ *
+ * Every cause must reach the operator naming the file it is about, and an
+ * unrecognised reason must fail CLOSED rather than being treated as a pass.
+ */
+describe('observability gate — an unreadable instrumented set says WHY', () => {
+  it('T24 — a collector-side cause names queue-depth.collector.js, not queue-metrics.js', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = {
+          ok: false,
+          reason: 'collector-module-absent',
+          file: 'apps/worker/dist/shared/observability/queue-depth.collector.js',
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('queue-depth.collector.js');
+    expect(joined).not.toContain('queue-metrics.js');
+    expect(joined).toContain('That is a failure, not a skip');
+  });
+
+  it('T24b — a registry-side cause names metrics.registry.js and quotes the residue', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = {
+          ok: false,
+          reason: 'registry-not-restored',
+          file: 'apps/worker/dist/shared/observability/metrics.registry.js',
+          detail: 'pilotage_queue_depth still carries the driven sentinel 17',
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('metrics.registry.js');
+    expect(joined).toContain('still carries the driven sentinel 17');
+    expect(joined).toContain('every later reader in this process would treat as real');
+  });
+
+  it('T24c — a queue-metrics-side cause still names queue-metrics.js', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = {
+          ok: false,
+          reason: 'driven-write-path-threw',
+          file: 'apps/worker/dist/shared/observability/queue-metrics.js',
+          detail: 'boom',
+        };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('queue-metrics.js');
+    expect(joined).toContain('driving the real write path threw');
+    expect(joined).toContain('boom');
+  });
+
+  it('T24d — an UNRECOGNISED reason fails closed, naming the reason it did not know', () => {
+    // DNC-08 applied to the enum itself. A reason added to a reader and not to
+    // the map must be a red that points at the map, never a silent pass.
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = { ok: false, reason: 'a-cause-nobody-mapped', file: 'x.js' };
+      }),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('a-cause-nobody-mapped');
+    expect(joined).toContain('That is a failure, not a skip');
+  });
+
+  it('T24e — `ok: false` with no reason at all is still a failure', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = { ok: false };
+      }),
+    );
+    expect(problems.join('\n')).toContain('no reason at all');
+    expect(problems.join('\n')).toContain('That is a failure, not a skip');
+  });
+
+  it('T24f — a result whose `declared` is not a list is a failure, not a skip', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = { ok: true, declared: 'exports', rendered: ['exports'] };
+      }),
+    );
+    expect(problems.join('\n')).toContain('That is a failure, not a skip');
+  });
 });
 
 describe('observability gate — helpers behave as the rules assume', () => {
@@ -1122,6 +1778,28 @@ describe('observability gate — helpers behave as the rules assume', () => {
 
     // Unbalanced is REPORTED, never silently treated as "no aggregation".
     expect(sumAggregationArguments('sum by (queue) (pilotage_queue_depth').unbalanced).toBe(true);
+    expect(sumAggregationArguments('sum pilotage_queue_depth').unbalanced).toBe(true);
+  });
+
+  it('T19b — S-E02-19 / AC-7: a `sum` inside a quoted label value is not a token', () => {
+    // It used to be, and — finding no argument after the closing quote — the
+    // reader returned `unbalanced: true`, i.e. a hard PROBLEM on a correct tree.
+    // The returned argument must be the REAL one, quotes and all: the mask is
+    // same-length precisely so the slice below still addresses the original.
+    expect(sumAggregationArguments('sum by (queue) (x_total{job="sum"})')).toEqual({
+      args: ['x_total{job="sum"}'],
+      unbalanced: false,
+    });
+    expect(
+      sumAggregationArguments('sum by (q) (label_replace(x_total, "sum", "$1", "q", "(.*)"))'),
+    ).toEqual({
+      args: ['label_replace(x_total, "sum", "$1", "q", "(.*)")'],
+      unbalanced: false,
+    });
+
+    // And the existing negatives are unchanged — the mask must not have made
+    // the token test looser.
+    expect(sumAggregationArguments('sum_over_time(pilotage_queue_depth[5m])').args).toEqual([]);
     expect(sumAggregationArguments('sum pilotage_queue_depth').unbalanced).toBe(true);
   });
 
