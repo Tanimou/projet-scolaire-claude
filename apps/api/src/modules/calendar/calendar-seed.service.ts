@@ -1,41 +1,9 @@
-import { isIP } from 'node:net';
-
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 import { buildFrenchHolidayPlan, type PlannedHoliday } from './french-holidays';
-
-/** Longueur maximale stockée dans `AuditLog.userAgent` (colonne `String?`). */
-export const MAX_USER_AGENT_LENGTH = 512;
-
-/**
- * Normalise une adresse IP avant qu'elle n'entre dans la transaction.
- *
- * `AuditLog.ipAddress` est une colonne `@db.Inet` : PostgreSQL **rejette** une
- * valeur non-inet (un `X-Forwarded-For` en « a, b, c », par exemple). Comme la
- * ligne d'audit est écrite DANS la même transaction que l'import (gate
- * G-AUDIT), un cast raté ferait rouler en arrière un import parfaitement
- * valide : l'hygiène deviendrait un mode de panne pour l'écriture qu'elle est
- * censée tracer. On assainit donc **avant** d'ouvrir la transaction, et une
- * valeur non-inet devient `null` (une provenance absente, jamais une provenance
- * fausse).
- */
-export function sanitiseInetOrNull(raw: string | undefined | null): string | null {
-  if (typeof raw !== 'string') return null;
-  const candidate = raw.trim();
-  if (candidate.length === 0) return null;
-  return isIP(candidate) === 0 ? null : candidate;
-}
-
-/** Tronque le user-agent ; `null` si absent ou vide. */
-export function truncateUserAgent(raw: string | undefined | null): string | null {
-  if (typeof raw !== 'string') return null;
-  const candidate = raw.trim();
-  if (candidate.length === 0) return null;
-  return candidate.slice(0, MAX_USER_AGENT_LENGTH);
-}
 
 /** Une année scolaire déclarée, réduite à ce dont la résolution a besoin. */
 export interface AcademicYearWindow {

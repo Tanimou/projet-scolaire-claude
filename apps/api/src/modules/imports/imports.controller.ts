@@ -18,6 +18,7 @@ import { ImportMode, ImportType } from '@prisma/client';
 import { IsEnum, IsIn, IsString, MaxLength, MinLength } from 'class-validator';
 import type { Response } from 'express';
 
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -134,9 +135,12 @@ export class ImportsController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
   ) {
     const me = await this.users.ensureUser(jwt);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
     return this.imports.resolveConflict(id, rowId, body.decision, {
       id: me.id,
       tenantId: me.tenantId,
+      actorRole,
+      portal,
     });
   }
 }

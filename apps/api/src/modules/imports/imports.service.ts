@@ -20,6 +20,7 @@ import {
 import { Queue } from 'bullmq';
 import { parse, type ParseResult } from 'papaparse';
 
+import { type AuditActorProvenance } from '../../shared/audit/provenance';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
 import { SchoolContextService } from '../school-structure/school-context.service';
@@ -362,7 +363,7 @@ export class ImportsService {
     batchId: string,
     rowId: string,
     decision: ConflictDecision,
-    actor: { id: string; tenantId: string },
+    actor: { id: string; tenantId: string } & AuditActorProvenance,
   ) {
     const batch = await this.getBatch(batchId, actor.tenantId);
     if (batch.status !== ImportStatus.applied) {
@@ -437,8 +438,8 @@ export class ImportsService {
         data: {
           tenantId: actor.tenantId,
           actorId: actor.id,
-          actorRole: 'school_admin',
-          portal: 'admin',
+          actorRole: actor.actorRole,
+          portal: actor.portal,
           action: 'import.conflict.resolve',
           resourceType: 'import_row',
           resourceId: row.id,

@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
+import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -18,7 +19,6 @@ import { RequiresPermission } from '../../shared/auth/requires-permission.decora
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
-import { deriveAlertActorProvenance } from './alert-provenance';
 import { MeetingRequestStatus } from './alerts.types';
 import { MeetingRequestsService } from './meeting-requests.service';
 

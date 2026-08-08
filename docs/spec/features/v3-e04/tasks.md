@@ -27,7 +27,7 @@
 
 ---
 
-## [ ] S-E04-1 — Shared audit provenance: one home, one decision, one real actor role
+## [x] S-E04-1 — Shared audit provenance: one home, one decision, one real actor role  ·  **shipped 2026-08-08**
 
 | | |
 |---|---|
@@ -85,8 +85,29 @@ weakness was 23 tests that called the service directly while the controller boun
 `super_admin`, `school_admin` and `teacher` JWTs; a single-declaration guard; a negative control proving each
 assertion can go red.
 
-**Out of scope.** Making IP/UA real (`S-E04-3`). Transactionality (`S-E04-6`). The vocabulary (`S-E04-4`). Touching
-the 20 call sites that already derive `actorRole` correctly.
+> **Shipped 2026-08-08.** Evidence in `PROGRESS.md` § `S-E04-1`. Five things this contract said that measurement
+> changed, all recorded there rather than quietly satisfied: (i) **precondition 1** (the authenticated `/admin/audit`
+> render) was **not performed** — it is `S-E04-2`'s headline and needs a running stack, and this contract itself says
+> not to fix the page here; (ii) the derivation existed **four** times, not once — two anonymous inline copies
+> (`analytics.controller`, `grades.controller`) were collapsed too, because AC-1 is unsatisfiable while they live;
+> (iii) `enqueueRebuild` **does** have a JWT on its only call path, so no `system` provenance constant was invented;
+> (iv) the `parent` → `portal: 'admin'` branch of the `grades` ternary is **unreachable** through the handler
+> (`assertCanWrite` refuses a parent), so the collapse removes a **latent** wrong value, not an observed one — the
+> parent-portal correction is proven at `ParentExportsController`, where a parent genuinely acts; and (v) **`AC-1` as
+> written here is FALSE and is narrowed, not ticked.** *"Exactly one file in `apps/api/src` decides an actor role"*
+> fails on three sites this contract's own `M-6` classified as already-correct — `child-claims.service.ts:722-729`
+> parametrises **both** fields (`PF-122`, and it writes `actorRole: 'admin'`, not a realm role),
+> `assessments.controller.ts:290` writes **neither** (`PF-123`), and `packages/imports-core` keeps its literals
+> (`PF-121`). All three are invisible to the new gate by construction. The honest claim is *"the 8 `actorRole` literals
+> and the 9 `portal: 'admin'` write literals are collapsed onto one derivation, plus two anonymous inline copies"*.
+> `S-E04-7` owns the column-level rule that would close it.
+
+**Out of scope.** Making IP/UA real (`S-E04-3`). Transactionality (`S-E04-6`). The vocabulary (`S-E04-4`).
+
+~~Touching the 20 call sites that already derive `actorRole` correctly.~~ **Corrected 2026-08-08:** that count came
+from `M-6`, which measured *literals* and read "takes `actorRole` from an argument" as "derives it from the JWT".
+Three of those sites do not (`PF-121`, `PF-122`, `PF-123`). Struck rather than deleted, because the next slice reads
+this line as settled scope.
 
 ---
 

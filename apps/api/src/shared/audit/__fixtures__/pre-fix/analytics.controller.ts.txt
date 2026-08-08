@@ -15,7 +15,6 @@ import {
   RebuildSnapshotsRequestSchema,
 } from '@pilotage/contracts';
 
-import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -291,18 +290,11 @@ export class AnalyticsController {
     const me = await this.users.ensureUser(jwt);
     const { tenantId } = await this.ctx.forUser(me);
     const parsed = RebuildSnapshotsRequestSchema.parse(body ?? {});
-    // S-E04-1 — one derivation, one home. The inline role-precedence copy that
-    // used to sit here (and the literal `portal: 'admin'` it fed at
-    // `snapshot-ops.service.ts`) are gone: `portal` is now derived from the same
-    // JWT read and threaded down, so a teacher-role rebuild is no longer audited
-    // as an admin-portal action.
-    const { actorRole, portal } = deriveAuditProvenance(jwt);
-    return this.snapshotOps.enqueueRebuild({
-      tenantId,
-      actorId: me.id,
-      actorRole,
-      portal,
-      body: parsed,
-    });
+    const roles = jwt.realm_access?.roles ?? [];
+    const actorRole =
+      ['super_admin', 'school_admin', 'teacher', 'parent'].find((r) => roles.includes(r)) ??
+      roles[0] ??
+      null;
+    return this.snapshotOps.enqueueRebuild({ tenantId, actorId: me.id, actorRole, body: parsed });
   }
 }

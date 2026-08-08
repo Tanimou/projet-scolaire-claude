@@ -29,6 +29,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -204,6 +205,7 @@ export class SubjectsController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
   ) {
     const me = await this.users.ensureUser(jwt);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
     if (!Array.isArray(body.entries) || body.entries.length === 0) {
       throw new BadRequestException('Aucune entrée à enregistrer.');
     }
@@ -224,8 +226,8 @@ export class SubjectsController {
         data: {
           tenantId: me.tenantId,
           actorId: me.id,
-          actorRole: 'school_admin',
-          portal: 'admin',
+          actorRole,
+          portal,
           action: 'coefficient.upsert',
           resourceType: 'subject_coefficient',
           after: { count: body.entries.length },

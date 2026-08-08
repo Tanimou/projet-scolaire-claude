@@ -20,7 +20,12 @@ import { ONEROSTER_MAX_ROWS } from './oneroster.adapter';
 const TENANT = 'tenant-1';
 const OTHER_TENANT = 'tenant-2';
 const SCHOOL = 'school-1';
-const ACTOR = { id: 'admin-up-1', tenantId: TENANT };
+// S-E04-1 — `connect`/`sync`'s actor seam now carries the JWT-derived provenance as
+// NON-OPTIONAL fields, so a caller that forgets it is a compile error rather than a
+// silently wrong attribution. This fixture is the shape the controller builds from
+// `deriveAuditProvenance(jwt)` for an admin caller (same shape as
+// `imports.service.spec.ts`'s).
+const ACTOR = { id: 'admin-up-1', tenantId: TENANT, actorRole: 'school_admin', portal: 'admin' };
 const RAW_CREDENTIAL = 'super-secret-bearer-token-1234567890';
 
 function sourceRow(overrides: Record<string, unknown> = {}) {

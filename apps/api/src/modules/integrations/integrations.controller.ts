@@ -20,6 +20,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -91,7 +92,8 @@ export class IntegrationsController {
   @RequiresPermission('integrations.write')
   async connect(@Body() body: ConnectSourceDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
-    return this.integrations.connect({ id: me.id, tenantId: me.tenantId }, body);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
+    return this.integrations.connect({ id: me.id, tenantId: me.tenantId, actorRole, portal }, body);
   }
 
   @Post(':id/sync')
@@ -104,6 +106,11 @@ export class IntegrationsController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
   ) {
     const me = await this.users.ensureUser(jwt);
-    return this.integrations.sync(id, { id: me.id, tenantId: me.tenantId }, body.bundle);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
+    return this.integrations.sync(
+      id,
+      { id: me.id, tenantId: me.tenantId, actorRole, portal },
+      body.bundle,
+    );
   }
 }

@@ -11,6 +11,7 @@ import {
 import { ImportOrigin, ImportRowStatus, ImportStatus, ImportType, Prisma, RosterSourceKind, RosterSyncStatus } from '@prisma/client';
 
 
+import { type AuditActorProvenance } from '../../shared/audit/provenance';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
@@ -88,7 +89,10 @@ export class IntegrationsService {
    * Connect / list
    * ---------------------------------------------------------------------- */
 
-  async connect(actor: { id: string; tenantId: string }, input: ConnectSourceInput): Promise<RosterSourceDto> {
+  async connect(
+    actor: { id: string; tenantId: string } & AuditActorProvenance,
+    input: ConnectSourceInput,
+  ): Promise<RosterSourceDto> {
     const label = input.label?.trim();
     if (!label) throw new BadRequestException('Un nom de source est requis.');
     if (label.length > 120) throw new BadRequestException('Nom de source trop long (max 120 caractères).');
@@ -159,7 +163,11 @@ export class IntegrationsService {
    * batch (never a half-applied roster). The OneRoster `sourcedId` is the
    * idempotency anchor carried in `externalRef`.
    */
-  async sync(id: string, actor: { id: string; tenantId: string }, bundle: OneRosterBundle): Promise<SyncResult> {
+  async sync(
+    id: string,
+    actor: { id: string; tenantId: string } & AuditActorProvenance,
+    bundle: OneRosterBundle,
+  ): Promise<SyncResult> {
     const source = await this.requireSource(id, actor.tenantId);
 
     if (source.kind === RosterSourceKind.oneroster_rest) {
@@ -627,7 +635,7 @@ export class IntegrationsService {
   }
 
   private async audit(
-    actor: { id: string; tenantId: string },
+    actor: { id: string; tenantId: string } & AuditActorProvenance,
     action: string,
     resourceId: string,
     after: Record<string, unknown>,
@@ -636,8 +644,8 @@ export class IntegrationsService {
       data: {
         tenantId: actor.tenantId,
         actorId: actor.id,
-        actorRole: 'school_admin',
-        portal: 'admin',
+        actorRole: actor.actorRole,
+        portal: actor.portal,
         action,
         resourceType: 'roster_source',
         resourceId,
