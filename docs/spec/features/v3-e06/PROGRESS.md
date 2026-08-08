@@ -10,9 +10,11 @@
 `S-E06-5` raised four follow-ups of its own (`PF-98`…`PF-101`) plus the gate's residual `PF-103`.
 **Next run → a `sprint-02` authoring / `epic-spec` run for `V3-E04`** (audit trail and governance surfaces), whose
 first slice is the shared audit-provenance interceptor `S-E06-6` just prototyped on one handler — and which must open
-with the `trust proxy` decision recorded below. **One item competes with that sequencing and should be read first:
-`PF-102`**, the post-authentication open redirect on all four portal login forms, is pre-existing, `L0`, security, and
-a ~4-line fix plus four negative tests — see the `S-E06-5` "not claimed" rows. *(This header was stale by one slice
+with the `trust proxy` decision recorded below. **`PF-102` no longer competes with that sequencing — it is `CLOSED`
+(2026-08-07, `S-E05-12`, `docs/spec/features/v3-e05/PROGRESS.md`).** The `S-E06-5` "not claimed" row below stays as
+written, because it was true when the slice shipped; note only that its *"~4 lines plus four negative tests"* estimate
+was wrong in one direction — the rule this file recommended was measured and found **exploitable on four inputs**, so
+the fix needed a fifth clause and 37 matrix rows. *(This header was stale by one slice
 until 2026-08-07 — it still pointed at `S-E06-2` after `S-E06-2` had landed in `296c5cd`. Corrected in the `S-E06-3`
 land pass, and named here rather than quietly overwritten. It was stale a second way until the `S-E06-5` land pass: it
 declared `sprint-01` exhausted and `S-E06-5` "never enumerated" while `S-E06-5` was being implemented — corrected

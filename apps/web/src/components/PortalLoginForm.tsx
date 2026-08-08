@@ -14,20 +14,11 @@ import {
   type PortalAccent,
 } from './AuthSplitLayout';
 
+import { PORTAL_LANDING } from '@/lib/portals';
+import { safeCallbackUrl } from '@/lib/safe-callback-url';
+
 const KEYCLOAK_URL = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? 'http://localhost:8180';
 const KEYCLOAK_REALM = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? 'pilotage-scolaire';
-
-/**
- * The default post-login landing per portal. All portals open on their dashboard
- * home; the student portal lands on "Mon objectif" (`/student/dashboard`, the
- * E8-S3 hero). Used only when no explicit `?callbackUrl=` is present.
- */
-const DEFAULT_LANDING: Record<PortalAccent, string> = {
-  admin: '/admin/dashboard',
-  teacher: '/teacher/dashboard',
-  parent: '/parent/dashboard',
-  student: '/student/dashboard',
-};
 
 function buildKeycloakResetUrl(portal: PortalAccent): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3100';
@@ -73,7 +64,14 @@ function PortalLoginFormInner({
 }) {
   const router = useRouter();
   const params = useSearchParams();
-  const callbackUrl = params.get('callbackUrl') ?? DEFAULT_LANDING[accent];
+  // PF-102 / S-E05-12 — `?callbackUrl=` is attacker-controllable, so it is validated
+  // HERE, once, at the read site: the binding below is same-origin by construction at
+  // both sinks (`router.push` on the credentials branch, `signIn(…, { callbackUrl })`
+  // on the SSO one). A per-sink guard would be a rule a third sink can forget.
+  // A rejected value falls back to this portal's landing page, silently and on
+  // purpose — the visitor never authored the parameter, so there is nothing
+  // actionable to tell them, and the code cannot tell "attack" from "malformed".
+  const callbackUrl = safeCallbackUrl(params.get('callbackUrl'), PORTAL_LANDING[accent]);
   const errorParam = params.get('error');
 
   const [email, setEmail] = useState('');
