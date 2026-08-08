@@ -15,3 +15,10 @@ Dockerfile*     text eol=lf
 # ~/.claude/scheduled-tasks/, which are always LF. Without this, a Windows checkout
 # rewrites the mirror to CRLF and the documented drift check reports a false diff.
 docs/daily-improvement-v3/routine/*.md  text eol=lf
+
+# S-E04-1 — the recorded pre-fix sources behind the audit-provenance gate's AC-7
+# negative control. `audit-provenance-gate.spec.ts` pins their sha256, so a Windows
+# checkout that rewrote them to CRLF would change every digest. (The spec also
+# normalises `\r\n` before hashing, so losing this line degrades gracefully rather
+# than going red — belt and braces, because the digest is the tamper signal.)
+apps/api/src/shared/audit/__fixtures__/pre-fix/*.ts.txt  text eol=lf

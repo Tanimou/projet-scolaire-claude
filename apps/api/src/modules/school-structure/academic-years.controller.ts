@@ -16,6 +16,7 @@ import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { AcademicYearStatus, Prisma } from '@prisma/client';
 import { IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
+import { deriveAuditProvenance, type AuditActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -103,7 +104,15 @@ export class AcademicYearsController {
           status,
         },
       });
-      await this.audit(tx, me, 'academic_year.create', created.id, null, { name: body.name, status });
+      await this.audit(
+        tx,
+        me,
+        deriveAuditProvenance(jwt),
+        'academic_year.create',
+        created.id,
+        null,
+        { name: body.name, status },
+      );
       return created;
     });
   }
@@ -138,7 +147,15 @@ export class AcademicYearsController {
           status: body.status ?? undefined,
         },
       });
-      await this.audit(tx, me, 'academic_year.update', id, { name: year.name }, updated);
+      await this.audit(
+        tx,
+        me,
+        deriveAuditProvenance(jwt),
+        'academic_year.update',
+        id,
+        { name: year.name },
+        updated,
+      );
       return updated;
     });
   }
@@ -160,7 +177,15 @@ export class AcademicYearsController {
     }
     await this.prisma.$transaction(async (tx) => {
       await tx.academicYear.delete({ where: { id } });
-      await this.audit(tx, me, 'academic_year.delete', id, { name: year.name }, null);
+      await this.audit(
+        tx,
+        me,
+        deriveAuditProvenance(jwt),
+        'academic_year.delete',
+        id,
+        { name: year.name },
+        null,
+      );
     });
     return { ok: true };
   }
@@ -254,6 +279,7 @@ export class AcademicYearsController {
   private async audit(
     tx: Prisma.TransactionClient,
     me: { id: string; tenantId: string },
+    provenance: AuditActorProvenance,
     action: string,
     resourceId: string,
     before: Prisma.InputJsonValue | null,
@@ -263,8 +289,8 @@ export class AcademicYearsController {
       data: {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole: 'school_admin',
-        portal: 'admin',
+        actorRole: provenance.actorRole,
+        portal: provenance.portal,
         action,
         resourceType: 'academic_year',
         resourceId,

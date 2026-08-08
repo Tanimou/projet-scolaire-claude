@@ -5,14 +5,16 @@ import { BadRequestException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 
-import { deriveAlertActorProvenance } from '../alerts/alert-provenance';
+import {
+  MAX_USER_AGENT_LENGTH,
+  deriveAlertActorProvenance,
+  sanitiseInetOrNull,
+  truncateUserAgent,
+} from '../../shared/audit/provenance';
 
 import {
   CalendarSeedService,
-  MAX_USER_AGENT_LENGTH,
   resolveAcademicYearId,
-  sanitiseInetOrNull,
-  truncateUserAgent,
   type AcademicYearWindow,
 } from './calendar-seed.service';
 import { SeedHolidaysDto } from './calendar.controller';

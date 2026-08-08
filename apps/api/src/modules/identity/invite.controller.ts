@@ -12,6 +12,7 @@ import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { UserStatus } from '@prisma/client';
 import { IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -75,6 +76,7 @@ export class InviteController {
   @ApiOkResponse({ description: 'Invitation envoyée par email' })
   async invite(@Body() body: InviteUserDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
     const email = body.email.toLowerCase();
 
     // 1. Refuse if a Keycloak user already exists with this email
@@ -152,8 +154,8 @@ export class InviteController {
       data: {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole: 'school_admin',
-        portal: 'admin',
+        actorRole,
+        portal,
         action: 'user.invite',
         resourceType: 'user_profile',
         resourceId: profile.id,

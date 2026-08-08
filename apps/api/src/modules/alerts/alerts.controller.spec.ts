@@ -9,7 +9,8 @@ import type { AlertsService } from './alerts.service';
 // Closes the verify-panel merge condition: the controller -> service seam that
 // derives audit provenance from the live JWT (via deriveAlertActorProvenance)
 // and threads it into the lifecycle write had ZERO coverage. The pure mapper
-// (alert-provenance.spec.ts) and the service in isolation (alerts.service.spec.ts)
+// (shared/audit/provenance.spec.ts — moved there by S-E04-1, which deleted this
+// module's alert-provenance.ts) and the service in isolation (alerts.service.spec.ts)
 // were tested, but nothing asserted the controller actually wires them together.
 // A refactor could drop the wiring and every other test would stay green while
 // the append-only audit trail silently recorded the wrong/null actor.

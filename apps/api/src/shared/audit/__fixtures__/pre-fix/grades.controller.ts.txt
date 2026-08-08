@@ -32,7 +32,6 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -330,18 +329,18 @@ export class GradesController {
 
     // Append-only audit, one row per real transition. Best-effort: a write
     // failure is logged and swallowed (never rolls back the flag).
-    // S-E04-1 — this used to be an inline copy of the role precedence PLUS an
-    // inline `portal` ternary that recorded a `parent` actor as having acted in
-    // the `admin` portal. Both are collapsed onto the one shared derivation; the
-    // parent case is CORRECTED (`portal: 'parent'`) and pinned by test T-9.
-    const { actorRole, portal } = deriveAuditProvenance(jwt);
+    const roles = jwt.realm_access?.roles ?? [];
+    const actorRole =
+      ['super_admin', 'school_admin', 'teacher', 'parent'].find((r) => roles.includes(r)) ??
+      roles[0] ??
+      null;
     try {
       await this.prisma.auditLog.create({
         data: {
           tenantId: me.tenantId,
           actorId: me.id,
           actorRole,
-          portal,
+          portal: actorRole === 'teacher' ? 'teacher' : actorRole ? 'admin' : null,
           action: body.flagged ? 'grade.flag' : 'grade.unflag',
           resourceType: 'grade',
           resourceId: grade.id,

@@ -93,9 +93,54 @@ that `docs/daily-improvement-v3/stories/` held only `sprint-01.md` — which `S-
 rather than quietly overwritten, because a ledger claim that the next autonomous run reads at Step 1 is exactly the
 kind of stale truth that makes it re-implement work that already shipped.)*
 
-**Next V3 slice → `S-E02-20`, the `V3-E02` gate-hardening follow-up that closes the two fail-`open` regressions
-`S-E02-19` itself introduced. Then the `V3-E04` `epic-spec` run.** *(`PF-102`, which this pointer used to name second,
-shipped in `S-E05-12` — run 25.)*
+**Next V3 slice → `S-E04-2` — `/admin/audit` measured under authentication, and `/admin/reports` stops being a dead
+link (`V3-E04`, `[web][nav]`, size S).** Its headline is a **measurement**, not a fix: `PF-14` is open in both
+directions and the authenticated render has still never been performed. Read `PF-119` before deciding what to build —
+`/admin/analytics` **exists** with no sidebar entry while the `Rapports` entry two lines away points at a route that
+does not, so "implement `/admin/reports`" may be the wrong half of `AC-5`. `S-E04-3` (real IP/UA) is also **unblocked**
+now that `S-E04-1` has shipped the seam and `ADR-036`.
+
+*(Rewritten 2026-08-08, `S-E04-1` land pass — and this pointer was stale in **two** ways, both named rather than
+quietly overwritten, because the next autonomous run reads this file at Step 1. (i) It named `S-E02-20` as next; that
+row is **struck** twelve lines below, closed by `S-E02-19` itself at run 27's Step 5. (ii) It named the `V3-E04`
+`epic-spec` run as second; that ran at **run 28** — `docs/spec/features/v3-e04/` exists with all eight kit files —
+and run 29 then shipped its **first slice**. A pointer that survives two completed runs is exactly the kind of stale
+truth that makes a routine re-implement shipped work.)*
+
+**V3 slice ledger — `V3-E04` · Audit trail and governance surfaces · layer L0 · `in-progress` (2026-08-08)**
+
+| Slice | State |
+|---|---|
+| **`S-E04-1`** — **shared audit provenance: one home, one decision, one real actor role.** The four helpers moved out of the `calendar` and `alerts` **feature** modules into a new `apps/api/src/shared/audit/`, the originals **deleted with no re-export shim** (a shim is how a second copy survives its own removal), 11 importers repointed. `deriveAuditProvenance(jwt, _req)` is now the single answer to *« qui a agi, et par quel portail ? »* — replacing **8** `actorRole: 'school_admin'` literals, **9** hard-coded `portal: 'admin'` write sites, and **two anonymous inline copies the intake had not measured** (`analytics.controller`, `grades.controller`). That second finding is load-bearing: `AC-1` is unsatisfiable while they live, and a guard stated over the *identifier* passes straight over a copy carrying no name — `S-E06-5`'s recorded lesson arriving early. So `shared/quality/audit-provenance-gate.spec.ts` is stated over the **invariant** (a role-precedence ordering, or an inline role→portal decision, anywhere in `apps/api/src`), and its negative control asserts the same matchers flagged all three pre-fix copies — over **recorded fixtures** (`apps/api/src/shared/audit/__fixtures__/pre-fix/*.ts.txt`, byte-for-byte `git show e218017:<path>`, sha256 pinned in the spec), **not** over `git show HEAD:`. That first form was **green only while the slice was uncommitted**: once committed, `HEAD` *is* the fixed tree, one of the three paths no longer exists there (`git show` exits 128 and throws) and the two survivors return the collapsed sources, so the slice's own proof-of-non-vacuity would have been permanently RED on `main`. Pinning a sha does not fix it either — `ci.yml` checks out at depth 1, so `e218017` is unreachable in the job that runs the api suite. Corrected by this run's gate pass; see `PROGRESS.md`. Two service seams were widened to carry the provenance as **non-optional** fields so a missed caller is a compile error, not a runtime null — **and one caller was missed**: `integrations.service.spec.ts`'s `ACTOR` fixture stayed un-widened across 16 call sites (16 × `TS2345`, caught by the typecheck gate, fixed the same run). The design worked; the recorded run could not see it because its `--testPathPattern` never loaded that file. **Executed, not asserted:** 3 suites / **115 tests green**; then the four collapsed files restored to `HEAD` → **14 red, 101 green**, with the observed output recorded in `PROGRESS.md`. Ships **`ADR-036`** — verified against its seven required items rather than re-authored (`PF-110`), pinning **`N = 2`** (prod: Traefik → nginx → api) and **`N = 0`** (local `--profile app`) with the host Traefik named as *outside this repository and not read*, refusing blanket `X-Forwarded-For` trust **in writing** (a forgeable audit IP is strictly worse than a blank one, because a recorded value is believed), and naming `S-E04-3` as the owner of making IP/UA real. Two ADR additions: `D5` records the shipped signature, `D8` records the unrecognised-role fallback as a *kept* decision. **Two measured corrections to the kit's own documents (`R-30`):** the brief's "`snapshot-ops` may have no JWT in scope" caveat is **falsified** (`enqueueRebuild` has exactly one caller, an HTTP handler with `@CurrentJwt`) so **no `system` provenance constant was invented**; and the `parent → portal 'admin'` defect at `grades.controller` is **latent, not live** — `assertCanWrite` refuses a parent before the write — so `AC-8` is evidenced at `ParentExportsController`, where a parent genuinely acts, and the `grades` parent path is asserted in the **negative** (403 **and** no audit row). **No schema, no migration, no endpoint, no permission, no env var, no flag, no CI stage, no `main.ts` edit** — `G-MIGRATION` does not trigger. Advances **`PF-31`** at the **8 + 9 literal sites**, *not* across the `actor_role` column — see the narrowed claim below; raises **`PF-121`**, **`PF-122`**, **`PF-123`** | ⚠️ **2026-08-08 — this run, needs human review (NOT auto-merged); `pnpm typecheck` **13 successful / 13 total** after the gate pass fixed 16 × `TS2345` in `integrations.service.spec.ts`, the two changed suites **2 passed / 74 tests passed**, `git diff --check` exit 0, `node scripts/production-artefact-check.js` exit 0 — see PROGRESS.md** |
+| `S-E04-2` … `S-E04-8` | `todo` — per-slice contract in `docs/spec/features/v3-e04/tasks.md`, status in its `PROGRESS.md` |
+
+**`PF-31` is closed at the 8 + 9 literal sites — NOT across `apps/api/src`, and not in the monorepo.** This paragraph
+used to read *"`PF-31` is closed in `apps/api/src`"* and `AC-1` used to read *"exactly one file in `apps/api/src`
+decides an actor role"*. The escalation panel falsified both **before** they landed here, so they are narrowed rather
+than ticked. Three residuals, all pre-existing, none a regression, each now registered with an owner:
+
+- **`PF-121`** — `packages/imports-core/src/engine.ts:201-202` and `:292-293` still write `actorRole: 'school_admin'` +
+  `portal: 'admin'`, and they are executed by the worker's import processor — a path with **no JWT anywhere in it**.
+  Correct provenance there needs capture at *enqueue* plus a ruling on what portal a background job acted through,
+  which is design work, not a mechanical collapse. Owner `S-E04-7`.
+- **`PF-122`** — `apps/api/src/modules/child-claims/child-claims.service.ts:722-729` is a **fourth decision site inside
+  the walk root**: `private async audit(…, actor: 'parent' | 'admin' = 'parent')` writes `actorRole: actor` and
+  `portal: actor`, chosen by a default parameter and by the literal `'admin'` at `:522`/`:609`
+  (`guardianship.claim_approved` / `claim_rejected` — two of the most governance-sensitive writes in the product). A
+  `super_admin` approving a claim is audited **`actorRole: 'admin'`, a value that is not a realm role at all**. All
+  four gate matchers pass over it by construction (`HARDCODED_ACTOR_ROLE` is pinned to `school_admin`,
+  `HARDCODED_PORTAL` to a quoted `'admin'` immediately after `portal:`, the precedence matcher needs four role names
+  in one bracket, the portal matcher needs a ternary). Owner `S-E04-7`.
+- **`PF-123`** — `apps/api/src/modules/grades/assessments.controller.ts:290` writes `assessment.publish` with **no
+  `actorRole` and no `portal` key at all** (both `null`): grade publication, the write the whole platform is about,
+  records no actor role. Owner `S-E04-7`.
+
+Read `S-E04-1` as **"the eight `school_admin` literals and the nine `portal: 'admin'` write literals are collapsed onto
+one derivation, and two anonymous inline copies with them"** — never as *"`apps/api` has one derivation"*, and never as
+*"every audit row in the product now names its real actor"*. The durable fix the panel asked for is a `G-2`-adjacent
+rule stated over the **column** rather than over three known literals (every `auditLog.create` must reach
+`actorRole`/`portal` from a `derive*Provenance` call in the same lexical scope); it is `S-E04-7`'s work, with
+`PF-122`/`PF-123` as its positive controls.
 
 *(Rewritten 2026-08-08, `S-E02-19` land pass. This pointer used to name `S-E02-19` itself as upcoming — that is now
 **stale**: `S-E02-19` landed this run and closed `PF-114` + `PF-115`. What replaces it is, for the third run running,
@@ -147,7 +192,11 @@ watched. The second is worse, which is why it outranks the `V3-E04` spec run.)*
    post-login redirect target is same-origin-only on all four portals. Kept as a struck row rather than deleted,
    because a reader who stops at the prose would re-implement a shipped fix. The `DEFAULT_LANDING` duplication the
    old row bundled in is **not** closed — it moves to the `V3-E05` follow-up at candidate 2 below. Owner `V3-E05`.
-2. **`V3-E04` — a `sprint-02` authoring / `epic-spec` run** (audit trail and governance surfaces — `PF-14`, `PF-31`,
+2. ~~**`V3-E04` — a `sprint-02` authoring / `epic-spec` run**~~ — **spent.** The `epic-spec` run landed at run 28
+   (`docs/spec/features/v3-e04/` holds all eight kit files) and `S-E04-1` shipped at run 29; the epic is
+   `in-progress` and its next slice is `S-E04-2` (see the ledger above). Kept as a struck row rather than deleted,
+   because a reader who stops at the prose would re-write a shipped spec-kit. *(Original text follows.)*
+   (audit trail and governance surfaces — `PF-14`, `PF-31`,
    `PF-32`). Still the right *epic* on the file's own sequencing rule (§3: *"`V3-E04` depends on `V3-E02` … and unlocks
    evidence for everything after it"*) — `V3-E02` is `code-complete`, so the dependency is satisfied — and `S-E06-6`
    made the case concrete: it wrote the **first** `AuditLog.ipAddress` in the codebase and derived `actorRole` from the

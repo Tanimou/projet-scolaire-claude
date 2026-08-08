@@ -14,6 +14,7 @@ import {
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -103,6 +104,7 @@ export class RolesController {
   @RequiresPermission('roles.write')
   async create(@Body() body: CreateRoleDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
     // Slug must be unique within the tenant (we don't have a tenant_id on Role yet — Phase 2 will add it)
     const existing = await this.prisma.role.findFirst({ where: { slug: body.slug, schoolId: null } });
     if (existing) throw new BadRequestException(`Un rôle avec le slug '${body.slug}' existe déjà.`);
@@ -132,8 +134,8 @@ export class RolesController {
       data: {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole: 'school_admin',
-        portal: 'admin',
+        actorRole,
+        portal,
         action: 'role.create',
         resourceType: 'role',
         resourceId: role.id,
@@ -156,6 +158,7 @@ export class RolesController {
     if (role.isSystem) throw new ForbiddenException('Les rôles système ne sont pas modifiables');
 
     const me = await this.users.ensureUser(jwt);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.role.update({
@@ -182,8 +185,8 @@ export class RolesController {
       data: {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole: 'school_admin',
-        portal: 'admin',
+        actorRole,
+        portal,
         action: 'role.update',
         resourceType: 'role',
         resourceId: id,
@@ -211,13 +214,14 @@ export class RolesController {
     }
 
     const me = await this.users.ensureUser(jwt);
+    const { actorRole, portal } = deriveAuditProvenance(jwt);
     await this.prisma.role.delete({ where: { id } });
     await this.prisma.auditLog.create({
       data: {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole: 'school_admin',
-        portal: 'admin',
+        actorRole,
+        portal,
         action: 'role.delete',
         resourceType: 'role',
         resourceId: id,

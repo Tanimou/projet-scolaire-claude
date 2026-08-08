@@ -16,6 +16,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AlertRuleCode, AlertStatus } from '@prisma/client';
 
+import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -25,7 +26,6 @@ import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
 
-import { deriveAlertActorProvenance } from './alert-provenance';
 import { AlertsService } from './alerts.service';
 import { EvaluateAlertsDto, RULE_CODES, UpdateAlertRuleDto } from './alerts.types';
 

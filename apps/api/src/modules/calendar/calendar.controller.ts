@@ -29,6 +29,11 @@ import {
   MinLength,
 } from 'class-validator';
 
+import {
+  deriveAlertActorProvenance,
+  sanitiseInetOrNull,
+  truncateUserAgent,
+} from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -36,15 +41,10 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { deriveAlertActorProvenance } from '../alerts/alert-provenance';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
 
-import {
-  CalendarSeedService,
-  sanitiseInetOrNull,
-  truncateUserAgent,
-} from './calendar-seed.service';
+import { CalendarSeedService } from './calendar-seed.service';
 import { MAX_SEED_YEAR, MIN_SEED_YEAR } from './french-holidays';
 
 /**

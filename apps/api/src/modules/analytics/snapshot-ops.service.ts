@@ -93,10 +93,17 @@ export class SnapshotOpsService {
   async enqueueRebuild(args: {
     tenantId: string;
     actorId: string;
+    /** Derived from the caller's JWT (`deriveAuditProvenance`) — never a literal. */
     actorRole: string | null;
+    /**
+     * S-E04-1 — derived alongside `actorRole` from the SAME JWT read at
+     * `analytics.controller.ts`. Non-optional on purpose: a caller that forgets it
+     * is a compile error, not a silently wrong `'admin'` attribution.
+     */
+    portal: string | null;
     body: RebuildSnapshotsRequest;
   }): Promise<RebuildSnapshotsResponse> {
-    const { tenantId, actorId, actorRole, body } = args;
+    const { tenantId, actorId, actorRole, portal, body } = args;
 
     // --- Validate every supplied scope id IN-TENANT (404 on a foreign/unknown id). ---
     await this.assertInTenant(
@@ -193,7 +200,7 @@ export class SnapshotOpsService {
           tenantId,
           actorId,
           actorRole,
-          portal: 'admin',
+          portal,
           action: 'analytics.snapshot_rebuild',
           resourceType: 'snapshot_recompute_trigger',
           resourceId: triggerId,

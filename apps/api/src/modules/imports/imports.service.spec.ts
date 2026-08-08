@@ -23,7 +23,11 @@ import { ImportsService } from './imports.service';
 const TENANT = 'tenant-1';
 const OTHER_TENANT = 'tenant-2';
 const SCHOOL = 'school-1';
-const ACTOR = { id: 'admin-1', tenantId: TENANT };
+// S-E04-1 — `resolveConflict`'s actor seam now carries the JWT-derived
+// provenance as NON-OPTIONAL fields, so a caller that forgets it is a compile
+// error rather than a silently wrong attribution. This fixture is the shape the
+// controller builds from `deriveAuditProvenance(jwt)` for an admin caller.
+const ACTOR = { id: 'admin-1', tenantId: TENANT, actorRole: 'school_admin', portal: 'admin' };
 
 function conflictRow(overrides: Record<string, unknown> = {}) {
   return {
