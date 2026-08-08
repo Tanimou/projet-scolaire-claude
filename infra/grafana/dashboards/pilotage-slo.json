@@ -1,5 +1,5 @@
 {
-  "__comment": "Tableau de bord SLO Pilotage (S-E02-13 / PF-56, étendu au troisième artefact par S-E02-15 / PF-79). Les quatre panneaux sont les quatre signaux dont un SLO a besoin — débit, taux d'erreur, latence p95, vivacité. TOUT regroupement HTTP porte désormais la dimension `app`, et ce n'est pas cosmétique : les trois registres (api, worker, web) publient DÉLIBÉRÉMENT les mêmes noms de métriques — une seule famille de noms, une étiquette qui distingue, sinon chaque panneau devrait être forké — mais sans `by (app, …)` les séries de l'API et celles du rendu SSR de Next se seraient confondues en une seule ligne et le taux de 5xx aurait moyenné deux artefacts. Vert, silencieux, faux : exactement la panne que cette épique passe son temps à trouver, à une adresse de plus. Les expressions ne citent que des métriques réellement enregistrées (apps/api/src/modules/metrics/metrics.registry.ts, apps/worker/src/shared/observability/metrics.registry.ts, apps/web/src/observability/web-observability.js) ; scripts/observability-check.js échoue sur toute métrique qu'aucun des trois registres ne déclare. S-E02-17 ajoute quatre panneaux de files (ids 5-8) : profondeur, échecs réintentables vs terminaux, débit, durée p95. Ils ne portent AUCUN seuil — ni `thresholds.steps`, ni `max`, ni bloc `alert` — parce que ce que « trop profond » ou « trop lent » veut dire est une décision produit que ce slice laisse ouverte (PF-56 reste ouvert pour elle) ; un seuil peint en rouge est un seuil, simplement affirmé en couleur plutôt qu'en YAML. Aucun titre, aucune description et aucune légende ne nomme un mécanisme de mise au rebut des jobs (une file de lettres mortes) : BullMQ n'en a pas — un job qui épuise ses tentatives reste dans l'ensemble `failed` — et le contrôle de cohérence ne lit que les expressions, donc la prose est la seule couche où cette erreur pourrait rentrer sans que rien la voie. La question qu'un tel panneau pose réellement est `outcome=\"failed_terminal\"`. Les légendes n'interpolent que des étiquettes d'un ensemble fermé, jamais `{{__name__}}` ni `{{}}`, qui rendraient TOUTES les étiquettes d'une série sur un tableau de bord non authentifié.",
+  "__comment": "Tableau de bord SLO Pilotage (S-E02-13 / PF-56, étendu au troisième artefact par S-E02-15 / PF-79). Les quatre panneaux sont les quatre signaux dont un SLO a besoin — débit, taux d'erreur, latence p95, vivacité. TOUT regroupement HTTP porte désormais la dimension `app`, et ce n'est pas cosmétique : les trois registres (api, worker, web) publient DÉLIBÉRÉMENT les mêmes noms de métriques — une seule famille de noms, une étiquette qui distingue, sinon chaque panneau devrait être forké — mais sans `by (app, …)` les séries de l'API et celles du rendu SSR de Next se seraient confondues en une seule ligne et le taux de 5xx aurait moyenné deux artefacts. Vert, silencieux, faux : exactement la panne que cette épique passe son temps à trouver, à une adresse de plus. Les expressions ne citent que des métriques réellement enregistrées (apps/api/src/modules/metrics/metrics.registry.ts, apps/worker/src/shared/observability/metrics.registry.ts, apps/web/src/observability/web-observability.js) ; scripts/observability-check.js échoue sur toute métrique qu'aucun des trois registres ne déclare. S-E02-17 ajoute quatre panneaux de files (ids 5-8) : profondeur, échecs réintentables vs terminaux, débit, durée p95. Ils ne portent AUCUN seuil — ni `thresholds.steps`, ni `max`, ni bloc `alert` — parce que ce que « trop profond » ou « trop lent » veut dire est une décision produit que ce slice laisse ouverte (PF-56 reste ouvert pour elle) ; un seuil peint en rouge est un seuil, simplement affirmé en couleur plutôt qu'en YAML. Aucun titre, aucune description et aucune légende ne nomme une file dédiée aux jobs abandonnés : BullMQ n'en a aucune — un job qui épuise ses tentatives reste dans l'ensemble `failed` — et le contrôle de cohérence ne lit que les expressions, donc la prose est la seule couche où cette erreur pourrait rentrer sans que rien la voie. La question qu'un tel panneau pose réellement est `outcome=\"failed_terminal\"`. (Reformulé par S-E02-18 / PF-109 : la phrase précédente employait elle-même le vocabulaire qu'elle interdit, au pluriel, et le garde T17b ne cherchait qu'au singulier.) S-E02-18 ajoute le panneau 9 — jobs bloqués — et met le panneau 5 en `max` : une jauge de ressource partagée n'est pas additive entre répliques, un `rate()` de compteur l'est. Les légendes n'interpolent que des étiquettes d'un ensemble fermé, jamais `{{__name__}}` ni `{{}}`, qui rendraient TOUTES les étiquettes d'une série sur un tableau de bord non authentifié.",
   "uid": "pilotage-slo",
   "title": "Pilotage — SLO",
   "tags": ["pilotage", "slo"],
@@ -76,23 +76,39 @@
       "id": 5,
       "type": "timeseries",
       "title": "Profondeur de file par état",
-      "description": "Publiée par le worker seul : la profondeur est une propriété de la file, pas du process, et deux sources pour un même nombre donnent un graphe qui se contredit (D1). Deux lectures à ne pas confondre. `completed` mesure la RÉTENTION, pas le débit — chaque site d'enqueue pose `removeOnComplete`, donc la série plafonne à la limite de rétention et un plateau n'est pas un blocage ; le débit se lit sur le panneau « Débit des jobs ». Et pendant une panne Redis les séries de profondeur se figent ou disparaissent tandis que les séries de process continuent : cette asymétrie EST le signal de diagnostic, et `pilotage_queue_depth_collection_failures_total` la nomme. Aucun seuil n'est déclaré ici : ce que « trop profond » veut dire est une décision produit, pas un panneau.",
+      "description": "Publiée par le worker seul : la profondeur est une propriété de la file, pas du process, et deux sources pour un même nombre donnent un graphe qui se contredit (D1). Agrégée avec `max` et non avec `sum`, et c'est la même raison une dimension plus loin : chaque réplique du worker publie le MÊME nombre absolu, donc `--scale worker=2` doublerait chaque ligne alors que la file n'a pas bougé. Les compteurs des panneaux voisins restent en `sum` parce qu'un `rate()` de compteur, lui, EST additif entre répliques. Deux lectures à ne pas confondre. `completed` mesure la RÉTENTION, pas le débit — chaque site d'enqueue pose `removeOnComplete`, donc la série plafonne à la limite de rétention et un plateau n'est pas un blocage ; le débit se lit sur le panneau « Débit des jobs ». Et pendant une panne Redis le collecteur dégrade vers des échantillons périmés, jamais vers zéro : sous `max`, la plus grande valeur périmée l'emporte et la ligne se fige au plus haut. C'est précisément pourquoi la seconde série de ce panneau trace `pilotage_queue_depth_collection_failures_total` — la panne que la profondeur ne montre plus est nommée juste à côté, sur l'axe de droite parce que les deux n'ont ni la même unité ni le même ordre de grandeur. Une file dont aucune source n'est branchée se lit sur `pilotage_queue_depth_sources_bound` : son compteur d'échecs de collecte, lui, reste honnêtement à zéro. Aucun seuil n'est déclaré ici : ce que « trop profond » veut dire est une décision produit, pas un panneau.",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (queue, state) (pilotage_queue_depth)",
+          "expr": "max by (queue, state) (pilotage_queue_depth)",
           "legendFormat": "{{queue}} · {{state}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (queue) (rate(pilotage_queue_depth_collection_failures_total[5m]))",
+          "legendFormat": "{{queue}} · échecs de collecte"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*échecs de collecte" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "ops" }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": 6,
       "type": "timeseries",
       "title": "Échecs — réintentables vs terminaux, par file",
-      "description": "`failed_retryable` = BullMQ va rejouer le job ; `failed_terminal` = les tentatives sont épuisées (ou le job a été écarté, ou l'erreur était irrécupérable) et le job reste dans l'ensemble `failed`. C'est la question qu'un opérateur pose réellement, et elle est écrite en toutes lettres dans la légende plutôt que portée par la seule couleur — une distinction encodée uniquement par la couleur ne se lit pas pour ~8 % des astreintes. Cette famille est vide tant qu'aucun job n'a échoué ; la présence des lignes de profondeur au-dessus atteste que le worker est bien scrapé.",
+      "description": "`failed_retryable` = BullMQ va rejouer le job ; `failed_terminal` = les tentatives sont épuisées (ou le job a été écarté, ou l'erreur était irrécupérable) et le job reste dans l'ensemble `failed`. C'est la question qu'un opérateur pose réellement, et elle est écrite en toutes lettres dans la légende plutôt que portée par la seule couleur — une distinction encodée uniquement par la couleur ne se lit pas pour ~8 % des astreintes. Cette famille est vide tant qu'aucun job n'a échoué ; la présence des lignes de profondeur au-dessus atteste que le worker est bien scrapé. Ce panneau ne couvre PAS toutes les façons d'échouer : un job dont le worker est tué n'émet jamais `failed`, il émet `stalled` — troisième forme, tracée sur le panneau « Jobs bloqués », et volontairement pas ici, parce que `outcome` est un ensemble de fins de vie et que l'événement `stalled` n'en affirme aucune.",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
       "targets": [
@@ -135,6 +151,22 @@
         }
       ],
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Jobs bloqués (stalled) par file",
+      "description": "La troisième forme d'échec, et celle que le panneau « Échecs » ne peut pas voir. Mesuré sur bullmq 5.76.8 : `worker.js:659` est le seul `emit('failed')` et il n'est atteint que si le processeur a levé une erreur dans ce process ; un worker tué par l'OOM-killer ou par SIGKILL fait émettre `('stalled', jobId, 'active')` par `worker.js:908`, et le script Lua `moveStalledJobsToWait-8:154-162` bascule même dans l'ensemble `failed` — en n'émettant toujours que `stalled`. Sans cette série, le compteur d'issues reste donc plat à zéro exactement quand le worker est cassé. Deux limites à énoncer plutôt qu'à laisser deviner. D'abord, la série NE distingue PAS un job remis en attente d'un job basculé en échec : sous `maxStalledCount` le job repart et sera recompté plus tard en `completed` ou en `failed`, au-dessus il ne sera jamais compté du tout — ces lignes ne s'additionnent donc pas avec celles du panneau « Échecs », dans un sens ni dans l'autre. Ensuite, elle n'est pas initialisée à zéro : tant qu'aucun blocage n'a eu lieu, il n'y a aucune ligne, et « No data » veut dire ici « ce n'est jamais arrivé » — la profondeur du panneau de gauche reste la preuve que le worker est bien scrapé. Aucun seuil : ce que « trop de blocages » veut dire est une décision produit.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "pilotage-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (queue) (rate(pilotage_queue_stalled_total[5m]))",
+          "legendFormat": "{{queue}} · bloqués (stalled)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
     }
   ]
 }

@@ -74,17 +74,48 @@ codebase** (a hosted stack trace references a file absent from the repository). 
 
 | ADR | Decision | Epic | Blocking |
 |---|---|---|---|
-| **ADR-025** | Tenant enforcement: RLS + application predicate, fail-closed, parameterised GUC | V3-E01 | yes |
-| **ADR-026** | Migration policy: baseline, expand/contract, preflight, no `db push`, seed prohibition | V3-E02 | yes |
-| **ADR-027** | Canonical read projections: versioning, freshness contract, KPI envelope | V3-E03 | yes |
-| **ADR-028** | Audit in-transaction, chain genesis, and the accepted pre-V3 gap | V3-E04 | yes |
+| ~~**ADR-025**~~ → **ADR-032** | Tenant enforcement: RLS + application predicate, fail-closed, parameterised GUC | V3-E01 | yes |
+| ~~**ADR-026**~~ → **ADR-033** | Migration policy: baseline, expand/contract, preflight, no `db push`, seed prohibition | V3-E02 | yes |
+| ~~**ADR-027**~~ → **ADR-034** | Canonical read projections: versioning, freshness contract, KPI envelope | V3-E03 | yes |
+| ~~**ADR-028**~~ → **ADR-035** | Audit in-transaction, chain genesis, and the accepted pre-V3 gap | V3-E04 | yes |
 | **ADR-029** | Branded identifier types across route and service boundaries | V3-E07 | no |
 | **ADR-030** | Audience resolution as a single shared service | V3-E11 | no |
 | **ADR-031** | Finance as an immutable ledger (supersedes the deferral in ADR-018) | V3-E15 | yes, when L3 opens |
 
+**The numbers `ADR-025`…`ADR-028` above are RESERVATIONS that were overtaken, and `docs/adr/` wins.**
+Corrected 2026-08-08 by `S-E02-18` (`PF-110`). This table reserved those four numbers for one decision each; V3
+slices then shipped ADR *files* under the same numbers for **different** decisions:
+
+| Number | What `docs/adr/` actually holds | What this table had reserved |
+|---|---|---|
+| `ADR-025` | An operator drill lives outside the CI gate (`S-E02-…`) | Tenant enforcement: RLS + application predicate → **renumbered `ADR-032`** |
+| `ADR-026` | Compose refuses rather than defaults | Migration policy → **renumbered `ADR-033`** |
+| `ADR-027` | The schema-drift gate needs a database | Canonical read projections → **renumbered `ADR-034`** |
+| `ADR-028` | Queue-owned metrics have exactly one collector (`S-E02-17`) | Audit in-transaction, chain genesis, pre-V3 gap → **renumbered `ADR-035`** |
+
+**The rule that was missing — and its absence, not any one collision, IS the defect `PF-110` records**
+(025/026/027 had already collided with this same table before anybody noticed):
+
+> A number is claimed by the **first file committed under `docs/adr/`**, never by a reservation in a planning
+> document. `docs/adr/` is the register of record; this table is a *wish list*. A shipped ADR is therefore never
+> renumbered — every existing reference to it would silently start pointing at a different decision — and it is the
+> reservation that moves. Before minting a number, run `ls docs/adr/` and take the next free one; before reserving
+> one here, do the same and leave a gap.
+
+Applying it: the four still-unwritten reserved decisions **renumber from `ADR-032`** — tenant enforcement →
+`ADR-032` (V3-E01), migration policy → `ADR-033` (V3-E02), canonical read projections → `ADR-034` (V3-E03), audit
+in-transaction → `ADR-035` (V3-E04). `ADR-029`/`ADR-030`/`ADR-031` keep their numbers: no file has taken them.
+`docs/adr/ADR-028-queue-metrics-single-collector.md` carries a `Numbering` header note pointing back here, and is
+**not** renumbered.
+
 **ADR-002 must be corrected, not deleted.** It currently records multi-tenancy RLS as *Accepted* while zero policies
-exist. Superseding it with ADR-025 and annotating the gap is part of `V3-E01`'s definition of done — otherwise the
-repository keeps lying to its next reader, which is precisely how this situation arose.
+exist. Superseding it with **`ADR-032`** and annotating the gap is part of `V3-E01`'s definition of done — otherwise
+the repository keeps lying to its next reader, which is precisely how this situation arose. *(This sentence read
+"`ADR-025`" until 2026-08-08. Under the precedence rule six lines above, `ADR-025` is the drill decision that is
+already committed under `docs/adr/`, so the sentence pointed `ADR-002`'s supersession at the wrong subject — the
+fourth instance of the collision `PF-110` records, sitting directly beneath the rule written to end it. Corrected by
+`S-E02-18`'s land pass rather than left standing, because a definition-of-done line is exactly what the next
+autonomous run implements from.)*
 
 ## 5. Cross-cutting requirements (apply to every epic)
 

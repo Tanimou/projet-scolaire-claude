@@ -14,6 +14,7 @@ import type { Job } from 'bullmq';
 import {
   observeJobCompleted,
   observeJobFailed,
+  observeJobStalled,
 } from '../../shared/observability/queue-metrics';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
@@ -76,6 +77,16 @@ export class ImportsProcessor extends WorkerHost {
   @OnWorkerEvent('failed')
   onFailed(job: Job<ImportJobPayload> | undefined, error: Error): void {
     observeJobFailed(QUEUE_IMPORTS, job, error);
+  }
+
+  /**
+   * S-E02-18 / PF-104 — `failed` above does not cover a job that fails by
+   * stalling (see `ExportsProcessor.onStalled` and `queue-metrics.ts`). The
+   * bare jobId BullMQ carries is deliberately never labelled.
+   */
+  @OnWorkerEvent('stalled')
+  onStalled(_jobId: string): void {
+    observeJobStalled(QUEUE_IMPORTS);
   }
 
   /**

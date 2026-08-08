@@ -39,10 +39,15 @@ import { registry } from './metrics.registry';
  *
  * Budget de cardinalité, chiffré pour que la prochaine addition soit un choix
  * et non une surprise : profondeur 3 files × 8 états = **24** · échecs de
- * collecte 3 · compteur d'issues 19 couples (file, job) × 3 issues = **57** ·
- * histogramme 19 couples × 12 séries (10 seaux + `_sum` + `_count`) = **228**.
- * Total ≈ **312 séries**. C'est l'histogramme qui grandit : **chaque nouvelle
- * valeur de `NotificationKind` coûte ~12 séries**.
+ * collecte 3 · **sources branchées 3** · **jobs bloqués ≤ 3** · compteur
+ * d'issues 19 couples (file, job) × 3 issues = **57** · histogramme 19 couples
+ * × 12 séries (10 seaux + `_sum` + `_count`) = **228**. Total ≈ **318 séries**.
+ * C'est l'histogramme qui grandit : **chaque nouvelle valeur de
+ * `NotificationKind` coûte ~12 séries**.
+ *
+ * *(Chiffre corrigé par S-E02-18 : il annonçait ≈ 312 et deux familles
+ * `queue`-étiquetées ont été ajoutées depuis. Un budget faux est DNC-06 dans le
+ * fichier qui interdit exactement ça.)*
  *
  * ---------------------------------------------------------------------------
  * PAS DE DLQ — ce n'est pas un oubli (D2 / DNC-06)
@@ -53,6 +58,29 @@ import { registry } from './metrics.registry';
  * l'ensemble `failed`, et un compteur qui sépare un échec **réintentable**
  * d'un échec **terminal** — la question opérationnelle qu'un panneau « DLQ »
  * pose réellement.
+ *
+ * ---------------------------------------------------------------------------
+ * L'ÉVÉNEMENT `failed` NE COUVRE PAS LES JOBS BLOQUÉS (S-E02-18 / PF-104)
+ * ---------------------------------------------------------------------------
+ * Mesuré contre `bullmq@5.76.8` installé, pour que le prochain lecteur n'ait
+ * pas à re-dériver le trou :
+ *
+ *  - `dist/cjs/classes/worker.js:659` est le **seul** `emit('failed', job, err)`
+ *    du worker, et il n'est atteint que depuis `handleFailed`, c'est-à-dire
+ *    quand le processeur a levé une erreur **dans ce process** ;
+ *  - `dist/cjs/classes/worker.js:908` émet `('stalled', jobId, 'active')` pour
+ *    chaque identifiant renvoyé par `moveStalledJobsToWait` ;
+ *  - le script Lua `moveStalledJobsToWait-8` lignes **154-162** déplace un job
+ *    ayant dépassé `maxStalledCount` dans l'ensemble `failed`, avec la raison
+ *    « job stalled more than allowable limit » — et **n'émet toujours que
+ *    `stalled`**.
+ *
+ * Conséquence opérationnelle : un worker tué par l'OOM-killer ou par SIGKILL
+ * laisse le panneau des échecs plat à zéro pendant que
+ * `pilotage_queue_depth{state="failed"}` monte. Un compteur d'échecs à zéro
+ * pendant que le worker est cassé, c'est exactement le graphe vert et faux que
+ * cette épique passe son temps à trouver. D'où `pilotage_queue_stalled_total`
+ * ci-dessous.
  *
  * ---------------------------------------------------------------------------
  * POURQUOI ICI ET PAS DANS L'API (D1 / DNC-01)
@@ -315,8 +343,85 @@ export const queueJobDuration = new Histogram({
   registers: [registry],
 });
 
+/**
+ * Jobs **bloqués** (`stalled`), par file — S-E02-18 / PF-104.
+ *
+ * Une famille SÉPARÉE, et non une quatrième valeur de `outcome` sur
+ * `pilotage_queue_jobs_total`. Deux raisons mesurées, pas une préférence :
+ *
+ *  1. **L'événement ne porte pas de nom de job.** `worker.js:908` émet
+ *     `('stalled', jobId, 'active')` : un identifiant nu, rien d'autre. Le
+ *     ranger sous `outcome` obligerait à inventer une étiquette `job` — donc
+ *     `<other>` pour 100 % des points, une colonne qui ne distingue rien — ou à
+ *     laisser un couple `(queue, job)` vide au milieu d'une famille où il est
+ *     toujours rempli.
+ *  2. **L'événement ne dit pas si le job est terminé.** Sous `maxStalledCount`
+ *     le job repart en `wait` et sera **recompté** plus tard en `completed` ou
+ *     en `failed` ; au-dessus, le Lua le bascule en `failed` et
+ *     `pilotage_queue_jobs_total` ne le verra **jamais**. `outcome` est un
+ *     ensemble de fins de vie ; y ajouter `stalled` affirmerait une terminalité
+ *     que l'événement ne peut pas porter.
+ *
+ * Corollaire à garder en tête en lisant le tableau de bord : cette série n'est
+ * ni un sous-ensemble ni un sur-ensemble de `pilotage_queue_jobs_total` — les
+ * deux ne s'additionnent pas.
+ *
+ * `queue` et **rien d'autre** (G-TENANT) : l'exposition n'est pas
+ * authentifiée, et l'identifiant que l'événement transporte est précisément ce
+ * qu'aucune étiquette ne doit porter — `observeJobStalled` ne le prend donc
+ * même pas en paramètre.
+ *
+ * **Pas** initialisé à zéro, délibérément : une file qui n'a jamais eu de job
+ * bloqué n'a pas de série ici, et « No data » se lit alors comme « ça n'est
+ * jamais arrivé ». Le zéro honnête est porté par la profondeur et par les
+ * compteurs voisins, qui, eux, sont toujours présents.
+ */
+export const queueStalledTotal = new Counter({
+  name: 'pilotage_queue_stalled_total',
+  help: 'Jobs BullMQ signalés « bloqués » (stalled), par file',
+  labelNames: ['queue'] as const,
+  registers: [registry],
+});
+
+/**
+ * Sources de profondeur réellement BRANCHÉES, par file — S-E02-18 / PF-106.
+ *
+ * `1` = une source de profondeur est branchée pour cette file, `0` = non.
+ *
+ * Pourquoi une **jauge** et pas un incrément sur
+ * `pilotage_queue_depth_collection_failures_total` (l'alternative, écartée et
+ * la raison écrite ici parce qu'elle est la première idée qui vient) :
+ *
+ *  - un compteur incrémenté une fois au boot est **plat pour toujours**
+ *    ensuite, donc `rate(...[5m])` — la forme sous laquelle le panneau 5 le
+ *    trace — retombe à zéro en cinq minutes et le manque redevient invisible.
+ *    C'est exactement la panne PF-107 réintroduite ;
+ *  - et il confondrait « jamais branchée » avec « branchée et en panne », deux
+ *    états dont le remède n'est pas le même. Les deux restent distinguables :
+ *    une file non branchée garde `..._collection_failures_total` à **0**.
+ *
+ * Écrite depuis **un seul endroit** — `registerQueueDepthSources`, qui est déjà
+ * le seul point de branchement et le seul qui connaisse le manque (DNC-01). Le
+ * collecteur, lui, ne fait que le **journaliser** ; il ne recalcule rien.
+ *
+ * Initialisée à zéro pour chaque file instrumentée dès l'import : sans aucun
+ * Redis, et sans aucun boot Nest, le manque est déjà lisible.
+ *
+ * *(Le slice l'appelait `pilotage_queue_depth_bound` ; le nom retenu est celui
+ * de la condition C2 de la décision d'architecture — il dit « sources
+ * branchées » plutôt que « profondeur bornée », qui se lisait comme un plafond.)*
+ */
+export const queueDepthSourcesBound = new Gauge({
+  name: 'pilotage_queue_depth_sources_bound',
+  help: 'Sources de profondeur branchées sur le collecteur (1 branchée, 0 non), par file',
+  labelNames: ['queue'] as const,
+  registers: [registry],
+});
+
 // Zéro honnête, dès l'import : voir le commentaire de la métrique ci-dessus.
 for (const queue of INSTRUMENTED_QUEUES) queueDepthCollectionFailures.inc({ queue }, 0);
+// Idem pour les sources branchées : hors boot Nest, la vérité est « aucune ».
+for (const queue of INSTRUMENTED_QUEUES) queueDepthSourcesBound.set({ queue }, 0);
 
 /* ------------------------------------------------------------------ *
  * Issue et durée d'un job
@@ -470,6 +575,27 @@ export function observeJobFailed(
   observeJobOutcome(queue, job, outcome);
 }
 
+/**
+ * Raccourci d'appel pour `@OnWorkerEvent('stalled')` — **la seule
+ * implémentation** de `pilotage_queue_stalled_total` (DNC-01), trois sites
+ * d'appel d'une ligne dans les trois processeurs.
+ *
+ * Elle ne prend **pas** l'identifiant du job, et ce n'est pas un oubli : la
+ * signature est ce qui rend G-TENANT structurel plutôt que simplement respecté.
+ * Un appelant qui voudrait étiqueter par job devrait d'abord changer cette
+ * signature — c'est-à-dire faire un choix visible en revue.
+ *
+ * Totale, comme ses voisines : un throw dans un écouteur d'événement BullMQ est
+ * un rejet non capturé dans le process du worker.
+ */
+export function observeJobStalled(queue: string): void {
+  try {
+    queueStalledTotal.inc({ queue: queueLabel(queue) }, 1);
+  } catch {
+    // Une panne d'instrumentation ne doit jamais dégrader le service.
+  }
+}
+
 function safeClassify(job: JobOutcomeSource, error: unknown): JobOutcome {
   try {
     return classifyFailure(job, error);
@@ -513,12 +639,44 @@ let depthSources: readonly QueueDepthSource[] = [];
  * Branche les files sur le collecteur. **Remplace**, n'empile jamais : appelée
  * deux fois (deux bootstraps dans une même suite de tests), elle est
  * idempotente.
+ *
+ * S-E02-18 : c'est aussi **le seul endroit** qui écrit
+ * `pilotage_queue_depth_sources_bound`. Le filtre ci-dessous laisse tomber en
+ * silence une file dont le `getJobCounts` n'est pas une fonction — un
+ * branchement PARTIEL. Avant ce slice, le seul témoin de ce manque était un
+ * `logger.log` comptant les survivants, que personne ne comparait à
+ * `INSTRUMENTED_QUEUES.length`, pendant que le compteur d'échecs (initialisé à
+ * zéro) rendait la file manquante comme parfaitement saine. La jauge remet la
+ * vérité dans l'exposition.
+ *
+ * `reset()` puis re-semis à zéro : l'idempotence porte donc aussi sur la
+ * jauge — deux appels successifs remplacent, ils n'empilent pas, et une file
+ * débranchée entre deux appels retombe à `0` au lieu de rester à `1`.
  */
 export function registerQueueDepthSources(sources: readonly QueueDepthSource[]): void {
   depthSources = sources.filter(
     (source): source is QueueDepthSource =>
       !!source && typeof source.queue === 'string' && typeof source.getJobCounts === 'function',
   );
+
+  queueDepthSourcesBound.reset();
+  for (const queue of INSTRUMENTED_QUEUES) queueDepthSourcesBound.set({ queue }, 0);
+  // `queueLabel` et non le nom brut : une file hors liste blanche tombe sous
+  // `<other>`, comme partout ailleurs dans ce fichier.
+  for (const source of depthSources) {
+    queueDepthSourcesBound.set({ queue: queueLabel(source.queue) }, 1);
+  }
+}
+
+/**
+ * Les files instrumentées pour lesquelles AUCUNE source n'est branchée.
+ *
+ * Exposée pour que le collecteur puisse les **nommer** dans son journal sans
+ * recalculer le manque une seconde fois (DNC-01 : un manque, une soustraction).
+ */
+export function unboundInstrumentedQueues(): string[] {
+  const bound = new Set(depthSources.map((source) => queueLabel(source.queue)));
+  return INSTRUMENTED_QUEUES.filter((queue) => !bound.has(queue));
 }
 
 /** Nombre de sources branchées — lu par les tests, pas par la production. */

@@ -57,12 +57,14 @@ interface Evaluation {
 const {
   evaluateObservability,
   metricNamesInExpr,
+  sumAggregationArguments,
   serviceListenPort,
   serviceListenPorts,
   splitTarget,
 } = require(SCRIPT_PATH) as {
   evaluateObservability: (input: unknown) => Evaluation;
   metricNamesInExpr: (expr: string) => string[];
+  sumAggregationArguments: (expr: string) => { args: string[]; unbalanced: boolean };
   serviceListenPort: (service: unknown) => number | null;
   serviceListenPorts: (service: unknown) => number[];
   splitTarget: (target: string) => { host: string; port: number } | null;
@@ -162,7 +164,35 @@ function healthyInput(): Record<string, unknown> {
     workerMetricsPath: '/metrics',
     webMetricsPath: '/metrics',
     webRoutes: ['/', '/parent/dashboard', '/admin/dashboard'],
-    exposedMetrics: ['pilotage_http_requests_total', 'pilotage_http_request_duration_seconds'],
+    exposedMetrics: [
+      'pilotage_http_requests_total',
+      'pilotage_http_request_duration_seconds',
+      // The queue families, so check 10's cases below exercise check 10 rather
+      // than tripping check 6 on a fixture gap.
+      'pilotage_queue_depth',
+      'pilotage_queue_depth_collection_failures_total',
+      'pilotage_queue_depth_sources_bound',
+      'pilotage_queue_jobs_total',
+      'pilotage_queue_job_duration_seconds',
+      'pilotage_queue_stalled_total',
+      'nodejs_eventloop_lag_p99_seconds',
+    ],
+    // S-E02-18 — check 10. ADDITIVE beside `exposedMetrics`, which keeps its
+    // `string[]` shape: check 6 does `new Set(exposed || [])` and then
+    // `if (exposedSet.size === 0) break`, so reshaping that field into an object
+    // would have made every dashboard query pass vacuously inside a blocking
+    // stage — a worse defect than the one being fixed, and invisible.
+    exposedMetricTypes: {
+      pilotage_http_requests_total: 'counter',
+      pilotage_http_request_duration_seconds: 'histogram',
+      pilotage_queue_depth: 'gauge',
+      pilotage_queue_depth_collection_failures_total: 'counter',
+      pilotage_queue_depth_sources_bound: 'gauge',
+      pilotage_queue_jobs_total: 'counter',
+      pilotage_queue_job_duration_seconds: 'histogram',
+      pilotage_queue_stalled_total: 'counter',
+      nodejs_eventloop_lag_p99_seconds: 'gauge',
+    },
     nginxConfs: [{ file: 'infra/nginx/conf.d/pilotage.conf', text: '  location /api/ {\n' }],
     // S-E02-17 — check 9. `declared` is the exported INSTRUMENTED_QUEUES
     // constant; `rendered` is the set of queue labels the worker exposition
@@ -222,6 +252,28 @@ function stripJsComments(text: string): string {
       return at === -1 ? line : line.slice(0, at) + ' '.repeat(line.length - at);
     })
     .join('\n');
+}
+
+/**
+ * Does this text name a dedicated abandoned-job queue — a mechanism BullMQ does
+ * not have? (S-E02-18 / PF-109)
+ *
+ * ONE predicate, used by the assertion over the real file AND by the cases that
+ * prove it can fire. Two inlined copies of a regex is DNC-01 at the test layer:
+ * the guard and its proof drift, and the proof keeps passing.
+ *
+ * Matched by STEM, not by five singular literals. The term that actually got
+ * through — « une file de lettres mortes », `pilotage-slo.json:2` — was a French
+ * plural, and every one of the five literals reported false against the file the
+ * guard was inspecting.
+ *
+ * JSON escape sequences are unescaped to whitespace first: inside a JSON string
+ * a newline is the two characters `\` and `n`, which `\s` does not match, so
+ * « lettres\nmortes » would otherwise slip past.
+ */
+function namesAnAbandonedJobQueue(text: string): boolean {
+  const flattened = text.replace(/\\[nrt]/g, ' ');
+  return /dlq|dead[-_ ]letter|lettres?\s+morte|files?\s+morte|mise\s+au\s+rebut/i.test(flattened);
 }
 
 describe('observability gate — the positive path', () => {
@@ -782,8 +834,22 @@ describe('observability gate — every registered queue is instrumented', () => 
       }),
     );
     const joined = problems.join('\n');
-    expect(joined).toContain('really publishes must be the same set');
-    expect(joined).toContain('imports');
+    expect(joined).toContain('survived a driven write path');
+    // S-E02-18 / AC-3: the MISSING set must be NAMED. "declared ≠ rendered" tells
+    // an on-call nothing about which queue to go and wire up.
+    expect(joined).toContain('Declared with NO write path: [imports]');
+  });
+
+  it('T15c2 — a queue that renders but is NOT declared is named on the other side', () => {
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        input.instrumentedQueues = {
+          declared: ['exports', 'notifications-email', 'imports'],
+          rendered: ['exports', 'notifications-email', 'imports', 'alerts-recompute'],
+        };
+      }),
+    );
+    expect(problems.join('\n')).toContain('Rendered but NOT declared: [alerts-recompute]');
   });
 
   it('T15d — a rendered set that is empty FAILS rather than skips', () => {
@@ -842,10 +908,52 @@ describe('observability gate — every registered queue is instrumented', () => 
    */
   it('T17b — no panel names a dead-letter mechanism this system does not have', () => {
     const dashboardPath = join(REPO_ROOT, 'infra', 'grafana', 'dashboards', 'pilotage-slo.json');
-    const raw = readFileSync(dashboardPath, 'utf8').toLowerCase();
-    for (const forbidden of ['dlq', 'dead letter', 'dead-letter', 'lettre morte', 'file morte']) {
-      expect(raw).not.toContain(forbidden);
+    const raw = readFileSync(dashboardPath, 'utf8');
+    // S-E02-18 / PF-109. Asserted against the RAW file, deliberately: the term
+    // that actually slipped through sat in `__comment`, not in a panel field,
+    // and narrowing the scan to panel titles/descriptions/legends would close
+    // the guard on the one place the defect used it.
+    expect(namesAnAbandonedJobQueue(raw)).toBe(false);
+  });
+
+  it('T17b2 — the dead-letter guard can actually FAIL, including on the plural that defeated it', () => {
+    // R-26 / PF-83, mirroring the DNC-10 pair below. The version of this guard
+    // that shipped with S-E02-17 listed five SINGULAR literals, and
+    // `pilotage-slo.json:2` already read « une file de lettres mortes » — so all
+    // five reported false against the very file the guard inspects. A guard
+    // never shown red is a guard we hope works.
+    for (const offender of [
+      'DLQ depth',
+      'dead letter queue',
+      'dead-letter',
+      'dead_letter',
+      'une lettre morte',
+      'une file de lettres mortes',
+      'files mortes',
+      'mise au rebut des jobs',
+    ]) {
+      expect(namesAnAbandonedJobQueue(offender)).toBe(true);
     }
+
+    // …and it must NOT fire on the vocabulary the dashboard legitimately uses,
+    // or the next person to write an honest description deletes the guard.
+    for (const innocent of [
+      'un job qui épuise ses tentatives reste dans l’ensemble `failed`',
+      'aucune file dédiée aux jobs abandonnés',
+      'outcome="failed_terminal"',
+    ]) {
+      expect(namesAnAbandonedJobQueue(innocent)).toBe(false);
+    }
+  });
+
+  it('T17b3 — an offender hiding in __comment fires, which pins the RAW-file scan', () => {
+    // The scan must not be narrowed to panel fields: this synthetic dashboard is
+    // clean everywhere a panel-field scan would look.
+    const synthetic = JSON.stringify({
+      __comment: 'les jobs abandonnés partent dans une file de lettres mortes',
+      panels: [{ title: 'Profondeur de file par état', description: 'rien à signaler' }],
+    });
+    expect(namesAnAbandonedJobQueue(synthetic)).toBe(true);
   });
 
   it('T17c — every queue legend interpolates only closed-set labels', () => {
@@ -868,7 +976,156 @@ describe('observability gate — every registered queue is instrumented', () => 
   });
 });
 
+/**
+ * Check 10 — S-E02-18 / PF-108: a GAUGE aggregated with `sum()`.
+ *
+ * `pilotage-slo.json:85` used to read `sum by (queue, state)
+ * (pilotage_queue_depth)`. Depth is a property of the QUEUE, not of the process,
+ * so every worker replica publishes the same absolute number and
+ * `docker compose up --scale worker=2` doubles every line while the queue is
+ * unchanged. The counters beside it are correct as written, because a counter
+ * `rate()` IS additive across replicas — which is why the rule is stated over
+ * the DECLARED TYPE and not over one metric name.
+ */
+describe('observability gate — a gauge must not be summed across replicas', () => {
+  /** The healthy input with the first panel's targets replaced by one expression. */
+  function withExpr(expr: string): Record<string, unknown> {
+    return withInput((input) => {
+      const dashboards = input.dashboards as { doc: { panels: Record<string, unknown>[] } }[];
+      const panel = at(at(dashboards, 0, 'dashboards').doc.panels, 0, 'panels');
+      panel.title = 'Profondeur de file par état';
+      panel.targets = [{ expr }];
+    });
+  }
+
+  it('T18 — FAILS on the expression that actually shipped, naming metric and panel', () => {
+    const { problems } = evaluateObservability(
+      withExpr('sum by (queue, state) (pilotage_queue_depth)'),
+    );
+    const joined = problems.join('\n');
+    expect(joined).toContain('aggregates the GAUGE "pilotage_queue_depth" with sum()');
+    expect(joined).toContain('Profondeur de file par état');
+    expect(joined).toContain('doubles every line');
+  });
+
+  it('T18b — accepts the correction, `max by (...)`', () => {
+    const { problems } = evaluateObservability(
+      withExpr('max by (queue, state) (pilotage_queue_depth)'),
+    );
+    expect(problems).toEqual([]);
+  });
+
+  it('T18c — accepts a COUNTER whose name is a prefix-superset of the gauge’s', () => {
+    // The false-red this rule would generate if it resolved names by
+    // `startsWith`: `pilotage_queue_depth_collection_failures_total` begins with
+    // `pilotage_queue_depth`, and it is exactly the series AC-5 adds beside it.
+    const { problems } = evaluateObservability(
+      withExpr('sum by (queue) (rate(pilotage_queue_depth_collection_failures_total[5m]))'),
+    );
+    expect(problems).toEqual([]);
+  });
+
+  it('T18d — accepts a bare gauge with no aggregation at all', () => {
+    const { problems } = evaluateObservability(withExpr('nodejs_eventloop_lag_p99_seconds'));
+    expect(problems).toEqual([]);
+  });
+
+  it('T18e — accepts a histogram summed under histogram_quantile', () => {
+    // `_bucket` resolves through `baseMetricName` to a family typed `histogram`,
+    // and the `sum` inside `histogram_quantile` reads a `rate()`, not the gauge.
+    const { problems } = evaluateObservability(
+      withExpr(
+        'histogram_quantile(0.95, sum by (le, queue, job) (rate(pilotage_queue_job_duration_seconds_bucket[5m])))',
+      ),
+    );
+    expect(problems).toEqual([]);
+  });
+
+  it('T18f — FAILS CLOSED when the type map is missing, empty or not a map (DNC-08)', () => {
+    for (const broken of [null, undefined, {}, [], 'gauge']) {
+      const { problems } = evaluateObservability(
+        withInput((input) => {
+          input.exposedMetricTypes = broken;
+        }),
+      );
+      expect(problems.join('\n')).toContain('declared TYPE of each registered metric');
+      expect(problems.join('\n')).toContain('That is a failure, not a skip');
+    }
+  });
+
+  it('T18g — an unscannable sum() is a PROBLEM, not an accepted expression', () => {
+    const { problems } = evaluateObservability(withExpr('sum by (queue) (pilotage_queue_depth'));
+    expect(problems.join('\n')).toContain('cannot scan to a matching parenthesis');
+  });
+
+  it('T18h — check 6 is untouched by the widening: exposedMetrics stays a string[]', () => {
+    // P0-4. Had the type map been folded INTO `exposedMetrics`, check 6's
+    // `new Set(exposed || [])` + `if (size === 0) break` would have accepted
+    // every dashboard query silently, inside a blocking stage.
+    const { problems } = evaluateObservability(
+      withInput((input) => {
+        const dashboards = input.dashboards as { doc: { panels: Record<string, unknown>[] } }[];
+        at(at(dashboards, 0, 'dashboards').doc.panels, 0, 'panels').targets = [
+          { expr: 'rate(pilotage_metric_no_application_will_ever_register_total[5m])' },
+        ];
+      }),
+    );
+    expect(problems.join('\n')).toContain('pilotage_metric_no_application_will_ever_register_total');
+    expect(Array.isArray(healthyInput().exposedMetrics)).toBe(true);
+  });
+
+  it('T18i — the real dashboard aggregates its gauge with max, not sum', () => {
+    // The fixture proves the rule; this proves the repository obeys it.
+    const dashboardPath = join(REPO_ROOT, 'infra', 'grafana', 'dashboards', 'pilotage-slo.json');
+    const dashboard = JSON.parse(readFileSync(dashboardPath, 'utf8')) as {
+      panels: { targets?: { expr?: string }[] }[];
+    };
+    const exprs = dashboard.panels.flatMap((panel) =>
+      (panel.targets ?? []).map((target) => target.expr ?? ''),
+    );
+    expect(exprs).toContain('max by (queue, state) (pilotage_queue_depth)');
+    expect(exprs.some((expr) => /\bsum\s+by\s*\([^)]*\)\s*\(\s*pilotage_queue_depth\s*\)/.test(expr))).toBe(
+      false,
+    );
+    // AC-5: the outage signal panel 5's description names BY NAME is now queried.
+    expect(exprs).toContain(
+      'sum by (queue) (rate(pilotage_queue_depth_collection_failures_total[5m]))',
+    );
+    // AC-4: the stalled series is plotted, and it is NOT a fourth `outcome`.
+    expect(exprs).toContain('sum by (queue) (rate(pilotage_queue_stalled_total[5m]))');
+    expect(exprs.join('\n')).not.toContain('outcome=~"stalled');
+  });
+});
+
 describe('observability gate — helpers behave as the rules assume', () => {
+  it('T19 — sumAggregationArguments returns the DIRECT argument of each sum', () => {
+    expect(sumAggregationArguments('sum by (queue, state) (pilotage_queue_depth)')).toEqual({
+      args: ['pilotage_queue_depth'],
+      unbalanced: false,
+    });
+    expect(
+      sumAggregationArguments('sum without (app) (rate(pilotage_http_requests_total[5m]))').args,
+    ).toEqual(['rate(pilotage_http_requests_total[5m])']);
+    expect(sumAggregationArguments('sum(rate(x_total[5m]))').args).toEqual(['rate(x_total[5m])']);
+
+    // `sum_over_time` and a trailing `_sum` are NOT aggregations — a token test,
+    // not a substring test, or every histogram `_sum` series would false-red.
+    expect(sumAggregationArguments('sum_over_time(pilotage_queue_depth[5m])').args).toEqual([]);
+    expect(sumAggregationArguments('pilotage_http_request_duration_seconds_sum').args).toEqual([]);
+
+    // Two sums in one expression, each scanned independently.
+    expect(
+      sumAggregationArguments(
+        'sum by (app) (rate(a_total[5m])) / clamp_min(sum by (app) (rate(b_total[5m])), 0.001)',
+      ).args,
+    ).toEqual(['rate(a_total[5m])', 'rate(b_total[5m])']);
+
+    // Unbalanced is REPORTED, never silently treated as "no aggregation".
+    expect(sumAggregationArguments('sum by (queue) (pilotage_queue_depth').unbalanced).toBe(true);
+    expect(sumAggregationArguments('sum pilotage_queue_depth').unbalanced).toBe(true);
+  });
+
+
   it('reads the listening port from the environment, not from the host-side mapping', () => {
     // The two differ routinely: the worker publishes 4001 on loopback only.
     expect(serviceListenPort({ environment: { PORT: '4000' }, ports: ['8080:4000'] })).toBe(4000);
@@ -935,6 +1192,14 @@ describe('observability gate — the gate stays connected', () => {
    * (`boot-gate.spec.ts`). So it now runs over comment-stripped content, using
    * the same discipline as that file — assert against what the runtime
    * EXECUTES, not what the file says.
+   *
+   * S-E02-18 note on coverage, so nobody has to re-derive it: this assertion is
+   * PATTERN-based, so it already covers the rules that slice added — check 10
+   * (a gauge aggregated with `sum()`) and the rewritten rule 6 of check 9 — and
+   * neither of them may grow a `SKIP_*` / `ALLOW_*` / `FORCE` / `CI` /
+   * `NODE_ENV` seam. Neither takes a CLI flag or an env var either: the seams
+   * they needed are function exports (`sumAggregationArguments`,
+   * `registerQueueDepthSources`, `observeJobCompleted`).
    */
   it('has no bypass flag — DNC-10', () => {
     const executable = stripJsComments(readFileSync(SCRIPT_PATH, 'utf8'));

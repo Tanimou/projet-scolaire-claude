@@ -31,7 +31,7 @@ track (`V3-E01` … `V3-E11`, layered L0→L4) — **not** from the E1–E12 fea
 cancelled**; every entry in it stays accurate as of E11. Do **not** read its "E12 finance is next" tail as the routine's
 next pick: it is not.
 
-**V3 slice ledger — `V3-E02` · Versioned database lifecycle and release integrity · layer L0 · `code-complete` (2026-08-07)**
+**V3 slice ledger — `V3-E02` · Versioned database lifecycle and release integrity · layer L0 · `code-complete` (2026-08-08)**
 
 | Slice | State |
 |---|---|
@@ -40,6 +40,7 @@ next pick: it is not.
 | **`S-E02-3`** — the **timed backup → restore rehearsal**, **executed against the LOCAL Docker stack**, not asserted: `scripts/restore-drill.js` dumps the seeded database, restores it into a name-guarded scratch database and verifies row counts **and** per-table `md5(row::text)` checksums **and** schema, against the reviewed `scripts/restore-drill-baseline.json`; six verdicts driven against the real database, `--update` proven to **refuse** a failed run; `docs/runbooks/backup-restore-drill.md` + `ADR-025` (the drill is deliberately **not** a `ci-gate.sh` stage, and the guard spec asserts that absence in the negative). Also carries the **`PF-84`** guard — `.dockerignore` excluded `infra/docker`, so the safe migrator's entrypoint was absent from **every** `Dockerfile.api` build and it had never once started. Closes **`VAL-03`** (local half) + **`PF-84`**; records **`PF-86`** | ✅ 2026-08-07 |
 | **`S-E02-5`** — the **migration ledger must reproduce `schema.prisma`**, and something now says so. `scripts/schema-drift-check.js` creates a disposable scratch database in a real PostgreSQL, runs `prisma migrate deploy` into it, diffs **that database** against the datamodel, and drops it on every exit path — wired as stage **0d** of `scripts/ci-gate.sh` (before `prisma generate`, outside the `--quick` guard) **and** as a step of `ci.yml`'s `build` job, the only one with a `postgres:15-alpine` service. Executed, not asserted: **PASS / exit 0 / 55 tables** on the unmodified repository; **exit 2 naming the drifted object** against a temp copy of the datamodel; **exit 1** on a migration whose SQL does not execute; **exit 1 naming all three routes tried** against a dead address, unchanged with every plausible bypass variable set. `--from-migrations` was measured and **rejected** (permanently red on a correct repository) and its absence is pinned by test. Ships **`ADR-027`** — this is `ci-gate.sh`'s first service-dependent stage, which narrows `ADR-025 D1`. Closes the **`PF-03`** residual | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
 | **`S-E02-17`** — **the queue third of `PF-56`: BullMQ stops being invisible, and a gate observes it.** The worker registry carried `collectDefaultMetrics` and nothing else, and its own header said so. It now publishes `pilotage_queue_depth{queue,state}` (**eight** BullMQ states, not the six the story named — measured: a job added with `priority` lands in `prioritized` and never in `waiting`, so a six-state gauge reads **0 on a backlogged queue**), `pilotage_queue_jobs_total{queue,job,outcome}` with **retryable vs terminal** split by a predicate mirroring BullMQ's own `shouldRetryJob` (`discard()` and `UnrecoverableError` included — arithmetic alone would promise a retry that never comes), `pilotage_queue_job_duration_seconds{queue,job}`, and `pilotage_queue_depth_collection_failures_total{queue}` so a Redis outage cannot render as a healthy system. **No dead-letter series**, because BullMQ has none (`DNC-06`); depth is collected in the **worker only** (`DNC-01`, asserted in the negative on the API exposition). Labels come from a build-time **whitelist**, not a sanitiser — a cuid survives any character-class filter — proven by driving a real payload carrying `tenantId`, `exportJobId` and a cuid, **with a cuid as the job name**, and finding none of them in the rendered exposition. **The durable half is check 9**: `instrumented ≡ registered`, both directions, plus api-side ≠ worker-side named per queue — the first thing that ever compares the two queue-name constant blocks, read as the **resolved** `BullQueue_*` registration off the built modules, so **neither `queue.module.ts` nor `packages/contracts` was edited** (`PF-80` avoided). Executed, not asserted: prom-client measured to **reject** on a throwing `collect()` (→ 500 through `version-server.ts`) and to **hang** on a never-settling one, both then driven through the real `node:http` socket → **200 with a body**; every negative shown able to fail (whitelist removed → G-TENANT red, deadline removed → both hang cases time out, check 9 removed → 11/11 red). Ships **`ADR-028`** — `registry.metrics()` may now perform I/O, and every future collector inherits a five-rule contract. **`PF-56` stays open** for the alert-rules / SLO-threshold decision, which is a product call. Raises **`PF-104`**…**`PF-110`**, registered by this land pass: a job that fails by **stalling** reaches no counter, check 9's rule 6 is a **tautology**, the six new `@OnWorkerEvent` handlers are executed by **no test**, the failure counter panel 5's own description names is **plotted nowhere**, a gauge is `sum`-med across replicas, a `DNC-06` guard is defeated by a French plural **in the file it inspects**, and `ADR-028` takes a number `architecture-impact.md` §4 had reserved for `V3-E04` | ⚠️ **2026-08-07 — this run, needs human review (NOT auto-merged)** |
+| **`S-E02-18`** — **the gate `S-E02-17` made blocking is now able to fail, its wiring is executed, and the dashboard stops under-reporting.** Closes the seven findings that slice's own verify panel raised *inside the mechanism it had just made blocking*. `PF-106`: a new `queue-depth.collector.spec.ts` (427 lines) executes the wiring instead of the helpers — the three `@OnWorkerEvent('stalled')` handlers are called **off the real processor prototypes** with a cuid jobId and a `tenantId`-bearing receiver, and `ObservabilityModule`'s resolved Nest `imports` metadata is read, so a dropped module or a drifted `@InjectQueue` token stops shipping green. `PF-105`: rule 6 stops being `A ≡ A` — `rendered` is now the **intersection** of `pilotage_queue_depth` ∩ `pilotage_queue_jobs_total` (neither zero-seeded), driven from the queue set read off the **collector's own resolved `self:paramtypes`** rather than off `INSTRUMENTED_QUEUES`, which is the independence that makes the comparison real. `PF-104`: `pilotage_queue_stalled_total{queue}` — a separate family, **not** a fourth `outcome`, because BullMQ's `stalled` event hands the listener a bare `jobId` and asserts no terminality; `observeJobStalled(queue)` has **arity 1**, so labelling by job id is unrepresentable rather than merely discouraged. `PF-107`/`PF-108`: a new panel 9 plots the stalled series, and every gauge query moved `sum by` → `max by` (depth is a property of the queue, so `--scale worker=2` used to double every line) — enforced by a **new blocking check 10** stated over the declared `# TYPE`, so it catches the class rather than the one line. `PF-109`: the `DNC-06` French-plural hole closed **with** a companion case proving the guard can go red. `PF-110`: `ADR-028` keeps its number, the *reservations* move to `ADR-032`…`035`, and a **written precedence rule** now says `docs/adr/` is the register of record. Also `PF-112` — the `PF-104` id collision, renumbered. Adds `pilotage_queue_depth_sources_bound{queue}` (renamed from the story's `pilotage_queue_depth_bound`) so a depth source that silently fails to bind is visible. **No schema, no endpoint, no permission, no contract, no `queue.module.ts` edit, no new CI stage/flag/env var** — both new rules land inside existing checks. **`PF-56` still does not close** (SLO thresholds are a product call) | ⚠️ **2026-08-08 — this run, needs human review (NOT auto-merged); typecheck 13/13 green, `scripts/observability-check.js` RED against a stale `apps/worker/dist` — see PROGRESS.md** |
 
 **Corrected 2026-08-07 (`S-E02-17` landed).** The table above used to stop at `S-E02-15`/`S-E02-3`/`S-E02-5`, the
 paragraph below called `S-E02-15` "the last *enumerated* slice", and the "Next V3 slice" pointer named `PF-102` or a
@@ -91,30 +92,32 @@ that `docs/daily-improvement-v3/stories/` held only `sprint-01.md` — which `S-
 rather than quietly overwritten, because a ledger claim that the next autonomous run reads at Step 1 is exactly the
 kind of stale truth that makes it re-implement work that already shipped.)*
 
-**Next V3 slice → `S-E02-18`, a `V3-E02` follow-up that closes what `S-E02-17` itself raised. Then `PF-102`.**
+**Next V3 slice → `S-E02-19`, the `V3-E02` gate-hardening follow-up that closes what `S-E02-18` itself raised. Then the
+`V3-E04` `epic-spec` run.** *(`PF-102`, which this pointer used to name second, shipped in `S-E05-12` — run 25.)*
 
-*(Rewritten 2026-08-07, `S-E02-17` land pass. This pointer used to open "none is enumerated in this epic, and there are
-two candidates" — true of `sprint-01` again now that `S-E02-17` has landed, but no longer the whole picture: that slice
-queued **seven** findings, three of which are defects **inside the gate it just made blocking**, and a gate that cannot
-fail is the one thing this programme has had to re-close four times. It goes first, ahead of `PF-102`, because
-`PF-105`/`PF-106` mean the freshly-landed check 9 currently passes on a queue nobody instruments.)*
+*(Rewritten 2026-08-08, `S-E02-18` land pass. This pointer used to name `S-E02-18` itself as upcoming — that is now
+**stale**: `S-E02-18` landed this run and closed `PF-104`…`PF-110` + `PF-112`. `PF-102` was closed separately by
+`S-E05-12`. What replaces it is not a new epic but the residual `S-E02-18` itself queued, and the reason is unchanged
+from last run's: three of the defects fixed this run were **inside a blocking CI stage**, and this run's verify panel
+found two more of exactly that shape in the code written to close them. A gate that goes falsely **red** teaches people
+to skip it, which the script's own header says; that is the same injury as a gate that cannot go red.)*
 
-0. **`S-E02-18` — make `S-E02-17`'s own gate able to fail, `L0`, ~1 spec file + ~15 lines + 2 dashboard targets.**
-   `PF-106` first: no test anywhere executes the six new `@OnWorkerEvent` handlers or
-   `QueueDepthCollector.onModuleInit`, so a swapped queue constant or a dropped `ObservabilityModule` ships green and
-   panels 6–8 render "No data" for ever — indistinguishable from an idle system. `PF-105` next: check 9's rule 6
-   compares `INSTRUMENTED_QUEUES` against labels rendered *from* `INSTRUMENTED_QUEUES`, so `declared ≡ rendered`
-   reduces to `A ≡ A`. Then `PF-104` (a job killed mid-execution emits `stalled`, never `failed`, so the terminal-failure
-   series under-reports exactly when the worker is broken) and the two dashboard rows `PF-107`/`PF-108`. All five are in
-   or under a **blocking** CI stage and a live SLO dashboard. Owner `V3-E02` *(follow-up)*.
-1. **`PF-102` — a post-authentication open redirect, `L0`, security, ~4 lines + four negative tests.**
-   `apps/web/src/components/PortalLoginForm.tsx:76` reads `callbackUrl` off the query string with **no same-origin
-   validation** and `:125` hands it to `router.push`, so `/parent/login?callbackUrl=https://evil.example/` shows the
-   genuine login page, authenticates the parent **for real**, then lands them off-site — on a platform whose users are
-   parents of minors. Pre-existing and outside the `S-E06-5` diff, but `S-E06-5` adds three new public, indexable entry
-   points into that flow, so the reachable surface grew this run. The same file also holds the fifth surviving copy of
-   the four portal landing paths (`DEFAULT_LANDING`), which the new `PORTAL_LANDING` guard cannot see because it
-   measures the *identifier*, not the invariant — so one small slice closes both. Owner `V3-E05`.
+0. **`S-E02-19` — `scripts/observability-check.js` stops false-redding, and its two new readers get coverage, `L0`,
+   ~15 lines + ~3 test cases.** Three items, all latent today, all inside the **blocking** stage 9 this programme has
+   now hardened twice. (a) `sumAggregationArguments()` scans the **raw** expression, so a `sum` token inside a quoted
+   label value (`x{job="sum"}`, `label_replace(…, "sum", …)`) returns `unbalanced: true` → a hard PROBLEM on a correct
+   tree; the sibling `metricNamesInExpr()` in the same file already blanks quoted spans, so the fix is to apply the
+   discipline consistently. (b) Check 10 rejects the canonical replica-de-duplication idiom
+   `sum by (queue) (max by (queue, state) (pilotage_queue_depth))` — the *correct* expression, and the one check 10's
+   own message recommends. (c) `readCollectorBoundQueues()` and `readInstrumentedQueues()` have **no test**:
+   the first `return null`s on six distinct causes that all collapse into one message naming the **wrong file**
+   (`queue-metrics.js`, when the unreadable file is `queue-depth.collector.js`); the second **writes to the shared
+   prom-client registry** and restores it in a `finally` that nothing asserts — a leak there fabricates queue traffic
+   every later reader in the process treats as real. Owner `V3-E02` *(follow-up)*.
+1. ~~**`PF-102` — a post-authentication open redirect**~~ — **closed by `S-E05-12` (run 25, `9f5085b`)**: the
+   post-login redirect target is same-origin-only on all four portals. Kept as a struck row rather than deleted,
+   because a reader who stops at the prose would re-implement a shipped fix. The `DEFAULT_LANDING` duplication the
+   old row bundled in is **not** closed — it moves to the `V3-E05` follow-up at candidate 2 below. Owner `V3-E05`.
 2. **`V3-E04` — a `sprint-02` authoring / `epic-spec` run** (audit trail and governance surfaces — `PF-14`, `PF-31`,
    `PF-32`). Still the right *epic* on the file's own sequencing rule (§3: *"`V3-E04` depends on `V3-E02` … and unlocks
    evidence for everything after it"*) — `V3-E02` is `code-complete`, so the dependency is satisfied — and `S-E06-6`

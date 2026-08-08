@@ -6,6 +6,7 @@ import type { Job } from 'bullmq';
 import {
   observeJobCompleted,
   observeJobFailed,
+  observeJobStalled,
 } from '../../shared/observability/queue-metrics';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_EXPORTS } from '../../shared/queue/queue.module';
@@ -148,5 +149,23 @@ export class ExportsProcessor extends WorkerHost {
   @OnWorkerEvent('failed')
   onFailed(job: Job<ExportJobPayload> | undefined, error: Error): void {
     observeJobFailed(QUEUE_EXPORTS, job, error);
+  }
+
+  /**
+   * S-E02-18 / PF-104 — a job that fails by STALLING never reaches `failed`.
+   *
+   * `failed` above is emitted only when this process threw
+   * (`bullmq@5.76.8 worker.js:659`, reached from `handleFailed`). An
+   * OOM-killed or SIGKILLed worker emits `stalled` instead — including the
+   * case where the Lua script moves the job into the `failed` SET past
+   * `maxStalledCount`. Rationale and citations: `queue-metrics.ts`.
+   *
+   * The parameter is the bare jobId BullMQ carries; it is deliberately unused
+   * (`_`), and `observeJobStalled` cannot accept it — the exposition is
+   * unauthenticated.
+   */
+  @OnWorkerEvent('stalled')
+  onStalled(_jobId: string): void {
+    observeJobStalled(QUEUE_EXPORTS);
   }
 }
