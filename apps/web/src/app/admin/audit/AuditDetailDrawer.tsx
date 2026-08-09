@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { AuditProvenance } from './AuditProvenance';
 import { VocabularyMarker } from './VocabularyMarker';
 import {
+  auditActionTone,
   auditVocabularyExplanation,
   classifyAuditAction,
   classifyAuditResourceType,
@@ -37,15 +38,17 @@ interface AuditDetailDrawerProps {
   onClose: () => void;
 }
 
-function pickActionTone(action: string): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
-  const a = action.toLowerCase();
-  if (a.includes('création') || a.includes('publish') || a.includes('approve') || a.includes('create'))
-    return 'success';
-  if (a.includes('suppression') || a.includes('delete') || a.includes('reject')) return 'danger';
-  if (a.includes('révision') || a.includes('update') || a.includes('mise à jour')) return 'warning';
-  if (a.includes('export')) return 'info';
-  return 'neutral';
-}
+/*
+ * `pickActionTone` vivait aussi **ici** — une cinquième table de vocabulaire,
+ * identique à celle de `AuditTable.tsx` et affectée du même défaut : elle
+ * peignait `coefficient.upsert` et `grade.unflag` en `neutral` alors que la
+ * carte « Modifications critiques » les compte. Elle est supprimée au profit de
+ * `auditActionTone()` de `@pilotage/contracts` (PF-134).
+ *
+ * Le tiroir devait de toute façon suivre : deux teintes différentes pour la
+ * même ligne selon qu'on la lit dans le tableau ou dans son détail aurait été
+ * une incohérence **créée** par la correction.
+ */
 
 function formatJson(value: unknown): string {
   if (value === null || value === undefined) return '—';
@@ -88,7 +91,7 @@ export function AuditDetailDrawer({ entry, onClose }: AuditDetailDrawerProps) {
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge
             label={action.label}
-            tone={pickActionTone(entry.action)}
+            tone={auditActionTone(entry.action)}
             size="sm"
             withDot
           />

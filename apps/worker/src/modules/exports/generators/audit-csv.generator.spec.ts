@@ -1,6 +1,8 @@
 import {
+  UnknownTimezoneError,
   classifyAuditAction,
   classifyAuditResourceType,
+  resolveAuditWindow,
 } from '@pilotage/contracts';
 
 import { generateAuditCsv, weakerVocabulary } from './audit-csv.generator';
@@ -70,18 +72,33 @@ const ROWS: Row[] = [
   },
 ];
 
-function makeArgs(rows: Row[] = ROWS): {
+/** The tenant's reporting zone, as `Tenant.timezone` carries it (S-E04-5). */
+const TENANT_ZONE = 'Europe/Paris';
+
+function makeArgs(
+  rows: Row[] = ROWS,
+  opts: { parameters?: Record<string, unknown>; timezone?: string | null } = {},
+): {
   args: Parameters<typeof generateAuditCsv>[0];
   findMany: jest.Mock;
+  tenantFindUnique: jest.Mock;
 } {
   const findMany = jest.fn().mockResolvedValue(rows);
+  const timezone = opts.timezone === undefined ? TENANT_ZONE : opts.timezone;
+  const tenantFindUnique = jest
+    .fn()
+    .mockResolvedValue(timezone === null ? null : { timezone });
   return {
     findMany,
+    tenantFindUnique,
     args: {
-      prisma: { auditLog: { findMany } } as never,
+      prisma: {
+        auditLog: { findMany },
+        tenant: { findUnique: tenantFindUnique },
+      } as never,
       tenantId: TENANT,
       schoolId: null,
-      parameters: {},
+      parameters: opts.parameters ?? {},
     },
   };
 }
@@ -202,6 +219,108 @@ describe('generateAuditCsv — the DPO export reads the one declaration', () => 
     const { lines } = await csvLines([]);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('action_label');
+  });
+});
+
+/* ================================================================== *
+ * S-E04-5 — the CSV and the screen answer the SAME filter
+ * ================================================================== */
+
+describe('generateAuditCsv — the day boundary is the tenant’s, and it is shared', () => {
+  it('the `to` day is INCLUDED: an exclusive `lt` at midnight of the next Paris day', async () => {
+    const { args, findMany } = makeArgs(ROWS, { parameters: { to: '2026-08-08' } });
+    await generateAuditCsv(args);
+    const where = findMany.mock.calls[0]![0].where;
+    // Paris is UTC+2 on 8 August → the day ends at 2026-08-08T22:00:00Z.
+    expect(where.createdAt.lt.toISOString()).toBe('2026-08-08T22:00:00.000Z');
+    // The bound that shipped before was `lte: new Date('2026-08-08')`, i.e.
+    // T00:00:00Z — the whole selected day missing from a regulator's file while
+    // the table above it showed the rows. Pinned so it cannot come back.
+    expect(where.createdAt.lte).toBeUndefined();
+    expect(where.createdAt.lt.toISOString()).not.toBe('2026-08-08T00:00:00.000Z');
+  });
+
+  it('the `from` day starts at Paris midnight, not UTC midnight', async () => {
+    const { args, findMany } = makeArgs(ROWS, { parameters: { from: '2026-08-08' } });
+    await generateAuditCsv(args);
+    const where = findMany.mock.calls[0]![0].where;
+    expect(where.createdAt.gte.toISOString()).toBe('2026-08-07T22:00:00.000Z');
+  });
+
+  it('P0-5 — the worker resolves the SAME window the API resolves, from the same helper', async () => {
+    const { args, findMany } = makeArgs(ROWS, {
+      parameters: { from: '2026-08-01', to: '2026-08-09' },
+    });
+    await generateAuditCsv(args);
+    const where = findMany.mock.calls[0]![0].where;
+    const expected = resolveAuditWindow('2026-08-01', '2026-08-09', TENANT_ZONE);
+    expect(where.createdAt.gte.toISOString()).toBe(expected.gte!.toISOString());
+    expect(where.createdAt.lt.toISOString()).toBe(expected.lt!.toISOString());
+  });
+
+  it('an ISO datetime is read as its day — the export button may post either shape', async () => {
+    const { args, findMany } = makeArgs(ROWS, {
+      parameters: { to: '2026-08-08T14:00:00.000Z' },
+    });
+    await generateAuditCsv(args);
+    expect(findMany.mock.calls[0]![0].where.createdAt.lt.toISOString()).toBe(
+      '2026-08-08T22:00:00.000Z',
+    );
+  });
+
+  it('the zone comes from the tenant row, never from the export parameters', async () => {
+    const { args, findMany, tenantFindUnique } = makeArgs(ROWS, {
+      // A caller-supplied zone must change nothing. Two DPOs exporting the same
+      // filter must not receive two different files.
+      parameters: { to: '2026-08-08', timezone: 'Pacific/Kiritimati' },
+      timezone: 'Europe/Paris',
+    });
+    await generateAuditCsv(args);
+    expect(tenantFindUnique).toHaveBeenCalledWith({
+      where: { id: TENANT },
+      select: { timezone: true },
+    });
+    expect(findMany.mock.calls[0]![0].where.createdAt.lt.toISOString()).toBe(
+      '2026-08-08T22:00:00.000Z',
+    );
+  });
+
+  it('a different tenant zone moves the boundary — the zone is load-bearing, not decorative', async () => {
+    const { args, findMany } = makeArgs(ROWS, {
+      parameters: { to: '2026-08-08' },
+      timezone: 'Pacific/Kiritimati', // UTC+14
+    });
+    await generateAuditCsv(args);
+    expect(findMany.mock.calls[0]![0].where.createdAt.lt.toISOString()).toBe(
+      '2026-08-08T10:00:00.000Z',
+    );
+  });
+
+  it('an unusable tenant zone FAILS the export — it never silently reverts to UTC', async () => {
+    const { args } = makeArgs(ROWS, {
+      parameters: { to: '2026-08-08' },
+      timezone: 'Mars/Olympus_Mons',
+    });
+    await expect(generateAuditCsv(args)).rejects.toBeInstanceOf(UnknownTimezoneError);
+  });
+
+  it('a missing tenant row falls back to the column default, and still bounds by day', async () => {
+    const { args, findMany } = makeArgs(ROWS, {
+      parameters: { to: '2026-08-08' },
+      timezone: null,
+    });
+    await generateAuditCsv(args);
+    expect(findMany.mock.calls[0]![0].where.createdAt.lt.toISOString()).toBe(
+      '2026-08-08T22:00:00.000Z',
+    );
+  });
+
+  it('G-TENANT — the tenant predicate survives the new window code', async () => {
+    const { args, findMany } = makeArgs(ROWS, {
+      parameters: { from: '2026-08-01', to: '2026-08-09' },
+    });
+    await generateAuditCsv(args);
+    expect(findMany.mock.calls[0]![0].where.tenantId).toBe(TENANT);
   });
 });
 

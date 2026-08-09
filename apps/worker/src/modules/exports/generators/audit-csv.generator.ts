@@ -1,6 +1,11 @@
 import {
+  DEFAULT_AUDIT_TIMEZONE,
+  assertKnownTimezone,
+  auditWindowCreatedAtFilter,
   classifyAuditAction,
   classifyAuditResourceType,
+  resolveAuditWindow,
+  zonedYmd,
   type AuditVocabularyKind,
 } from '@pilotage/contracts';
 
@@ -36,18 +41,47 @@ const UTF8_BOM = '\uFEFF';
  * The labels come from `@pilotage/contracts` at **module load**, so a missing
  * or stale `contracts/dist` in the worker image fails loudly at boot rather than
  * halfway through a regulator's export (ADR-037 D5).
+ *
+ * **S-E04-5 — the same day boundary as the screen.** This generator carried the
+ * identical defect the audit page did: `to = new Date(toIso)` then `lte: to`, so
+ * `to=2026-08-08` cut the file at `T00:00:00Z` and the last day was missing. The
+ * page's « Exporter en CSV » button posts the *same* `from`/`to` the table used,
+ * so the two disagreed — one filter, two answers, on the one surface whose whole
+ * thesis is that it does not lie. Both now go through `resolveAuditWindow` from
+ * `@pilotage/contracts`, in the **tenant's** timezone (`Tenant.timezone`), with
+ * an exclusive upper bound. One function, not two implementations that agree
+ * today.
  */
 export async function generateAuditCsv(args: GenerateArgs): Promise<GenerateResult> {
   const { prisma, tenantId, parameters } = args;
   const fromIso = (parameters.from as string | undefined) ?? null;
   const toIso = (parameters.to as string | undefined) ?? null;
-  const from = fromIso ? new Date(fromIso) : daysAgo(90);
-  const to = toIso ? new Date(toIso) : new Date();
+
+  // Same resolution as `analytics.service.ts`: server-side, from the tenant row,
+  // never from `parameters`. An unresolvable zone throws rather than quietly
+  // shifting every boundary by an hour in a regulator's file.
+  const tenantRow = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { timezone: true },
+  });
+  const declaredZone = (tenantRow?.timezone ?? '').trim();
+  const timezone = declaredZone === '' ? DEFAULT_AUDIT_TIMEZONE : assertKnownTimezone(declaredZone);
+
+  const now = new Date();
+  // Unfiltered defaults, expressed as tenant days so they go through the same
+  // boundary code as an explicit filter — a default computed a second way is a
+  // second implementation waiting to drift.
+  const auditWindow = resolveAuditWindow(
+    fromIso ?? zonedYmd(daysAgo(90, now), timezone),
+    toIso ?? zonedYmd(now, timezone),
+    timezone,
+  );
+  const createdAt = auditWindowCreatedAtFilter(auditWindow);
 
   const rows = await prisma.auditLog.findMany({
     where: {
       tenantId,
-      createdAt: { gte: from, lte: to },
+      ...(createdAt ? { createdAt } : {}),
     },
     orderBy: { createdAt: 'desc' },
     take: 50_000,
@@ -121,9 +155,13 @@ function csvEscape(v: unknown): string {
   return s;
 }
 
-function daysAgo(n: number): Date {
-  const d = new Date();
+/**
+ * `n` days before `ref`, as an instant. Only ever handed to `zonedYmd`, which
+ * turns it into the tenant's civil day — the day is what the window resolves,
+ * so this function no longer decides a boundary, only a rough starting point.
+ */
+function daysAgo(n: number, ref: Date): Date {
+  const d = new Date(ref.getTime());
   d.setUTCDate(d.getUTCDate() - n);
-  d.setUTCHours(0, 0, 0, 0);
   return d;
 }

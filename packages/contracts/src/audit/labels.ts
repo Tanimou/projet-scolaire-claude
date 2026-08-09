@@ -35,6 +35,8 @@ import {
   AUDIT_RESOURCE_TYPES,
   LEGACY_AUDIT_ACTION_ALIASES,
   LEGACY_AUDIT_RESOURCE_TYPE_ALIASES,
+  type AuditActionEntry,
+  type AuditActionTone,
   type AuditLegacyAlias,
   type AuditVocabularyEntry,
 } from './vocabulary';
@@ -120,4 +122,65 @@ export function classifyAuditPortal(code: string): AuditVocabularyResolution {
   const hit = PORTAL_LABELS.get(code);
   if (hit !== undefined) return { code, label: hit, vocabulary: 'canonical' };
   return { code, label: code, vocabulary: 'unknown' };
+}
+
+// ---------------------------------------------------------------------------
+// Teinte d'une action — PF-134
+// ---------------------------------------------------------------------------
+
+// `AuditActionTone` est exporté par `vocabulary.ts` (le barrel le ré-exporte) :
+// une seconde ré-exportation ici créerait deux chemins pour un même symbole.
+
+const ACTION_ENTRIES = new Map<string, AuditActionEntry>(AUDIT_ACTIONS.map((a) => [a.code, a]));
+const LEGACY_ACTION_ENTRIES = new Map<string, AuditLegacyAlias>(
+  LEGACY_AUDIT_ACTION_ALIASES.map((a) => [a.code, a]),
+);
+
+/**
+ * `null` quand l'action n'entre dans aucun compteur. Sinon le KPI qui la
+ * compte — la seule source du texte de légende et de la phrase `sr-only` du
+ * tableau, pour que la couleur d'une ligne ne puisse pas contredire le chiffre
+ * d'une carte.
+ */
+export type AuditActionCountedBy = 'criticalChanges' | 'sensitiveExports' | null;
+
+/** Le compteur qui inclut ce code, ou `null`. Couvre les deux vocabulaires. */
+export function auditActionCountedBy(code: string): AuditActionCountedBy {
+  const entry = ACTION_ENTRIES.get(code) ?? LEGACY_ACTION_ENTRIES.get(code);
+  if (!entry) return null;
+  if (entry.critical) return 'criticalChanges';
+  if (entry.export) return 'sensitiveExports';
+  return null;
+}
+
+function toneFromFlags(entry: AuditActionEntry | AuditLegacyAlias): AuditActionTone {
+  // L'ordre est porteur : aucun code n'est à la fois `critical` et `export`
+  // aujourd'hui, mais si cela arrivait, « critique » l'emporte — la teinte la
+  // plus prudente est celle qui ne minimise pas.
+  if (entry.critical) return 'danger';
+  if (entry.export) return 'info';
+  return 'neutral';
+}
+
+/**
+ * La teinte d'une puce d'action — **dérivée de la déclaration**, jamais d'une
+ * sous-chaîne du code (PF-134).
+ *
+ * Trois classes, et exactement trois, parce qu'elles sont la légende des
+ * cartes : `danger` = la ligne est comptée par « Modifications critiques »,
+ * `info` = comptée par « Exports sensibles », `neutral` = journalisée, non
+ * comptée. Le vert et l'ambre disparaissent délibérément de la colonne Action :
+ * ils décoraient, ils ne renseignaient pas. Après ce changement, un lecteur qui
+ * balaie la table retrouve à l'œil les lignes dont un chiffre est fait.
+ *
+ * Total : un code inconnu renvoie `neutral` — non compté, ce qui est exact.
+ * Les alias hérités passent par la même dérivation, donc `Suppression` et
+ * `Mise à jour` (déclarés `critical`) rendent `danger` : ils sont comptés.
+ */
+export function auditActionTone(code: string): AuditActionTone {
+  const canonical = ACTION_ENTRIES.get(code);
+  if (canonical) return canonical.tone ?? toneFromFlags(canonical);
+  const legacy = LEGACY_ACTION_ENTRIES.get(code);
+  if (legacy) return toneFromFlags(legacy);
+  return 'neutral';
 }

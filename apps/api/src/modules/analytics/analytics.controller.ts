@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -13,6 +14,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   type RebuildSnapshotsRequest,
   RebuildSnapshotsRequestSchema,
+  normalizeYmd,
 } from '@pilotage/contracts';
 
 import { deriveAuditProvenance } from '../../shared/audit/provenance';
@@ -29,6 +31,26 @@ import { TeacherProfileService } from '../teaching/teacher-profile.service';
 import { AnalyticsService } from './analytics.service';
 import { SchoolPerformanceDrilldownService } from './school-performance-drilldown.service';
 import { SnapshotOpsService } from './snapshot-ops.service';
+
+/**
+ * A `from`/`to` audit bound is a **calendar day** or it is absent — never a
+ * best-effort parse (S-E04-5).
+ *
+ * An empty string means "no filter" (that is what an unset `<input type="date">`
+ * submits). Anything else that is not a real day is a 400 naming the parameter:
+ * these values now drive date arithmetic in the tenant's zone, and a silent
+ * coercion would produce an unbounded or empty range that looks like a result.
+ */
+function requireAuditDay(name: 'from' | 'to', raw?: string): string | null {
+  if (raw === undefined || raw.trim() === '') return null;
+  const day = normalizeYmd(raw);
+  if (day === null) {
+    throw new BadRequestException(
+      `Le paramètre « ${name} » doit être une date au format AAAA-MM-JJ (reçu : ${JSON.stringify(raw)}).`,
+    );
+  }
+  return day;
+}
 
 @ApiTags('analytics')
 @ApiBearerAuth()
@@ -222,7 +244,20 @@ export class AnalyticsController {
     return this.analytics.teachersAggregate({ tenantId, schoolId });
   }
 
-  /** Audit log list with filters — `/admin/audit` page. */
+  /**
+   * Audit log list with filters — `/admin/audit` page.
+   *
+   * **There is deliberately no `timezone` query parameter** (S-E04-5). The zone
+   * is read server-side from `Tenant.timezone` and echoed back in
+   * `filters.timezone`. Accepting it here would let two admins get two different
+   * counts for the same filter — the defect this slice closes, relocated to the
+   * client. No header and no cookie either: `me.tenantId` (from the JWT) is the
+   * only input to the lookup.
+   *
+   * `from`/`to` are rejected unless they are calendar days: they now drive date
+   * arithmetic, and `to=garbage` must be a 400 the caller can see, not a silently
+   * unbounded (or silently empty) range.
+   */
   @Get('audit')
   @RequiresPermission('audit.read')
   async auditList(
@@ -237,12 +272,14 @@ export class AnalyticsController {
     @Query('offset') offset?: string,
   ) {
     const me = await this.users.ensureUser(jwt);
+    const fromDay = requireAuditDay('from', from);
+    const toDay = requireAuditDay('to', to);
     const take = Math.min(parseInt(limit ?? '50', 10) || 50, 200);
     const skip = parseInt(offset ?? '0', 10) || 0;
     return this.analytics.auditList({
       tenantId: me.tenantId,
-      from,
-      to,
+      from: fromDay ?? undefined,
+      to: toDay ?? undefined,
       actorId,
       action,
       resourceType,

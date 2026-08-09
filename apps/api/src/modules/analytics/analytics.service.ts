@@ -3,8 +3,14 @@ import {
   AUDIT_CRITICAL_ACTIONS,
   AUDIT_EXPORT_ACTIONS,
   AUDIT_LOGIN_ACTIONS,
+  AUDIT_PORTAL_NONE,
+  DEFAULT_AUDIT_TIMEZONE,
   LEGACY_AUDIT_CRITICAL_ALIASES,
   LEGACY_AUDIT_EXPORT_ALIASES,
+  assertKnownTimezone,
+  auditWindowCreatedAtFilter,
+  isAuditPortalNone,
+  resolveAuditWindow,
 } from '@pilotage/contracts';
 import type { RemediationProgressDto, SnapshotFreshness } from '@pilotage/contracts';
 
@@ -62,14 +68,120 @@ export function auditExportActionCodes(): string[] {
  *
  * Pointing that query at the (empty) `AUDIT_LOGIN_ACTIONS` would have been
  * worse: a `{ in: [] }` count is a *canonically* broken card, harder to see than
- * the inline one. So the query is **skipped** and the KPI is `null`; the page
- * renders « Non instrumenté » instead of a `0` that reads as "we looked, there
- * were none". Instrumenting login is a new privileged write path — a later
- * slice, not this one.
+ * the inline one. So the query was **skipped** and the KPI reported `null`, and
+ * the page rendered « Non instrumenté ».
+ *
+ * **S-E04-5 finished the thought: the card is gone.** Reporting « Non
+ * instrumenté » was honest, but it spent a quarter of a governance surface on a
+ * sentence that could never become a number here — and its dormant, re-armable
+ * query was the last `portal: 'admin'` literal in `apps/api/src` (PF-138, closed
+ * **by deletion**, not by a fix). « Acteurs distincts » took the slot: a KPI
+ * computed over the same `where` as the table, which can read something.
+ *
+ * This function survives its only caller **on purpose**. It is the executable
+ * form of the measurement — `AUDIT_LOGIN_ACTIONS` is empty because nothing
+ * writes a login action, not because someone forgot — and the DNC-09 gate drives
+ * it rather than a re-implementation of it. Real login/session auditing is owned
+ * by **V3-E05** (PF-26, session lifecycle); it is a new privileged write path,
+ * and no « first authenticated request » heuristic stands in for it.
  */
 export function auditLoginActionCodes(): string[] {
   return [...AUDIT_LOGIN_ACTIONS];
 }
+
+// =============================================================================
+// Audit list — response envelope (S-E04-5)
+// =============================================================================
+
+/** Les quatre KPI du journal d'audit. Aucun autre n'existe. */
+export type AuditKpiKey =
+  | 'eventsInRange'
+  | 'criticalChanges'
+  | 'sensitiveExports'
+  | 'distinctActors';
+
+/**
+ * Un KPI d'audit — **le chiffre, sa portée et son titre voyagent ensemble**.
+ *
+ * `scope` et `label` ne sont pas décoratifs : sur une surface de gouvernance, la
+ * portée d'un nombre fait partie du nombre. Quatre cartes qui comptaient « tout »
+ * à côté d'un tableau filtré n'étaient pas quatre cartes avec un bug, c'étaient
+ * quatre phrases fausses. Et `label` est servi par le serveur pour que le titre
+ * et le chiffre ne puissent pas diverger : la carte n'a plus de titre à elle.
+ *
+ * Enveloppe **locale à l'audit**, délibérément : `architecture-impact.md` §4
+ * réserve l'enveloppe KPI canonique à V3-E03. Aucun type `Kpi` générique n'est
+ * exporté depuis `packages/contracts` (ce serait préempter cette décision).
+ */
+export interface AuditKpi {
+  value: number;
+  /**
+   * `'filtered'` — et c'est la seule valeur possible aujourd'hui, par
+   * construction : les quatre KPI sont calculés sur le `where` du tableau. Le
+   * champ existe pour que la carte l'affiche, pas pour offrir un choix.
+   */
+  scope: 'filtered';
+  label: string;
+}
+
+/**
+ * Ce que le serveur a **réellement** appliqué — renvoyé pour être ré-affiché.
+ *
+ * `timezone` est résolu depuis `Tenant.timezone` et **jamais accepté du
+ * client** : ni paramètre de requête, ni en-tête, ni cookie. Une surface qui
+ * annonce « du 1er au 9 août inclus » sans dire dans quel fuseau n'a pas énoncé
+ * sa portée. `from`/`to` reviennent normalisés (`YYYY-MM-DD` ou `null`) : une
+ * valeur illisible revient `null`, jamais recopiée telle quelle.
+ */
+export interface AuditAppliedFilters {
+  timezone: string;
+  from: string | null;
+  to: string | null;
+  actorId: string | null;
+  action: string | null;
+  resourceType: string | null;
+  /** Peut valoir `AUDIT_PORTAL_NONE` — la sentinelle « Sans portail ». */
+  portal: string | null;
+}
+
+export interface AuditListRow {
+  id: string;
+  createdAt: string;
+  actorId: string | null;
+  actorName: string | null;
+  actorRole: string | null;
+  portal: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  detail: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  before: unknown;
+  after: unknown;
+}
+
+export interface AuditListResult {
+  data: AuditListRow[];
+  total: number;
+  kpis: Record<AuditKpiKey, AuditKpi>;
+  filters: AuditAppliedFilters;
+}
+
+/**
+ * Les titres des cartes, servis par le serveur.
+ *
+ * Ils vivent ici et pas dans `apps/web` pour une raison précise : tant que le
+ * titre était écrit dans le composant et le chiffre calculé ici, les deux
+ * pouvaient dériver — « ACTIONS AUJOURD'HUI » a survécu des mois au-dessus d'un
+ * compteur qui ne comptait pas la journée du tenant. Un seul endroit les décide.
+ */
+const AUDIT_KPI_LABELS: Record<AuditKpiKey, string> = {
+  eventsInRange: 'Actions filtrées',
+  criticalChanges: 'Modifications critiques',
+  sensitiveExports: 'Exports sensibles',
+  distinctActors: 'Acteurs distincts',
+};
 
 // =============================================================================
 // Aggregates — KPI cards for Students / Classes / Teachers admin pages
@@ -3259,8 +3371,34 @@ export class AnalyticsService {
 
   /**
    * Audit log listing with filters + pagination — backs `/admin/audit` page.
-   * Returns rows with resolved `actorName` (via batched UserProfile lookup) and
-   * KPI counts (today / critical / sensitive exports / admin logins).
+   *
+   * **S-E04-5 — the KPIs share the table's scope, and `to` includes its own day.**
+   *
+   * Two defects lived here, and they were the same defect twice:
+   *
+   *  1. `lte: new Date(to)` made `to=2026-08-08` mean `T00:00:00Z`, so the
+   *     selected day was thrown away; `gte: new Date(from)` took UTC midnight,
+   *     which is 02:00 in Paris in summer, so the first two hours of the first
+   *     day were thrown away too. Both bounds now resolve through **one** shared
+   *     helper (`resolveAuditWindow`, `@pilotage/contracts`) in the **tenant's**
+   *     timezone, with an EXCLUSIVE `lt` = midnight of the day after `to`.
+   *  2. Three KPI counts carried `where: { tenantId }` **only** — three all-time
+   *     numbers beside a filtered table. All four now read the *same* `where`
+   *     object the table reads, and `eventsInRange` is not even a query: it is
+   *     `total`, so `kpis.eventsInRange.value === total` is structural, not
+   *     asserted. Two counts of an append-only table are two snapshots, and
+   *     under concurrent writes they disagree — the invariant would have been
+   *     true in a mock and intermittently false in production.
+   *
+   * The resolved timezone is read from `Tenant.timezone`, **echoed** in
+   * `filters.timezone`, and never accepted from the caller — no query param, no
+   * header, no cookie. A caller-supplied zone would let two admins get two
+   * different counts for the same filter, which is the defect relocated.
+   *
+   * The KPI predicates stay lexically inside this method on purpose: the DNC-08
+   * gate builds its scan window by slicing this file from `async auditList(` to
+   * `async auditFacets(`. Moving them into a helper would leave those rules green
+   * over an empty window — DNC-08 committed inside the DNC-08 enforcer.
    */
   async auditList(opts: {
     tenantId: string;
@@ -3272,51 +3410,46 @@ export class AnalyticsService {
     portal?: string;
     take: number;
     skip: number;
-  }): Promise<{
-    data: Array<{
-      id: string;
-      createdAt: string;
-      actorId: string | null;
-      actorName: string | null;
-      actorRole: string | null;
-      portal: string | null;
-      action: string;
-      resourceType: string;
-      resourceId: string | null;
-      detail: string | null;
-      ipAddress: string | null;
-      userAgent: string | null;
-      before: unknown;
-      after: unknown;
-    }>;
-    total: number;
-    kpis: {
-      today: number;
-      criticalChanges: number;
-      sensitiveExports: number;
-      /**
-       * `null` = **not instrumented** (DNC-09). Never `0` by construction — see
-       * `auditLoginActionCodes()`. The page renders « Non instrumenté ».
-       */
-      adminLogins: number | null;
-    };
-  }> {
+  }): Promise<AuditListResult> {
     const { tenantId, from, to, actorId, action, resourceType, portal, take, skip } = opts;
 
+    // --- The tenant's own timezone. Server-resolved, echoed, never accepted. ---
+    // `findUnique` on the primary key: `tenant.id` IS the tenant discriminator,
+    // so G-TENANT is satisfied by identity here (no redundant `tenant_id`).
+    const tenantRow = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true },
+    });
+    const declaredZone = (tenantRow?.timezone ?? '').trim();
+    // An ABSENT value (no row yet, empty column) falls back to the same default
+    // the column carries. A PRESENT but unresolvable value throws
+    // `UnknownTimezoneError` — a silent fallback to the server's zone is exactly
+    // the defect this slice removes, and it would make `filters.timezone` a lie.
+    const timezone =
+      declaredZone === '' ? DEFAULT_AUDIT_TIMEZONE : assertKnownTimezone(declaredZone);
+    const auditWindow = resolveAuditWindow(from ?? null, to ?? null, timezone);
+    const createdAt = auditWindowCreatedAtFilter(auditWindow);
+
+    // `AUDIT_PORTAL_NONE` is decoded HERE, server-side, into `portal: null`
+    // (PF-123 read half). The sentinel never reaches Prisma as a literal, and no
+    // client ever sends a `null` through to a query.
+    const portalFilter: { portal?: string | null } = portal
+      ? isAuditPortalNone(portal)
+        ? { portal: null }
+        : { portal }
+      : {};
+
+    // --- ONE `where`, built once, passed by reference to every query. ---
+    // Everything below spreads THIS object and adds at most one predicate. That
+    // is the anti-drift property: "the cards and the table disagree" has no
+    // representation.
     const where = {
       tenantId,
       ...(actorId ? { actorId } : {}),
       ...(action ? { action: { contains: action, mode: 'insensitive' as const } } : {}),
       ...(resourceType ? { resourceType } : {}),
-      ...(portal ? { portal } : {}),
-      ...(from || to
-        ? {
-            createdAt: {
-              ...(from ? { gte: new Date(from) } : {}),
-              ...(to ? { lte: new Date(to) } : {}),
-            },
-          }
-        : {}),
+      ...portalFilter,
+      ...(createdAt ? { createdAt } : {}),
     };
 
     const [rows, total] = await Promise.all([
@@ -3369,42 +3502,62 @@ export class AnalyticsService {
       };
     });
 
-    // KPI counts
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    // THREE counts, not four. The fourth card is not instrumented and reports
-    // that instead of counting nothing (DNC-09 — see `auditLoginActionCodes`).
-    const [today, criticalChanges, sensitiveExports] = await Promise.all([
+    // --- KPI predicates. Same `where`, plus exactly one predicate each. ---
+    //
+    // `AND: [...]` rather than a top-level key, because the user's own `action`
+    // filter lives at the top level: overwriting it would silently widen the KPI
+    // past the table it sits above — the very drift this block exists to close.
+    //
+    // Cost, stated rather than discovered: three filtered counts replace three
+    // tenant-only counts, and the `action` filter is an unindexed `ILIKE`. One
+    // `count(*) FILTER (…)` aggregate would be cheaper, but it means `$queryRaw`
+    // — a second language restating the filter, able to drop the tenant
+    // predicate — and the anti-drift invariant is worth more than one round
+    // trip. `distinctActors` uses `groupBy` (bounded by the user count), never
+    // `findMany({ distinct })`, which would materialise unbounded rows.
+    const [criticalCount, exportCount, distinctActorRows] = await Promise.all([
       this.prisma.auditLog.count({
-        where: { tenantId, createdAt: { gte: todayStart } },
+        where: { ...where, AND: [{ action: { in: auditCriticalActionCodes() } }] },
       }),
       this.prisma.auditLog.count({
-        where: { tenantId, action: { in: auditCriticalActionCodes() } },
+        where: { ...where, AND: [{ action: { in: auditExportActionCodes() } }] },
       }),
-      this.prisma.auditLog.count({
-        where: { tenantId, action: { in: auditExportActionCodes() } },
+      this.prisma.auditLog.groupBy({
+        by: ['actorId'],
+        // `actorId: null` is excluded, and the card says so: system-written rows
+        // carry no actor, and counting them together would invent a phantom
+        // « acteur » — the all-time-count defect wearing a different hat.
+        where: { ...where, AND: [{ actorId: { not: null } }] },
       }),
     ]);
-    // No query is issued while the declared set is empty: a `{ in: [] }` count
-    // is a card that can only read 0, which is what DNC-09 forbids. When a slice
-    // instruments login, adding the code to `AUDIT_LOGIN_ACTIONS` is the whole
-    // change — this branch starts counting on its own.
-    const loginActions = auditLoginActionCodes();
-    const adminLogins =
-      loginActions.length === 0
-        ? null
-        : await this.prisma.auditLog.count({
-            // `portal: 'admin'` is part of the card's own claim — it reads
-            // « CONNEXIONS ADMIN ». The predicate this branch replaced carried
-            // that scope, and dropping it would make the card count teacher and
-            // parent logins the day login becomes instrumented (PF-138).
-            where: { tenantId, portal: 'admin', action: { in: loginActions } },
-          });
+
+    const kpi = (key: AuditKpiKey, value: number): AuditKpi => ({
+      value,
+      scope: 'filtered',
+      label: AUDIT_KPI_LABELS[key],
+    });
 
     return {
       data,
       total,
-      kpis: { today, criticalChanges, sensitiveExports, adminLogins },
+      kpis: {
+        // NOT a fifth count. `total` itself — so `eventsInRange.value === total`
+        // holds by construction, including under concurrent appends, and one
+        // query fewer is issued.
+        eventsInRange: kpi('eventsInRange', total),
+        criticalChanges: kpi('criticalChanges', criticalCount),
+        sensitiveExports: kpi('sensitiveExports', exportCount),
+        distinctActors: kpi('distinctActors', distinctActorRows.length),
+      },
+      filters: {
+        timezone: auditWindow.timezone,
+        from: auditWindow.fromDay,
+        to: auditWindow.toDay,
+        actorId: actorId ?? null,
+        action: action ?? null,
+        resourceType: resourceType ?? null,
+        portal: portal ?? null,
+      },
     };
   }
 
@@ -3417,7 +3570,15 @@ export class AnalyticsService {
     tenantId: string;
   }): Promise<{
     resourceTypes: string[];
+    /**
+     * May end with `AUDIT_PORTAL_NONE` — appended **only** when this tenant
+     * actually has a `portal IS NULL` row (PF-123 read half). Offering it
+     * otherwise would be a filter that can only return nothing: DNC-09 in the
+     * filter strip.
+     */
     portals: string[];
+    /** Whether the sentinel above is present, stated rather than inferred. */
+    hasNullPortal: boolean;
     actions: string[];
     actors: Array<{ id: string; name: string; role: string | null }>;
   }> {
@@ -3431,8 +3592,13 @@ export class AnalyticsService {
         orderBy: { resourceType: 'asc' },
         take: 100,
       }),
+      // PF-123 (read half): `portal: { not: null }` is GONE. The row filter
+      // compares `portal` exactly, so excluding nulls from the facet made every
+      // null-portal row reachable by no offered value — silently. The distinct
+      // set now includes `null`, and the sentinel is appended below only if it
+      // is observed. Still tenant-scoped, still `distinct: ['portal']`.
       this.prisma.auditLog.findMany({
-        where: { tenantId, portal: { not: null } },
+        where: { tenantId },
         select: { portal: true },
         distinct: ['portal'],
         orderBy: { portal: 'asc' },
@@ -3482,9 +3648,15 @@ export class AnalyticsService {
       .filter((a) => a.name && a.name !== '—')
       .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 
+    // The null is not dropped, it is TRANSLATED — into a value the filter strip
+    // can offer and `auditList` can decode. Sorted last, after the real codes.
+    const hasNullPortal = portalRows.some((r) => r.portal === null);
+    const observedPortals = portalRows.map((r) => r.portal).filter((p): p is string => !!p);
+
     return {
       resourceTypes: resourceTypeRows.map((r) => r.resourceType).filter(Boolean),
-      portals: portalRows.map((r) => r.portal).filter((p): p is string => !!p),
+      portals: hasNullPortal ? [...observedPortals, AUDIT_PORTAL_NONE] : observedPortals,
+      hasNullPortal,
       actions: actionRows.map((r) => r.action).filter(Boolean),
       actors,
     };

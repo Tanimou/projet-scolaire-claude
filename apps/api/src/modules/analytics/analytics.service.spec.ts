@@ -803,22 +803,42 @@ describe('AnalyticsService.auditList — KPI predicates (S-E04-4 / DNC-09)', () 
 
   function makeAuditService() {
     const count = jest.fn().mockResolvedValue(7);
+    const groupBy = jest.fn().mockResolvedValue([{ actorId: 'u-1' }, { actorId: 'u-2' }]);
     const prisma = {
+      // S-E04-5: the zone is read from the tenant row before anything else runs.
+      // Without this mock every assertion below dies on `undefined.findUnique`,
+      // and the tempting "fix" is a `try/catch` that silently restores the
+      // server's zone — the exact defect the slice removes.
+      tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: 'Europe/Paris' }) },
       auditLog: {
         findMany: jest.fn().mockResolvedValue([]),
         count,
+        groupBy,
       },
       userProfile: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const service = new AnalyticsService(prisma as never, {} as never, {} as never);
-    return { service, count };
+    return { service, count, groupBy };
   }
 
-  /** The `where` objects of every `auditLog.count` EXCEPT the "today" one. */
+  /**
+   * The `where` objects of every `auditLog.count` that carries a KPI predicate.
+   *
+   * S-E04-5 moved the predicate into `AND: [...]` so that the caller's own
+   * `action` filter — which lives at the top level — cannot be overwritten by a
+   * KPI widening past the table it sits above.
+   */
   function kpiWheres(count: jest.Mock): Array<Record<string, unknown>> {
     return count.mock.calls
       .map((c) => c[0].where as Record<string, unknown>)
-      .filter((w) => 'action' in w && typeof (w.action as { in?: unknown }).in !== 'undefined');
+      .filter((w) => Array.isArray(w.AND));
+  }
+
+  /** The one KPI predicate a KPI `where` adds to the table's `where`. */
+  function kpiPredicate(where: Record<string, unknown>): { action: { in: string[] } } {
+    const clauses = where.AND as Array<{ action?: { in?: string[] } }>;
+    expect(clauses).toHaveLength(1);
+    return clauses[0] as { action: { in: string[] } };
   }
 
   it('criticalChanges spans BOTH vocabularies — a canonical code AND a frozen legacy alias', async () => {
@@ -828,7 +848,7 @@ describe('AnalyticsService.auditList — KPI predicates (S-E04-4 / DNC-09)', () 
     // only data a demo tenant has (DNC-09).
     const { service, count } = makeAuditService();
     await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
-    const critical = kpiWheres(count)[0]!.action as { in: string[] };
+    const critical = kpiPredicate(kpiWheres(count)[0]!).action;
     expect(critical.in).toContain('role.delete');
     expect(critical.in).toContain('Suppression');
     for (const dead of ['delete', 'revise', 'Révision']) {
@@ -839,7 +859,7 @@ describe('AnalyticsService.auditList — KPI predicates (S-E04-4 / DNC-09)', () 
   it('sensitiveExports is an exact set, not a substring match over a display string', async () => {
     const { service, count } = makeAuditService();
     await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
-    const exports = kpiWheres(count)[1]!.action as { in: string[] };
+    const exports = kpiPredicate(kpiWheres(count)[1]!).action;
     expect(exports.in).toContain('export.bulletin.request');
     expect(exports.in).toContain('export.grade_grid.request');
     expect(exports.in).toContain('Export');
@@ -850,27 +870,66 @@ describe('AnalyticsService.auditList — KPI predicates (S-E04-4 / DNC-09)', () 
   });
 
   it('every KPI count stays tenant-scoped (G-TENANT unchanged)', async () => {
-    const { service, count } = makeAuditService();
+    const { service, count, groupBy } = makeAuditService();
     await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
     for (const call of count.mock.calls) {
       expect(call[0].where.tenantId).toBe(AUDIT_TENANT);
     }
+    expect(groupBy.mock.calls[0]![0].where.tenantId).toBe(AUDIT_TENANT);
   });
 
-  it('DNC-09 — THREE counts are issued, not four, and adminLogins is null', async () => {
-    // The un-instrumented card must not run a query that can only read 0. The
-    // count budget is asserted because "returns null" alone would still pass if
-    // a `{ in: [] }` query were issued and its result discarded.
-    const { service, count } = makeAuditService();
+  it('DNC-09 — the count budget is THREE, and `eventsInRange` is `total` itself', async () => {
+    // RE-POINTED (S-E04-5). The old shape was "3 KPI counts + 1 list count = 4,
+    // and the fourth card is null". The un-instrumented card is now GONE, so
+    // what this case defends has changed with it:
+    //
+    //   * `eventsInRange` must NOT be a query. Two counts of an append-only
+    //     table are two snapshots; under concurrent writes they disagree, and
+    //     `eventsInRange.value === total` would be true in this mock and
+    //     intermittently false in production.
+    //   * `distinctActors` must be a `groupBy`, not a fourth count and not a
+    //     `findMany({ distinct })` that materialises unbounded rows.
+    const { service, count, groupBy } = makeAuditService();
     const res = await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
-    // 1 × total (the `where` list count) + 3 × KPI = 4 calls in all.
-    expect(count).toHaveBeenCalledTimes(4);
-    expect(res.kpis.adminLogins).toBeNull();
-    expect(res.kpis.criticalChanges).toBe(7);
-    expect(res.kpis.sensitiveExports).toBe(7);
-    // No count carries the old `portal: 'admin'` filter — the whole query is gone.
+    // 1 × total + 2 × KPI count. A fourth would mean `eventsInRange` re-queried.
+    expect(count).toHaveBeenCalledTimes(3);
+    expect(groupBy).toHaveBeenCalledTimes(1);
+    expect(res.kpis.eventsInRange.value).toBe(res.total);
+    expect(res.kpis.criticalChanges.value).toBe(7);
+    expect(res.kpis.sensitiveExports.value).toBe(7);
+    expect(res.kpis.distinctActors.value).toBe(2);
+    // Every KPI states its own scope and carries its own title (AC-3).
+    for (const kpi of Object.values(res.kpis)) {
+      expect(kpi.scope).toBe('filtered');
+      expect(kpi.label.length).toBeGreaterThan(0);
+    }
+    // The removed card leaves no trace: no `adminLogins`, and no count carries
+    // the `portal: 'admin'` filter its query used to (PF-138, closed by deletion).
+    expect(res.kpis).not.toHaveProperty('adminLogins');
     for (const call of count.mock.calls) {
       expect(call[0].where.portal).toBeUndefined();
+    }
+  });
+
+  it('the KPI `where` is the table `where` plus exactly one predicate (AC-2)', async () => {
+    // RE-POINTED. The previous rule was "every `where.portal` is undefined",
+    // which held because the KPIs ignored the filters entirely — it passed BY
+    // the defect. The invariant it should have been stating: a KPI reads what
+    // the table reads, including the portal filter.
+    const { service, count, groupBy } = makeAuditService();
+    await service.auditList({
+      tenantId: AUDIT_TENANT,
+      portal: 'admin',
+      resourceType: 'role',
+      take: 10,
+      skip: 0,
+    });
+    const listWhere = count.mock.calls.map((c) => c[0].where).find((w) => !Array.isArray(w.AND));
+    expect(listWhere).toEqual({ tenantId: AUDIT_TENANT, portal: 'admin', resourceType: 'role' });
+    for (const where of [...kpiWheres(count), groupBy.mock.calls[0]![0].where]) {
+      const { AND, ...rest } = where as { AND: unknown[] };
+      expect(rest).toEqual(listWhere);
+      expect(AND).toHaveLength(1);
     }
   });
 });

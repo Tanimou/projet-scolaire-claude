@@ -1,0 +1,41 @@
+-- S-E04-5 — `Tenant.timezone` : le fuseau de REPORTING du tenant.
+--
+-- Migration RELUE À LA MAIN (ADR-027). Elle n'a pas été produite par
+-- `prisma migrate dev` : sur la moindre dérive contre `0_baseline`, cette
+-- commande propose de RÉINITIALISER la base — ce qui détruirait les 54 lignes
+-- d'audit héritées qui sont le jeu de données de tout l'épic V3-E04.
+-- `prisma db push` n'apparaît nulle part dans ce diff ni dans le journal de run.
+--
+-- POURQUOI cette colonne. `/admin/audit` bornait `from`/`to` sur minuit UTC :
+-- « au 8 août » jetait toute la journée du 8, et « depuis le 8 août » jetait les
+-- lignes écrites entre 00:00 et 02:00 à Paris. Répondre juste demande de savoir
+-- dans quel fuseau la question est posée. `audit_log` porte `tenant_id` et
+-- AUCUN `school_id` : `school.timezone` (le fuseau OPÉRATIONNEL, déjà présent —
+-- `0_baseline/migration.sql:185`) ne peut pas répondre à une question portée par
+-- le tenant. Les deux colonnes coexistent et aucune n'est dérivée de l'autre
+-- (D-25). `tenant.settings` (Json) a été écarté : une clé Json n'est ni typée,
+-- ni défaultable, ni visible de `scripts/schema-drift-check.js` — la dérive ne
+-- serait pas vue par le garde.
+--
+-- FORME. Copie exacte de `school.timezone` : `TEXT NOT NULL DEFAULT` avec un
+-- défaut NON VOLATILE, donc aucune réécriture de table sur PG 11+ (PG 15 ici).
+-- Pas de backfill (le défaut couvre les lignes existantes), pas d'index (l'accès
+-- se fait par clé primaire).
+--
+-- TENANT_ID. Satisfait par identité : la colonne est portée par `tenant`, dont
+-- la clé primaire EST le discriminant de tenant. Aucun `tenant_id` redondant.
+--
+-- RLS. Mesuré : ZÉRO `ENABLE ROW LEVEL SECURITY` et zéro `CREATE POLICY` dans
+-- tout le dépôt, `0_baseline` compris. La clause RLS d'ADR-002 reste donc NON
+-- IMPLÉMENTÉE à l'échelle du dépôt ; cette migration ne change pas cette
+-- posture et ne l'inaugure pas (une première policy exigerait le GUC
+-- `app.current_tenant_id` et la séparation de rôles `app_user`/`app_migrator`,
+-- qui n'existent pas). Suivi comme constat propre, pas hérité en silence.
+--
+-- EXPAND / CONTRACT : expand-only. **Il n'y a pas de phase contract.**
+-- ROLLBACK (sans perte — la valeur est un préréglage d'affichage, défaulté et
+-- redérivable) : revenir le code d'abord, la colonne défautée est inoffensive ;
+-- puis, une fois le retour confirmé :
+--   ALTER TABLE "tenant" DROP COLUMN "timezone";
+
+ALTER TABLE "tenant" ADD COLUMN "timezone" TEXT NOT NULL DEFAULT 'Europe/Paris';

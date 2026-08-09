@@ -1,143 +1,131 @@
-# NEXT — written by run 32 (`S-E04-4`), 2026-08-09
+# NEXT — written by run 33 (`S-E04-5`), 2026-08-09
 
 > Read this at Step 1. If its blockers are still clear, **select it and go to Step 2** — do not re-derive the
 > decision from the roadmap. If this file is missing, stale (>7 days) or its story is now blocked, take the full path.
 
-## ▶ Next story → `S-E04-5`
+## ▶ Next story → `S-E04-6`
 
 | | |
 |---|---|
-| **Story** | `S-E04-5` — The KPIs share the table's scope, and the `to` filter includes its own day |
+| **Story** | `S-E04-6` — Five privileged families write their audit row in the same transaction |
 | **Epic** | `V3-E04` — Audit trail and governance surfaces |
 | **Layer** | **L0** |
-| **Size** | M · `[schema][api][web][truth]` |
-| **Gates** | **`G-MIGRATION`** *(first slice in this epic where it triggers)*, `G-TRUTH`, `G-TENANT`, `G-DNC` *(DNC-09)* |
-| **blockedBy** | **nothing** — `S-E04-4` shipped the declared vocabulary (run 32), which was its only blocker |
-| **Contract** | `docs/spec/features/v3-e04/tasks.md` § `S-E04-5` (from line 264) — read it verbatim, it is the contract |
+| **Size** | M · `[api][audit]` |
+| **Gates** | **`G-AUDIT` (primary)**, `G-TENANT`, `G-AUTHZ`, `G-DNC` *(DNC-10)* · **`G-MIGRATION` does not trigger** |
+| **blockedBy** | **nothing** — `S-E04-1` (run 29) and `S-E04-3` (run 31) both shipped; provenance is true before it is recorded at five more families, which was the whole point of the ordering |
+| **Contract** | `docs/spec/features/v3-e04/tasks.md` § `S-E04-6` — read it verbatim, it is the contract |
 
-### `G-MIGRATION` triggers, and it is not obvious why
+### The measurement the story rests on is from 2026-08-08 — re-verify it cheaply, it is one grep
 
-A day-inclusive `to` is meaningless without a declared timezone, and **`Tenant` has no `timezone` column** — measured:
-only `School.timezone` exists (default `Europe/Paris`), and `Tenant` carries `settings Json`. Computing the boundary in
-the *server's* zone is the defect at a new address. This wants a reviewed migration, an expand/contract plan and a
-stated rollback — never `db push`. Budget for it: the `schema drift` gate stage alone took **107 s** on run 32.
+**6 of 28** audit call sites use `tx.auditLog.create` inside a `$transaction`; the other **22** call
+`this.prisma.auditLog.create` outside one. Three of the five `AC-2` families write **no row at all**: role
+grant/revoke (`identity/users.service.ts:57`, `:74`), school mutations (`apps/api/src/modules/schools/` — **zero**
+`auditLog` references) and enrollment decisions (`apps/api/src/modules/enrollments/` — **zero**). The finance family
+is **vacuous**: there is no finance module in `apps/api/src/modules`. State that plainly; do not tick `AC-2`.
 
-### Carry these three with it — they are in the file you will already have open
+The seam's shape is the point: `writeAudit(tx: Prisma.TransactionClient, input)` — the transaction client as the
+**first parameter** makes `writeAudit(this.prisma, …)` a *type* error, so the invariant is compile-time rather than a
+review convention.
 
-1. **`PF-138` is already closed** (run 32 restored the `portal: 'admin'` scope and flipped the provenance gate back to
-   length 1). Do not re-fix it; do not re-invert the gate.
-2. **`PF-137`** — reconcile `contracts/openapi.yaml` `AuditKpis` and `data-model.md` D-23 with whatever shape you ship.
-   They currently specify `adminLogins` *removed* and `distinctActors` in four `{value, scope}` envelopes; the code
-   ships `adminLogins: number | null`. Pick one and make the other agree. Same file, same problem for
-   `sensitiveExports`: the contract defines it structurally (`resourceType = 'export_job'`), the code by action.
-3. **`PF-139`** — the KPI card work is yours anyway: « Non instrumenté » is **clipped, not ellipsised**, in
-   `KpiCard`'s `font-mono text-3xl` slot, and `page.tsx`'s `safe()` collapses an analytics **outage** onto the same
-   `adminLogins: null` sentinel that means "not instrumented". An outage must not render as a claim.
+### Carry these two — they are in the files you will already have open
 
-### The read-side half of `portal` that a label map could not fix
+1. **`PF-149` (P1, latent)** — `UnknownTimezoneError` is thrown by `packages/contracts/src/audit/window.ts` and
+   **caught nowhere**; the only reference in `apps/api/src` is a comment at `analytics.service.ts:3426`. It cannot
+   fire today (measured: `tenant.timezone` is `NOT NULL DEFAULT 'Europe/Paris'`, both tenants hold that value, no
+   writer for the column exists anywhere, and `process.versions.icu` is **76.1** inside `pilotage_api`). It goes live
+   the moment anything writes the column, because nothing validates it on write. Two small halves: validate with the
+   already-exported `isKnownTimezone` on write, and map the error to a deliberate HTTP response.
+   **Do not "fix" it by reintroducing a fallback** — fail-closed is the design.
+2. **`PF-150` (P2)** — encode « `S-E04-8` stays last » as a real `blockedBy` in `dependency-map.md`. It currently
+   survives only because each run remembers the reasoning (a chain over provenance that is not yet true is a
+   cryptographically verifiable record of falsehoods).
 
-`analytics.service.ts` builds the portal facet `where: { portal: { not: null } }` while the row filter matches `portal`
-exactly — so a `null`-portal row is reachable by **no offered filter value at all** (there is no « sans portail »
-option). That is `PF-123`'s read half and it belongs with the filter work, not with `S-E04-7`.
+### What run 33 shipped, so the next run does not re-derive it
 
----
+`S-E04-5` closed the **last two halves of `PF-32`** plus `PF-134`, `PF-137`, `PF-139`, and the **read half** of
+`PF-123`. Full gate `GATE: PASS`.
 
-## ✅ What run 32 shipped, so the next run does not re-derive it
+- **`Tenant.timezone`** exists — additive, `TEXT NOT NULL DEFAULT 'Europe/Paris'`, one hand-reviewed expand-only
+  migration at `apps/api/prisma/migrations/20260809120000_tenant_timezone/`. **Applied to the local stack** with
+  `prisma migrate deploy`; the ledger holds both migrations, finished and not rolled back. No `db push`.
+- **`packages/contracts/src/audit/window.ts`** is now the single resolver of audit date bounds — `gte` = local
+  midnight, `lt` = **next** local midnight (exclusive, so no precision to choose against Postgres microseconds).
+  It fixed **both** bounds: `from` had the same UTC-midnight defect, i.e. it dropped 00:00–02:00 Paris on the first
+  selected day. DST by civil-date increment plus a second `Intl` offset read, asserted on the 23 h and 25 h Paris days.
+- **The four KPIs share the table's `where`**, each plus exactly one predicate, combined with `AND: [...]` so a user's
+  own `action` filter is never overwritten. `eventsInRange` is **`total` itself**, not a fifth count — the anti-drift
+  invariant holds by construction, including under concurrent appends.
+- **`adminLogins` and `today` are gone.** « Acteurs distincts » replaces them, via `groupBy`, excluding the actor-less
+  system row rather than inventing a phantom actor. `V3-E05` (`PF-26`) owns real login auditing; no
+  "first authenticated request" heuristic was invented.
+- **`pickActionTone` had TWO copies**, not the one `PF-134` named — `AuditDetailDrawer.tsx:40` as well as
+  `AuditTable.tsx:57`. Both deleted; tone is now a declared property of `AUDIT_ACTIONS`.
 
-`S-E04-4` closed the **vocabulary half of `PF-32`**. One declaration now exists — `packages/contracts/src/audit/`
-(`vocabulary.ts` + `labels.ts` + a re-export-only `index.ts`), exported as `@pilotage/contracts/audit`, CJS-built.
-It carries `AUDIT_RESOURCE_TYPES`, `AUDIT_ACTIONS` (each code with its French label and `critical`/`export` flags),
-`AUDIT_PORTALS` (**four**), and a **frozen** `LEGACY_AUDIT_*_ALIASES` table. `ADR-037` records five decisions.
+**Measured on the live local database, not asserted** — two rows inserted at 23:30 and 00:30 Europe/Paris on
+2026-08-09, then filtered with `from = to = 2026-08-09`:
 
-**Three consumers read it and hold no local copy:** the web label map (`RESOURCE_TYPE_LABELS` / `PORTAL_LABELS`
-deleted), the API KPI predicates, and the worker `audit-csv` generator that every prior reading had missed.
+| predicate | rows returned |
+|---|---|
+| old (`gte`/`lte: new Date(ymd)` — UTC midnight) | **0** |
+| new (`gte` local midnight … `lt` next local midnight) | **2** |
 
-**The written set was extracted by a TypeScript AST walker, not transcribed** — and it falsified the brief's own
-hand-count, which was short by roughly a third across five literal shapes. The `asc`/`desc` trap (Prisma `orderBy`,
-in both object and array form) is excluded by construction and asserted absent. Completeness is set equality in
-**both** directions.
+Those two fixture rows are still in the local `audit_log` (61 rows now, was 59). They are harmless; delete them if
+they bother a count, local data is expendable.
 
-**Measured on the live local database, not asserted:**
+### One correction to the sprint's own review, so it is not inherited wrong
 
-| | before | after |
-|---|---|---|
-| `criticalChanges` | **9** (matched only the French `Suppression` out of four listed strings) | **18** (declared critical set + declared legacy aliases) |
-| `adminLogins` | **0**, structurally forever | **`null`** — «Non instrumenté», and **no query is issued** |
-| legacy values outside the frozen alias table | never measured | **0** on both axes (`PF-143` discharged) |
-
-`PORTALS` was deliberately **not** widened: it backs `dto/auth.ts` `portal: z.enum(PORTALS)` for **login**, so adding
-`student` there would have made it a legal login portal. `AUDIT_PORTALS` is a separate 4-valued declaration and
-`ADR-037` D2 says why. **No writer emits `portal: 'student'` yet** — `deriveAuditProvenance` maps three — and none was
-fabricated to satisfy AC-3.
+The a11y lens reported the focus-ring defect (`PF-148`) as *"a straight regression"* on the two filter controls.
+**Measured false:** the two pre-existing selects keep their `focus:ring-blue-400/30` **and** their
+`focus:border-blue-400`, and this diff does not touch them. What is true is that the slice adds **three new** controls
+using the same low-alpha house ring. Recorded at P2 with that correction, not at the severity the panel proposed.
 
 ---
 
 ## ⚠️ Container-state facts that will otherwise waste your Step 2
 
-1. **`pilotage_api` was rebuilt and recreated by run 32, and is healthy on `S-E04-4`'s code.** Measured both sides:
-   `grep -c auditLoginActionCodes dist/modules/analytics/analytics.service.js` inside the container returned **0**
-   before and **3** after. The rebuild was the rationed one, and it was necessary — `adminLogins` was still being
-   served by pre-`S-E04-4` code, so AC-3 could not otherwise be evidenced.
-2. **`pilotage_web` still serves an image from 2026-08-07.** Unchanged from runs 30, 31 and 32.
-   `http://localhost:3000/admin/audit` served by the *container* is the **old bundle** — not a regression, not
-   something to debug.
-3. **`PF-126` still blocks every `web` image rebuild** — `next build` inside BuildKit cannot fetch `Inter` from Google
-   Fonts, and the two obvious explanations are already falsified (host: 200; bare `docker run alpine`: 200). **Do not
-   re-test connectivity.** Fix direction is `next/font/local`; owner `V3-E02`.
-4. **But `PF-126` does not block *executing* the web code, and run 32 proved that.** The **host** `next build` works
-   (the gate emits 116 routes), so the way to drive the real page is: `docker stop pilotage_web`, run
-   `npx next dev --port 3000` from `apps/web` with `AUTH_URL=http://localhost:3000`, drive Playwright at it, then
-   `docker start pilotage_web`. **Port 3000 specifically** — the Keycloak clients only list
-   `http://localhost:3000/*` as a redirect URI, so any other port fails login, and widening that list is not worth
-   doing. Warm each route first: a cold `next dev` compile takes 5–17 s and trips the harness's 4 s probe (`PF-146`).
-5. **A sweep is still not schedulable** for the same reason runs 30–32 gave: its mechanism is one
+1. **`pilotage_api` was NOT rebuilt this run.** It still runs run 32's image, so the container does **not** serve
+   `S-E04-5`'s code. Every claim above was evidenced by unit test, by the full gate, or by direct SQL against
+   `pilotage_postgres` — **not** by the running API. If you need the new endpoint shape live, that is one rationed
+   rebuild of `api` only.
+2. **The database is ahead of the API container** — `tenant.timezone` exists in Postgres while the running API's
+   Prisma client does not know the column. That is safe (additive, and the old client never selects it) and it is the
+   expand phase behaving exactly as the migration's own header describes.
+3. **`pilotage_web` still serves an image from 2026-08-07.** Unchanged from runs 30–33. The container's
+   `/admin/audit` is the **old bundle** — not a regression, not something to debug.
+4. **`PF-126` still blocks every `web` image rebuild** — `next build` inside BuildKit cannot fetch `Inter` from Google
+   Fonts, and the two obvious explanations are already falsified (host: 200; bare `docker run alpine`: 200).
+   **Do not re-test connectivity.** Fix direction is `next/font/local`; owner `V3-E02`.
+5. **A sweep is still not schedulable** for the reason runs 30–33 gave: its mechanism is one
    `docker compose build` + `--force-recreate`, and the `web` half of that is what is broken.
 
----
+## Still open from earlier runs, untouched by run 33
 
-## Findings raised by run 32 and still open
+`PF-136`, `PF-140`, `PF-141` (`S-E04-7`) · `PF-142`, `PF-146` (`V3-E02`) · `PF-145` (`V3-E05`) ·
+`PF-121`, `PF-122` (`S-E04-7`) · `PF-124`…`PF-127` from run 30. `PF-123` is now **half** closed — read side done,
+write side still `S-E04-7`.
 
-| Finding | Priority | Owner | One line |
-|---|---|---|---|
-| `PF-134` | **P1** | `S-E04-5` | a **fourth** audit vocabulary survives in `AuditTable.tsx`'s inline `pickActionTone`, and it is **already wrong**: `coefficient.upsert` and `grade.unflag` are declared critical, counted by the card, and painted `neutral` |
-| `PF-140` | **P1** | `S-E04-7` | the DPO CSV changed bytes with no AC asking (three columns **mid-header**, new BOM), collapses two vocabulary axes into one column, and `csvEscape` neutralises no leading `=`/`+`/`-`/`@` one column from a raw client header |
-| `PF-136` | P2 | `S-E04-7` | drawer, table and worker use **three different** merge rules for a mixed-vocabulary row; the marker is `aria-hidden`, so the regulatory signal is absent from the accessibility tree |
-| `PF-137` | P2 | `S-E04-5` | `openapi.yaml` + `data-model.md` D-23 disagree with shipped code |
-| `PF-139` | P2 | `S-E04-5` | « Non instrumenté » is clipped in `KpiCard`; an analytics outage renders as an affirmative claim |
-| `PF-141` | P2 | `S-E04-7` | the table shows the label and **drops the raw code**, while its own filter still matches the raw column |
-| `PF-142` | P2 | `V3-E02` | both jest configs now read contracts **source**, so nothing verifies the built CJS artefact Node actually loads |
-| `PF-145` | **P1** | `V3-E05` | **only `admin` can be authenticated by the e2e harness** — teacher, parent and student all fail `otp_required`, so a repaired authenticated layer still covers one portal of four. Measure `requiredActions` on the seeded users before writing the story |
-| `PF-146` | P2 | `V3-E02` | the e2e reachability probe aborts at **4 s** and calls the abort "stack down → green skip", while a cold `next dev` route takes 5–17 s. DNC-08 inverted: cannot-tell reported as pass. It is how `PF-144` stayed hidden |
-
-`PF-138`, `PF-143`, **`PF-135`** and **`PF-144`** were raised **and closed** by run 32 — they are in
-`traceability/CLOSED-L0.md`, not here.
-`PF-121`, `PF-122`, `PF-123` (`S-E04-7`) and `PF-124`…`PF-127` from run 30 are all still open and untouched.
-
-### The three worth doing together, if a gate slice is ever picked up
-
-`PF-129` and `PF-133` are the **same missing artefact**: there is no web-side quality gate at all, and no
-web unit runner (`apps/web` has Playwright only — that is also `PF-100`'s blocker and part of `VAL-08`). One spec could
-assert all of it: every server-side `fetch` to `API_URL` goes through `clientProvenanceHeaders`; nothing reachable from
-a `'use client'` entry imports `@/lib/api-client` / `next/headers` / `@/auth`; Build them together. (`/admin/audit` itself is now covered — run 32 shipped the Playwright spec while closing `PF-135`.)
+`PF-129` and `PF-133` remain the **same missing artefact**: there is no web-side quality gate and no web unit runner
+(`apps/web` has Playwright only — also `PF-100`'s blocker and part of `VAL-08`). `PF-148` and `PF-139`'s derivation
+module are two more things that would be verifiable if it existed. Build them together.
 
 ---
 
-cleanup-pending: C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\awesome-spence-9e6f69
+cleanup-pending: C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\brave-almeida-541d05
 
-> Step 0.5 D: run 32 executed inside that worktree and could not delete the ground it stood on. Apply the three
+> Step 0.5 D: run 33 executed inside that worktree and could not delete the ground it stood on. Apply the three
 > Step 0.5 C tests (not mine · clean · merged or no open PR) and remove it, then clear this line.
 >
-> **Run 31's handoff (`pensive-raman-4baf7c`) is discharged at the git level** — run 32 deregistered it along with
-> `musing-archimedes-77d454` and `youthful-jones-758d15`; `git worktree list` shows none of the three. All three
-> **directories** survive on disk: `Remove-Item -Recurse -Force` failed with *"being used by another process"* for
-> each. They are inert leftover bytes, not worktrees; no git command is needed, just delete them when the holding
-> process is gone. Same for `agitated-cerf-ad2bdf`, `elated-ellis-40bb4a`, `inspiring-mclaren-a76c8e`,
-> `sharp-albattani-ec7c4d` and `stoic-allen-b8284b`.
+> **Run 32's handoff (`awesome-spence-9e6f69`) is discharged at the git level** — run 33 deregistered it;
+> `git worktree list` no longer shows it. Its **directory** survives on disk: `git worktree remove` reported
+> *"Permission denied"* on the delete, exactly as runs 31–32 saw for theirs. Inert leftover bytes, not a worktree; no
+> git command is needed, just delete it when the holding process is gone. Same for `pensive-raman-4baf7c`,
+> `musing-archimedes-77d454`, `youthful-jones-758d15`, `agitated-cerf-ad2bdf`, `elated-ellis-40bb4a`,
+> `inspiring-mclaren-a76c8e`, `sharp-albattani-ec7c4d` and `stoic-allen-b8284b`.
 >
-> Unchanged and still requiring a human, said now by runs 29–32: `laughing-wing-54e738` is unregistered but **not
-> empty** (~1.4 MB: `PLAN.md`, `packages/`, `upcomingicsexport.patch`) — unreachable *and* unattributable, so it is not
-> deleted. `youthful-chaum-6aad5c` is **dirty** (staged deletions under `docs/`); the hard rule forbids removing it.
+> Unchanged and still requiring a human, said now by runs 29–33: `laughing-wing-54e738` is unregistered but **not
+> empty** (~1.4 MB: `PLAN.md`, `packages/`, `upcomingicsexport.patch`) — unreachable *and* unattributable, so it is
+> not deleted. `youthful-chaum-6aad5c` is **dirty** (staged deletions under `docs/`); the hard rule forbids removing it.
 >
-> **Remote `ci/*` branch deletion was denied to run 32 by the permission classifier** (`git push origin --delete`).
-> All 38 remote `ci/*` branches are merged and back no open PR; they are safe to delete whenever the permission
-> allows. No local `ci/*` branches remain.
+> **Remote `ci/*` branch deletion stays denied by the permission classifier** (`git push origin --delete`), as in
+> run 32. All merged remote `ci/*` branches back no open PR and are safe to delete whenever the permission allows.
+> No local `ci/*` branches remain beyond this run's.

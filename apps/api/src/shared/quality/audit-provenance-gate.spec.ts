@@ -295,7 +295,7 @@ describe('G-2 / AC-2 — no hard-coded actorRole or portal remains in apps/api/s
     expect(HARDCODED_ACTOR_ROLE.test('        actorRole,')).toBe(false);
   });
 
-  it("the only surviving portal: 'admin' is a where: FILTER, and there is exactly one", () => {
+  it("no production file DECIDES a portal by writing 'admin' — and now none reads one either", () => {
     // FLIPPED BACK, exactly as the S-E04-4 inversion said it would be — and by
     // the protocol that inversion wrote down, not by deleting the case.
     //
@@ -316,19 +316,32 @@ describe('G-2 / AC-2 — no hard-coded actorRole or portal remains in apps/api/s
     //    `AUDIT_LOGIN_ACTIONS` gains a code would have counted teacher, parent
     //    and student logins behind a card labelled « CONNEXIONS ADMIN ». Scope
     //    restored in the same run, so the literal is back — as a FILTER.
+    //  * `S-E04-5` **removed the card**. « Connexions admin » was honest about
+    //    being un-instrumented, but it spent a quarter of a governance surface
+    //    on a sentence that could never become a number, and « Acteurs
+    //    distincts » — computed over the table's own `where` — took the slot.
+    //    The dormant query went with it, so PF-138 closes **by deletion**, not
+    //    by a fix, and the count returns to 0. Real login/session auditing is
+    //    owned by V3-E05 (PF-26).
     //
-    // The invariant never moved: no production file under `apps/api/src` DECIDES
-    // a portal by writing the literal `'admin'`. One read-side filter is legal
-    // and is pinned here by shape; a write is not, at any count.
+    // The invariant never moved, and this is its third measurement rather than
+    // its third rewrite: no production file under `apps/api/src` DECIDES a
+    // portal by writing the literal `'admin'`. A read-side `where:` filter was
+    // legal and pinned by shape while one existed; a write is not, at any count.
+    // The shape rule is kept below as a POSITIVE CONTROL so that going to zero
+    // did not turn this case into a rule that checks nothing (DNC-08).
     const occurrences: { path: string; line: string }[] = [];
     for (const [path, source] of PRODUCTION) {
       for (const line of source.split(/\r?\n/)) {
         if (HARDCODED_PORTAL.test(line)) occurrences.push({ path, line: line.trim() });
       }
     }
-    expect(occurrences).toHaveLength(1);
-    expect(occurrences[0]?.line).toContain('where');
-    expect(occurrences[0]?.line).not.toContain('auditLog');
+    expect(occurrences).toEqual([]);
+    // The scan itself still works: PRODUCTION is populated, and the matcher
+    // still finds the literal when it is present. Without these two, `[]` above
+    // would also be the result of scanning nothing with a broken regex.
+    expect(PRODUCTION.length).toBeGreaterThan(10);
+    expect(HARDCODED_PORTAL.test("      where: { tenantId, portal: 'admin' },")).toBe(true);
   });
 
   it('G-7 positive control — the portal regex DOES match a write-shaped literal', () => {
