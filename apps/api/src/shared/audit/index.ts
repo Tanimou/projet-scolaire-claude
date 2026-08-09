@@ -34,3 +34,13 @@ export {
   type AuditClientHintsPolicy,
   type ClientHintsRequest,
 } from './client-hints';
+
+// S-E04-6 — the in-transaction write seam. Re-exported, never declared here:
+// `audit-provenance-gate.spec.ts` asserts this barrel holds no declaration of
+// its own, so it can never become a second home.
+export {
+  AUDIT_WRITE_FAILED_MESSAGE,
+  writeAudit,
+  type AuditTransactionClient,
+  type AuditWriteInput,
+} from './write-audit';

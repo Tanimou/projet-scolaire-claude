@@ -195,18 +195,54 @@ const SOURCES = new Map<string, ts.SourceFile>(
 
 type Axis = 'action' | 'resourceType';
 
+/**
+ * S-E04-6 — the SHARED seams: **exported** helpers that write an audit row on
+ * behalf of call sites living in OTHER files.
+ *
+ * Phase B below resolves a forwarder's arguments **scoped to the declaring
+ * file**, and states its reason: every one of the six original forwarders is a
+ * `private` method, and a repo-wide name match would apply one helper's
+ * parameter position to another helper's arguments. That reason is exactly what
+ * does NOT hold for `writeAudit` — it is exported, it is called from eight other
+ * files, and `write-audit.ts` contains zero call sites of its own. Left on the
+ * file-scoped path it resolves to NOTHING: every code routed through the seam
+ * drops silently out of the written set, and the REVERSE completeness direction
+ * then demands that nine real French labels be deleted. That is a gate-shape
+ * failure wearing a vocabulary error's clothes, and it is the most expensive
+ * possible thing to debug.
+ *
+ * The registry is therefore resolved repo-wide — and the ambiguity the
+ * file-scoping avoided is closed by assertion instead: `V-1` proves there is
+ * EXACTLY ONE exported `writeAudit` under `apps/api/src`, so the day a second one
+ * appears the suite goes red before it can mix two helpers' arguments.
+ */
+const SHARED_SEAMS = [
+  { rel: 'apps/api/src/shared/audit/write-audit.ts', name: 'writeAudit' },
+] as const;
+const SHARED_SEAM_KEYS = new Set(SHARED_SEAMS.map((s) => `${s.rel}#${s.name}`));
+const SHARED_SEAM_NAMES = new Set<string>(SHARED_SEAMS.map((s) => s.name));
+
 interface Extraction {
   actions: Set<string>;
   resourceTypes: Set<string>;
   /** Prefixes of `` `x_${runtimeValue}` `` shapes — NOT pretended to be literals. */
   families: Set<string>;
-  /** Every `auditLog.create` site found, for the vacuity floor. */
+  /**
+   * Every audit-WRITING site found, for the vacuity floor: a direct
+   * `auditLog.create`, **or** a call to a shared seam.
+   *
+   * Counting both is not bookkeeping. Migrating a call site onto the seam removes
+   * one `auditLog.create` and adds one `writeAudit(…)`, so the total is conserved
+   * by construction. Counting only the direct form would make the floor collapse
+   * by ~18 during `S-E04-7` and present a successful migration as a regression —
+   * fixing the DEFINITION belongs in the slice that introduces the seam.
+   */
   seams: number;
-  /** Private helpers that forward an `action` into a seam (the closure list). */
+  /** Helpers that forward an `action` into a seam (the closure list). */
   forwarders: Set<string>;
 }
 
-function extract(): Extraction {
+function extract(sources: Map<string, ts.SourceFile> = SOURCES): Extraction {
   const out: Extraction = {
     actions: new Set(),
     resourceTypes: new Set(),
@@ -349,8 +385,20 @@ function extract(): Extraction {
 
   // ---- Phase A: the `auditLog.create` seams. Only the `data:` object literal
   // is read, which is what structurally excludes `orderBy: { action: 'asc' }`.
-  for (const [file, sf] of SOURCES) {
+  for (const [file, sf] of sources) {
     const visit = (node: ts.Node): void => {
+      // A call to a shared seam is a WRITE SITE too — counted here so the floor
+      // survives S-E04-7's migration (see `Extraction.seams`). Its arguments are
+      // resolved in Phase B, repo-wide.
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression;
+        const calleeName = ts.isIdentifier(callee)
+          ? callee.text
+          : ts.isPropertyAccessExpression(callee)
+            ? callee.name.text
+            : undefined;
+        if (calleeName !== undefined && SHARED_SEAM_NAMES.has(calleeName)) out.seams += 1;
+      }
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
@@ -386,9 +434,11 @@ function extract(): Extraction {
   }
 
   // ---- Phase B: call-site resolution for the registered forwarders. Scoped to
-  // the DECLARING file — every one of the six is a `private` method, and a
+  // the DECLARING file — every one of the six PRIVATE helpers is a method, and a
   // repo-wide name match would apply one helper's parameter position to
-  // another's arguments.
+  // another's arguments. A SHARED SEAM (see `SHARED_SEAMS`) is the documented
+  // exception and is resolved across every writer file, because its call sites
+  // are by definition not in the file that declares it.
   const done = new Set<string>();
   for (let pass = 0; pass < 3 && pendingForwarders.length > 0; pass++) {
     const batch = pendingForwarders.splice(0);
@@ -396,42 +446,47 @@ function extract(): Extraction {
       const key = `${fw.file}#${fw.name}#${fw.paramIndex}#${fw.member ?? ''}`;
       if (done.has(key)) continue;
       done.add(key);
-      const sf = SOURCES.get(fw.file);
-      if (!sf) continue;
-      const visit = (node: ts.Node): void => {
-        if (ts.isCallExpression(node)) {
-          const callee = node.expression;
-          const name = ts.isIdentifier(callee)
-            ? callee.text
-            : ts.isPropertyAccessExpression(callee)
-              ? callee.name.text
-              : undefined;
-          if (name === fw.name) {
-            let arg = node.arguments[fw.paramIndex];
-            if (arg) {
-              if (fw.member) {
-                while (arg && (ts.isAsExpression(arg) || ts.isParenthesizedExpression(arg))) {
-                  arg = arg.expression;
-                }
-                if (arg && ts.isObjectLiteralExpression(arg)) {
-                  const mp = arg.properties.find(
-                    (x) => x.name && ts.isIdentifier(x.name) && x.name.text === fw.member,
-                  );
-                  if (mp && ts.isPropertyAssignment(mp)) {
-                    resolveExpression(mp.initializer, fw.file, fw.axis);
-                  } else if (mp && ts.isShorthandPropertyAssignment(mp)) {
-                    resolveExpression(mp.name, fw.file, fw.axis);
+      const shared = SHARED_SEAM_KEYS.has(`${repoRel(fw.file)}#${fw.name}`);
+      const searchFiles = shared
+        ? [...sources.values()]
+        : [sources.get(fw.file)].filter((sf): sf is ts.SourceFile => sf !== undefined);
+      for (const sf of searchFiles) {
+        const currentFile = sf.fileName;
+        const visit = (node: ts.Node): void => {
+          if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            const name = ts.isIdentifier(callee)
+              ? callee.text
+              : ts.isPropertyAccessExpression(callee)
+                ? callee.name.text
+                : undefined;
+            if (name === fw.name) {
+              let arg = node.arguments[fw.paramIndex];
+              if (arg) {
+                if (fw.member) {
+                  while (arg && (ts.isAsExpression(arg) || ts.isParenthesizedExpression(arg))) {
+                    arg = arg.expression;
                   }
+                  if (arg && ts.isObjectLiteralExpression(arg)) {
+                    const mp = arg.properties.find(
+                      (x) => x.name && ts.isIdentifier(x.name) && x.name.text === fw.member,
+                    );
+                    if (mp && ts.isPropertyAssignment(mp)) {
+                      resolveExpression(mp.initializer, currentFile, fw.axis);
+                    } else if (mp && ts.isShorthandPropertyAssignment(mp)) {
+                      resolveExpression(mp.name, currentFile, fw.axis);
+                    }
+                  }
+                } else {
+                  resolveExpression(arg, currentFile, fw.axis);
                 }
-              } else {
-                resolveExpression(arg, fw.file, fw.axis);
               }
             }
           }
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(sf);
+          ts.forEachChild(node, visit);
+        };
+        visit(sf);
+      }
     }
   }
 
@@ -534,12 +589,20 @@ const LEGACY_RESOURCE_TYPE_CODES = LEGACY_AUDIT_RESOURCE_TYPE_ALIASES.map((a) =>
 
 describe('V-0 — the gate is not vacuous', () => {
   it('the extractor walked a real application and found real audit seams', () => {
-    // Measured 2026-08-09 on this branch: 168 non-spec `.ts` files (156 under
-    // apps/api/src, 11 under packages/imports-core/src, plus the seed) and 32
-    // `auditLog.create` sites. Floors sit below the measurement so a legitimate
-    // deletion is not red, and far above zero so an empty walk cannot pass.
+    // Measured 2026-08-09 on this branch: 169 non-spec `.ts` files (157 under
+    // apps/api/src, 11 under packages/imports-core/src, plus the seed).
+    //
+    // S-E04-6 RE-MEASURED the seam count and, more importantly, changed its
+    // DEFINITION (see `Extraction.seams`). The old figure was 32 direct
+    // `auditLog.create` sites. This slice moves `assessments.controller.ts` off
+    // the direct form (−1), adds the one inside `write-audit.ts` (+1) and adds
+    // eleven `writeAudit(…)` call sites, so the counted total goes UP, not down —
+    // and because migration is one-for-one, S-E04-7's ~18 further conversions
+    // leave it unchanged. The floor is re-stated at 30: below today's
+    // measurement, above the pre-slice figure, and unbreakable by a correct
+    // migration.
     expect(WRITER_FILES.length).toBeGreaterThanOrEqual(120);
-    expect(EXTRACTED.seams).toBeGreaterThanOrEqual(25);
+    expect(EXTRACTED.seams).toBeGreaterThanOrEqual(30);
     expect(WRITTEN_ACTIONS.size).toBeGreaterThanOrEqual(40);
     expect(WRITTEN_RESOURCE_TYPES.size).toBeGreaterThanOrEqual(20);
   });
@@ -626,16 +689,91 @@ describe('V-1 / AC-2 / AC-7 — every written code has a label, and every label 
     // set, and a shrunken written set makes the REVERSE completeness direction
     // demand that real labels be deleted. That is the failure this assertion
     // exists to make loud.
+    //
+    // S-E04-6 adds a FIFTH, and it is of a new kind: `writeAudit` is exported and
+    // its call sites live in other files, so it is resolved repo-wide
+    // (`SHARED_SEAMS`). It is pinned in the SAME list rather than in a parallel
+    // one — a second table would be a second answer to "what forwards an action",
+    // which is the shape this epic exists to delete.
     expect([...EXTRACTED.forwarders].sort()).toEqual([
       'apps/api/src/modules/child-claims/child-claims.service.ts#audit',
       'apps/api/src/modules/integrations/integrations.service.ts#audit',
       'apps/api/src/modules/remediation/remediation.controller.ts#writeBookingAudit',
       'apps/api/src/modules/school-structure/academic-years.controller.ts#audit',
+      'apps/api/src/shared/audit/write-audit.ts#writeAudit',
     ]);
     // …and the two union-typed helpers are accounted for by their codes being
     // present, which is the only way their type-resolution path can be green.
     expect(WRITTEN_ACTIONS.has('alert.dismiss')).toBe(true);
     expect(WRITTEN_ACTIONS.has('remediation.availability_updated')).toBe(true);
+  });
+
+  it('S-E04-6 — the SHARED seam is unambiguous: exactly one exported `writeAudit` under apps/api/src', () => {
+    // The repo-wide resolution above is only safe while the name identifies ONE
+    // helper. This is the assertion that keeps it safe: a second exported
+    // `writeAudit` anywhere under `apps/api/src` would silently make the extractor
+    // apply one helper's parameter positions to another's arguments — the exact
+    // hazard Phase B's file-scoping was invented to avoid.
+    const declarers = WRITER_FILES.filter((file) =>
+      /export\s+(?:async\s+)?function\s+writeAudit\b/.test(
+        stripCommentsPreservingLines(readFileSync(file, 'utf8')),
+      ),
+    ).map(repoRel);
+    expect(declarers).toEqual(['apps/api/src/shared/audit/write-audit.ts']);
+    expect([...SHARED_SEAM_KEYS]).toEqual(['apps/api/src/shared/audit/write-audit.ts#writeAudit']);
+  });
+
+  it('S-E04-6 — one code per NEW family is recovered THROUGH the shared seam, by name', () => {
+    // In `V-1`'s "five hard literal shapes" style: named individually, because an
+    // empty-array assertion would also be satisfied by an extractor that resolved
+    // nothing at all. Each of these is written ONLY at a `writeAudit(tx, {…})`
+    // call site in another file, so every one of them proves the repo-wide
+    // resolution actually fired.
+    expect(WRITTEN_ACTIONS.has('role.grant')).toBe(true); // identity/users.service.ts
+    expect(WRITTEN_ACTIONS.has('role.revoke')).toBe(true); // identity/users.service.ts
+    expect(WRITTEN_ACTIONS.has('school.close')).toBe(true); // schools/schools.controller.ts
+    expect(WRITTEN_ACTIONS.has('enrollment.transfer')).toBe(true); // enrollments/…
+    expect(WRITTEN_ACTIONS.has('assessment.publish')).toBe(true); // grades/… (MOVED onto the seam)
+    expect(WRITTEN_RESOURCE_TYPES.has('user_role')).toBe(true);
+    expect(WRITTEN_RESOURCE_TYPES.has('school')).toBe(true);
+    expect(WRITTEN_RESOURCE_TYPES.has('enrollment')).toBe(true);
+  });
+
+  it('FALSIFICATION — delete a family’s call and the pair goes RED, so the pin is not decorative', () => {
+    // The negative control for the assertion above. Without it, "the extractor
+    // sees `writeAudit`" is unfalsifiable: every code could be arriving from
+    // somewhere else entirely and the two directions would still look green.
+    //
+    // The mutation is applied to an in-memory COPY of the source map — nothing on
+    // disk is touched — and it deletes exactly one family's call sites.
+    const target = join(REPO_ROOT, 'apps', 'api', 'src', 'modules', 'schools', 'schools.controller.ts');
+    const original = readFileSync(target, 'utf8');
+    expect(original).toContain('writeAudit(tx, {');
+    const mutatedText = original.replace(/await writeAudit\(tx, \{[\s\S]*?\n {6}\}\);/g, '');
+    expect(mutatedText).not.toContain('writeAudit(tx, {');
+
+    const mutatedSources = new Map(SOURCES);
+    mutatedSources.set(
+      target,
+      ts.createSourceFile(target, mutatedText, ts.ScriptTarget.ES2022, true),
+    );
+    const mutated = extract(mutatedSources);
+
+    // The school family disappears from the written set…
+    expect(mutated.actions.has('school.create')).toBe(false);
+    expect(mutated.actions.has('school.update')).toBe(false);
+    expect(mutated.actions.has('school.close')).toBe(false);
+    expect(mutated.resourceTypes.has('school')).toBe(false);
+    // …which is precisely what turns REVERSE completeness red, since the four
+    // labels are still declared. This is the failure the pin exists to make loud.
+    expect(
+      DECLARED_ACTIONS.filter((c) => !mutated.actions.has(c) && !FAMILY_MEMBERS.has(c)).sort(),
+    ).not.toEqual([]);
+    // …and the OTHER families are untouched, so the mutation was surgical rather
+    // than a demolition that would make any assertion pass.
+    expect(mutated.actions.has('role.grant')).toBe(true);
+    expect(mutated.actions.has('enrollment.transfer')).toBe(true);
+    expect(mutated.seams).toBeLessThan(EXTRACTED.seams);
   });
 
   it('FORWARD — every written action has a label', () => {
@@ -661,12 +799,20 @@ describe('V-1 / AC-2 / AC-7 — every written code has a label, and every label 
     expect(DECLARED_RESOURCE_TYPES.filter((c) => !WRITTEN_RESOURCE_TYPES.has(c)).sort()).toEqual([]);
   });
 
-  it('the 7 keys nobody writes are gone, by name (AC-2)', () => {
+  it('the keys nobody writes are still gone, by name (AC-2) — amended by S-E04-6', () => {
     // Named individually so a reader can see exactly which orphans the reverse
     // direction removed, rather than trusting an empty array.
+    //
+    // AMENDMENT, NOT A SILENT LINE EDIT. `enrollment` was on this list: S-E04-4
+    // deleted it as a dead label and pinned the deletion here BY NAME. S-E04-6
+    // gives it four real writers (`enrollments.controller.ts`), so both halves of
+    // the old assertion invert — it is now declared, and it is now written. That
+    // is the list being right twice, not the list being wrong: the code was
+    // orphaned only because the enrollment decision was not audited AT ALL, which
+    // is the very gap this slice closes. It moves to the "written, therefore
+    // declared" half below, and the four codes that remain orphaned stay pinned.
     const declared = new Set([...DECLARED_RESOURCE_TYPES]);
     for (const orphan of [
-      'enrollment',
       'enrollment_request',
       'class_section',
       'teacher_profile',
@@ -675,9 +821,15 @@ describe('V-1 / AC-2 / AC-7 — every written code has a label, and every label 
       expect(declared.has(orphan)).toBe(false);
       expect(WRITTEN_RESOURCE_TYPES.has(orphan)).toBe(false);
     }
-    // …and the two that stay, because they ARE written.
+    // …and the ones that stay, because they ARE written.
     expect(declared.has('student')).toBe(true);
     expect(declared.has('grade')).toBe(true);
+    // The amendment itself, asserted in both directions so it cannot rot into a
+    // deletion: `enrollment` is declared BECAUSE it is written, and if the writers
+    // ever disappear the reverse-completeness direction goes red rather than this
+    // line quietly staying true.
+    expect(declared.has('enrollment')).toBe(true);
+    expect(WRITTEN_RESOURCE_TYPES.has('enrollment')).toBe(true);
   });
 });
 
@@ -797,8 +949,10 @@ const DECLARATION_REL = 'packages/contracts/src/audit/vocabulary.ts';
  *
  * `RoleBuilderForm.tsx` declares `RESOURCE_LABEL`, the PERMISSION-domain label
  * map (`school`, `term`, `cycle`, `attendance`, `lesson`, …). It collides with
- * the audit vocabulary on exactly four tokens (`academic_year`, `assessment`,
- * `grade`, `role`) by accident of both being French labels for school nouns. It
+ * the audit vocabulary on six tokens (`academic_year`, `assessment`, `grade`,
+ * `role`, and — since S-E04-6 declared them as audit resource types — `school`
+ * and `enrollment`) by accident of both being French labels for school nouns.
+ * No assertion pins the number; only that the file trips the matcher at all. It
  * is a different vocabulary, it is not read by any audit surface, and forcing it
  * through the audit declaration would be a wrong fix. Both properties are
  * asserted below.

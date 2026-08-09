@@ -123,9 +123,29 @@ export function isAuditPortalNone(code: string | null | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Types de ressource — 22 codes, relevés sur les sites d'écriture
+// Types de ressource — 25 codes, relevés sur les sites d'écriture
 // ---------------------------------------------------------------------------
 
+/**
+ * S-E04-6 ajoute **trois** codes — `enrollment`, `school`, `user_role` — parce
+ * que trois familles privilégiées se sont mises à écrire une ligne d'audit dans
+ * leur propre transaction (`apps/api/src/shared/audit/write-audit.ts`).
+ *
+ * `enrollment` **revient** : `S-E04-4` l'avait supprimé comme libellé orphelin
+ * (déclaré, jamais écrit) et avait épinglé la suppression par son nom dans
+ * `audit-vocabulary-gate.spec.ts`. Ce n'est pas une annulation de cette décision
+ * mais son aboutissement : le code n'était orphelin que parce que la décision
+ * d'inscription n'était pas tracée du tout. Il a désormais quatre écrivains, et
+ * l'assertion par nom a été amendée — avec la raison — plutôt que supprimée.
+ *
+ * `user_role` et **non** `user_profile` pour la famille grant/revoke :
+ * `AuditLog.resourceId` est une colonne `@db.Uuid`, la valeur qui identifie
+ * l'attribution est `UserRole.id`, et nommer la ressource `user_profile` tout en
+ * y écrivant l'identifiant d'une autre table rendrait la colonne illisible. Un
+ * identifiant composite (`userId:roleId`) est refusé pour la même raison qu'une
+ * IP non-inet l'est dans `provenance.ts` : PostgreSQL rejette le cast et la
+ * ligne d'audit ferait échouer la mutation qu'elle trace.
+ */
 export const AUDIT_RESOURCE_TYPES: readonly AuditVocabularyEntry[] = [
   { code: 'academic_year', label: 'Année scolaire' },
   { code: 'alert_instance', label: 'Alerte' },
@@ -136,6 +156,11 @@ export const AUDIT_RESOURCE_TYPES: readonly AuditVocabularyEntry[] = [
   { code: 'calendar_event', label: 'Événement du calendrier' },
   { code: 'conversation', label: 'Conversation' },
   { code: 'conversation_report', label: 'Signalement de conversation' },
+  // S-E04-6. Le libellé est volontairement identique au code hérité
+  // « Inscription » de `LEGACY_AUDIT_RESOURCE_TYPE_ALIASES` : les deux DÉSIGNENT
+  // la même chose. Ce qui les distingue à l'écran n'est pas le mot mais le
+  // marqueur « Format hérité », que seule la ligne héritée porte.
+  { code: 'enrollment', label: 'Inscription' },
   { code: 'export_job', label: "Tâche d'export" },
   { code: 'grade', label: 'Note' },
   { code: 'guardianship_claim', label: 'Demande de rattachement' },
@@ -145,16 +170,18 @@ export const AUDIT_RESOURCE_TYPES: readonly AuditVocabularyEntry[] = [
   { code: 'remediation_plan', label: 'Plan de remédiation' },
   { code: 'role', label: 'Rôle' },
   { code: 'roster_source', label: 'Source d’effectifs' },
+  { code: 'school', label: 'Établissement' },
   { code: 'snapshot_recompute_trigger', label: 'Recalcul d’agrégats' },
   { code: 'student', label: 'Élève' },
   { code: 'subject_coefficient', label: 'Coefficient de matière' },
   { code: 'tutor', label: 'Tuteur' },
   { code: 'tutor_availability', label: 'Disponibilité de tuteur' },
   { code: 'user_profile', label: 'Utilisateur' },
+  { code: 'user_role', label: 'Attribution de rôle' },
 ] as const;
 
 // ---------------------------------------------------------------------------
-// Actions — 48 codes, relevés sur les sites d'écriture
+// Actions — 57 codes, relevés sur les sites d'écriture
 // ---------------------------------------------------------------------------
 
 /**
@@ -212,6 +239,14 @@ export const AUDIT_ACTIONS: readonly AuditActionEntry[] = [
   { code: 'conversation.moderation_read', label: 'Lecture de modération' },
   { code: 'conversation.report', label: 'Signalement d’une conversation' },
 
+  // S-E04-6 — la décision d'inscription. Quatre codes pour quatre décisions
+  // distinctes ; `status_change` et `cancel` sont comptés par « Modifications
+  // critiques » parce qu'ils retirent un élève d'une classe.
+  { code: 'enrollment.create', label: 'Inscription d’un élève' },
+  { code: 'enrollment.status_change', label: 'Changement de statut d’inscription', critical: true },
+  { code: 'enrollment.transfer', label: 'Transfert de classe' },
+  { code: 'enrollment.cancel', label: 'Annulation d’une inscription', critical: true },
+
   { code: 'export.bulletin.request', label: 'Demande d’export de bulletins', export: true },
   { code: 'export.grade_grid.request', label: 'Demande d’export du tableau de notes', export: true },
 
@@ -252,6 +287,18 @@ export const AUDIT_ACTIONS: readonly AuditActionEntry[] = [
   { code: 'role.create', label: 'Création d’un rôle' },
   { code: 'role.update', label: 'Modification d’un rôle', critical: true },
   { code: 'role.delete', label: 'Suppression d’un rôle', critical: true },
+  // S-E04-6 — l'attribution et le retrait d'un rôle sont les deux mutations de
+  // privilège les plus sensibles de la plateforme, et jusqu'à cette tranche
+  // elles n'écrivaient AUCUNE ligne. Toutes deux critiques.
+  { code: 'role.grant', label: 'Attribution d’un rôle', critical: true },
+  { code: 'role.revoke', label: 'Retrait d’un rôle', critical: true },
+
+  // S-E04-6 — `school.close` et non `school.delete` : `DELETE /schools/:id` est
+  // une fermeture douce (`status: 'closed'`), la ligne survit. Le vocabulaire ne
+  // doit pas annoncer une suppression qui n'a pas eu lieu.
+  { code: 'school.create', label: 'Création d’un établissement' },
+  { code: 'school.update', label: 'Modification d’un établissement', critical: true },
+  { code: 'school.close', label: 'Fermeture d’un établissement', critical: true },
 
   { code: 'student.account_linked', label: 'Rattachement d’un compte élève' },
   { code: 'user.invite', label: 'Invitation d’un utilisateur' },
