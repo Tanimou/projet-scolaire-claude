@@ -77,6 +77,21 @@ jobs:
       # probes are reported as not-executed here rather than silently skipped.
       # Kept in step with scripts/ci-gate.sh stage 0c (S-E02-2 AC-4).
       - run: node scripts/compose-invocation-check.js
+      # Audit writes (S-E04-7 / PF-31). Every `auditLog.create` under the walk
+      # root apps/api/src + apps/worker/src + packages/imports-core/src is either
+      # behind `writeAudit(tx, {…})` inside a transaction, or carries a reviewed
+      # baseline row whose finding id RESOLVES against
+      # docs/daily-improvement-v3/audit-findings-index.md — resolves, not merely
+      # matches PF-nnn, which is the S-E06-5 defect turned into a check. It also
+      # fails any writeAudit call given a non-transactional first argument, a
+      # non-literal second argument, or sitting inside a try block.
+      # Source-only: no build, no database, no generated Prisma client, so it
+      # belongs HERE and not in the build job, which PF-126 makes the least
+      # reliable place in the harness. Blocking: the job fails on its exit code,
+      # and no failure-tolerating key is attached to this step.
+      # Kept in step with scripts/ci-gate.sh stage 0d (S-E02-2 AC-4) — the two
+      # must not drift.
+      - run: node scripts/audit-write-check.js
       # `lint` dependsOn `^build` in turbo.json, and the API build needs the
       # generated Prisma client — without this the lint job dies on unresolvable
       # `@prisma/client` types rather than on a lint rule.

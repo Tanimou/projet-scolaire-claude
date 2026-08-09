@@ -1,4 +1,5 @@
 import { InternalServerErrorException } from '@nestjs/common';
+import { type AuditActionCode, type AuditResourceTypeCode } from '@pilotage/contracts';
 import { Prisma } from '@prisma/client';
 
 import { type AuditProvenance } from './provenance';
@@ -95,10 +96,21 @@ export interface AuditWriteInput {
   tenantId: string;
   /** The acting `UserProfile.id`, or null when no profile is resolvable. */
   actorId: string | null;
-  /** A code declared in `AUDIT_ACTIONS` (`packages/contracts/src/audit`). */
-  action: string;
-  /** A code declared in `AUDIT_RESOURCE_TYPES`. */
-  resourceType: string;
+  /**
+   * A code declared in `AUDIT_ACTIONS` (`packages/contracts/src/audit`) — and
+   * since S-E04-7 that sentence is enforced by the compiler rather than by this
+   * comment (PF-162, `ADR-035` D14). An undeclared code is a type error at the
+   * call site; `write-audit.spec.ts` pins it with a `@ts-expect-error` that goes
+   * red in BOTH directions, so a future widening of the union back to `string`
+   * is itself a failing typecheck rather than a silent loss of the invariant.
+   *
+   * A **computed** family (`` `remediation.booking_${status}` ``) cannot satisfy
+   * a closed union by construction; `audit-vocabulary-gate.spec.ts` is the half
+   * that covers those, and neither half replaces the other.
+   */
+  action: AuditActionCode;
+  /** A code declared in `AUDIT_RESOURCE_TYPES`. Same compile-time rule (PF-162). */
+  resourceType: AuditResourceTypeCode;
   /** A bare uuid, or null. Never a composite. */
   resourceId: string | null;
   /** Derived BEFORE `$transaction` opens, by `deriveAuditProvenance`. */

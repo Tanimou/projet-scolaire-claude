@@ -8,11 +8,17 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Req,
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
+import {
+  type ClientHintsRequest,
+  extractAuditClientHints,
+} from '../../shared/audit/client-hints';
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -73,8 +79,18 @@ export class ChildClaimsController {
   @HttpCode(HttpStatus.OK)
   @RequiresPermission('guardianships.claim')
   @ApiOperation({ summary: 'Self-claim a child (deny-by-default match → pending link, never active)' })
-  async submit(@CurrentJwt() jwt: KeycloakJwtPayload, @Body() dto: CreateChildClaimDto) {
+  async submit(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Body() dto: CreateChildClaimDto,
+    @Req() req: ClientHintsRequest,
+  ) {
     const { me, guardian } = await this.resolveGuardian(jwt);
+    // S-E04-7: derived HERE, above the service's transaction (S-E06-6's rule).
+    // The value on this path is what it always was — 'parent' IS a Keycloak realm
+    // role, unlike the 'admin' literal the admin path used to write (PF-122) — so
+    // the row is unchanged; what changed is that it is DERIVED rather than
+    // hard-coded at the write site.
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     return this.service.submitClaim({
       tenantId: guardian.tenantId,
       schoolId: guardian.schoolId,
@@ -85,6 +101,7 @@ export class ChildClaimsController {
       birthDate: dto.birthDate,
       externalRef: dto.externalRef,
       relationship: dto.relationship,
+      provenance,
     });
   }
 
@@ -100,13 +117,19 @@ export class ChildClaimsController {
   @HttpCode(HttpStatus.OK)
   @RequiresPermission('guardianships.claim')
   @ApiOperation({ summary: 'Withdraw a still-submitted own claim (404-before-403, double-withdraw no-op)' })
-  async withdraw(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id', ParseUUIDPipe) id: string) {
+  async withdraw(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: ClientHintsRequest,
+  ) {
     const { me, guardian } = await this.resolveGuardian(jwt);
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     const ok = await this.service.withdraw({
       tenantId: guardian.tenantId,
       guardianId: guardian.id,
       actorId: me.id,
       claimId: id,
+      provenance,
     });
     if (!ok) {
       // A missing / non-own / cross-tenant / non-submitted id → 404 (no leak).

@@ -1,0 +1,108 @@
+{
+  "$comment": "Audit writes that still reach `auditLog.create` directly, measured by scripts/audit-write-check.js over the walk root apps/api/src + apps/worker/src + packages/imports-core/src (production .ts, excluding *.spec.ts and the seam apps/api/src/shared/audit/write-audit.ts). Keyed on path#symbol, NEVER on path:line — a line-keyed row silently un-baselines its site on any edit above it, and remediation.controller.ts / messaging.service.ts are exactly the churning files. This list may only ever SHRINK: a row matching no site is a FAILURE, not a leftover.",
+  "$doc": [
+    "MEASURED, WITH ITS ROOT (S-E04-7, branch ci/2026-08-09-v3-e04-s7): 27 direct audit writes outside the seam across 16 files — 25 in apps/api/src, 0 in apps/worker/src, 2 in packages/imports-core/src. S-E04-7 CONVERTED 10 onto writeAudit(tx, {…}) and BASELINED the 17 below. 27 = 10 + 17, and the check asserts that arithmetic by construction (rule A + rule D).",
+    "docs/spec/features/v3-e04/tasks.md AC-1 says 30; that figure is stale (pre-S-E04-6). ADR-035 D9 says '27 sites across 15 files' and attributes all of them to apps/api; the file count is 16 and 2 of the sites are in packages/imports-core. Numbers here always travel with their walk root — that is the S-E06-5 lesson.",
+    "",
+    "Every row carries a class, a reason, and a finding id that RESOLVES to a declared row in docs/daily-improvement-v3/audit-findings-index.md — not merely one shaped like PF-nnn. S-E06-5 measured three live baseline rows in link-integrity-baseline.json citing ids that existed nowhere, because only the id SHAPE was validated. Rule E is that measurement turned into a check, and it is driven in BOTH directions by the guard spec (a fabricated PF-99999 must turn the check red; a real id must not).",
+    "",
+    "Why the ids used here are PF-31 and PF-121 and nothing newer: the register holds PF-01..PF-133. PF-136/140/141/149/150/154..162 exist only in docs/daily-improvement-v3/traceability/OPEN.md and would NOT resolve. The two honest options were to cite only ids that resolve, or to register the missing ones in the index in this diff. The first was taken, deliberately — making the resolver accept either register 'to be safe' would produce a resolver that cannot fail, which is the defect S-E06-5 measured, reintroduced by the fix written to delete it.",
+    "",
+    "THE THREE DECLARED CLASSES:",
+    "  best-effort-post-commit — the site swallows its audit failure BY DESIGN and says so in its own comment: the mutation stands, the notice is best-effort. Converting it means DELETING its catch, which flips the handler to fail-closed (ADR-035 D2, 'a real availability trade'). That is a semantic change on ~15 handlers, not a sweep, and it is queued under PF-31 rather than taken silently.",
+    "  cross-package-seam — the write lives in a package that CANNOT import the seam without inverting a dependency. @pilotage/imports-core is a dependency OF apps/api and apps/worker and depends only on @prisma/client; importing apps/api/src/shared/audit/write-audit.ts would be a cycle, and write-audit.ts imports @nestjs/common so it cannot move into a Nest-free package either (PF-160). Structural and permanent until the seam is repackaged.",
+    "  no-actor-in-scope — DECLARED AND CURRENTLY EMPTY. It exists so the next site with no actor at all lands in a named class instead of inventing one, or worse, being filed under a class that does not describe it."
+  ],
+  "walkRoots": [
+    "apps/api/src",
+    "apps/worker/src",
+    "packages/imports-core/src"
+  ],
+  "sites": {
+    "apps/api/src/modules/alerts/alerts.service.ts#recordMeetingIntent": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "The row is written AFTER a $transaction whose catch resolves a P2002 idempotency race by returning the existing record early — so today the race-loser writes no row at all. Moving the write inside without re-deriving that branch could write a row for a create that did not happen. Converting it is a behaviour decision about the race, not a relocation. Queued under PF-31."
+    },
+    "apps/api/src/modules/alerts/alerts.service.ts#writeAuditEntry": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Private helper whose own comment records that an audit failure is swallowed and never rolls back the acknowledgement/dismissal/resolution it traces. Converting deletes the catch and makes an alert acknowledgement fail with a French 500 when the audit insert fails — ADR-035 D2's availability trade, applied to a teacher-facing path. Stated, not taken, in this slice."
+    },
+    "apps/api/src/modules/alerts/meeting-requests.service.ts#resolve": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Post-commit notice on the meeting-request resolution path (note the path: modules/alerts/, not modules/meetings/). The audit failure is caught and logged; the resolution stands. Same fail-closed trade as the sibling above."
+    },
+    "apps/api/src/modules/analytics/snapshot-ops.service.ts#enqueueRebuild": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "The audit write sits beside a coalescing lookup and a BullMQ ENQUEUE. Wrapping them together would put a queue round-trip inside a Prisma interactive transaction (default timeout 5 s, maxWait 2 s) and create a P2028 failure mode under load that does not exist today. ADR-035 D5 draws that boundary explicitly; honouring it means this site is converted with its enqueue re-ordered, or not at all."
+    },
+    "apps/api/src/modules/exports/exports.service.ts#writeBulletinAudit": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Export request notice written next to a queue enqueue, swallowed on failure so that a bulletin export is never lost to an audit hiccup. Same enqueue-inside-transaction hazard as snapshot-ops (ADR-035 D5). The action code is export-flagged, so this row is a KNOWN governance-bearing debt rather than routine activity — which is precisely why it carries an owning finding instead of being quietly dropped."
+    },
+    "apps/api/src/modules/exports/exports.service.ts#writeGradeGridAudit": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "As writeBulletinAudit: post-enqueue export notice, failure swallowed by design. Converting both export sites together is one decision about export availability, not two."
+    },
+    "apps/api/src/modules/grades/grades.controller.ts#flag": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "The contract's own named exemplar: the site's comment states a write failure is swallowed and never rolls back the flag. Recorded honestly rather than converted. The decision was CLOSE, and the reason it was close is worth writing down: the call site computes `body.flagged ? 'grade.flag' : 'grade.unflag'`, and `grade.unflag` is a `critical: true` action while `grade.flag` is not — one call site, two codes, one of them governance-bearing. A rule keyed on the action's criticality cannot split a call site, so the site moves as a unit or not at all."
+    },
+    "apps/api/src/modules/messaging/messaging.service.ts#createConversation": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Written AFTER a $transaction whose catch resolves a P2002 idempotency race by returning the existing conversation. Same shape as alerts#recordMeetingIntent: converting it without re-deciding the race can write a row for a create that did not happen, or stop writing one for a create that did. A duplicate-call test is the prerequisite, and it belongs with the conversion."
+    },
+    "apps/api/src/modules/messaging/messaging.service.ts#listReports": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "A READ path. `conversation.moderation_read` records that a moderator looked at the report list — there is no mutation and no transaction to bind to, and the write is guarded by `if (rows.length > 0)`. Converting it would open a transaction around a read for the sole purpose of a notice, and make the admin moderation list return 500 when the audit insert fails. Baselined with that stated: it is a read-path notice, not a missing transaction."
+    },
+    "apps/api/src/modules/messaging/messaging.service.ts#reportConversation": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Post-commit notice on the conversation-report path; the report stands if its audit row does not. Converted together with the other two messaging sites or not at all — they share a service, a transaction idiom and a test."
+    },
+    "apps/api/src/modules/remediation/remediation.controller.ts#promote": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Plan promotion notice, swallowed on failure. Two of the eleven `remediation.*` codes (`plan_closed`, `plan_reopened`) are `critical: true` and the rest are not, so this file does NOT move as a unit; deciding it per-site is part of the conversion work, not part of this slice's sweep."
+    },
+    "apps/api/src/modules/remediation/remediation.controller.ts#writeAvailabilityAudit": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Private forwarder with a closed union `action` type; the audit failure is swallowed so a tutor's availability edit is never lost to it. Fail-closed here is a teacher-facing availability trade (ADR-035 D2)."
+    },
+    "apps/api/src/modules/remediation/remediation.controller.ts#writeBookingAudit": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Private forwarder whose `action` is a TEMPLATE-LITERAL type (`remediation.booking_${string}`), computed at the call site from a booking transition. It cannot satisfy the closed `AuditActionCode` union by construction, so converting it also needs a decision about how computed families reach the seam — `AUDIT_ACTION_FAMILIES` covers the vocabulary half, nothing covers the typing half yet. Recorded rather than half-done."
+    },
+    "apps/api/src/modules/remediation/remediation.controller.ts#writePlanLifecycleAudit": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Private forwarder covering the plan lifecycle, including the two `critical: true` codes `remediation.plan_closed` and `remediation.plan_reopened`. Governance-bearing and therefore the FIRST of these fifteen that should convert — recorded here so that ordering is a decision on the record rather than whichever site the next agent happens to open."
+    },
+    "apps/api/src/modules/remediation/remediation.controller.ts#writeTutorAudit": {
+      "class": "best-effort-post-commit",
+      "finding": "PF-31",
+      "reason": "Private forwarder for tutor create/update; audit failure swallowed so a tutor record is never lost to it. Moves with the other three remediation forwarders — they share a controller and a catch idiom."
+    },
+    "packages/imports-core/src/engine.ts#applyBatchRows": {
+      "class": "cross-package-seam",
+      "finding": "PF-121",
+      "reason": "ALREADY transactional (`tx.auditLog.create` inside the apply transaction) — this is off-seam debt, not un-transacted debt, and the two are different. It cannot reach the seam: @pilotage/imports-core is a dependency OF apps/api and apps/worker and declares only @prisma/client, so importing apps/api/src/shared/audit/write-audit.ts would invert the dependency; and write-audit.ts imports @nestjs/common, so the seam cannot move into a Nest-free package either (PF-160). The site also hard-codes `actorRole: 'school_admin'` / `portal: 'admin'` because no JWT exists on its call path — that is PF-121 itself, and routing a known-wrong provenance through the canonical seam would give it the seam's authority. A path SKIP in the script was refused deliberately: a skip is invisible, a baseline row is reviewed and ratcheted, and the difference between those two is the whole lesson of this epic."
+    },
+    "packages/imports-core/src/engine.ts#rollbackBatchRows": {
+      "class": "cross-package-seam",
+      "finding": "PF-121",
+      "reason": "The rollback half of the same structural situation as applyBatchRows: transactional, off-seam, unreachable from a package that apps/api depends on, and carrying the same two hard-coded provenance literals. Both are recorded so that when the seam is repackaged, both move together."
+    }
+  }
+}

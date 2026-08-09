@@ -237,6 +237,110 @@ export async function brandPositiveControl(
   await writeAudit(tx, input);
 }
 
+/* ================================================================== *
+ * W-3b (S-E04-7 AC-6, PF-162) — the VOCABULARY is a compile-time
+ * invariant too, and this control decides it in both directions
+ * ================================================================== */
+
+/**
+ * NEVER INVOKED. Type-checked only, exactly like `brandNegativeControl`.
+ *
+ * `AuditWriteInput.action` is `AuditActionCode` and `.resourceType` is
+ * `AuditResourceTypeCode` — unions derived from `AUDIT_ACTIONS` /
+ * `AUDIT_RESOURCE_TYPES` in `packages/contracts`. The two directions:
+ *
+ *   • the union really is closed → the undeclared codes below are errors, the
+ *     `@ts-expect-error` directives are satisfied, typecheck is green;
+ *   • the union widens back to `string` — which is what it resolved to BEFORE
+ *     this slice, because `: readonly AuditActionEntry[]` overrode the trailing
+ *     `as const` and made `(typeof AUDIT_ACTIONS)[number]['code']` be `string` —
+ *     then these errors vanish, TypeScript reports the `@ts-expect-error`
+ *     directives as unused, and typecheck goes RED.
+ *
+ * That second direction is the whole point. PF-162 implemented over the old
+ * annotation would have shipped green and inert: a named type forbidding nothing.
+ */
+export async function vocabularyNegativeControl(
+  tx: Prisma.TransactionClient,
+  base: Omit<AuditWriteInput, 'action' | 'resourceType'>,
+): Promise<void> {
+  await writeAudit(tx, {
+    ...base,
+    // @ts-expect-error — AC-6: 'role.definitely_not_declared' is in no row of
+    // AUDIT_ACTIONS. If this line stops erroring, the action union widened.
+    action: 'role.definitely_not_declared',
+    resourceType: 'role',
+  });
+  await writeAudit(tx, {
+    ...base,
+    action: 'role.create',
+    // @ts-expect-error — AC-6: same, for the resource-type union.
+    resourceType: 'definitely_not_a_resource_type',
+  });
+  await writeAudit(tx, {
+    ...base,
+    // @ts-expect-error — AC-6 / ADR-037 D4: the LEGACY French aliases are
+    // deliberately outside the union. Legacy rows are never rewritten and
+    // nothing new may be written in that vocabulary, so emitting one is a
+    // compile error rather than a review comment.
+    action: 'Connexion',
+    resourceType: 'role',
+  });
+}
+
+/** The positive half: declared codes compile, so the union is not vacuously empty. */
+export async function vocabularyPositiveControl(
+  tx: Prisma.TransactionClient,
+  base: Omit<AuditWriteInput, 'action' | 'resourceType'>,
+): Promise<void> {
+  await writeAudit(tx, { ...base, action: 'role.create', resourceType: 'role' });
+  await writeAudit(tx, { ...base, action: 'user.invite', resourceType: 'user_profile' });
+  await writeAudit(tx, {
+    ...base,
+    action: 'coefficient.upsert',
+    resourceType: 'subject_coefficient',
+  });
+}
+
+describe('W-3b / AC-6 — the audit vocabulary is enforced by the compiler (PF-162)', () => {
+  it('both controls exist, so the typecheck gate really has something to decide', () => {
+    expect(typeof vocabularyNegativeControl).toBe('function');
+    expect(typeof vocabularyPositiveControl).toBe('function');
+  });
+
+  it('AuditWriteInput types action/resourceType to the contracts unions, not to string', () => {
+    const source = stripCommentsPreservingLines(readFileSync(SELF_PATH, 'utf8'));
+    expect(source).toMatch(/action:\s*AuditActionCode;/);
+    expect(source).toMatch(/resourceType:\s*AuditResourceTypeCode;/);
+    expect(source).not.toMatch(/action:\s*string;/);
+    expect(source).not.toMatch(/resourceType:\s*string;/);
+    // Imported from the ONE declaration, never re-declared locally (ADR-037 D1).
+    expect(source).toMatch(/from '@pilotage\/contracts'/);
+  });
+
+  it('the contracts declaration uses `as const satisfies`, the form that keeps the union', () => {
+    // The measured defect PF-162 names: `: readonly AuditActionEntry[] = [...] as const`
+    // widens every element to the interface, so the derived union is `string`. An
+    // edit reinstating the annotation makes THIS assertion red rather than making
+    // the invariant quietly inert — the failure mode the union exists to prevent.
+    const vocab = stripCommentsPreservingLines(
+      readFileSync(join(REPO_ROOT, 'packages', 'contracts', 'src', 'audit', 'vocabulary.ts'), 'utf8'),
+    );
+    expect(vocab).toMatch(/export const AUDIT_ACTIONS = \[/);
+    expect(vocab).toMatch(/export const AUDIT_RESOURCE_TYPES = \[/);
+    expect(vocab).toMatch(/\] as const satisfies readonly AuditActionEntry\[\];/);
+    expect(vocab).toMatch(/\] as const satisfies readonly AuditVocabularyEntry\[\];/);
+    expect(vocab).not.toMatch(/AUDIT_ACTIONS:\s*readonly AuditActionEntry\[\]/);
+    expect(vocab).not.toMatch(/AUDIT_RESOURCE_TYPES:\s*readonly AuditVocabularyEntry\[\]/);
+    expect(vocab).toMatch(
+      /export type AuditActionCode = \(typeof AUDIT_ACTIONS\)\[number\]\['code'\];/,
+    );
+    expect(vocab).toMatch(
+      /export type AuditResourceTypeCode = \(typeof AUDIT_RESOURCE_TYPES\)\[number\]\['code'\];/,
+    );
+  });
+});
+
 describe('W-3 / AC-6 — the transaction-client brand is load-bearing, not decorative', () => {
   it('both controls exist, so the typecheck gate really has something to decide', () => {
     expect(typeof brandNegativeControl).toBe('function');

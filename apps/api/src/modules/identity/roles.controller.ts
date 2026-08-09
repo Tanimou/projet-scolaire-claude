@@ -15,6 +15,7 @@ import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 import { deriveAuditProvenance } from '../../shared/audit/provenance';
+import { writeAudit } from '../../shared/audit/write-audit';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -104,7 +105,10 @@ export class RolesController {
   @RequiresPermission('roles.write')
   async create(@Body() body: CreateRoleDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
-    const { actorRole, portal } = deriveAuditProvenance(jwt);
+    // Derived BEFORE the transaction opens (S-E06-6's rule). No `@Req()` in this
+    // controller, so the two client hints stay the honest blank they already were;
+    // capturing them is PF-123's remaining half and is NOT taken in this slice.
+    const provenance = deriveAuditProvenance(jwt);
     // Slug must be unique within the tenant (we don't have a tenant_id on Role yet — Phase 2 will add it)
     const existing = await this.prisma.role.findFirst({ where: { slug: body.slug, schoolId: null } });
     if (existing) throw new BadRequestException(`Un rôle avec le slug '${body.slug}' existe déjà.`);
@@ -117,30 +121,34 @@ export class RolesController {
       throw new BadRequestException({ message: 'Permissions inconnues', missing });
     }
 
-    const role = await this.prisma.role.create({
-      data: {
-        name: body.name,
-        slug: body.slug,
-        description: body.description ?? null,
-        portal: body.portal,
-        isSystem: false,
-        rolePermissions: {
-          create: perms.map((p) => ({ permissionId: p.id })),
+    // S-E04-7 — the role and its audit row are now created in ONE transaction.
+    // Before this slice they were two separate statements, so a failure between
+    // them left a role that exists and is unaudited; `write-audit.ts`'s own header
+    // cites this handler by name as the measured example. Fail-closed is the
+    // decision (ADR-035 D2): if the audit insert fails, the role is not created.
+    const role = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.role.create({
+        data: {
+          name: body.name,
+          slug: body.slug,
+          description: body.description ?? null,
+          portal: body.portal,
+          isSystem: false,
+          rolePermissions: {
+            create: perms.map((p) => ({ permissionId: p.id })),
+          },
         },
-      },
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
+      });
+      await writeAudit(tx, {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole,
-        portal,
         action: 'role.create',
         resourceType: 'role',
-        resourceId: role.id,
-        after: { name: role.name, slug: role.slug, permissions: body.permissionCodes },
-      },
+        resourceId: created.id,
+        provenance,
+        after: { name: created.name, slug: created.slug, permissions: body.permissionCodes },
+      });
+      return created;
     });
 
     return { id: role.id };
@@ -158,8 +166,14 @@ export class RolesController {
     if (role.isSystem) throw new ForbiddenException('Les rôles système ne sont pas modifiables');
 
     const me = await this.users.ensureUser(jwt);
-    const { actorRole, portal } = deriveAuditProvenance(jwt);
+    // Derived BEFORE the transaction opens (S-E06-6's rule). No `@Req()` in this
+    // controller, so the two client hints stay the honest blank they already were;
+    // capturing them is PF-123's remaining half and is NOT taken in this slice.
+    const provenance = deriveAuditProvenance(jwt);
 
+    // S-E04-7 — the audit row moves INSIDE the transaction that already existed
+    // here. It used to be written after it committed, so a permission rewrite
+    // could succeed while its trace failed, and nothing would say so.
     await this.prisma.$transaction(async (tx) => {
       await tx.role.update({
         where: { id },
@@ -179,20 +193,16 @@ export class RolesController {
           await tx.rolePermission.create({ data: { roleId: id, permissionId: p.id } });
         }
       }
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
+      await writeAudit(tx, {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole,
-        portal,
         action: 'role.update',
         resourceType: 'role',
         resourceId: id,
+        provenance,
         before: { name: role.name },
         after: { name: body.name ?? role.name, permissions: body.permissionCodes },
-      },
+      });
     });
 
     return { id };
@@ -214,19 +224,24 @@ export class RolesController {
     }
 
     const me = await this.users.ensureUser(jwt);
-    const { actorRole, portal } = deriveAuditProvenance(jwt);
-    await this.prisma.role.delete({ where: { id } });
-    await this.prisma.auditLog.create({
-      data: {
+    // Derived BEFORE the transaction opens (S-E06-6's rule). No `@Req()` in this
+    // controller, so the two client hints stay the honest blank they already were;
+    // capturing them is PF-123's remaining half and is NOT taken in this slice.
+    const provenance = deriveAuditProvenance(jwt);
+    // S-E04-7 — deletion and its trace in one transaction. A deleted role whose
+    // audit row never landed is the worst of the three cases: the evidence that
+    // it ever existed is gone with it.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.role.delete({ where: { id } });
+      await writeAudit(tx, {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole,
-        portal,
         action: 'role.delete',
         resourceType: 'role',
         resourceId: id,
+        provenance,
         before: { name: role.name, slug: role.slug },
-      },
+      });
     });
     return { ok: true };
   }

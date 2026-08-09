@@ -10,6 +10,7 @@ import type {
   AdminChildClaimQueueResponse,
   AdminChildClaimRow,
   ApproveChildClaimResponse,
+  AuditActionCode,
   ChildClaimAlreadyLinkedResponse,
   ChildClaimListResponse,
   ChildClaimStatusRow,
@@ -19,6 +20,8 @@ import type {
 } from '@pilotage/contracts';
 import { Prisma } from '@prisma/client';
 
+import { type AuditProvenance } from '../../shared/audit/provenance';
+import { writeAudit, type AuditTransactionClient } from '../../shared/audit/write-audit';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -53,6 +56,14 @@ export interface SubmitClaimArgs {
   birthDate?: string;
   externalRef?: string;
   relationship: GuardianRelationship;
+  /**
+   * Derived by the controller from the JWT, BEFORE the transaction opens
+   * (S-E04-7 / PF-122). Non-optional on purpose — `provenance.ts` already states
+   * the rule: « un appelant oublié est une erreur de compilation et non une
+   * provenance silencieusement nulle ». A default here would be the same silent
+   * fallback the `'parent' | 'admin'` parameter used to be.
+   */
+  provenance: AuditProvenance;
 }
 
 type SubmitResult = ChildClaimSubmitResponse | ChildClaimAlreadyLinkedResponse;
@@ -177,13 +188,20 @@ export class ChildClaimsService {
           status: 'match_failed',
         },
       });
-      await this.audit(tx, args, 'guardianship.claim_match_failed', null, {
-        status: 'match_failed',
-        claimedFirstName: args.firstName,
-        claimedLastName: args.lastName,
-        claimedDob: args.birthDate ?? null,
-        claimedExternalRef: args.externalRef ?? null,
-      });
+      await this.audit(
+        tx,
+        args,
+        'guardianship.claim_match_failed',
+        null,
+        {
+          status: 'match_failed',
+          claimedFirstName: args.firstName,
+          claimedLastName: args.lastName,
+          claimedDob: args.birthDate ?? null,
+          claimedExternalRef: args.externalRef ?? null,
+        },
+        args.provenance,
+      );
       return claim;
     });
 
@@ -259,15 +277,22 @@ export class ChildClaimsService {
           },
         });
 
-        await this.audit(tx, args, 'guardianship.claim_submitted', null, {
-          status: 'submitted',
-          claimedFirstName: args.firstName,
-          claimedLastName: args.lastName,
-          claimedDob: args.birthDate ?? null,
-          claimedExternalRef: args.externalRef ?? null,
-          matchedStudentId: studentId,
-          guardianshipId: link.id,
-        });
+        await this.audit(
+          tx,
+          args,
+          'guardianship.claim_submitted',
+          null,
+          {
+            status: 'submitted',
+            claimedFirstName: args.firstName,
+            claimedLastName: args.lastName,
+            claimedDob: args.birthDate ?? null,
+            claimedExternalRef: args.externalRef ?? null,
+            matchedStudentId: studentId,
+            guardianshipId: link.id,
+          },
+          args.provenance,
+        );
 
         return claim;
       });
@@ -334,7 +359,14 @@ export class ChildClaimsService {
    * Returns true when something was withdrawn; false when nothing was withdrawable
    * (the controller maps a missing/own-but-not-submitted claim to 404 / a calm no-op).
    */
-  async withdraw(args: { tenantId: string; guardianId: string; actorId: string; claimId: string }): Promise<boolean> {
+  async withdraw(args: {
+    tenantId: string;
+    guardianId: string;
+    actorId: string;
+    claimId: string;
+    /** Derived from the JWT before the transaction opens (S-E04-7). */
+    provenance: AuditProvenance;
+  }): Promise<boolean> {
     const claim = await this.prisma.guardianshipClaim.findFirst({
       where: { id: args.claimId, tenantId: args.tenantId, guardianId: args.guardianId },
     });
@@ -367,6 +399,7 @@ export class ChildClaimsService {
         'guardianship.claim_withdrawn',
         { status: 'submitted' },
         { status: 'withdrawn', guardianship: 'revoked' },
+        args.provenance,
       );
       return true;
     });
@@ -460,13 +493,16 @@ export class ChildClaimsService {
    *  4. no driven link (a match_failed has guardianshipId=null) → 409 (nothing to grant).
    *  5. ONE $transaction: from-status-guarded link flip pending→active (count===0 → a
    *     concurrent winner already flipped it → 409); then claim submitted→approved; then
-   *     append-only `guardianship.claim_approved` audit (actorRole 'admin').
+   *     append-only `guardianship.claim_approved` audit (actorRole = the JWT's realm role,
+   *     PF-122 — never the literal 'admin', which is not a realm role).
    *  6. AFTER commit: best-effort parent notification (never rolls back).
    */
   async approveClaim(args: {
     tenantId: string;
     actorId: string;
     claimId: string;
+    /** PF-122: the acting admin's REAL realm role, derived at the controller. */
+    provenance: AuditProvenance;
   }): Promise<ApproveChildClaimResponse> {
     const claim = await this.prisma.guardianshipClaim.findFirst({
       where: { id: args.claimId, tenantId: args.tenantId },
@@ -530,7 +566,10 @@ export class ChildClaimsService {
           decidedBy: args.actorId,
           decidedAt: new Date().toISOString(),
         },
-        'admin',
+        // PF-122 (write half): the actor's REAL Keycloak realm role, derived
+        // from the JWT at the controller, never the literal 'admin' — which is
+        // not a realm role and never was.
+        args.provenance,
       );
     });
 
@@ -568,6 +607,8 @@ export class ChildClaimsService {
     actorId: string;
     claimId: string;
     reason: string;
+    /** PF-122: the acting admin's REAL realm role, derived at the controller. */
+    provenance: AuditProvenance;
   }): Promise<{ claimId: string; status: 'rejected' }> {
     const reason = args.reason.trim();
     const claim = await this.prisma.guardianshipClaim.findFirst({
@@ -612,7 +653,8 @@ export class ChildClaimsService {
         'guardianship.claim_rejected',
         { status: 'submitted', guardianship: 'pending' },
         { status: 'rejected', guardianship: 'revoked', decisionReason: reason },
-        'admin',
+        // PF-122 (write half): see approveClaim — the real realm role, not 'admin'.
+        args.provenance,
       );
     });
 
@@ -707,31 +749,51 @@ export class ChildClaimsService {
   }
 
   /**
-   * Append-only audit (the direct prisma.auditLog.create pattern; resourceType
-   * ='guardianship_claim'). The actor role/portal is parametrised (defaulting to
-   * 'parent' for the S1 parent paths) so the S2 admin approve/reject decisions log
-   * `actorRole:'admin'`/`portal:'admin'` — the audit row IS the status history,
-   * so the actor must be truthful (Winston CONCERN #4).
+   * Append-only audit for the claim lifecycle, now through the shared seam
+   * (`writeAudit`, `ADR-035`), inside the caller's transaction.
+   *
+   * ## PF-122's write half — why the `'parent' | 'admin'` parameter is gone
+   *
+   * This helper used to take `actor: 'parent' | 'admin' = 'parent'` and write it
+   * into **both** `actorRole` and `portal`. `portal: 'admin'` was right.
+   * `actorRole: 'admin'` was not: **`admin` is not a Keycloak realm role.** The
+   * realm roles are the ones `ROLE_PRECEDENCE` lists in
+   * `shared/audit/provenance.ts`, and an administrator authenticates as
+   * `school_admin`. So every approve/reject decision recorded a role nobody
+   * holds — and routing that value through the canonical seam unchanged would
+   * have laundered a known-wrong provenance into the one place the repository
+   * points at as authoritative. That is why the parameter is replaced rather
+   * than forwarded.
+   *
+   * The value now comes from `deriveAuditProvenance(jwt, …)` at the controller,
+   * ABOVE the `$transaction` call — S-E06-6's ordering rule, because
+   * `AuditLog.ipAddress` is `@db.Inet` and a failed cast inside the transaction
+   * would roll back the decision the row exists to trace.
+   *
+   * **Who may approve or reject is unchanged.** `@RequiresPermission
+   * ('guardianships.approve')` and every ABAC path are untouched; this is a
+   * change to what the row *says*, not to what the endpoint *allows* (ADR-015).
    */
   private async audit(
-    tx: Prisma.TransactionClient,
+    // PF-164 — the BRAND, not `Prisma.TransactionClient`; see the same note on
+    // `academic-years.controller.ts#audit`. Widening here would make the
+    // compile-time half of `ADR-035` D1 unfireable one hop from the seam.
+    tx: AuditTransactionClient,
     args: Pick<SubmitClaimArgs, 'tenantId' | 'actorId'>,
-    action: string,
+    action: AuditActionCode,
     before: Prisma.InputJsonValue | null,
     after: Prisma.InputJsonValue,
-    actor: 'parent' | 'admin' = 'parent',
+    provenance: AuditProvenance,
   ): Promise<void> {
-    await tx.auditLog.create({
-      data: {
-        tenantId: args.tenantId,
-        actorId: args.actorId,
-        actorRole: actor,
-        portal: actor,
-        action,
-        resourceType: 'guardianship_claim',
-        before: before ?? undefined,
-        after,
-      },
+    await writeAudit(tx, {
+      tenantId: args.tenantId,
+      actorId: args.actorId,
+      action,
+      resourceType: 'guardianship_claim',
+      resourceId: null,
+      provenance,
+      ...(before === null ? {} : { before }),
+      after,
     });
   }
 }

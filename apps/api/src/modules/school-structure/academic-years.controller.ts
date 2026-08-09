@@ -13,10 +13,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { type AuditActionCode } from '@pilotage/contracts';
 import { AcademicYearStatus, Prisma } from '@prisma/client';
 import { IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 import { deriveAuditProvenance, type AuditActorProvenance } from '../../shared/audit/provenance';
+import { writeAudit, type AuditTransactionClient } from '../../shared/audit/write-audit';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -276,27 +278,56 @@ export class AcademicYearsController {
     }
   }
 
+  /**
+   * S-E04-7 — relays onto the shared seam (`writeAudit`) instead of writing the
+   * row itself. Three things about this signature are deliberate:
+   *
+   *  • `action` is `AuditActionCode`, not `string` (PF-162). An undeclared code
+   *    is now a compile error at the three call sites above. The parameter stays
+   *    a **type reference**, so `audit-vocabulary-gate.spec.ts` still classifies
+   *    this helper as an OPEN-parameter forwarder and keeps resolving its codes
+   *    from the call sites — the pinned forwarder list is unchanged, and the
+   *    written set does not silently absorb all 57 declared codes.
+   *  • `tx` stays a `Prisma.TransactionClient` parameter. The three callers
+   *    already open the transaction; the seam's brand accepts a transaction
+   *    client and rejects a full `PrismaService`, so "same transaction" is
+   *    carried by the type across this hop.
+   *  • the client hints are stated as `null` rather than omitted. This family
+   *    captured no IP/UA before this slice — the callers hold `@CurrentJwt()`
+   *    but no `@Req()` — so the honest blank is non-regressive, and writing it
+   *    down here is what stops "no hints" becoming an ambient default
+   *    (`ADR-036`). Threading `@Req()` through the three handlers is PF-123's
+   *    remaining half and is deliberately NOT taken in this slice.
+   */
   private async audit(
-    tx: Prisma.TransactionClient,
+    // PF-164 — the BRAND, not `Prisma.TransactionClient`. A relay that widens
+    // back to the bare type launders the invariant `ADR-035` D1 makes
+    // compile-time: `writeAudit(tx, …)` in the body would still typecheck when
+    // a caller handed this relay a full `PrismaService`, so the hole run 34
+    // closed reopens one hop away — and the new ratchet, which reads only the
+    // seam call, blesses it.
+    tx: AuditTransactionClient,
     me: { id: string; tenantId: string },
     provenance: AuditActorProvenance,
-    action: string,
+    action: AuditActionCode,
     resourceId: string,
     before: Prisma.InputJsonValue | null,
     after: Prisma.InputJsonValue | null,
   ) {
-    await tx.auditLog.create({
-      data: {
-        tenantId: me.tenantId,
-        actorId: me.id,
+    await writeAudit(tx, {
+      tenantId: me.tenantId,
+      actorId: me.id,
+      action,
+      resourceType: 'academic_year',
+      resourceId,
+      provenance: {
         actorRole: provenance.actorRole,
         portal: provenance.portal,
-        action,
-        resourceType: 'academic_year',
-        resourceId,
-        before: before ?? undefined,
-        after: after ?? undefined,
+        ipAddress: null,
+        userAgent: null,
       },
+      ...(before === null ? {} : { before }),
+      ...(after === null ? {} : { after }),
     });
   }
 }

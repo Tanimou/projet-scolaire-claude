@@ -4,7 +4,7 @@
 **Depends on** `V3-E02` (`code-complete` 2026-08-08 — dependency satisfied) · **Blocks** `V3-E03`, `V3-E11`
 **Risks** `R-10` (accepted), `A-01` (permanent) · **Referenced, not fixed:** `PF-96`
 
-**Status (2026-08-09, after `S-E04-6`)** — **`in-progress`. 6 of 8 slices shipped.**
+**Status (2026-08-09, after `S-E04-7`)** — **`in-progress`. 7 of 8 slices shipped.**
 
 The `epic-spec` run wrote `spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `ux.md`, `tasks.md`,
 `quickstart.md` and this file, and touched no code. **`S-E04-1` then shipped** the shared provenance home, the eight
@@ -20,47 +20,56 @@ all four KPIs share the table's scope, the day-inclusive `to`, the `__none__` po
 tone, and the reconciliation of `openapi.yaml` / `data-model.md` against shipped code (`PF-137`) — evidence in
 § `S-E04-5` below. **`S-E04-6` shipped** the in-transaction write seam (`apps/api/src/shared/audit/write-audit.ts`),
 its compile-time brand, the three families that wrote **no row at all**, `ADR-035`, and the 12 new vocabulary codes —
-evidence in § `S-E04-6` below. `S-E04-7`…`S-E04-8` remain **open**, and every gate they own is still described by
-**how it will be evidenced**, never as met.
+evidence in § `S-E04-6` below. **`S-E04-7` shipped** the exclusivity half: 10 of the 27 remaining direct
+`auditLog.create` sites moved onto the seam, the other 17 are **baselined with a class, a reason and a resolving
+finding id**, `scripts/audit-write-check.js` makes that arithmetic blocking in both harnesses, `writeAudit`'s
+`action`/`resourceType` became the declared unions (`PF-162`), and `PF-122`'s write half closed — evidence in
+§ `S-E04-7` below. **`S-E04-8` alone remains open**, and every gate it owns is still described by **how it will be
+evidenced**, never as met.
 
-> ### ▶ Next slice → **`S-E04-7`** — the remaining call sites move onto the seam, and a blocking gate keeps them there
+> ### ▶ Next slice → **`S-E04-8`** — the hash chain from a declared genesis, its verification, and the documented gap
 >
-> `[api][audit]` · size **M** · **`G-AUDIT` is its PRIMARY gate** · no new ADR (**`ADR-035` is amended**) ·
-> **blockedBy** `S-E04-6` ✅ — shipped 2026-08-09, so it is unblocked. `G-MIGRATION` does **not** trigger.
+> `[schema][api][web][gate]` · size **M–L** · **`G-MIGRATION` DOES trigger** — the only migration this epic still
+> owes · G-AUDIT, G-AUTHZ, G-TENANT, G-DNC · no new ADR (**`ADR-035` is amended again**) · **blockedBy**
+> `S-E04-3` ✅, `S-E04-6` ✅, **`S-E04-7` ✅ — shipped 2026-08-09, so it is unblocked. It is the last slice of the
+> epic: shipping it moves `V3-E04` to `shipped`.**
 >
-> Start at `tasks.md` § `S-E04-7`. Five things `S-E04-6` hands over, none of which it may silently re-decide:
+> Start at `tasks.md` § `S-E04-8`. Five things the epic hands over, none of which it may silently re-decide:
 >
-> 1. **The seam exists; it is not exclusive, and that gap IS this slice.** Measured on the `S-E04-6` branch:
->    **27 direct `auditLog.create` call sites remain outside the seam, across 15 files** — including
->    `identity/roles.controller.ts`, the exact defect `write-audit.ts`'s own docstring cites as its motivation (it
->    creates the role, then writes its audit row in a separate non-transactional statement).
-> 2. **Land the pinned-inventory gate as an *allow-list*, not a ban.** A ban is RED on arrival. Walk
->    `apps/api/src/**/*.ts` (excluding `*.spec.ts` and `shared/audit/write-audit.ts`), collect every
->    `auditLog.create` site as `file` + count, and assert the set equals a checked-in inventory. A new file or a
->    higher count fails pointing at `writeAudit`; **migrating** a site fails too, so the inventory only ever shrinks
->    deliberately. Every other invariant of `S-E04-6` already has a test; the one thing nothing defends is **erosion**.
-> 3. **The vocabulary gate's floor was redefined, not merely raised.** `EXTRACTED.seams` now counts *direct writes +
->    shared-seam calls*, floor **30**, precisely so this slice's migration conserves the total by construction and
->    cannot read as a regression. Do not re-narrow it to the direct form.
-> 4. **`writeAudit`'s `action` / `resourceType` are typed `string`, not the declared unions.** `apps/api` already
->    depends on `@pilotage/contracts`, so typing them `AuditActionCode` / `AuditResourceTypeCode` converts `ADR-035`
->    D6 from convention to invariant and matches D1. It also removes D6.2's *"call it with an inline object literal"*
->    rule, which today has nothing but a comment behind it.
-> 5. **`PF-121` / `PF-122` / the remaining `PF-123` sites are still yours.** `S-E04-6` closed `PF-123`'s **write**
->    half for `assessments.controller.ts` publish **only**, because that line was being edited anyway. `PF-150`
->    (`portal = ''`), `PF-129`, `PF-132` and `PF-141` remain.
+> 1. **The chain has never existed.** `hash` / `prev_hash` are nullable columns written by **no call site anywhere**
+>    — 0 of 54 rows (M-2). An append-only table with no chain is append-only *by convention*, and convention is what
+>    an audit exists to stop relying on.
+> 2. **First task is the serialisation ruling, and it is not a detail.** Two concurrent audit writes must not read
+>    the same `prevHash`. `data-model.md` §3 names three candidates — per-tenant advisory lock (no schema change, but
+>    **measure** it against the long `imports` apply transaction), `isolationLevel: 'Serializable'` (**zero**
+>    occurrences in `apps/api`, so it is a new idiom needing a retry policy that does not exist), or a monotonic
+>    `chainSeq` (schema change). **Do not ship a chain whose ordering under concurrency is unstated.**
+> 3. **`S-E04-7` handed it a seam that is now the only door for 10 sites and a *ratchet* over the other 17.** The
+>    chain writer belongs **inside `writeAudit`**, not beside it — that is what makes the chain cover every converted
+>    site at once. The 17 baselined sites are then, by construction, the **unchained** set, and that gap must be
+>    stated in the same breath as `preGenesisRowCount`, not folded into it.
+> 4. **`preGenesisRowCount` is part of the response, not a footnote**, and is rendered on `/admin/audit` as
+>    *« N lignes antérieures à la genèse ne sont pas chaînées »*. `A-01` is permanent; the gap must be visible where
+>    the trail is read. `hash`/`prevHash` stay **nullable** — `NOT NULL` is impossible while pre-genesis rows exist,
+>    and they exist permanently. Write *nullable means pre-genesis* into the model comment.
+> 5. **`DNC-08` is the sharpest in the epic here.** A verifier that cannot read the rows exits non-zero naming why.
+>    *"Nothing to verify"* is **never** a pass — and `S-E04-7`'s own gate spec is the worked example of that rule
+>    (see § `S-E04-7`, the `--help` and unparseable-tree residuals it recorded rather than hid).
 >
-> **Do not start with `S-E04-8`.** The chain is last by product ruling, not by convenience — see the ordering note
-> below. Run `quickstart.md` §5 before writing code: the measurement table is meant to be **falsified**, not trusted.
+> Run `quickstart.md` §5 before writing code: the measurement table is meant to be **falsified**, not trusted.
 >
-> **A human owns two things before either one runs.** `S-E04-5`'s four cheap merge conditions: `PF-144` (two
-> `@pilotage/ui` props with zero call sites, so `AC-9`'s rendering half is unreachable), `PF-145` (a malformed date
-> renders as a service outage), `PF-146` (a malformed export parameter removes the window's lower bound), `PF-149`
-> (full-ICU on `node:22-alpine` is asserted and never measured). And **`S-E04-6`'s posture decision**: `ADR-035` D2
-> is now live — a failed audit insert throws and rolls back the mutation, so role grant/revoke, school
-> create/update/close, all four enrollment decisions and grade publish **fail closed** on audit-table trouble. That
-> is intentional, documented, and deliberately un-switchable (DNC-10) — and it is a new production failure mode on
-> privileged admin paths.
+> **A human owns four things before this runs, and they accumulate.** `S-E04-5`'s four cheap merge conditions:
+> `PF-144` (two `@pilotage/ui` props with zero call sites, so `AC-9`'s rendering half is unreachable), `PF-145` (a
+> malformed date renders as a service outage), `PF-146` (a malformed export parameter removes the window's lower
+> bound), `PF-149` (full-ICU on `node:22-alpine` is asserted and never measured). **`S-E04-6`'s posture decision**:
+> `ADR-035` D2 is live — a failed audit insert throws and rolls back the mutation, so role grant/revoke, school
+> create/update/close, all four enrollment decisions and grade publish **fail closed** on audit-table trouble.
+> **`S-E04-7` widens exactly that posture to five more privileged families** — role create/update/delete, user
+> invite, roster connect/sync, academic-year create/update/close, guardianship claim submit/approve/reject — and
+> raises **`PF-163`**: `invite.controller.ts` creates the Keycloak account and sends the activation email *before*
+> the new transaction, with no compensating delete, so a rolled-back audit insert now costs the **account**, not one
+> row. Intentional, documented, un-switchable by design (DNC-10) — and it needs a signature before `S-E04-8` builds
+> a chain on top of it.
 
 ---
 
@@ -136,7 +145,7 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 
 ---
 
-## Slice backlog (`tasks.md` is the contract; 6 of 8 have shipped)
+## Slice backlog (`tasks.md` is the contract; 7 of 8 have shipped)
 
 | Story | Title | State | blockedBy | `G-MIGRATION` | ADR |
 |---|---|---|---|---|---|
@@ -146,10 +155,10 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 | **`S-E04-4`** | One canonical audit vocabulary, declared once, in `packages/contracts` | **`shipped`** 2026-08-09 | `S-E04-2` ✅ | no | **`ADR-037`** ✅ |
 | **`S-E04-5`** | The KPIs share the table's scope, and the `to` filter includes its own day | **`shipped`** 2026-08-09 *(9/11 AC evidenced; AC-9 partial, AC-3 render half NOT OBSERVED)* | `S-E04-4` ✅ | **YES** — `Tenant.timezone`, `scripts/schema-drift-check.js` **PASS** | — *(`D-E04-5-1` / `D-E04-5-2`, no ADR — `ADR-034` explicitly **not** claimed)* |
 | **`S-E04-6`** | Five privileged families write their audit row **in the same transaction** | **`shipped`** 2026-08-09 *(all 5 story AC evidenced; the seam is built but **not yet exclusive** — 27 direct sites remain, owner `S-E04-7`)* | `S-E04-1` ✅, `S-E04-3` ✅ | no | **`ADR-035`** ✅ |
-| `S-E04-7` | The remaining call sites move onto the seam, and a blocking gate keeps them there | `todo` ◀ **next** *(unblocked)* | `S-E04-6` ✅ | no | — *(`ADR-035` amendment)* |
-| `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` | `S-E04-3` ✅, `S-E04-6` ✅, `S-E04-7` | **YES** | `ADR-035` *(amendment)* |
+| **`S-E04-7`** | The remaining call sites move onto the seam, and a blocking gate keeps them there | **`shipped`** 2026-08-09 *(all 12 story AC evidenced; **the seam is exclusive by ratchet, not by absence** — 17 sites remain off it, each baselined with a class, a reason and a resolving finding id, and the count can now only shrink)* | `S-E04-6` ✅ | no | — *(`ADR-035` amended: **D11–D14**)* |
+| `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` ◀ **next** *(unblocked — **last slice of the epic**)* | `S-E04-3` ✅, `S-E04-6` ✅, `S-E04-7` ✅ | **YES** | `ADR-035` *(amendment)* |
 
-**8 slices · 2 `todo` · 0 in progress · 6 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
+**8 slices · 1 `todo` · 0 in progress · 7 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
 (or `blocked`, with the blocking decision id). A slice moves to `shipped` only when its own acceptance criteria are
 evidenced in its PR — never because the code merged.
 
@@ -1375,3 +1384,189 @@ reserved → written rather than re-deciding it. Note also that `ADR-035` and `S
   run, in two different agents' output — which is the strongest available argument that the missing check is worth
   ~10 lines. **Raise it as a `V3-E06` follow-up**: a tracked-file NUL scan in the `scripts/*-check.js` family, wired
   into both harnesses, landing green today with a zero-entry baseline.
+
+---
+
+## S-E04-7 — the remaining call sites move onto the seam, and a blocking gate keeps them there
+
+**Landed.** Backend + tooling only; zero files under `apps/web`.
+
+### The measurement, and its root
+
+Walk root `apps/api/src` + `apps/worker/src` + `packages/imports-core/src`, production `.ts`, excluding
+`*.spec.ts` and the seam itself, re-measured on this branch:
+
+| Root | Sites before | Files |
+|---|---|---|
+| `apps/api/src` | 25 | 15 |
+| `apps/worker/src` | **0** | — |
+| `packages/imports-core/src` | 2 | 1 |
+| **Total** | **27** | **16** |
+
+**10 converted · 17 baselined · 27 = 10 + 17.** The check asserts that arithmetic by construction: a site
+that is neither behind `writeAudit` inside a transaction nor in the reviewed baseline is red, and a baseline
+row matching no site is red.
+
+**Ledger disagreements, recorded rather than inherited.** `tasks.md` § S-E04-7 AC-1 says **30** — stale, it
+is the pre-`S-E04-6` figure. `ADR-035` D9 says *"27 sites across 15 files"* and attributes all of them to
+`apps/api` — the count is right, the file count is 16, and two of the sites are in `packages/imports-core`.
+`NEXT.md`'s "27 in `apps/api`" is 25 in `apps/api/src` plus 2 elsewhere. Every artefact this slice writes
+prints the walk root next to the number, which is the `S-E06-5` lesson applied to its own reporting.
+
+### Converted — 10, named individually
+
+| Site | What changed |
+|---|---|
+| `calendar/calendar-seed.service.ts` | already transactional; same `tx`, now through the seam |
+| `imports/imports.service.ts` (conflict resolve) | already transactional; hints stated as the honest blank they already were |
+| `school-structure/subjects.controller.ts` | already transactional; provenance was already derived above `$transaction` (S-E06-6's ordering) |
+| `school-structure/academic-years.controller.ts` (`#audit` ×3 call sites) | private forwarder relays into the seam; `action` narrowed to `AuditActionCode` |
+| `child-claims/child-claims.service.ts` (`#audit` ×5 call sites) | **PF-122 write half** — see below |
+| `identity/roles.controller.ts` `create` | role + row now in ONE transaction (was two statements) |
+| `identity/roles.controller.ts` `update` | row moved INSIDE the transaction that already existed |
+| `identity/roles.controller.ts` `remove` | delete + row now in one transaction |
+| `identity/invite.controller.ts` | profile + optional custom role + row in one transaction; every Keycloak call stays OUTSIDE it |
+| `integrations/integrations.service.ts` (`#audit` ×2 call sites) | helper takes `tx`; both callers open a TIGHT transaction (the HTTP fetch, the mapping and the batch creation stay outside) |
+
+**`PF-122`'s write half is closed.** `child-claims.service.ts` took `actor: 'parent' | 'admin' = 'parent'`
+and wrote it into **both** `actorRole` and `portal`. `portal: 'admin'` was right; `actorRole: 'admin'` was
+not — **`admin` is not a Keycloak realm role**, an administrator authenticates as `school_admin`. Routing
+that literal through the canonical seam unchanged would have given a known-wrong provenance the seam's
+authority, which is why the parameter was replaced rather than forwarded. The value now comes from
+`deriveAuditProvenance(jwt, extractAuditClientHints(req))` at the controller, above the transaction.
+**Who may approve or reject a claim is unchanged** and asserted: three `@RequiresPermission
+('guardianships.approve')` decorators, byte-identical, and no ABAC path touched.
+
+### Baselined — 17, in three declared classes
+
+- **15 `best-effort-post-commit`** (`PF-31`): the site swallows its audit failure by design and says so in
+  its own comment. Converting means deleting its catch, which flips the handler to fail-closed — `ADR-035`
+  D2's *"real availability trade"*, applied to fifteen more handlers. A semantic change, not a sweep.
+  Notable individual reasons on the record: `messaging.service.ts#listReports` is a **read path** with no
+  mutation to bind to; `snapshot-ops` and both `exports` sites sit beside a **queue enqueue** that must not
+  end up inside an interactive transaction (`ADR-035` D5); `alerts#recordMeetingIntent` and
+  `messaging#createConversation` sit after a transaction whose catch resolves a **P2002 idempotency race**,
+  so moving the write in is a decision about the race, not a relocation; `grades.controller.ts#flag` writes
+  `grade.flag`/`grade.unflag` from **one call site with two codes**, one of them `critical: true`.
+- **2 `cross-package-seam`** (`PF-121`): `packages/imports-core/src/engine.ts` — already transactional, so
+  this is *off-seam* debt, not *un-transacted* debt. It cannot reach the seam: `@pilotage/imports-core` is a
+  dependency **of** `apps/api`, and `write-audit.ts` imports `@nestjs/common` so the seam cannot move into a
+  Nest-free package either (`PF-160`). A path skip in the script was **refused**: a skip is invisible, a
+  baseline row is reviewed and ratcheted.
+- **0 `no-actor-in-scope`**: declared and deliberately empty, printed on every run, so the next such site
+  lands in a named class rather than inventing one.
+
+### The ratchet — `scripts/audit-write-check.js`
+
+Blocking in **both** harnesses with zero arguments: stage **0d** of `scripts/ci-gate.sh`, **outside every
+`--quick` guard**, and a step in the **lint** job of `.github/workflows/ci.yml` (not the build job —
+`PF-126` makes that the least reliable place in the harness). Parses with `require('typescript')`, never a
+regex: a grep over the walk root returns 29 hits for 27 sites because two are inside JSDoc.
+
+Site keys are `path#symbol`, never `path:line` — `remediation.controller.ts` and `messaging.service.ts` are
+exactly the churning files, and a line-keyed row silently un-baselines its site on any edit above it.
+
+**Executed on the real repository, verdict quoted:**
+
+```
+▶ apps/api/src … 157 files · 15 direct audit writes
+▶ apps/worker/src … 60 files · 0 direct audit writes
+▶ packages/imports-core/src … 11 files · 2 direct audit writes
+
+AUDIT WRITE CHECK: PASS — 38 audit writes over apps/api/src + apps/worker/src +
+packages/imports-core/src: 21 through the seam inside a transaction, 17 baselined with a
+reason and a resolving finding id, 0 unaccounted for
+```
+
+**Shown able to fail (AC-3), driven and reverted:** a deliberately-added non-transactional write produced
+`RULE A (auditLog.create outside shared/audit) — …__ac3_probe.ts:4 …`, exit **1**; the probe was removed and
+the tree is clean. The guard spec re-drives that case on every run and asserts `git`-visible cleanliness by
+removing the probe in `afterEach`.
+
+**DNC-08 (AC-4), driven with a portable ladder** — the script is copied into a scratch tree and its inputs
+supplied one at a time, each step asserting the run fails **naming what is still missing**: an unresolvable
+`typescript`; an absent seam; an absent findings register; a register yielding **zero** declared ids; an
+absent baseline; a malformed baseline; an absent walk root; a walk root with zero `.ts` files. No `chmod` —
+this repository is developed on Windows and a permissions-based case is unreliable here.
+**The failing condition is zero FILES walked in a root, never zero writes found**: `apps/worker/src`
+legitimately holds zero audit writes and that is a printed PASS.
+
+**DNC-10 (AC-5), asserted in the negative:** no `process.env` read anywhere; the argv whitelist is exactly
+`['--help', '--update']`, asserted over what the script *inspects* rather than over prose (the help text
+names `--skip` in order to say it does not exist); an unknown argument exits non-zero; and the script
+executes to the same verdict with `SKIP_AUDIT_CHECK`, `ALLOW_AUDIT_WRITES`, `CI=false` and
+`NODE_ENV=production` all set. `--update` refuses to write while any rule-B/C violation is present and
+writes new rows with an empty class/reason/finding, so the gate stays red until a human fills all three in.
+
+### `PF-162` — the vocabulary becomes a compile-time invariant
+
+`AuditWriteInput.action` is now `AuditActionCode` and `.resourceType` is `AuditResourceTypeCode`.
+
+**The blocking prerequisite, measured:** both tables were `export const X: readonly Entry[] = [ … ] as const`
+— **the annotation wins**, so `(typeof X)[number]['code']` resolved to `string` and the `as const` bought
+nothing. PF-162 implemented over that declaration would have shipped green and inert. Both are now
+`as const satisfies readonly Entry[]`, which keeps the per-row check and keeps the literal types.
+`write-audit.spec.ts` carries `@ts-expect-error` controls that go red in **both** directions, plus a positive
+control, so a future widening back to `string` is a failing typecheck rather than a silent loss of the
+invariant. The legacy French aliases are deliberately outside the unions — writing one is now a compile
+error, which is `ADR-037` D4 enforced.
+
+### One latent defect this sweep exposed, fixed in the same diff
+
+`audit-vocabulary-gate.spec.ts`'s Phase B registered a forwarder under `sourceFile.fileName`, which
+`ts.createSourceFile` **normalises**: on Windows the map key built by `join()` carries backslashes while
+`fileName` carries forward slashes, so the next pass's `sources.get(...)` returned `undefined` and the
+forwarder resolved to **nothing, silently**. Latent until now because every forwarder used to be registered
+in Phase A, which passes the map key. This slice creates the first **two-hop** chains (call site → private
+`audit` helper → `writeAudit`), and ten real action codes — `academic_year.*`, `guardianship.claim_*`,
+`import.sync.pull`, `integration.roster_source.created` — dropped out of the written set, after which the
+gate's reverse-completeness direction demanded their real French labels be **deleted**. Exactly the failure
+`ADR-035` D6 exists to pre-empt, arriving through a path separator. Phase B now iterates map **entries**, and
+the ten codes are pinned by name in a new assertion.
+
+### Findings
+
+| Finding | Outcome |
+|---|---|
+| `PF-162` | **CLOSED** — `as const satisfies` + the two derived unions + the two typed members, with `@ts-expect-error` controls in both directions |
+| `PF-122` | **write half CLOSED** — `child-claims.service.ts` no longer writes `actorRole: 'admin'`; the value is JWT-derived at both controllers |
+| `PF-31` | **advanced, not closed** — 10 of 27 sites converted; the remaining 17 are queued under it with a class and a reason, and are now *ratcheted* rather than merely counted |
+| `PF-121` | **open, now baselined with its reason** — structural, cannot be fixed without repackaging the seam |
+| `PF-123` | **partially advanced** — the converted sites state their client-hint deferral in code rather than leaving it ambient; threading `@Req()` through `roles`/`invite`/`academic-years` is not taken here |
+| `PF-156`, `PF-153` | **deliberately NOT fixed.** `roles.controller.ts` is in the sweep and changes not one line of authorisation. `ADR-015` exists to stop exactly that, and a G-AUTHZ negative asserts the permission decorator set is byte-identical |
+| `PF-149` | **left pointed here.** Nothing in this diff touches a timezone path; `UnknownTimezoneError` stays uncaught, which is the design |
+| `PF-150` | **collision recorded, not half-fixed.** `OPEN.md` and this file use the id for two different findings; renumbering must be atomic across both. This slice cites the id nowhere |
+| `PF-160` | **open.** The seam still imports `@nestjs/common` and still throws an HTTP exception. It is now the reason `packages/imports-core` is baselined rather than converted, which sharpens the finding rather than closing it |
+| `PF-136`, `PF-140`, `PF-141`, `PF-154`, `PF-155`, `PF-157`, `PF-158`, `PF-159` | **left pointed here or at a later slice**, untouched. Several are `apps/web`/worker-side and this slice writes zero files there |
+| **`PF-163`** *(new, P1)* | **RAISED BY THIS SLICE.** `invite.controller.ts` is fail-closed on its local half and fail-open on its remote half: steps 3–4 create the Keycloak account and send the activation email *before* the new transaction, with no compensating delete, so a rolled-back audit insert leaves an enabled identity with no `UserProfile` — and `UserSyncService.ensureUser` then self-provisions it into `DEMO_TENANT_SLUG`. Named independently by all three escalation-panel members. `invite` is also not one of the story's declared Group-A/B sites, so the trade was never stated. **Two acceptable resolutions, both cheap**, in `OPEN.md` |
+| **`PF-164`** *(new, P2)* | **RAISED BY THIS SLICE.** The three private `audit()` forwarders declare `tx: Prisma.TransactionClient`, not the branded `AuditTransactionClient`, so `this.audit(this.prisma, …)` compiles *and* passes rule B (`TRANSACTION_CLIENT_TYPE_NAMES` whitelists the bare name) — the `ADR-035` D1 brand does not survive one indirection. No call site is wrong today; it is a control gap, sharpened by an `academic-years.controller.ts:290` docblock that asserts the opposite. Fix is one word × 3 |
+
+### Gates
+
+- **G-AUDIT** — primary, and the reason the slice exists.
+- **G-DNC** — DNC-08 and DNC-10, both driven.
+- **G-MIGRATION does NOT trigger** — no `schema.prisma` change, no SQL, no migration file. Asserted in the
+  negative (the check reads no schema and no migrations directory).
+- **G-AUTHZ / G-TENANT negative** — no guard, no `@RequiresPermission`, no ABAC path and no `where` clause
+  gains or loses a `tenantId`. Asserted, not claimed.
+
+### Test evidence
+
+- `apps/api/src/shared/quality/audit-write-gate.spec.ts` — **74 passing**, the gate's own guard: positive,
+  negative, each of rules A–E independently red, the DNC-08 ladder, the DNC-10 negatives, and the wiring
+  assertions read against `stripComments`-blanked executable content (`PF-83` — the new stage's comment names
+  the script in prose directly above the runner line).
+- `node scripts/test-ratchet.js api` — **2130/2141 passed · 11 known-failing (baseline) · no drift.**
+  Four sibling suites were amended, each with its reason written into the assertion rather than deleted:
+  `audit-provenance-gate.spec.ts` (the needle is "writes an audit row", not "spells `auditLog.create`"),
+  `provenance-callsites.spec.ts` (the roles harness now RUNS the `$transaction` callback),
+  `calendar-seed-holidays.spec.ts` (T9b now asserts the French operator sentence *and* the original cause),
+  `integrations.service.spec.ts` and `child-claims.service.spec.ts` (transaction client + JWT-derived
+  provenance fixtures).
+
+### Not done, and stated
+
+- The 15 swallowing sites are **not** converted. Each is a fail-closed availability decision on a live
+  handler, and `ADR-035` D2 says so in writing.
+- `apps/web` is untouched: **zero new French labels**, and no new action or resource-type code was needed —
+  every converted site already had one declared.

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { writeAudit } from '../../shared/audit/write-audit';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 import { buildFrenchHolidayPlan, type PlannedHoliday } from './french-holidays';
@@ -202,30 +203,38 @@ export class CalendarSeedService {
       // requis parce que `/admin/audit` dérive sa colonne « détail » de
       // `after.detail ?? after.summary` (analytics.service.ts) : sans lui, la
       // ligne s'afficherait vide. Écrite même quand 0 ligne est créée.
-      await tx.auditLog.create({
-        data: {
-          tenantId: args.tenantId,
-          actorId: args.actorId,
+      // S-E04-7 — écrite par le seam `writeAudit` plutôt que par un
+      // `tx.auditLog.create` direct. Le comportement observable est identique
+      // (même transaction, même ligne, mêmes colonnes) ; ce qui change est que
+      // le site est désormais atteignable par `scripts/audit-write-check.js` et
+      // que ses codes sont vérifiés à la compilation (PF-162).
+      await writeAudit(tx, {
+        tenantId: args.tenantId,
+        actorId: args.actorId,
+        action: 'calendar.seed_french_holidays',
+        resourceType: 'calendar_event',
+        resourceId: null,
+        // Dérivée par l'appelant AVANT l'ouverture de la transaction — la règle
+        // de S-E06-6 : `AuditLog.ipAddress` est `@db.Inet`, un cast raté à
+        // l'intérieur annulerait l'import que la ligne existe pour tracer.
+        provenance: {
           actorRole: args.actorRole,
           portal: args.portal,
-          action: 'calendar.seed_french_holidays',
-          resourceType: 'calendar_event',
-          resourceId: null,
           ipAddress: args.ipAddress,
           userAgent: args.userAgent,
-          after: {
-            summary,
-            requestedYear: plan.requestedYear,
-            years: plan.years,
-            planned: plan.planned,
-            created: missing.length,
-            alreadyPresent,
-            // Les années scolaires que le PLAN rattache (pas seulement les
-            // lignes créées) : le périmètre que l'opérateur a confirmé reste
-            // lisible même sur une relance à 0 création.
-            academicYearIds,
-            unattachedCount,
-          },
+        },
+        after: {
+          summary,
+          requestedYear: plan.requestedYear,
+          years: plan.years,
+          planned: plan.planned,
+          created: missing.length,
+          alreadyPresent,
+          // Les années scolaires que le PLAN rattache (pas seulement les lignes
+          // créées) : le périmètre que l'opérateur a confirmé reste lisible même
+          // sur une relance à 0 création.
+          academicYearIds,
+          unattachedCount,
         },
       });
 

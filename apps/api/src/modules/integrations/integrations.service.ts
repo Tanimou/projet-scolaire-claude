@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { type AuditActionCode } from '@pilotage/contracts';
 import {
   buildImportCaches,
   getHandler,
@@ -12,6 +13,7 @@ import { ImportOrigin, ImportRowStatus, ImportStatus, ImportType, Prisma, Roster
 
 
 import { type AuditActorProvenance } from '../../shared/audit/provenance';
+import { writeAudit, type AuditTransactionClient } from '../../shared/audit/write-audit';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
@@ -111,23 +113,27 @@ export class IntegrationsService {
       ? this.sealCredential(actor.tenantId, schoolId)
       : null;
 
-    const source = await this.prisma.rosterSource.create({
-      data: {
-        tenantId: actor.tenantId,
-        schoolId,
-        kind: input.kind,
-        label,
-        baseUrl: input.baseUrl?.trim() || null,
-        credentialRef,
-        status: RosterSyncStatus.idle,
-        createdBy: actor.id,
-      },
-    });
-
-    await this.audit(actor, 'integration.roster_source.created', source.id, {
-      kind: source.kind,
-      label: source.label,
-      hasCredential: !!credentialRef,
+    // S-E04-7 — the source and its audit row in ONE transaction (ADR-035 D1).
+    // Fail-closed: if the trace cannot be written, the source is not created.
+    const source = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.rosterSource.create({
+        data: {
+          tenantId: actor.tenantId,
+          schoolId,
+          kind: input.kind,
+          label,
+          baseUrl: input.baseUrl?.trim() || null,
+          credentialRef,
+          status: RosterSyncStatus.idle,
+          createdBy: actor.id,
+        },
+      });
+      await this.audit(tx, actor, 'integration.roster_source.created', created.id, {
+        kind: created.kind,
+        label: created.label,
+        hasCredential: !!credentialRef,
+      });
+      return created;
     });
 
     return this.toDto(source);
@@ -301,22 +307,32 @@ export class IntegrationsService {
         );
       }
 
-      await this.prisma.rosterSource.updateMany({
-        where: { id: source.id, tenantId: actor.tenantId },
-        data: {
-          status: RosterSyncStatus.mapped,
-          lastSyncAt: new Date(),
-          lastBatchId: lastBatchId ?? primaryBatchId,
-          lastError: null,
-        },
-      });
-
-      await this.audit(actor, 'import.sync.pull', source.id, {
-        kind: source.kind,
-        sourceRowCount: mappedBundle.sourceRowCount,
-        batches: produced.map((b) => ({ id: b.id, type: b.type, valid: b.validCount, invalid: b.invalidCount })),
-        // FR3/AC-3 — record the non-destructive divergence count (never an action).
-        absentFromSourceCount: absentFromSource.length,
+      // S-E04-7 — the success flip and its audit row in ONE transaction. Scoped
+      // DELIBERATELY tight: the batch creation and every HTTP/parse step above
+      // stay OUTSIDE it, so this slice adds no new interactive-transaction
+      // timeout surface (Prisma's default is 5 s).
+      await this.prisma.$transaction(async (tx) => {
+        await tx.rosterSource.updateMany({
+          where: { id: source.id, tenantId: actor.tenantId },
+          data: {
+            status: RosterSyncStatus.mapped,
+            lastSyncAt: new Date(),
+            lastBatchId: lastBatchId ?? primaryBatchId,
+            lastError: null,
+          },
+        });
+        await this.audit(tx, actor, 'import.sync.pull', source.id, {
+          kind: source.kind,
+          sourceRowCount: mappedBundle.sourceRowCount,
+          batches: produced.map((b) => ({
+            id: b.id,
+            type: b.type,
+            valid: b.validCount,
+            invalid: b.invalidCount,
+          })),
+          // FR3/AC-3 — record the non-destructive divergence count (never an action).
+          absentFromSourceCount: absentFromSource.length,
+        });
       });
 
       return {
@@ -634,23 +650,46 @@ export class IntegrationsService {
     };
   }
 
+  /**
+   * S-E04-7 — relays onto the shared seam, INSIDE the caller's transaction.
+   *
+   * The `tx` parameter is the change that matters: this helper used to write on
+   * `this.prisma`, so the roster-source mutation and its trace were two separate
+   * statements and a failure between them left an un-traced mutation. Both
+   * callers now open a transaction around their mutation and this write.
+   *
+   * `action` is `AuditActionCode` (PF-162) — an undeclared code is a compile
+   * error at the two call sites. The parameter stays a type REFERENCE, so
+   * `audit-vocabulary-gate.spec.ts` still resolves this helper's codes from its
+   * arguments and the pinned forwarder list is unchanged.
+   *
+   * No client hints: this service has no request in scope (the sync path also
+   * runs from a scheduler), so the honest blank is recorded rather than an
+   * invented address (ADR-036).
+   */
   private async audit(
+    // PF-164 — the BRAND, not `Prisma.TransactionClient`; see the same note on
+    // `academic-years.controller.ts#audit`. Widening here would make the
+    // compile-time half of `ADR-035` D1 unfireable one hop from the seam.
+    tx: AuditTransactionClient,
     actor: { id: string; tenantId: string } & AuditActorProvenance,
-    action: string,
+    action: AuditActionCode,
     resourceId: string,
     after: Record<string, unknown>,
   ): Promise<void> {
-    await this.prisma.auditLog.create({
-      data: {
-        tenantId: actor.tenantId,
-        actorId: actor.id,
+    await writeAudit(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.id,
+      action,
+      resourceType: 'roster_source',
+      resourceId,
+      provenance: {
         actorRole: actor.actorRole,
         portal: actor.portal,
-        action,
-        resourceType: 'roster_source',
-        resourceId,
-        after: after as Prisma.InputJsonValue,
+        ipAddress: null,
+        userAgent: null,
       },
+      after: after as Prisma.InputJsonValue,
     });
   }
 }
