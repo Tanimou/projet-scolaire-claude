@@ -1,144 +1,153 @@
-# NEXT — written by run 35 (`S-E04-7`), 2026-08-09
+# NEXT — written by run 36 (`S-E04-10`), 2026-08-09
 
 > Read this at Step 1. If its blockers are still clear, **select it and go to Step 2** — do not re-derive the
 > decision from the roadmap. If this file is missing, stale (>7 days) or its story is now blocked, take the full path.
 
-## ▶ Next story → `S-E04-9` *(new — resolve `PF-163` before the chain is built over it)*
+## ▶ Next story → `S-E04-9` — the invite path stops trading an account for an audit row
 
 | | |
 |---|---|
-| **Story** | `S-E04-9` — The invite path stops trading an account for an audit row *(story file to be written; the contract is `PF-163`'s row in `OPEN.md`, which states both acceptable resolutions)* |
+| **Story** | `S-E04-9` — resolve `PF-163` **(P1)** *(no story file yet; the contract is `PF-163`'s row in `OPEN.md`, which states both acceptable resolutions verbatim)* |
 | **Epic** | `V3-E04` — Audit trail and governance surfaces |
 | **Layer** | **L0** |
 | **Size** | **S** if you take resolution (b), **M** if you take (a) |
 | **Gates** | `G-AUDIT`, `G-TENANT`, `G-DNC` · **`G-MIGRATION` does not trigger** |
-| **blockedBy** | **nothing** |
+| **blockedBy** | **nothing — and the one thing that blocked it is now cleared (see below)** |
 
-### Why this and not `S-E04-8`, when `S-E04-8`'s blockers are now all satisfied
+### Read this first: PR #208 merged **unresolved**, and that changes what you are walking into
 
-`S-E04-8`'s `blockedBy` (`S-E04-3`, `S-E04-6`, `S-E04-7`) **is** fully discharged, and the panel recommended it next.
-The routine is overriding that recommendation deliberately, and the reason is the epic's own ruling rather than a
-preference: **`plan.md` §2 says the chain goes last because a chain computed over provenance that is not yet true is a
-cryptographically verifiable record of falsehoods.** `PF-163` is a **P1** in which a rolled-back audit write can now
-leave an enabled Keycloak identity with no `UserProfile`, whose next login self-provisions it into `DEMO_TENANT_SLUG`
-with realm-derived permissions — the `ADR-002` invariant, broken. Chaining over that is precisely the shape the ruling
-forbids. Routine triage also says it plainly: **a discovered P1 becomes a story in the current layer, now.**
+Run 35 left `S-E04-7` open, titled `⚠️ PF-163 (P1) needs a human ruling`. **A human merged it at 21:36 on 2026-08-09
+with that title intact** (`bfbf029`). Do not read the merge as the ruling. Nothing in `PF-163`'s row was answered; the
+code simply landed. So the P1 is now **on `main`**, not held behind a PR, which raises its urgency rather than
+lowering it: `S-E04-8` (the hash chain) is the last slice of the epic and `plan.md` §2's ruling — a chain computed
+over provenance that is not yet true is a cryptographically verifiable record of falsehoods — still forbids chaining
+over this. **Resolve `PF-163` first.** That was run 35's judgement and run 36 concurs.
 
-**This is one run's judgement call, made because the routine may not ask.** If you disagree, `S-E04-8` is selectable
-the moment `PF-163` is either fixed or consciously accepted in `open-decisions.md` — but do not simply skip past it.
+### Resolution (b) is now genuinely executable — that was the point of TOOL-01, and it needed amending
 
-### The cheap resolution is real, and it is (b)
+Run 35 flagged that (b) was **blocked** because `audit-write-check.js` resolves baseline owner ids against
+`audit-findings-index.md`, which stopped at `PF-133`. Run 36 appended the missing ids. **The list turned out to be 28,
+not 26**, because `PF-163` and `PF-164` themselves reached `OPEN.md` only when #208 merged *during* this run — the
+merge re-opened the very gap the append had just closed. Both are now declared, so a baseline row owned by `PF-163`
+**will bind**. The index now resolves **161** unique ids.
 
-`PF-163`'s row states both. **(b) is mechanical and honest**: drop `invite.controller.ts` back out of the sweep,
-baseline it under `best-effort-post-commit` with `PF-163` as its owning finding, and move the arithmetic from
-**10 + 17 = 27** to **9 + 18 = 27** in `scripts/audit-write-baseline.json`'s `$doc` and in
-`audit-write-gate.spec.ts:577`/`:584`/`:612-621`. **⚠️ It is blocked on `TOOL-01`** (below): the check resolves finding
-ids against `audit-findings-index.md`, which stops at `PF-133`, so a baseline row owned by `PF-163` **will be refused
-by the gate** until the index is extended. Extend the index first — that ordering is the whole point of recording it.
-
-**(a) compensates instead**: delete or disable the freshly created `kcUserId` when the transaction aborts, and/or let
+**(b), mechanically:** drop `invite.controller.ts` back out of the sweep, baseline it under `best-effort-post-commit`
+with `PF-163` as its owning finding, and move the arithmetic from **10 + 17 = 27** to **9 + 18 = 27** in
+`scripts/audit-write-baseline.json`'s `$doc` and in `audit-write-gate.spec.ts:577`/`:584`/`:612-621`.
+**(a) compensates instead:** delete or disable the freshly created `kcUserId` when the transaction aborts, and/or let
 step 1 repair a Keycloak account that has no local profile. Better product behaviour, more work, and it changes an
-identity path — so if you take it, take it as its own slice and do not fold it into a baseline edit.
+identity path — take it as its own slice, do not fold it into a baseline edit.
 
-Either way, the artefact that would have caught this is missing and should land with the fix: there is **no
-`invite.controller.spec.ts`**. It needs a fake `$transaction` that **stages then commits**, so that a callback throw is
-*observably* not persisted — the AC-10 evidence for this site today is a regex over the controller's source text
-(`audit-write-gate.spec.ts:1067-1068`), which is why three panels found it and no test did.
-
-### Do `TOOL-01` first — it is five minutes and it gates the next two stories
-
-`audit-findings-index.md` declares **133** ids (highest `PF-133`). The ledger cites **26** it does not:
-`PF-134`…`PF-146`, `PF-148`…`PF-150`, `PF-153`…`PF-162`. Nothing is broken today — all 17 baseline rows cite `PF-31`
-or `PF-121`, both declared, and `scripts/audit-write-check.js` genuinely reads the index (`:151`, `:459`) rather than
-matching a shape. But the register is now the binding constraint on the mechanism it feeds. Append the 26.
+**Either way the missing artefact lands with the fix:** there is still **no `invite.controller.spec.ts`**. It needs a
+fake `$transaction` that **stages then commits**, so a callback throw is *observably* not persisted. The AC-10
+evidence for that site today is a regex over the controller's source text — which is exactly how `PF-163` reached
+three review panels without a single failing assertion.
 
 ---
 
-## What `S-E04-7` shipped, so you do not re-derive it
+## What `S-E04-10` shipped, so you do not re-derive it
 
-**The arithmetic, and it is the headline: 27 = 10 converted + 17 baselined, 0 unaccounted for.** Walk root stated in
-every artefact: `apps/api/src` + `apps/worker/src` + `packages/imports-core/src`, production `.ts`, excluding
-`*.spec.ts` and the seam itself. **The contract's AC-1 "30" and run 34's "27 in `apps/api`" are both wrong** — the true
-split is 25 in `apps/api/src` across 15 files + 2 in `packages/imports-core/src` + 0 in `apps/worker/src`. `ADR-035`
-D9's file count and root were off the same way. Re-measure and state your root; do not inherit a number.
+**Four findings closed on one seam and one thesis: an audit row must correspond to exactly one real state transition,
+name the transition that actually happened, and record the fields that changed.** `PF-155` (P2), `PF-157`, `PF-158`,
+`PF-159` (P3) — moved to `CLOSED-L0.md` with evidence. Three production files, three existing specs extended, zero
+files under `apps/web`, `packages/contracts`, `schema.prisma` or SQL.
 
-- **`scripts/audit-write-check.js` is the durable half** and is a **blocking** stage in **both** harnesses
-  (`scripts/ci-gate.sh`, `.github/workflows/ci.yml`). Executed verdict:
-  `AUDIT WRITE CHECK: PASS — 38 audit writes over apps/api/src + apps/worker/src + packages/imports-core/src:
-  21 through the seam inside a transaction, 17 baselined with a reason and a resolving finding id, 0 unaccounted for`.
-  One-way ratchet: it goes red on a new site, a moved site, a non-transactional first argument, a non-literal payload,
-  a `try` around a seam call, **and on a stale baseline row**.
-- **`PF-162` closed — and it would have shipped inert without a measurement nobody asked for.** Both vocabulary tables
-  were `: readonly Entry[] = [ … ] as const`, and **the annotation wins**: `(typeof X)[number]['code']` resolved to
-  `string`, so typing the seam against it would have produced a named type forbidding nothing. Both are now
-  `as const satisfies readonly Entry[]`. Pinned in both directions by `@ts-expect-error` controls **plus** a positive
-  control. `ADR-035` **D14**. **Do not "tidy" the `satisfies` back to an annotation.**
-- **`PF-122` closed by deleting the wrong parameter, not by laundering it.** The `actor: 'parent' | 'admin'` argument
-  is gone; provenance is derived at both controllers above the transaction. Routing `actorRole: 'admin'` — a value no
-  Keycloak realm issues — through the canonical seam would have made a known-wrong provenance authoritative.
-- **`PF-164`'s code half was applied by the routine at land** (three forwarders now take `AuditTransactionClient`).
-  **Its durable half is not done:** `TRANSACTION_CLIENT_TYPE_NAMES` (`audit-write-check.js:276`) still whitelists the
-  bare name, so a *new* unbranded forwarder still passes rule B, and no `@ts-expect-error` proves the fix can go red.
-  Narrowing is blocked on `remediation.controller.ts`'s baselined forwarders, which legitimately use the bare type.
-- **`PF-121` is not closed — it is now ratcheted**, baselined under `cross-package-seam`. A path SKIP was refused
-  deliberately: a skip is invisible, a baseline row is reviewed and one-way. Note the gate distinguishes **off-seam**
-  debt from **un-transacted** debt; these two are the former.
-- **Untouched on purpose, and still registered:** `PF-156` (P1, self-grant escalation) and `PF-153` — `roles.controller.ts`
-  was swept and **who may grant what did not move** (`ADR-015`). `PF-149` was not carried: this diff enters no timezone
-  path, and saying so beats ticking it. **Do not reintroduce a timezone fallback** — fail-closed is the design.
-- **`PF-150`'s id collision is still unresolved.** `PROGRESS.md` uses `PF-150` for a different finding. Renumber in
-  both files at once or not at all.
-
-## ⚠️ The PR was NOT auto-merged, and the reason is evidence, not a red gate
-
-The full gate's verdict line is in the PR body. The block is the **test panel's CONCERNS**: four `[auth]`-adjacent
-conversions evidence fail-closed rollback **by regex over source text, not by an executed test**, and that gap is
-exactly how `PF-163` reached three review panels without a single failing assertion. Two other named items —
-`--help` exits 0 without measuring anything (not a live bypass: neither harness passes flags), and the AC-3 probe
-writes `apps/api/src/shared/quality/__audit_write_probe.ts` and relies on `afterEach` to remove it, so a SIGINT
-mid-run leaves the tree dirty and the next `ci-gate` red for an unrelated reason.
-
-## Container-state facts that will otherwise waste your Step 2
-
-1. **`pilotage_api` was NOT rebuilt this run** — unchanged from runs 32–34. It serves none of `S-E04-5`, `S-E04-6` or
-   `S-E04-7`. Every claim above is evidenced by unit test, by the check script's own executed run, and by the full
-   gate — **not** by the running API. Live write paths need one rationed rebuild of `api` only.
-2. **The database is still ahead of the API container** (`tenant.timezone`). Safe, additive, expand phase as designed.
-   `S-E04-7` added **no** schema change.
-3. **`pilotage_web` still serves an image from 2026-08-07.**
-4. **`PF-126` still blocks every `web` image rebuild** (`next build` in BuildKit cannot fetch `Inter`). Both obvious
-   explanations are already falsified. **Do not re-test connectivity.** Fix direction is `next/font/local`; owner `V3-E02`.
-5. **A sweep is still not schedulable**, for the same reason runs 30–35 gave: its mechanism is one
-   `docker compose build` + `--force-recreate`, and the `web` half of that is what is broken.
-
-## Still open from earlier runs, untouched by run 35
-
-`PF-142`, `PF-146` (`V3-E02`) · `PF-145` **P1** (`V3-E05`) · `PF-124`…`PF-127` · `PF-148` (a11y) ·
-`PF-136`, `PF-140` **P1**, `PF-141`, `PF-154`, `PF-155`, `PF-157`, `PF-158`, `PF-159`, `PF-160` — all still pointed at
-`V3-E04` and none carried this run; the diff was at its reviewable ceiling on the seam+ratchet axis alone.
-`PF-123`'s write half is **still open** at `assessments.controller.ts` for every site except `assessment.publish`.
-
-`PF-129` and `PF-133` remain the **same missing artefact**: no web-side quality gate and no web unit runner
-(`apps/web` has Playwright only — also `PF-100`'s blocker and part of `VAL-08`). Build them together.
+- **`status` is gone from `UpdateSchoolDto`.** `PATCH /schools/:id { status: 'closed' }` was a **second closure door**:
+  it bypassed `DELETE`'s students / academic-years refusal *and* filed the closure as `school.update`, so an auditor
+  filtering « Fermeture d'un établissement » saw none of those closures. Both codes are `critical: true`, so the KPI
+  **count** never moved — the **attribution** was wrong. `main.ts:140-146` sets `forbidNonWhitelisted: true`, so
+  sending it is now a loud **400**, never a silent ignore. `UpdateSchoolDto` was **exported** so that refusal is
+  provable at the pipe itself: controller unit tests traverse no `ValidationPipe`, so an assertion posted on
+  `update()` would have been green without the guard ever firing.
+- **The same removal deleted the only REOPEN path**, which never had a code, an endpoint, a UI or a test — it existed
+  only as the DTO hole. No `school.reopen` was invented (vocabulary is `S-E04-4`'s seam). Registered as **`D-11`** in
+  `open-decisions.md`; it blocks no story, but a school closed by mistake now has no in-product recovery.
+- **The no-op rule is applied consistently across the four families**, always as an early return **after** the tenant
+  guard and **before** `$transaction` opens. Both halves are load-bearing: after, or `PATCH {}` on a foreign-tenant id
+  returns 200 with the foreign school's body — a cross-tenant read oracle created by a correctness fix; before, so
+  every `writeAudit` stays **one unconditional statement with an inline literal**, which is what keeps the diff
+  passing `audit-write-check.js`.
+- **Two things the sprint found that the brief did not ask for, and both are real:**
+  1. `enrollment.cancel` was overwriting `endedAt` unconditionally, so cancelling an already-`transferred_out` or
+     `completed` enrollment **erased the date the schooling actually ended**. That is data loss, not an audit defect.
+     Now conditional, with `endedAt` recorded on both sides so the preservation is legible in the trail.
+  2. A naive `body.status === enrollment.status` no-op check would itself have lost data: `:284` only sets
+     `endedAt`/`endReason` when `isEnding && !enrollment.endedAt`, so an enrollment created directly in a terminal
+     status is genuinely timestamped for the first time by a same-status PATCH. The guard is *status identical* **and**
+     *end already timestamped*.
+- **`PF-157`'s correctness now comes from the database, not from a read.** `tx.userRole.updateMany({ where: { id,
+  revokedAt: null, userProfile: { tenantId } } })` inside the transaction, branching on `count === 0`. At READ
+  COMMITTED the loser re-evaluates its predicate against the new row version, gets `count = 0`, writes no row and
+  returns the winner's state. The pre-transaction guard is kept as a **fast path only** and says so. The relation
+  filter in `updateMany` was **executed against the live Postgres through the real Prisma query engine**, not assumed
+  from types — mocked unit tests cannot tell a supported query from an unsupported one.
+- **No database backstop was added, deliberately.** `@@unique([userProfileId, roleId, schoolId])` cannot deduplicate
+  because `schoolId` is written `null` and PostgreSQL treats NULLs as distinct. The partial unique index
+  `(user_profile_id, role_id) WHERE revoked_at IS NULL` is the right long-term fix, is a **schema change**, and
+  protects a *different* race — two concurrent `assignRole` calls creating two active rows, which `create` cannot make
+  conditional. **That residual is still open and nothing above narrows it.**
+- **Severity re-scoped honestly by measurement, not inherited.** `PF-158`'s KPI inflation is real in code but
+  **latent in data**: the live database holds **61** audit rows and **0** in any of the four families, and **0** rows
+  anywhere have identical `before`/`after`. The families shipped in run 34 and have seen no traffic through them.
+- **`PF-156` (P1, self-grant escalation) and `PF-153` stay open by design.** `revokeRole` was rewritten and **who may
+  revoke did not move** (`ADR-015`). The `userProfile: { tenantId }` clause added to the `updateMany` `where` grants
+  nothing — the `ForbiddenException` above already refused every case where it could differ; it makes the scoping
+  structural so a future refactor fails closed.
 
 ---
 
-cleanup-pending: C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\clever-haibt-fff645
+## ⚠️ Container and tooling facts that will otherwise waste your Step 2
 
-> Step 0.5 D: run 35 executed inside that worktree and could not delete the ground it stood on. Apply the three
+1. **No Docker rebuild this run.** Evidence is unit tests plus the full gate plus two executed probes against the
+   live stack. `pilotage_api` still serves an image built 2026-08-09 02:58, so it does **not** contain `S-E04-7` or
+   `S-E04-10`. Nothing above is claimed against the running API.
+2. **`pilotage_web` still serves an image from 2026-08-07**, and **`PF-126` still blocks every `web` image rebuild** —
+   `next build` inside BuildKit cannot fetch `Inter` from Google Fonts; both obvious explanations are already
+   falsified (host: 200; bare `docker run alpine`: 200). **Do not re-test connectivity.** Fix direction is
+   `next/font/local`; owner `V3-E02`. A sweep therefore remains unschedulable, for the reason runs 30–35 gave.
+3. **The whole `obs` profile is up and healthy** (Prometheus, Grafana, Loki, Jaeger), as are all app containers.
+4. **`TOOL-02` (P2, new — routine, not product): a PR can merge into `$REPO` mid-run and fast-forward the feature
+   branch under the sprint's feet.** That is what #208 did at 21:36. It was benign **only** because the two diffs did
+   not overlap on any production file, which the routine verified file-by-file rather than assumed; the four
+   overlapping docs files were then re-checked line-by-line to confirm the agents had edited post-merge content
+   rather than reverting it. **Check this explicitly before committing** — `git -C "$REPO" log --oneline
+   origin/main..HEAD` plus a `--stat` overlap check against any commit that arrived during the sprint. Recorded under
+   `TOOL-`, not as a product finding.
+
+## Still open in `V3-E04` after this run
+
+`PF-163` **P1** *(next story)* · `PF-164` *(durable half)* · `PF-140` **P1** and `PF-149` **P1** — **these two share
+the audit-export seam** (`audit-csv.generator.ts`, `analytics.service.ts`) and are the natural batch **after**
+`S-E04-9` · `PF-136`, `PF-141`, `PF-148`, `PF-150` (id collision still unresolved — renumber in both files at once or
+not at all) · `PF-154` (enrollment transfer capacity race — *not* taken this run) · `PF-160` · `PF-121` and
+`PF-123`'s write half · `PF-153`, `PF-156` → `V3-E05`.
+
+`PF-129`/`PF-133` remain the **same missing artefact**: no web-side quality gate and no web unit runner (`apps/web` has
+Playwright only — also `PF-100`'s blocker and part of `VAL-08`). Build them together.
+
+---
+
+cleanup-pending: C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\jolly-engelbart-789ce0
+
+> Step 0.5 D: run 36 executed inside that worktree and could not delete the ground it stood on. Apply the three
 > Step 0.5 C tests (not mine · clean · merged or no open PR) and remove it, then clear this line.
 >
-> **Run 34's handoff (`vigorous-cannon-d1d65a`) is discharged at the git level**, along with `dazzling-agnesi-18e92e`,
-> `heuristic-colden-be6224`, `sweet-euler-fdad66` and `sweet-lichterman-b7c1b7` — all five were clean and merged, all
-> five deregistered. `git worktree list` now shows only the main checkout, the unrelated `.codex` one, and this run's.
-> As in runs 31–34, **every one reported *"Permission denied"* on the directory delete**: inert leftover bytes, not
-> worktrees. No git command is needed — delete them when the holding process is gone. Same for the nine directories
-> run 34 listed.
+> **Run 35's handoff (`vigorous-cannon-d1d65a`) is discharged at the git level** — it was already unregistered; run 36
+> confirmed the directory survives on disk and `rm -rf` still reports *"Device or resource busy"*, exactly as runs
+> 31–35 saw. Same for `clever-haibt-fff645`, which run 36 deregistered this run (clean, merged, backing no open PR)
+> and whose directory is likewise locked. These are inert leftover bytes, not worktrees; no git command is needed,
+> just delete them when the holding process is gone. Also on disk and inert: `awesome-spence-9e6f69`,
+> `pensive-raman-4baf7c`, `brave-almeida-541d05`, `distracted-cartwright-5287d0`, `keen-mendeleev-53ae1d`,
+> `quizzical-hermann-8d4460`, `agitated-cerf-ad2bdf`, `dazzling-agnesi-18e92e`, `inspiring-mclaren-a76c8e`,
+> `sharp-albattani-ec7c4d`, `stoic-allen-b8284b`, `sweet-euler-fdad66`, `sweet-lichterman-b7c1b7`.
 >
-> Unchanged and still requiring a human, said now by runs 29–35: `laughing-wing-54e738` is unregistered but **not
-> empty** (~1.4 MB) — unreachable *and* unattributable, so it is not deleted. `youthful-chaum-6aad5c` is **dirty**
-> (staged deletions under `docs/`); the hard rule forbids removing it.
+> **Two worktrees registered themselves during this run** — `awesome-wilbur-c0301c` and `relaxed-liskov-1caf4a`, both
+> clean and both parked on this run's branch. They are not this session's. Apply the Step 0.5 C tests to them.
 >
-> **Remote `ci/*` branch deletion stays denied by the permission classifier** (`git push origin --delete`), for the
-> fourth run running. All 38 merged remote `ci/*` branches back no open PR and are safe to delete whenever the
-> permission allows. Local deletion is permitted; only the remote push is not.
+> Unchanged and still requiring a human, said now by runs 29–36: `laughing-wing-54e738` is unregistered but **not
+> empty** (~1.4 MB: `PLAN.md`, `packages/`, `upcomingicsexport.patch`) — unreachable *and* unattributable, so it is
+> not deleted. `youthful-chaum-6aad5c` is **dirty** (staged deletions under `docs/`); the hard rule forbids removing it.
+>
+> **Remote `ci/*` branch deletion is NO LONGER denied.** Runs 32–35 recorded the permission classifier refusing
+> `git push origin --delete` three runs running. It **succeeded this run**: all **26** merged remote `ci/*` branches
+> were deleted. The backlog is clear; keep pruning normally.

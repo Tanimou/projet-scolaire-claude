@@ -4,7 +4,7 @@
 **Depends on** `V3-E02` (`code-complete` 2026-08-08 — dependency satisfied) · **Blocks** `V3-E03`, `V3-E11`
 **Risks** `R-10` (accepted), `A-01` (permanent) · **Referenced, not fixed:** `PF-96`
 
-**Status (2026-08-09, after `S-E04-7`)** — **`in-progress`. 7 of 8 slices shipped.**
+**Status (2026-08-09, after `S-E04-10`)** — **`in-progress`. 8 of 10 slices shipped.**
 
 The `epic-spec` run wrote `spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `ux.md`, `tasks.md`,
 `quickstart.md` and this file, and touched no code. **`S-E04-1` then shipped** the shared provenance home, the eight
@@ -24,15 +24,47 @@ evidence in § `S-E04-6` below. **`S-E04-7` shipped** the exclusivity half: 10 o
 `auditLog.create` sites moved onto the seam, the other 17 are **baselined with a class, a reason and a resolving
 finding id**, `scripts/audit-write-check.js` makes that arithmetic blocking in both harnesses, `writeAudit`'s
 `action`/`resourceType` became the declared unions (`PF-162`), and `PF-122`'s write half closed — evidence in
-§ `S-E04-7` below. **`S-E04-8` alone remains open**, and every gate it owns is still described by **how it will be
-evidenced**, never as met.
+§ `S-E04-7` below. **`S-E04-10` shipped** the correctness pass over the rows those seven slices made exist: `status`
+left `UpdateSchoolDto` so a closure can no longer file itself as `school.update` (`PF-155`), the no-op rule reached the
+three families that wrote a `critical` row for a non-event (`PF-158`), `address` joined `school.update`'s
+`before`/`after` (`PF-159`), `revokeRole`'s decision moved **inside** its transaction (`PF-157`), and the 26 finding
+ids the ledger cited but the register did not declare were appended (`TOOL-01`) — evidence in § `S-E04-10` below.
+**`S-E04-9` and `S-E04-8` remain open**, and every gate they own is still described by **how it will be evidenced**,
+never as met.
 
-> ### ▶ Next slice → **`S-E04-8`** — the hash chain from a declared genesis, its verification, and the documented gap
+> ### ▶ Next slice → **`S-E04-9`** — the invite path stops trading an account for an audit row (`PF-163`, **P1**)
+>
+> `[api][auth][audit]` · size **S–M** · G-AUDIT, G-AUTHZ, G-TENANT · `G-MIGRATION` expected **not** to trigger ·
+> **blockedBy** `S-E04-7` ✅. **Its one blocking prerequisite is now discharged:** `S-E04-10` appended the 26 missing
+> ids to `audit-findings-index.md`, so a `scripts/audit-write-check.js` baseline row owned by `PF-163` resolves
+> instead of being *correctly* refused.
+>
+> There is no `tasks.md` entry and no story file. **The contract is `PF-163`'s row in `traceability/OPEN.md`**, which
+> states the defect and both acceptable resolutions:
+>
+> - `invite.controller.ts:138` — `S-E04-7` wrapped steps 5–7 in one `$transaction` and correctly kept Keycloak
+>   outside it, but steps 3–4 **already** created the Keycloak user and sent the activation mail, and neither is
+>   reversible. `ADR-035` D2 makes an audit-insert failure fatal, so a rollback now strands an **enabled Keycloak
+>   identity holding `school_admin`/`teacher` with no `UserProfile`** — which `UserSyncService.ensureUser`
+>   self-provisions on first login into `DEMO_TENANT_SLUG` with realm-derived permissions. That is the `ADR-002`
+>   invariant, broken by an availability fault. Before `S-E04-7` the same fault cost one audit row.
+> - **(a)** compensate — delete or disable the fresh `kcUserId` when the transaction aborts, and/or let step 1 repair
+>   a Keycloak account with no local profile; or **(b)** drop `invite` back out of the sweep and baseline it under
+>   `best-effort-post-commit`, moving the arithmetic to 9 + 18 = 27 in `audit-write-baseline.json` and the gate spec.
+> - Either way, the missing `invite.controller.spec.ts` — a fake `$transaction` that **stages then commits**, so a
+>   callback throw is *observably* not persisted — is what would have caught it.
+>
+> **`S-E04-10` leaves `S-E04-9` one piece of unfinished business of its own:** `ADR-035` **D15 is owed** and was not
+> written by that slice (see § `S-E04-10`, « What is owed »). `D10` items 1 and 2 now assert the opposite of the
+> shipped code.
+>
+> ### Then → **`S-E04-8`** — the hash chain from a declared genesis, its verification, and the documented gap
 >
 > `[schema][api][web][gate]` · size **M–L** · **`G-MIGRATION` DOES trigger** — the only migration this epic still
 > owes · G-AUDIT, G-AUTHZ, G-TENANT, G-DNC · no new ADR (**`ADR-035` is amended again**) · **blockedBy**
-> `S-E04-3` ✅, `S-E04-6` ✅, **`S-E04-7` ✅ — shipped 2026-08-09, so it is unblocked. It is the last slice of the
-> epic: shipping it moves `V3-E04` to `shipped`.**
+> `S-E04-3` ✅, `S-E04-6` ✅, **`S-E04-7` ✅ — dependency-wise it is unblocked; it is ordered after `S-E04-9` by the
+> epic's own ruling (do not chain over `PF-163`), not by a dependency. It is the last slice of the epic: shipping it
+> moves `V3-E04` to `shipped`.**
 >
 > Start at `tasks.md` § `S-E04-8`. Five things the epic hands over, none of which it may silently re-decide:
 >
@@ -145,7 +177,14 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 
 ---
 
-## Slice backlog (`tasks.md` is the contract; 7 of 8 have shipped)
+## Slice backlog (`tasks.md` is the contract; 8 of 10 have shipped)
+
+> **The denominator moved from 8 to 10, and that is not scope creep hidden in an arithmetic edit.** `tasks.md`
+> enumerates `S-E04-1`…`S-E04-8` and is the contract for those eight. **Two slices were added after the kit was
+> written, both from findings this epic itself raised** — `S-E04-9` (`PF-163`, raised by `S-E04-7`'s escalation panel)
+> and `S-E04-10` (`PF-155`/`PF-157`/`PF-158`/`PF-159`, raised by `S-E04-6`'s edge lens, plus `TOOL-01`). Neither has a
+> `tasks.md` entry; `S-E04-10`'s contract is `stories/S-E04-10.md`, and `S-E04-9`'s is `PF-163`'s row in
+> `traceability/OPEN.md`. **`S-E04-10` shipped before `S-E04-9`** because it carried `TOOL-01`, which `S-E04-9` needs.
 
 | Story | Title | State | blockedBy | `G-MIGRATION` | ADR |
 |---|---|---|---|---|---|
@@ -156,9 +195,11 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 | **`S-E04-5`** | The KPIs share the table's scope, and the `to` filter includes its own day | **`shipped`** 2026-08-09 *(9/11 AC evidenced; AC-9 partial, AC-3 render half NOT OBSERVED)* | `S-E04-4` ✅ | **YES** — `Tenant.timezone`, `scripts/schema-drift-check.js` **PASS** | — *(`D-E04-5-1` / `D-E04-5-2`, no ADR — `ADR-034` explicitly **not** claimed)* |
 | **`S-E04-6`** | Five privileged families write their audit row **in the same transaction** | **`shipped`** 2026-08-09 *(all 5 story AC evidenced; the seam is built but **not yet exclusive** — 27 direct sites remain, owner `S-E04-7`)* | `S-E04-1` ✅, `S-E04-3` ✅ | no | **`ADR-035`** ✅ |
 | **`S-E04-7`** | The remaining call sites move onto the seam, and a blocking gate keeps them there | **`shipped`** 2026-08-09 *(all 12 story AC evidenced; **the seam is exclusive by ratchet, not by absence** — 17 sites remain off it, each baselined with a class, a reason and a resolving finding id, and the count can now only shrink)* | `S-E04-6` ✅ | no | — *(`ADR-035` amended: **D11–D14**)* |
-| `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` ◀ **next** *(unblocked — **last slice of the epic**)* | `S-E04-3` ✅, `S-E04-6` ✅, `S-E04-7` ✅ | **YES** | `ADR-035` *(amendment)* |
+| **`S-E04-10`** | The audit row describes the transition that actually happened | **`shipped`** 2026-08-09 *(all 23 story AC addressed; **the no-op guards close the sequential retry, not the concurrent one** — only `role.revoke` is race-safe, see § `S-E04-10`)* | `S-E04-6` ✅ *(and mergeable with `S-E04-7` ✅ by AC-8's shape rule)* | **no** — asserted | — *(`ADR-035` **D15 owed**, see § `S-E04-10`)* |
+| `S-E04-9` | The invite path stops trading an account for an audit row (`PF-163`, **P1**) | `todo` ◀ **next** *(unblocked — its `TOOL-01` prerequisite was discharged by `S-E04-10`)* | `S-E04-7` ✅ | no *(expected)* | — |
+| `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` — **last in the epic** *(unblocked; ordered after `S-E04-9` by routine triage, not by dependency)* | `S-E04-3` ✅, `S-E04-6` ✅, `S-E04-7` ✅ | **YES** | `ADR-035` *(amendment)* |
 
-**8 slices · 1 `todo` · 0 in progress · 7 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
+**10 slices · 2 `todo` · 0 in progress · 8 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
 (or `blocked`, with the blocking decision id). A slice moves to `shipped` only when its own acceptance criteria are
 evidenced in its PR — never because the code merged.
 
@@ -1570,3 +1611,124 @@ the ten codes are pinned by name in a new assertion.
   handler, and `ADR-035` D2 says so in writing.
 - `apps/web` is untouched: **zero new French labels**, and no new action or resource-type code was needed —
   every converted site already had one declared.
+
+---
+
+## `S-E04-10` — shipped 2026-08-09 · the audit row describes the transition that actually happened
+
+**Branch** `ci/2026-08-09-v3-e04-s10` · **Risk** P1 · **Gates** `G-AUDIT` *(primary)*, `G-TENANT`, `G-AUTHZ`,
+`G-TRUTH`, `G-DNC` · **`G-MIGRATION` did NOT trigger** · **`G-PORTAL` did NOT trigger** · no new ADR shipped
+(**`ADR-035` D15 is owed — see « What is owed »**)
+
+**The thesis, one sentence.** An audit row must correspond to exactly one real state transition, must name the
+transition that actually happened, and must record the fields that changed. `S-E04-6` made these rows exist,
+`S-E04-7` made the seam exclusive; this slice makes the rows **true**.
+
+### What landed
+
+| # | Finding | Change | Where |
+|---|---|---|---|
+| AC-1/2/3 | **`PF-155`** | `status` leaves `UpdateSchoolDto` (the class is now `export`ed); `DELETE` stays the only closure door and its students/academic-years guard is **not** duplicated into `PATCH` | `schools.controller.ts` |
+| AC-6/8 | **`PF-158`** | Three pre-transaction no-op guards: `isSchoolUpdateNoOp(body, school)`; `body.status === enrollment.status && !(isEnding && !endedAt)`; `status === 'dropped' && endedAt !== null` | `schools.controller.ts`, `enrollments.controller.ts` ×2 |
+| AC-9/10 | **`PF-159`** | `address` added to `school.update`'s `before` **and** `after` via a new `auditAddress()`; `status` **kept** as declared context, with the reason inline | `schools.controller.ts` |
+| AC-11/12/14 | **`PF-157`** | `tx.userRole.updateMany({ where: { id, revokedAt: null, userProfile: { tenantId } } })` + mandatory `findUniqueOrThrow` re-read + `count === 0` early return **above** `writeAudit`; the pre-transaction guard stays, relabelled a fast path; one `revokedAt` clock shared by the column and the row | `users.service.ts` |
+| — | **`PF-157`, 5th site** | `enrollments.remove()`'s soft branch stops overwriting an existing `endedAt`/`endReason`; both sides of the row now carry `endedAt`, so the preservation is legible | `enrollments.controller.ts` |
+| AC-15 | **`TOOL-01`** | 26 finding ids appended to `audit-findings-index.md` from **both** ledgers (18 `OPEN.md` + 8 `CLOSED-L0.md`); **44 insertions / 0 deletions**; §7's counts knowingly left stale and recorded as such | `docs/daily-improvement-v3/` |
+
+**Three implementation choices worth reading, because each is where the obvious version is wrong.**
+
+1. **The no-op is detected field-by-field, not by body emptiness.** The case `AC-7` is about is a double-clicked form
+   resubmitting the *same populated values*, not `PATCH {}`. An `Object.keys(body).length === 0` test would have left
+   the defect fully intact while looking fixed.
+2. **`auditAddress()` falls back to the raw column.** `parseAddress` returns `null` for an *absent* address **and**
+   for an *invalid* one. Applied naively to `before`, that would have made the trail assert an address was **created**
+   where one already existed — a falsification manufactured by the fix, on the one field for which the audit row is
+   the sole surviving copy of the previous value.
+3. **Each early return reproduces the shipped response shape.** `schools.update`'s returns
+   `{ ...school, address: parseAddress(school.address) }` (a bare `return school` would emit raw Prisma JSON);
+   `enrollments.update`'s pre-read gained the same `include: { classSection: { select: { name: true } } }` the write
+   path carries. A 200 with the wrong body is invisible to every assertion about audit rows.
+
+**`AC-8`'s shape rule was honoured at all four sites.** `writeAudit` remains **one unconditional statement with an
+inline object literal inside its transaction**; every guard is an early `return` *above* it, never an `if` wrapping
+it. That is what keeps this diff mergeable with `S-E04-7`'s `audit-write-check.js` ratchet and legible to the
+vocabulary gate's call-site AST extractor (`ADR-035` D1).
+
+### Executed, not asserted
+
+| Check | Result |
+|---|---|
+| `pnpm typecheck` (test-architect, the one gate run) | **13/13 tasks successful**, 3m41s; `@pilotage/api` was a real cache miss and compiled clean |
+| `git diff --check` | exit 0 |
+| `node scripts/audit-write-check.js` — **re-measured on the rebased tree by this land pass** | **PASS, exit 0** — 38 audit writes over `apps/api/src` + `apps/worker/src` + `packages/imports-core/src`: **21 through the seam inside a transaction, 17 baselined with a reason and a resolving finding id, 0 unaccounted for** |
+| `schools.controller.spec.ts` + `enrollments.controller.spec.ts` + `users.service.spec.ts` | **80/80 pass** — ⚠️ measured on the **pre-rebase** tree |
+| `write-audit.spec.ts` + `provenance-callsites.spec.ts` + `audit-vocabulary-gate.spec.ts` + `audit-provenance-gate.spec.ts` | **215/215 pass** — ⚠️ measured on the **pre-rebase** tree |
+
+**The rebase, and why the last two rows carry a warning.** The sprint ran on base `main @64f64dd`; `S-E04-7` merged
+as `bfbf029` while it ran. This land pass fast-forwarded the branch (`64f64dd → bfbf029`) **before** touching any
+ledger file, because editing `roadmap.md` / `PROGRESS.md` / `OPEN.md` on the stale base would have silently reverted
+`S-E04-7`'s own entries in those same files. The code diff survived the move byte-identically (**829 insertions / 27
+deletions** before and after — `S-E04-7` touched none of the three production files). But `S-E04-7` **rewrote all
+four audit-gate artefacts** — `write-audit.ts` (+20, the `AuditTransactionClient` brand),
+`audit-vocabulary-gate.spec.ts`, `provenance-callsites.spec.ts` and `packages/contracts/src/audit/vocabulary.ts` —
+so the 215/215 was measured against versions no longer on the branch. **The ratchet was re-run and is green; the
+seven spec files were not re-run** (only the test-architect runs tests, once per sprint). That re-run is the first
+thing the next pass owes.
+
+### What this slice does NOT close, stated rather than implied
+
+- **The concurrent case of `PF-158` is closed for `role.revoke` only.** The three new guards in `schools.update`,
+  `enrollments.update` and `enrollments.remove` read **before** their transaction opens, and the write inside stays
+  unconditional — so two genuinely overlapping requests (a double-click on a slow connection, not a sequential
+  retry) still both pass the guard and both commit a `critical` row. That is **today's behaviour, not a
+  regression**, and it is forced by `AC-8`'s shape rule; but the docblocks assert *« une ligne d'audit = une vraie
+  transition »* without naming the residual. Only `revokeRole` is race-safe, because only there does the
+  discriminating predicate live inside the `UPDATE`.
+- **`DELETE /schools/:id` has no no-op guard.** A second `DELETE` on an already-`closed` empty school still opens a
+  transaction and writes a second `school.close` row whose `before.status` and `after.status` are both `'closed'` —
+  the `PF-158` shape surviving inside the school family, in the very slice that made `DELETE` the only closure door.
+  The fix is two lines (`if (school.status === 'closed') return school;`, after the tenant guard, above
+  `$transaction`) and the test-architect named the exact test for it. **Not done here; carry it.**
+- **`revokeRole`'s `where` carries a relation filter** (`userProfile: { tenantId }`) — the only `updateMany` relation
+  filter in `apps/api`. It is authorisation-neutral (the `ForbiddenException` above already refused every case where
+  it could differ) and the house pattern elsewhere (`imports.service.ts`, `child-claims.service.ts`) is scalar-only.
+  The architecture lens' concern is that a relation filter is the construct most likely to push Prisma toward a
+  two-step `SELECT` + `UPDATE … WHERE id IN (…)` plan, which would make both concurrent callers report `count = 1`
+  and defeat the fix — **and the unit tests cannot see it**, because they mock `updateMany`. Settle it with
+  `DEBUG="prisma:query"` on one real revoke, or drop the clause.
+- **`count === 0` does not prove its own claim.** The loser branch answers 200 with the assignment body on the
+  assumption that the revocation already happened. A three-line
+  `if (after.revokedAt === null) throw new ConflictException(...)` would convert the only silent-open path in the
+  diff into a loud one. Recommended by the security lens; not applied.
+- **The partial unique index `(user_profile_id, role_id) WHERE revoked_at IS NULL` is deferred** (`AC-13`) — it is a
+  schema change, `G-MIGRATION` must not trigger here, and it guards a **different** race: two concurrent
+  `assignRole` calls creating two active rows, which `create` cannot make conditional.
+- **`PF-156`** (self-grant / vertical privilege escalation) and **`PF-153`** (unfiltered role lookup) were
+  deliberately left untouched — a silent authz change inside an audit slice is what `ADR-015` exists to prevent.
+- **`PF-150`'s id collision** (`OPEN.md:49` vs this file) was deliberately not resolved: renumbering belongs in both
+  registers at once, or not at all.
+
+### What is owed — carry these
+
+| Owed | Why | Owner |
+|---|---|---|
+| **`ADR-035` D15** | D10 item 1 records the `revokeRole` TOCTOU as a *known limit* and names this exact `updateMany` as the in-scope fix — the ADR now states a falsehood. D10 item 2 says the no-op rule is applied to roles and *not* to the other three families, and names `S-E04-7` as the owner of both. **Mark D10 items 1–2 superseded rather than rewriting them** (D10's purpose is to record what was true at `S-E04-6`) and add D15: the in-transaction conditional as the mechanism, the retained pre-transaction read as an explicit fast path, the guard-ordering rule (tenant → no-op → transaction), the four-family extension, and the deferred partial index. D9's *"`UpdateSchoolDto` exposes `status?: SchoolStatus`"* clause is now false too | `S-E04-9` |
+| ~~**`traceability/OPEN.md` ⇄ register disagreement**~~ — **DONE in this land pass** | `PF-155`, `PF-157`, `PF-158`, `PF-159` sat in `OPEN.md` as `open`, owned by **`S-E04-7`** — a story that merged without closing them — while the register rows this slice appended named `S-E04-10` as their closer. `GUARDRAILS` §6 points every agent at `OPEN.md` as the canonical open-findings list, so the next run would have read four closed findings as open. **All four rows moved to `CLOSED-L0.md`** with `S-E04-10` as owner, `closed 2026-08-09 (run 35)` as status, and a closure paragraph naming the mechanism *and* the carried residuals — every other cell preserved verbatim, exactly as `S-E04-7` did for `PF-162`/`PF-122`. 4 lines out, 4 lines in; `PF-156` (adjacent, deliberately out of scope) untouched | — |
+| ~~**`audit-findings-index.md`, the `PF-134` row**~~ — **DONE in this land pass** | It carried three **unescaped `\|`** inside inline code spans, so GFM emitted 10 cells into a 7-column table. Every other row in the same append escapes correctly (`number \| null` at `PF-137`, `active \| closed` at `PF-155`). Escaped | — |
+| **`enrollment.cancel`'s `before.endReason`** | `after.endReason` is recorded and `before.endReason` is not — so a `DELETE` on a `transferred_out` enrollment produces a row where an auditor cannot tell whether the administrative cancellation *set* that reason (it did not) or inherited it from the transfer | `S-E04-9` |
+| **`isSchoolUpdateNoOp` defaults to `true`** | A field added to `UpdateSchoolDto` and not to the comparator is silently swallowed — 200, no row, no mutation. Today the two lists agree; this diff is itself the evidence that the DTO changes. Drive it from a `{ [K in keyof Required<UpdateSchoolDto>]: … }` map so omission is a compile error | `S-E04-9` |
+| **`schools.controller.spec.ts` S-5 pins the pipe by hand-copied literal** | Its own comment concedes it *« devient vert par accident »* if `main.ts` is edited. This slice made the drift consequence worse: `whitelist` without `forbidNonWhitelisted` strips `status`, the body reaches `update()` as `{}`, the **new** no-op guard returns 200, and the school stays open — loud misfiling became silent success. Read `main.ts` in the spec (the house idiom: two gate specs already parse TS source) | `S-E04-9` |
+| **`D-11`, the reopen decision** | Recorded in `docs/daily-improvement-v3/open-decisions.md`. A school closed by mistake has no in-product recovery, and the DBA route writes no audit row | human |
+
+### `G-DNC` — the rules addressed explicitly
+
+- **`DNC-01`** (KPI ⇄ ledger divergence) is the rule `PF-158` protects, and is why four `critical` codes stop
+  emitting on non-events: `school.update`, `enrollment.status_change`, `enrollment.cancel`, `role.revoke`.
+- **`DNC-12`** (« irreversible » cash close contradicted by later mass-cancellation tooling) — **asserted in the
+  negative, with its reason.** It is the CASH-CLOSE rule owned by `V3-E16` finance and it does **not** apply here:
+  `school.close` is a **soft** close (`status: 'closed'`, the row survives), it makes no accounting assertion, and
+  this slice *removes* an undesigned reversal path rather than adding tooling that contradicts a stated
+  irreversibility. There is no finance module (`ADR-018` defers it).
+- **`DNC-10`** — no `try`/`catch` was added anywhere near a `writeAudit`; the fail-closed re-throw from `ADR-035` D2
+  is untouched. The only `try` in the diffed files is the pre-existing best-effort guardian fan-out at
+  `enrollments.controller.ts:71`, outside every transaction.
