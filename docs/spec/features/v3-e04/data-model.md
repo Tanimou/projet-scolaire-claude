@@ -442,16 +442,35 @@ annulerait la mutation métier de l'appelant pour une raison qui ne le concerne 
 **D-21 — les quatre KPI sont calculés sur le filtre actif.** M-22 est le défaut : trois compteurs *all-time* posés à
 côté d'un tableau filtré, qui le contredisent en silence.
 
-**D-22 — chaque KPI transporte sa portée.** L'enveloppe est `{ value: number, scope: 'filtered' | 'all_time' }`.
-Aujourd'hui les quatre valent `filtered` ; le champ `scope` existe pour qu'une exception délibérée soit
-**représentable et visible**, jamais implicite.
+**D-22 — chaque KPI transporte sa portée *et son titre*.** L'enveloppe est
+`{ value: number, scope: 'filtered' | 'all_time', label: string }`. Aujourd'hui les quatre valent `filtered` ; le
+champ `scope` existe pour qu'une exception délibérée soit **représentable et visible**, jamais implicite.
+`label` a été **ajouté par `S-E04-5` (`D-E04-5-1`)** et est **requis** : le défaut corrigé était un *titre* de carte
+qui contredisait le *nombre* posé dessous, et le seul remède structurel est un objet unique qui porte les deux.
+Ce n'est **pas** `ADR-034` — `architecture-impact.md` §4 réserve l'enveloppe KPI *canonique* inter-produit à
+`V3-E03` ; celle-ci est **minimale et locale** à `/analytics/audit`.
 
 | Clé | Définition exécutoire | Portée | Remplace |
 |---|---|---|---|
 | `eventsInRange` | `count(*)` sur le `where` filtré **complet** | `filtered` | `today` (un compteur « aujourd'hui » à côté d'un tableau filtré **est** le défaut G-TRUTH) |
-| `criticalChanges` | `count(*)` sur le filtre **∩** `action ∈ AUDIT_CRITICAL_ACTIONS` (déclaré en contracts, §2.3) | `filtered` | la liste `['delete','Suppression','Révision','revise']` (M-18), qui enjambe deux vocabulaires et n'en touche correctement aucun |
-| `sensitiveExports` | `count(*)` sur le filtre **∩** `resourceType = 'export_job'` — **structurel**, plus une recherche de sous-chaîne | `filtered` | `action contains 'Export'` (M-19), qui dépend d'une casse et d'une langue |
+| `criticalChanges` | `count(*)` sur le filtre **∩** `action ∈ AUDIT_CRITICAL_ACTIONS ∪ LEGACY_AUDIT_CRITICAL_ALIASES` (déclaré en contracts, §2.3) | `filtered` | la liste `['delete','Suppression','Révision','revise']` (M-18), qui enjambe deux vocabulaires et n'en touche correctement aucun |
+| `sensitiveExports` | `count(*)` sur le filtre **∩** `action ∈ AUDIT_EXPORT_ACTIONS ∪ LEGACY_AUDIT_EXPORT_ALIASES` — critère par **ACTION** (`D-E04-5-2`) | `filtered` | `action contains 'Export'` (M-19), recherche de sous-chaîne dépendante d'une casse et d'une langue |
 | `distinctActors` | `count(distinct actor_id)` sur le filtre, `actor_id` non nul | `filtered` | **`adminLogins`** — mesuré `0` et **structurellement toujours `0`** (M-20) |
+
+**`D-E04-5-2` — `sensitiveExports` reste défini par ACTION ; c'est le contrat qui est corrigé, pas le code.**
+Cette ligne du tableau disait `resourceType = 'export_job'` — critère **structurel** — au motif qu'une recherche
+d'action *« dépend d'une casse et d'une langue »*. Cette objection avait déjà été répondue par `S-E04-4` : le
+prédicat livré n'est pas une sous-chaîne, c'est une **appartenance exacte** à un registre déclaré (`ADR-037`).
+Mesuré sur le seed, les deux définitions divergent réellement :
+
+| Ligne du seed | `action` | `resourceType` | par action | structurel |
+|---|---|---|---|---|
+| `seed-demo.ts:1105-1110` | `export.grade_grid.request` | `export_job` | ✅ | ✅ |
+| les **50** lignes génériques | `export.bulletin.request` | tiré parmi `student/user_profile/role/assessment/grade/academic_year` — **jamais** `export_job` | ✅ | ❌ |
+| `seed-demo.ts:1174-1178` (fixture héritée) | `Export` | `Résultats` | ✅ | ❌ |
+
+Le critère structurel écarterait **51 lignes sur 52**, dont la ligne héritée que la fixture existe précisément pour
+exercer. `PF-137` est donc fermé **dans la direction que la mesure indique**.
 
 **D-23 — `adminLogins` est supprimé, pas réparé.** Une carte qui ne peut afficher que `0` est une contre-vérité de
 produit. Le remplacement (`distinctActors`) est calculable à partir des données qui existent. **Conséquence de
@@ -462,6 +481,25 @@ même PR (même schéma que `S-E06-6`).
 **D-24 — G-TRUTH est prouvée par une fixture commune.** Un même jeu de lignes doit donner, pour le même filtre, des
 KPI *et* un `total` de tableau **cohérents par construction** : `eventsInRange === total`. C'est une **assertion**,
 pas une remarque : elle attrape la classe entière de défauts.
+
+**D-25 — `Tenant.timezone` est ajouté ; `School.timezone` reste ; aucune n'est dérivée de l'autre.** *(Décision de
+`S-E04-5`. Elle est citée par `apps/api/prisma/schema.prisma` et par l'en-tête de
+`apps/api/prisma/migrations/20260809120000_tenant_timezone/migration.sql`, et n'existait à aucune adresse : elle est
+écrite ici pour que le renvoi résolve.)*
+
+Une borne `to` **inclusive** n'a pas de sens sans fuseau déclaré, et calculer minuit dans le fuseau du **serveur**
+ferait voir deux comptes différents à deux admins pour un même filtre — exactement le défaut G-TRUTH que cette slice
+ferme. Trois candidats ont été pesés :
+
+| Candidat | Verdict | Raison mesurée |
+|---|---|---|
+| `School.timezone` (déjà présent, `0_baseline/migration.sql:185`) | **rejeté** | `audit_log` porte `tenant_id` et **aucun `school_id`**. Un fuseau porté par l'école ne peut pas borner une question portée par le tenant. C'est le fuseau **opérationnel** (sonneries, créneaux) ; celui-ci est le fuseau de **reporting** |
+| une clé dans `tenant.settings` (`Json`) | **rejeté** | Ni typée, ni défaultable, ni visible de `scripts/schema-drift-check.js` : la dérive ne serait vue par aucun garde |
+| **`Tenant.timezone` — colonne additive, `TEXT NOT NULL DEFAULT 'Europe/Paris'`** | **retenu** | Copie exacte de la forme de `school.timezone`. Défaut **non volatile** → aucune réécriture de table sur PG 15. Pas de backfill, pas d'index (accès par clé primaire). `tenant_id` satisfait **par identité** : la clé primaire de `tenant` *est* le discriminant |
+
+Les deux colonnes **coexistent**, et rien ne les synchronise : un établissement peut sonner à Fort-de-France pendant
+que le tenant rapporte à Paris. Expand-only, **il n'y a pas de phase contract**. Rollback sans perte (le code
+d'abord, la colonne défautée est inoffensive ; puis `ALTER TABLE "tenant" DROP COLUMN "timezone";`).
 
 ---
 

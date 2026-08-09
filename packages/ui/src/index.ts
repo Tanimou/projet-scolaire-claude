@@ -123,7 +123,7 @@ export { BarChart, type BarChartProps, type BarSeries } from './components/BarCh
 export { GroupedBarChart, type GroupedBarChartProps } from './components/GroupedBarChart';
 
 // KPI / numeric
-export { KpiCard, type KpiCardProps, type KpiTone } from './components/KpiCard';
+export { KpiCard, type KpiCardProps, type KpiState, type KpiTone } from './components/KpiCard';
 export { SubjectKpiCard, type SubjectKpiCardProps } from './components/SubjectKpiCard';
 export { Stats2x2Grid, type Stats2x2GridProps, type StatsCell, type StatsTone } from './components/Stats2x2Grid';
 

@@ -259,11 +259,18 @@ components:
       name: portal
       in: query
       required: false
-      schema: { type: string, enum: [admin, teacher, parent, student] }
+      schema: { type: string, enum: [admin, teacher, parent, student, __none__] }
       description: >
-        Quatre membres (ADR-037 / D-16). `packages/contracts` déclare aujourd'hui `PORTALS` à TROIS
-        membres alors que `apps/web/src/lib/portals.ts` en déclare quatre : c'est PF-101, OUVERT,
-        référencé ici et NON corrigé par cet épic.
+        Quatre portails réels (ADR-037 / D-16) plus la SENTINELLE `__none__`
+        (`AUDIT_PORTAL_NONE`, S-E04-5, PF-123 moitié LECTURE). `__none__` n'est pas un portail :
+        c'est la seule valeur de filtre qui décode côté serveur en `portal IS NULL`. Avant
+        S-E04-5 la facette était construite `where: { portal: { not: null } }`, donc une ligne à
+        portail nul — ce que PF-123 écrit — n'était atteignable par AUCUNE valeur offerte. La
+        sentinelle n'est proposée par `/analytics/audit-facets` QUE si une telle ligne existe pour
+        le tenant : offrir un filtre qui ne peut rien ramener serait DNC-09 dans la barre de
+        filtres. `packages/contracts` déclare aujourd'hui `PORTALS` à TROIS membres alors que
+        `apps/web/src/lib/portals.ts` en déclare quatre : c'est PF-101, OUVERT, référencé ici et
+        NON corrigé par cet épic.
     Limit:
       name: limit
       in: query
@@ -330,10 +337,26 @@ components:
 
     Kpi:
       type: object
-      required: [value, scope]
+      required: [value, scope, label]
+      description: >
+        D-E04-5-1 (S-E04-5) — `label` est REQUIS et vient du serveur. Le défaut corrigé était un
+        TITRE de carte qui contredisait le NOMBRE posé dessous ; le seul remède structurel est un
+        objet unique qui porte les deux. Ceci n'est PAS `ADR-034` et ne le revendique pas :
+        `architecture-impact.md` §4 réserve l'enveloppe KPI CANONIQUE inter-produit à `V3-E03`.
+        L'enveloppe déclarée ici est MINIMALE et LOCALE à `/analytics/audit`, offerte comme entrée
+        à cette décision, pas comme la décision. Le nom de schéma `Kpi` est conservé volontairement
+        (le brief opérateur disait `KpiValue`) : d'autres chemins peuvent le référencer.
       properties:
         value: { type: integer, minimum: 0 }
         scope: { $ref: '#/components/schemas/KpiScope' }
+        label:
+          type: string
+          minLength: 1
+          examples: ['Événements sur la période']
+          description: >
+            Titre de la carte, résolu côté serveur (`AUDIT_KPI_LABELS`). Le client ne le compose
+            pas : un libellé composé côté client peut dériver de la définition qui produit la
+            valeur, ce qui est exactement le défaut que cette slice ferme.
 
     AuditKpis:
       type: object
@@ -357,8 +380,17 @@ components:
         sensitiveExports:
           allOf: [{ $ref: '#/components/schemas/Kpi' }]
           description: >
-            filtre ∩ `resourceType = 'export_job'` — critère STRUCTUREL. Remplace
-            `action contains 'Export'` (mesuré 7), qui dépendait d'une casse et d'une langue.
+            filtre ∩ `action ∈ AUDIT_EXPORT_ACTIONS ∪ LEGACY_AUDIT_EXPORT_ALIASES` — critère par
+            ACTION, registre `packages/contracts` (`ADR-037`).
+            D-E04-5-2 (S-E04-5) — CE CHAMP DISAIT « `resourceType = 'export_job'`, critère
+            STRUCTUREL » ; c'est le code qui avait raison, pas le contrat, et la correction va donc
+            dans ce fichier. L'objection d'origine (« `action contains 'Export'` dépend d'une casse
+            et d'une langue ») a été répondue par `S-E04-4` : le prédicat livré n'est pas une
+            recherche de sous-chaîne, c'est une appartenance EXACTE à un registre déclaré. Mesuré
+            sur le seed, les deux définitions divergent réellement : les 50 lignes
+            `export.bulletin.request` portent un `resourceType` tiré au hasard qui n'est JAMAIS
+            `export_job`, et la ligne héritée porte `action: 'Export'` / `resourceType:
+            'Résultats'`. Le critère structurel écarterait les 51.
         distinctActors:
           allOf: [{ $ref: '#/components/schemas/Kpi' }]
           description: "`count(distinct actor_id)` sur le filtre, `actor_id` non nul. Remplace `adminLogins`."
@@ -468,7 +500,20 @@ components:
       properties:
         resourceTypes: { type: array, items: { $ref: '#/components/schemas/FacetEntry' } }
         actions: { type: array, items: { $ref: '#/components/schemas/FacetEntry' } }
-        portals: { type: array, items: { $ref: '#/components/schemas/FacetEntry' } }
+        portals:
+          type: array
+          items: { $ref: '#/components/schemas/FacetEntry' }
+          description: >
+            Peut se terminer par la sentinelle `__none__` (`AUDIT_PORTAL_NONE`, libellé
+            « Sans portail ») — ajoutée UNIQUEMENT si ce tenant porte réellement une ligne
+            `portal IS NULL` (S-E04-5, PF-123 moitié lecture).
+        hasNullPortal:
+          type: boolean
+          description: >
+            S-E04-5 — la présence de la sentinelle ci-dessus, ÉNONCÉE plutôt qu'inférée par le
+            client. Champ déclaré ici parce que le serveur le renvoie ; il n'a AUCUN consommateur
+            à ce jour (`PF-152`) : soit l'UI s'en sert pour dire pourquoi « Sans portail » est ou
+            n'est pas offert, soit il est retiré du contrat et du service.
         actors: { type: array, items: { $ref: '#/components/schemas/ActorFacet' } }
 
     AuditChainVerdict:

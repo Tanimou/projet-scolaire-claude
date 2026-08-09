@@ -17,15 +17,17 @@ import { expect, test } from '../fixtures/portal-fixtures';
  *
  *  1. a **React element** passed as `SelectOption.label` from a server
  *     component across the RSC boundary into a `'use client'` filter, and
- *  2. a KPI value whose type moves from `number` to `number | string`
- *     («Non instrumenté»).
+ *  2. a KPI value whose type is `number | string`, so that a card can state a
+ *     non-measurement («—» + «Indisponible») instead of a fabricated `0`.
  *
  * Both are legal. Whether they *render* is a different question, and it is the
  * only one this file asks.
  *
- * Scope discipline: this asserts the vocabulary claims and nothing else. It does
- * not assert tone, icon or ordering — `PF-134` owns the fourth inline
- * vocabulary in `AuditTable.tsx` and will bring its own coverage.
+ * Scope discipline: this asserts the vocabulary claims plus the KPI-scope claims
+ * `S-E04-5` added. It still does not assert tone or icon: `auditActionTone()` is
+ * a pure function of the declared vocabulary and is proven where that can be
+ * measured — the contracts gate, naming `coefficient.upsert` and `grade.unflag`
+ * as the negative controls that used to render `neutral`.
  */
 test.describe('@journey /admin/audit renders the declared vocabulary', () => {
   test('the page renders for an authenticated admin at all (the PF-14 tripwire)', async ({
@@ -42,14 +44,35 @@ test.describe('@journey /admin/audit renders the declared vocabulary', () => {
     await expect(adminPage.getByRole('heading', { name: /journal d'audit/i })).toBeVisible();
   });
 
-  test('AC-3 / DNC-09 — the uninstrumented KPI reports the gap, and never a fabricated 0', async ({
+  /**
+   * Re-pointed by `S-E04-5`, not deleted (DNC-08).
+   *
+   * The old assertion pinned « Non instrumenté » on the « Connexions admin »
+   * card. That card is **gone** — the honest thing a card could say about an
+   * unwritten action is nothing at all — so the string is no longer expected on
+   * this page. What survives the removal is the invariant the assertion was
+   * really guarding: *no card states a number it did not measure*. That is now
+   * checked from the other side — every card carries a rendered scope, and the
+   * removal is stated in-product rather than left to be discovered.
+   */
+  test('AC-3 / AC-4 / DNC-09 — every KPI card renders its scope, and the removed card says why', async ({
     adminPage,
   }) => {
     await adminPage.goto('/admin/audit');
 
-    // The string is the whole point: `adminLogins` is `null` because nothing
-    // writes a login action, and the card says so rather than printing `0`.
-    await expect(adminPage.getByText('Non instrumenté')).toBeVisible();
+    // Four cards, four scopes. A scope is not optional decoration: a number on a
+    // governance surface without the population it counted is a false sentence.
+    await expect(adminPage.getByText(/Portée :/)).toHaveCount(4);
+
+    // « Acteurs distincts » replaces « Connexions admin ».
+    await expect(adminPage.getByText(/acteurs distincts/i).first()).toBeVisible();
+
+    // The removal is a governance statement and is permanent on the page.
+    await expect(adminPage.getByText(/V3-E05/)).toBeVisible();
+
+    // And the old sentinel is no longer reachable from any card: it described a
+    // card that no longer exists, and leaving it would be an orphan claim.
+    await expect(adminPage.getByText('Non instrumenté')).toHaveCount(0);
   });
 
   test('AC-4 / DNC-08 — a legacy French row is marked, not relabelled or hidden', async ({

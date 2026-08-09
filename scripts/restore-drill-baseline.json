@@ -15,9 +15,10 @@
   },
   "ledger": {
     "migrations": [
-      "0_baseline"
+      "0_baseline",
+      "20260809120000_tenant_timezone"
     ],
-    "reason": "Every directory under apps/api/prisma/migrations must come back in the restored _prisma_migrations, finished and not rolled back. A restore without the migration history is a restore of the data, not of the database."
+    "reason": "Every directory under apps/api/prisma/migrations must come back in the restored _prisma_migrations, finished and not rolled back. A restore without the migration history is a restore of the data, not of the database. 20260809120000_tenant_timezone was added by S-E04-5 (additive `tenant.timezone`, expand-only) and is recorded here by hand as part of that review — this list is a reviewed record, so a migration reaching disk without reaching this file is exactly the drift the check exists to catch."
   },
   "durations": {
     "dumpMs": {

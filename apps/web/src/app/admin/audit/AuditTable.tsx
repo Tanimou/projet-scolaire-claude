@@ -2,8 +2,9 @@
 
 import { StatusBadge, formatDateLong, formatRelativeTime } from '@pilotage/ui';
 import {
+  Bell,
+  CalendarDays,
   ChevronRight,
-  CircleSlash,
   Database,
   Download,
   Eye,
@@ -11,10 +12,12 @@ import {
   FileText,
   GraduationCap,
   KeyRound,
-  LogIn,
+  LifeBuoy,
+  MessagesSquare,
   Pencil,
   Shield,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   Upload,
   UserPlus,
@@ -27,10 +30,13 @@ import { AuditDetailDrawer, type AuditEntry } from './AuditDetailDrawer';
 import { AuditProvenance } from './AuditProvenance';
 import { VocabularyMarker } from './VocabularyMarker';
 import {
+  auditActionCountedBy,
+  auditActionTone,
   classifyAuditAction,
   classifyAuditResourceType,
   describeNonCanonicalFields,
   humanizePortal,
+  type AuditActionCountedBy,
 } from './audit-labels';
 
 interface AuditTableProps {
@@ -49,40 +55,87 @@ const PORTAL_TONE: Record<string, string> = {
 };
 
 /**
- * `pickActionTone` / `pickActionIcon` reçoivent le **code brut**, jamais le
- * libellé français. Les deux font des correspondances de sous-chaîne sur
- * `create` / `delete` / `export` : leur passer « Suppression du rôle » re-teint
- * silencieusement chaque ligne. Ne pas « simplifier » en leur passant le label.
+ * Ce que la teinte d'une ligne annonce, en toutes lettres.
+ *
+ * La couleur seule ne peut pas porter cette information (SC 1.4.1) : la phrase
+ * est écrite en `sr-only` à côté de la puce, et la même formulation sert de
+ * légende sous le tableau. Elle est **dérivée** de `auditActionCountedBy`, donc
+ * elle ne peut pas contredire le prédicat qui alimente la carte.
  */
-function pickActionTone(action: string): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
-  const a = action.toLowerCase();
-  if (a.includes('création') || a.includes('publish') || a.includes('approve') || a.includes('create'))
-    return 'success';
-  if (a.includes('suppression') || a.includes('delete') || a.includes('reject')) return 'danger';
-  if (a.includes('révision') || a.includes('update') || a.includes('mise à jour')) return 'warning';
-  if (a.includes('export')) return 'info';
-  return 'neutral';
-}
+const COUNTED_BY_SENTENCE: Record<Exclude<AuditActionCountedBy, null>, string> = {
+  criticalChanges: 'Comptée par Modifications critiques',
+  sensitiveExports: 'Comptée par Exports sensibles',
+};
 
-function pickActionIcon(action: string, resourceType: string): ComponentType<{ className?: string }> {
-  const a = action.toLowerCase();
-  if (a.includes('login')) return LogIn;
-  if (a.includes('export')) return Download;
-  if (a.includes('import')) return Upload;
-  if (a.includes('publish')) return ShieldCheck;
-  if (a.includes('delete') || a.includes('suppression')) return Trash2;
-  if (a.includes('create') || a.includes('création')) {
-    if (resourceType === 'user_profile') return UserPlus;
-    return FilePlus2;
+/**
+ * Icône d'une action — **indexée sur les préfixes de codes déclarés**, plus des
+ * replis par type de ressource (PF-134).
+ *
+ * L'ancienne version faisait `action.toLowerCase().includes('update')` sur la
+ * valeur brute : `coefficient.upsert` ne contient pas `update`, `grade.unflag`
+ * non plus, et `a.includes('login')` était mort depuis que la mesure a montré
+ * qu'aucun site d'écriture n'émet d'action de connexion. Une sous-chaîne n'est
+ * pas un vocabulaire.
+ *
+ * Une icône reste une **aide**, jamais une affirmation comptable — c'est la
+ * teinte, elle, qui doit correspondre exactement à ce qu'une carte compte, et
+ * elle vient de `@pilotage/contracts`. L'ordre des préfixes est porteur : le
+ * plus spécifique d'abord.
+ */
+// `Map` et non `Record` : la clé est une valeur venue de la base. Un
+// `Record[action]` sur `'constructor'` renverrait une fonction du prototype,
+// qui rendrait en tant que composant. Une `Map` n'a pas ce chemin.
+const ACTION_ICON_EXACT = new Map<string, ComponentType<{ className?: string }>>([
+  // Les cinq alias hérités gelés : des libellés français dans une colonne
+  // structurelle. Correspondance exacte, jamais par sous-chaîne.
+  ['Création', FilePlus2],
+  ['Mise à jour', Pencil],
+  ['Validation', ShieldCheck],
+  ['Suppression', Trash2],
+  ['Export', Download],
+  ['assessment.publish', ShieldCheck],
+  ['user.invite', UserPlus],
+]);
+
+const ACTION_ICON_PREFIXES: Array<[string, ComponentType<{ className?: string }>]> = [
+  ['academic_year.', KeyRound],
+  ['alert.', Bell],
+  ['analytics.', Database],
+  ['calendar.', CalendarDays],
+  ['coefficient.', SlidersHorizontal],
+  ['conversation.', MessagesSquare],
+  ['export.', Download],
+  ['grade.', GraduationCap],
+  ['guardianship.', UserPlus],
+  ['import.', Upload],
+  ['integration.', Database],
+  ['meeting_request.', CalendarDays],
+  ['remediation.', LifeBuoy],
+  ['role.', Shield],
+  ['student.', Users],
+];
+
+const RESOURCE_ICON = new Map<string, ComponentType<{ className?: string }>>([
+  ['academic_year', KeyRound],
+  ['assessment', GraduationCap],
+  ['export_job', Download],
+  ['grade', GraduationCap],
+  ['import_batch', Database],
+  ['import_row', Database],
+  ['role', Shield],
+  ['user_profile', Users],
+]);
+
+function pickActionIcon(
+  action: string,
+  resourceType: string,
+): ComponentType<{ className?: string }> {
+  const exact = ACTION_ICON_EXACT.get(action);
+  if (exact) return exact;
+  for (const [prefix, Icon] of ACTION_ICON_PREFIXES) {
+    if (action.startsWith(prefix)) return Icon;
   }
-  if (a.includes('update') || a.includes('mise à jour') || a.includes('révision')) return Pencil;
-  if (a.includes('reject')) return CircleSlash;
-  if (resourceType === 'role') return Shield;
-  if (resourceType === 'user_profile') return Users;
-  if (resourceType === 'assessment' || resourceType === 'grade') return GraduationCap;
-  if (resourceType === 'import_batch') return Database;
-  if (resourceType.includes('academic_year')) return KeyRound;
-  return FileText;
+  return RESOURCE_ICON.get(resourceType) ?? FileText;
 }
 
 export function AuditTable({ rows }: AuditTableProps) {
@@ -94,7 +147,7 @@ export function AuditTable({ rows }: AuditTableProps) {
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50">
             <tr className="text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              <th scope="col" className="px-4 py-3">Date & heure</th>
+              <th scope="col" className="px-4 py-3">Date &amp; heure</th>
               <th scope="col" className="px-4 py-3">Utilisateur</th>
               <th scope="col" className="px-4 py-3">Action</th>
               <th scope="col" className="px-4 py-3">Ressource</th>
@@ -102,7 +155,9 @@ export function AuditTable({ rows }: AuditTableProps) {
               {/* « Portail · IP » promettait une valeur nulle sur 54 lignes sur
                   54 : c'est l'en-tête, pas la cellule, qui ment en premier. */}
               <th scope="col" className="px-4 py-3">Portail · provenance</th>
-              <th scope="col" className="w-10 px-4 py-3"></th>
+              <th scope="col" className="w-10 px-4 py-3">
+                <span className="sr-only">Détail</span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -111,13 +166,14 @@ export function AuditTable({ rows }: AuditTableProps) {
               const action = classifyAuditAction(a.action);
               const resourceType = classifyAuditResourceType(a.resourceType);
               const nonCanonical = describeNonCanonicalFields(a);
+              const countedBy = auditActionCountedBy(a.action);
               // Repli ardoise conservé pour tout portail non reconnu (DNC-08).
               const portalCls = a.portal ? PORTAL_TONE[a.portal] ?? 'bg-slate-100 text-slate-600 ring-slate-200' : '';
               return (
                 <tr
                   key={a.id}
                   onClick={() => setSelected(a)}
-                  className="cursor-pointer transition hover:bg-blue-50/30"
+                  className="group cursor-pointer transition hover:bg-blue-50/30"
                 >
                   <td className="px-4 py-3 align-top text-xs">
                     <div className="font-medium text-slate-700">{formatDateLong(a.createdAt)}</div>
@@ -138,12 +194,21 @@ export function AuditTable({ rows }: AuditTableProps) {
                       <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
                         <Icon className="h-3.5 w-3.5" />
                       </span>
+                      {/* La teinte vient de la **déclaration** partagée, pas
+                          d'une correspondance de sous-chaîne : une puce rose est
+                          exactement une ligne que « Modifications critiques »
+                          compte, une puce bleue exactement une ligne que
+                          « Exports sensibles » compte. Le tableau devient la
+                          légende des cartes (PF-134). */}
                       <StatusBadge
                         label={action.label}
-                        tone={pickActionTone(a.action)}
+                        tone={auditActionTone(a.action)}
                         size="sm"
                         withDot
                       />
+                      {countedBy && (
+                        <span className="sr-only">{`, ${COUNTED_BY_SENTENCE[countedBy]}`}</span>
+                      )}
                     </div>
                     {/* Le marqueur est posé **en bloc**, sous la puce d'action :
                         la table défile horizontalement, une puce en ligne
@@ -162,7 +227,7 @@ export function AuditTable({ rows }: AuditTableProps) {
                     {nonCanonical && (
                       <span className="sr-only">
                         {` Pour cette entrée, ${nonCanonical.fields} ${
-                          nonCanonical.fields.includes(' et ') ? 'sortent' : 'sort'
+                          nonCanonical.fieldCount > 1 ? 'sortent' : 'sort'
                         } du vocabulaire d’audit déclaré. ${nonCanonical.explanation}`}
                       </span>
                     )}
@@ -198,9 +263,24 @@ export function AuditTable({ rows }: AuditTableProps) {
                     <AuditProvenance ip={a.ipAddress} ua={a.userAgent} variant="cell" />
                   </td>
                   <td className="px-4 py-3 align-top text-right">
-                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full text-slate-400 transition group-hover:bg-blue-100 group-hover:text-blue-600">
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </span>
+                    {/* Le clic sur la ligne était **le seul** chemin vers le
+                        tiroir : au clavier, le détail était inatteignable. Le
+                        chemin clavier est un vrai `<button>` plutôt qu'un
+                        `role="button"` posé sur le `<tr>` — ce dernier retire la
+                        sémantique de rangée à un lecteur d'écran, et une table
+                        d'audit se lit en rangées. Le clic sur la ligne reste un
+                        raccourci à la souris. */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelected(a);
+                      }}
+                      aria-label={`Voir le détail : ${action.label}, ${formatDateLong(a.createdAt)}`}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-full text-slate-400 transition group-hover:bg-blue-100 group-hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+                    </button>
                   </td>
                 </tr>
               );
@@ -220,13 +300,34 @@ export function AuditTable({ rows }: AuditTableProps) {
   );
 }
 
+/**
+ * La légende. Elle vit dans la bande déjà présente sous le tableau — pas de
+ * nouveau chrome — et énonce la correspondance exacte entre une teinte et la
+ * carte qui la compte, de sorte qu'un auditeur puisse vérifier un chiffre à
+ * l'œil et pas seulement par un test.
+ */
 function ViewerHint() {
   return (
-    <p className="border-t border-slate-100 bg-slate-50/40 px-4 py-2 text-[11px] text-slate-500">
-      <span className="inline-flex items-center gap-1">
-        <Eye className="h-3 w-3" />
-        Cliquez sur une ligne pour voir le détail complet (avant / après, provenance, user agent).
-      </span>
-    </p>
+    <div className="border-t border-slate-100 bg-slate-50/40 px-4 py-2 text-[11px] text-slate-600">
+      <p className="inline-flex items-center gap-1">
+        <Eye className="h-3 w-3" aria-hidden />
+        Cliquez sur une ligne (ou activez la flèche au clavier) pour voir le détail complet
+        (avant / après, provenance, user agent).
+      </p>
+      <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-rose-500" aria-hidden />
+          {COUNTED_BY_SENTENCE.criticalChanges}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" aria-hidden />
+          {COUNTED_BY_SENTENCE.sensitiveExports}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-slate-400" aria-hidden />
+          Journalisée, non comptée
+        </span>
+      </p>
+    </div>
   );
 }

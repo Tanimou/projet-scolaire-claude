@@ -94,6 +94,34 @@ export const AUDIT_PORTALS: readonly AuditVocabularyEntry[] = [
   { code: 'student', label: 'Élève' },
 ] as const;
 
+/**
+ * Sentinelle de filtre pour `portal IS NULL` (PF-123, moitié lecture).
+ *
+ * Une ligne dont `portal` est nul n'était atteignable par **aucune** valeur
+ * offerte : la facette était construite avec `portal: { not: null }` pendant que
+ * le filtre de ligne comparait `portal` à l'égalité. Le trou se referme par une
+ * valeur réservée, décodée **côté serveur** en `{ portal: null }`.
+ *
+ * Pourquoi une sentinelle et pas la chaîne vide : `''` est indiscernable de
+ * « aucun filtre » dans une query string. Pourquoi pas un `null` transmis par le
+ * client : une valeur de filtre reste une chaîne sur le fil, et un `null`
+ * traversant jusqu'à Prisma est un littéral non validé.
+ *
+ * **Ce n'est pas un portail.** Elle n'est volontairement pas ajoutée à
+ * `AUDIT_PORTALS` : le vocabulaire déclare ce que les lignes portent, et
+ * « aucun portail » n'est pas une valeur portée. Un garde vérifie la
+ * non-collision.
+ */
+export const AUDIT_PORTAL_NONE = '__none__';
+
+/** Libellé de la sentinelle « portail non enregistré ». */
+export const AUDIT_PORTAL_NONE_LABEL = 'Sans portail';
+
+/** `true` quand la valeur de facette/filtre est la sentinelle `portal IS NULL`. */
+export function isAuditPortalNone(code: string | null | undefined): boolean {
+  return code === AUDIT_PORTAL_NONE;
+}
+
 // ---------------------------------------------------------------------------
 // Types de ressource — 22 codes, relevés sur les sites d'écriture
 // ---------------------------------------------------------------------------
@@ -141,7 +169,29 @@ export const AUDIT_RESOURCE_TYPES: readonly AuditVocabularyEntry[] = [
 export interface AuditActionEntry extends AuditVocabularyEntry {
   readonly critical?: boolean;
   readonly export?: boolean;
+  /**
+   * Teinte de la puce d'action, **déclarée** (PF-134).
+   *
+   * Optionnelle : par défaut elle est *dérivée* des deux drapeaux ci-dessus —
+   * `critical` → `danger`, `export` → `info`, sinon `neutral`. Une teinte
+   * explicite n'existe que pour un code dont la lecture visuelle doit s'écarter
+   * de sa comptabilisation ; elle ne change **jamais** ce qui est compté.
+   *
+   * C'est la déclaration qui remplace la quatrième table de vocabulaire :
+   * `AuditTable.tsx` faisait de la correspondance de sous-chaîne sur le code
+   * (`a.includes('update')`), ce qui peignait `coefficient.upsert` et
+   * `grade.unflag` en `neutral` alors que la carte « Modifications critiques »
+   * les comptait — la couleur contredisait le chiffre.
+   */
+  readonly tone?: AuditActionTone;
 }
+
+/**
+ * Les teintes qu'une action d'audit peut prendre. Volontairement un
+ * sous-ensemble de `StatusTone` de `@pilotage/ui` : `packages/contracts` ne
+ * dépend d'aucun paquet d'interface, la compatibilité est structurelle.
+ */
+export type AuditActionTone = 'success' | 'danger' | 'warning' | 'info' | 'neutral';
 
 export const AUDIT_ACTIONS: readonly AuditActionEntry[] = [
   { code: 'academic_year.create', label: 'Création d’une année scolaire' },

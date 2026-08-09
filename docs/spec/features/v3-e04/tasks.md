@@ -261,7 +261,14 @@ Plus a legacy-row rendering case.
 
 ---
 
-## [ ] S-E04-5 — The KPIs share the table's scope, and the `to` filter includes its own day
+## [x] S-E04-5 — The KPIs share the table's scope, and the `to` filter includes its own day
+
+> **Shipped 2026-08-09, needing human review (NOT auto-merged).** 9 of 11 acceptance criteria evidenced,
+> **AC-9 partially** (the derivation ships and is gated; the `KpiCard` `state`/`scope` props it was written for are
+> **not wired** — `PF-144`) and **AC-3's rendered half NOT OBSERVED** (`PF-135`, no browser was driven). Decisions
+> `D-E04-5-1` / `D-E04-5-2` are recorded in the story §3, in `openapi.yaml` and in `data-model.md` §3.6/D-22.
+> Implementation note 6 (`excludesLegacyRows`) is **vacuous by measurement** and was deliberately not shipped — the
+> table is in `PROGRESS.md` § `S-E04-5`. New findings raised: `PF-144`…`PF-152`. Evidence: `PROGRESS.md` § `S-E04-5`.
 
 | | |
 |---|---|

@@ -253,6 +253,14 @@ model Tenant {
   status    TenantStatus @default(active)
   plan      String       @default("standard")
   settings  Json         @default("{}")
+  /// Fuseau de **reporting** du tenant (S-E04-5, D-25). Distinct de
+  /// `School.timezone`, le fuseau **opérationnel** d'un établissement :
+  /// `audit_log` porte `tenant_id` et **aucun** `school_id`, donc un fuseau
+  /// d'école ne peut pas répondre à une question portée par le tenant. Ni l'un
+  /// ni l'autre n'est dérivé de l'autre. Même forme que `School.timezone`
+  /// (`0_baseline/migration.sql:185`) — pas de nouvelle convention. Jamais
+  /// accepté du client : la valeur est lue ici, puis renvoyée pour affichage.
+  timezone  String       @default("Europe/Paris")
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 

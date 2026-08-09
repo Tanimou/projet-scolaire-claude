@@ -1,3 +1,6 @@
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { MigrationPreflightError, assertMigrationsClean } from './migration-preflight';
 import { readMigrationState } from './migration-state';
 
@@ -29,6 +32,34 @@ function prismaWith(options: {
 }
 
 const silentLogger = { log: () => undefined, warn: () => undefined } as never;
+
+/**
+ * Les migrations réellement livrées, lues **sur le disque**.
+ *
+ * `readMigrationState` compare le dossier `prisma/migrations` au registre. Un
+ * test « tout est appliqué » qui recopie l'inventaire à la main devient donc
+ * faux à la migration suivante — et il l'est devenu : `S-E04-5` a ajouté
+ * `Tenant.timezone` et ces deux cas sont passés `clean` → `pending` sans qu'un
+ * seul comportement ait changé. On dérive la liste de la même source que le code
+ * testé, pour que l'assertion porte sur l'invariant (« aucune en attente ») et
+ * non sur une copie de l'inventaire.
+ */
+function allShippedMigrations(): string[] {
+  const dir = join(__dirname, '..', '..', '..', 'prisma', 'migrations');
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/** Un registre où **toutes** les migrations livrées sont appliquées proprement. */
+function allAppliedRows(): { migration_name: string; finished_at: Date; rolled_back_at: null }[] {
+  return allShippedMigrations().map((migration_name) => ({
+    migration_name,
+    finished_at: new Date(),
+    rolled_back_at: null,
+  }));
+}
 
 describe('readMigrationState', () => {
   const OLD_ENV = process.env.PRISMA_MIGRATIONS_DIR;
@@ -68,15 +99,16 @@ describe('readMigrationState', () => {
   });
 
   it('signale `clean` et expose la version de schéma quand tout est appliqué', async () => {
+    const shipped = allShippedMigrations();
     const state = await readMigrationState(
-      prismaWith({
-        ledgerPresent: true,
-        rows: [{ migration_name: '0_baseline', finished_at: new Date(), rolled_back_at: null }],
-      }),
+      prismaWith({ ledgerPresent: true, rows: allAppliedRows() }),
     );
 
     expect(state.status).toBe('clean');
-    expect(state.schemaVersion).toBe('0_baseline');
+    // La version de schéma est la DERNIÈRE migration livrée, pas la première :
+    // avec un seul dossier les deux se confondaient et l'assertion ne
+    // distinguait pas les deux lectures.
+    expect(state.schemaVersion).toBe(shipped[shipped.length - 1]);
     expect(state.pending).toHaveLength(0);
   });
 
@@ -138,10 +170,7 @@ describe('assertMigrationsClean', () => {
     delete process.env.MIGRATION_PREFLIGHT;
 
     const state = await assertMigrationsClean(
-      prismaWith({
-        ledgerPresent: true,
-        rows: [{ migration_name: '0_baseline', finished_at: new Date(), rolled_back_at: null }],
-      }),
+      prismaWith({ ledgerPresent: true, rows: allAppliedRows() }),
       silentLogger,
     );
 

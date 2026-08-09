@@ -36,23 +36,57 @@
  */
 
 import {
+  AUDIT_PORTAL_NONE,
+  AUDIT_PORTAL_NONE_LABEL,
+  auditActionCountedBy,
+  auditActionTone,
   auditVocabularyExplanation,
   auditVocabularyMarker,
   classifyAuditAction,
   classifyAuditPortal,
   classifyAuditResourceType,
+  isAuditPortalNone,
+  type AuditActionCountedBy,
+  type AuditActionTone,
   type AuditVocabularyKind,
   type AuditVocabularyResolution,
 } from '@pilotage/contracts';
 
 export {
+  AUDIT_PORTAL_NONE,
+  auditActionCountedBy,
+  auditActionTone,
   auditVocabularyExplanation,
   auditVocabularyMarker,
   classifyAuditAction,
   classifyAuditPortal,
   classifyAuditResourceType,
+  isAuditPortalNone,
 };
-export type { AuditVocabularyKind, AuditVocabularyResolution };
+export type {
+  AuditActionCountedBy,
+  AuditActionTone,
+  AuditVocabularyKind,
+  AuditVocabularyResolution,
+};
+
+/**
+ * Résout une valeur de **facette de portail**, sentinelle comprise (PF-123).
+ *
+ * `classifyAuditPortal` reste total et verbatim sur tout code inconnu : c'est sa
+ * propriété, et on ne la casse pas. La sentinelle `__none__` n'est pas un code
+ * porté par une ligne — c'est une valeur de filtre — donc sa traduction vit ici,
+ * dans l'adaptateur web, et non dans la déclaration.
+ *
+ * Le vocabulaire rendu reste `unknown` : « Sans portail » n'est pas un portail
+ * canonique, et le marqueur neutre le dit. Ne pas l'ajouter à `AUDIT_PORTALS`.
+ */
+export function classifyAuditPortalFilterValue(code: string): AuditVocabularyResolution {
+  if (isAuditPortalNone(code)) {
+    return { code, label: AUDIT_PORTAL_NONE_LABEL, vocabulary: 'unknown' };
+  }
+  return classifyAuditPortal(code);
+}
 
 /**
  * Libellé d'un type de ressource.
@@ -87,7 +121,19 @@ export function humanizePortal(p: string | null): string {
 export function describeNonCanonicalFields(entry: {
   action: string;
   resourceType: string;
-}): { kind: AuditVocabularyKind; marker: string; explanation: string; fields: string } | null {
+}): {
+  kind: AuditVocabularyKind;
+  marker: string;
+  explanation: string;
+  fields: string;
+  /**
+   * Combien de champs sortent du vocabulaire — 1 ou 2. Exposé pour que
+   * l'appelant accorde son verbe sans re-tester la chaîne : `AuditTable.tsx`
+   * faisait `fields.includes(' et ')`, et une correspondance de sous-chaîne sur
+   * une valeur d'audit est précisément ce que PF-134 supprime de ce fichier.
+   */
+  fieldCount: number;
+} | null {
   const action = classifyAuditAction(entry.action);
   const resourceType = classifyAuditResourceType(entry.resourceType);
   const offenders: Array<{ name: string; kind: AuditVocabularyKind }> = [];
@@ -108,6 +154,7 @@ export function describeNonCanonicalFields(entry: {
     marker: auditVocabularyMarker(kind) ?? '',
     explanation: auditVocabularyExplanation(kind) ?? '',
     fields: offenders.map((o) => o.name).join(' et '),
+    fieldCount: offenders.length,
   };
 }
 

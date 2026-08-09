@@ -9,15 +9,18 @@ import {
   AUDIT_EXPORT_ACTIONS,
   AUDIT_LOGIN_ACTIONS,
   AUDIT_PORTALS,
+  AUDIT_PORTAL_NONE,
   AUDIT_RESOURCE_TYPES,
   LEGACY_AUDIT_ACTION_ALIASES,
   LEGACY_AUDIT_RESOURCE_TYPE_ALIASES,
   LEGACY_FORMAT_MARKER,
   PORTALS,
   TEACHER_BOOKING_TRANSITION,
+  auditActionTone,
   classifyAuditAction,
   classifyAuditPortal,
   classifyAuditResourceType,
+  isAuditPortalNone,
 } from '@pilotage/contracts';
 import * as ts from 'typescript';
 
@@ -1252,29 +1255,107 @@ describe('V-8 / DNC-09 / AC-8 — every populated KPI can match, and the empty o
     expect([...AUDIT_EXPORT_ACTIONS].sort()).toEqual(written);
   });
 
-  it('adminLogins is NOT instrumented, is null, and never runs a { in: [] } count', () => {
+  it('login is STILL not instrumented — measured, and no { in: [] } count exists anywhere', () => {
+    // RE-EXPRESSED, not deleted (S-E04-5). The three sub-claims this block made
+    // are each still load-bearing; only the surface they were attached to
+    // changed. What moved: the « CONNEXIONS ADMIN » card is GONE, so its
+    // `adminLogins: number | null` field and its dormant re-armable query went
+    // with it — PF-138 closed **by deletion**, which is why the third assertion
+    // below is now an absence. Real login/session auditing is owned by V3-E05
+    // (PF-26); no heuristic stands in for it here.
+    //
+    //  (i) the set is empty BY MEASUREMENT, not by omission;
     expect(AUDIT_LOGIN_ACTIONS).toHaveLength(0);
     expect(auditLoginActionCodes()).toEqual([]);
+
     const analytics = CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
-    // Three counts in the Promise.all, and the fourth value is a null, not a
-    // query that can only read 0.
-    expect(analytics).toMatch(/const \[today, criticalChanges, sensitiveExports\] = await Promise\.all/);
-    expect(analytics).toMatch(/loginActions\.length === 0\s*\?\s*null/);
-    expect(analytics).toMatch(/adminLogins: number \| null;/);
-    // PF-138 — the branch is dormant, so no runtime assertion can catch it
-    // losing the scope its own card claims. The card reads « CONNEXIONS ADMIN »;
-    // the query that wakes up when `AUDIT_LOGIN_ACTIONS` gains a code must still
-    // be admin-scoped, or the first slice to instrument login silently makes an
-    // RGPD governance card over-report teacher, parent and student sessions.
-    // Asserted on the source precisely because there is no behaviour to assert.
-    expect(analytics).toMatch(
-      /where: \{ tenantId, portal: 'admin', action: \{ in: loginActions \} \}/,
-    );
+    const region = auditKpiRegion();
+    expect(region.length).toBeGreaterThan(200);
+
+    //  (ii) NO query that can only read 0 is issued in the audit region — not
+    //       against the empty declaration, not against a literal empty array.
+    //       A `{ in: [] }` count is a canonically broken card, harder to see
+    //       than an inline one (DNC-09).
+    expect(region).not.toMatch(/in:\s*\[\s*\]/);
+    expect(region).not.toMatch(/in:\s*(?:auditLoginActionCodes\(\)|AUDIT_LOGIN_ACTIONS)/);
+    expect(region).not.toMatch(/loginActions/);
+
+    //  (iii) the field a card could bind to no longer exists, so no card can be
+    //        fed a value that is structurally always the same.
+    expect(analytics).not.toMatch(/adminLogins/);
+    expect(analytics).not.toMatch(/kpis: \{ today,/);
+
+    // …and what replaced it can actually read something: four KPIs, each an
+    // envelope carrying its own scope and label.
+    expect(region).toMatch(/eventsInRange/);
+    expect(region).toMatch(/distinctActors/);
+    expect(region).toMatch(/scope: 'filtered'/);
   });
 
-  it('the page reports the gap rather than a fabricated zero', () => {
+  it('the page distinguishes an OUTAGE from a measured value — and never fabricates a zero', () => {
+    // RE-POINTED TWICE (PF-139).
+    //
+    // First re-pointing: the original assertion — `page.tsx` contains the string
+    // « Non instrumenté » — was satisfied by a *comment*, and after the card's
+    // removal it would have been exactly that: a green rule over nothing.
+    //
+    // Second re-pointing (this one): the replacement asserted « Indisponible »
+    // against `page.tsx` and was **red as written**. `CONSUMER_SOURCES` is
+    // already built through `stripCommentsPreservingLines` (see :822), so the
+    // only capital-I occurrence in that file — the `AuditKpi` JSDoc — is blanked
+    // before the matcher ever runs, and the two rendered strings are the
+    // lowercase « Indicateurs indisponibles. » / « Entrées indisponibles ». The
+    // state vocabulary does not live in the page at all: it lives in
+    // `audit-kpi-state.ts`, which the page imports. A case-insensitive match on
+    // « indisponibles » would have gone green on the outage banner alone and
+    // stopped guarding the per-card state — the wrong repair.
+    //
+    // So the claim is split across the two files that actually carry its halves,
+    // and the wiring between them is asserted rather than assumed. The invariant
+    // is unchanged and stronger: three states must be declared and
+    // non-overlapping, the outage state must be named and must render a dash,
+    // and an absent response must never render as a `0`.
     const page = CONSUMER_SOURCES.get('apps/web/src/app/admin/audit/page.tsx') ?? '';
-    expect(page).toContain('Non instrumenté');
+    const state = CONSUMER_SOURCES.get('apps/web/src/app/admin/audit/audit-kpi-state.ts') ?? '';
+    // Unguarded (DNC-08): a moved or renamed file must fail here, never degrade
+    // into an empty string that satisfies every `not.toMatch` below.
+    expect(page).not.toBe('');
+    expect(state).not.toBe('');
+
+    // (a) the three states are DECLARED, named, and mutually exclusive — the
+    //     union lists exactly them, and each is the `kind` of a distinct return.
+    const union = /export type AuditKpiStateKind =([^;]+);/.exec(state);
+    expect(union).not.toBeNull();
+    const declared = [...union![1]!.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]!);
+    expect(declared.sort()).toEqual(['measured', 'not-instrumented', 'unavailable']);
+    expect(new Set(declared).size).toBe(declared.length);
+    for (const kind of declared) expect(state).toContain(`kind: '${kind}'`);
+
+    // (b) the outage state is NAMED, and what it puts in the value slot is a
+    //     dash — not a zero, not an empty string, not a silently absent card.
+    expect(state).toMatch(/KPI_UNAVAILABLE_DISPLAY\s*=\s*'—'/);
+    expect(state).toMatch(/KPI_UNAVAILABLE_SCOPE\s*=\s*'Indisponible/);
+    expect(state).not.toMatch(/KPI_UNAVAILABLE_DISPLAY\s*=\s*['"`]?0/);
+    //     …and « unavailable » is reached from the RESPONSE being missing, which
+    //     is a different input from a `value: null` the API did send.
+    expect(state).toContain('responseMissing');
+
+    // (c) the page is genuinely WIRED to that module — otherwise (a) and (b)
+    //     would be a gate over a file nothing renders.
+    expect(page).toContain("from './audit-kpi-state'");
+    expect(page).toContain('resolveAuditKpiState');
+    expect(page).toContain("state.kind === 'unavailable'");
+
+    // (d) the removal is stated in-product, with its owner;
+    expect(page).toContain('V3-E05');
+    // (e) no KPI is read from the removed fields — the page cannot bind to a
+    //     value the API stopped sending and render an empty slot for it.
+    expect(page).not.toMatch(/adminLogins/);
+    expect(page).not.toMatch(/kpis\.today/);
+    // (f) the fabricated-zero fallback is gone: no literal zero is synthesised
+    //     for a call that did not return.
+    expect(page).not.toMatch(/criticalChanges:\s*0/);
+    expect(page).not.toMatch(/sensitiveExports:\s*0/);
   });
 
   it('the KPI predicates hold NO inline vocabulary of their own', () => {
@@ -1367,5 +1448,193 @@ describe('V-10 — a fresh seed writes canonical codes plus exactly three legacy
     expect(deleteMany).toHaveLength(1);
     // …and it is the demo-tenant reset, not a widened purge.
     expect(seed).toMatch(/auditLog\.deleteMany\(\{ where: \{ tenantId: T \} \}\)/);
+  });
+});
+
+/* ================================================================== *
+ * V-11 (S-E04-5) — the tone, the sentinel and the day boundary each
+ * have exactly ONE declaration, and each is DERIVED, never restated
+ * ================================================================== */
+
+describe('V-11 / PF-134 — the action tone is derived from the declaration, never substring-matched', () => {
+  const TONES = ['success', 'danger', 'warning', 'info', 'neutral'];
+
+  it('every declared action resolves to a tone, in BOTH directions', () => {
+    // One-directional checking is how `calendar_event` went missing. Every
+    // declared code must resolve, and every resolution must be a declared tone:
+    // an `undefined` would paint a badge with no class and read as a rendering
+    // bug rather than as the vocabulary gap it is.
+    expect(AUDIT_ACTIONS.length).toBeGreaterThan(40);
+    expect(LEGACY_AUDIT_ACTION_ALIASES.length).toBeGreaterThan(0);
+    for (const entry of [...AUDIT_ACTIONS, ...LEGACY_AUDIT_ACTION_ALIASES]) {
+      const tone = auditActionTone(entry.code);
+      expect({ code: entry.code, known: TONES.includes(tone) }).toEqual({
+        code: entry.code,
+        known: true,
+      });
+    }
+  });
+
+  it('AC-8 — a counted row is a coloured row: critical → danger/warning, export → info', () => {
+    expect(AUDIT_CRITICAL_ACTIONS.length).toBeGreaterThan(0);
+    expect(AUDIT_EXPORT_ACTIONS.length).toBeGreaterThan(0);
+    for (const code of AUDIT_CRITICAL_ACTIONS) {
+      const tone = auditActionTone(code);
+      expect({ code, counted: tone === 'danger' || tone === 'warning' }).toEqual({
+        code,
+        counted: true,
+      });
+    }
+    for (const code of AUDIT_EXPORT_ACTIONS) {
+      expect({ code, tone: auditActionTone(code) }).toEqual({ code, tone: 'info' });
+    }
+  });
+
+  it('the two codes the substring matcher got WRONG are named, and now read danger', () => {
+    // `coefficient.upsert` contains no `update`; `grade.unflag` contains no
+    // `delete`. Both are declared critical, both were counted by « Modifications
+    // critiques », and both were painted `neutral`: the colour contradicted the
+    // number, on the surface whose whole thesis is that it does not. Named
+    // explicitly, because a loop over the declaration would still pass if these
+    // two were special-cased away.
+    expect(AUDIT_CRITICAL_ACTIONS).toContain('coefficient.upsert');
+    expect(AUDIT_CRITICAL_ACTIONS).toContain('grade.unflag');
+    expect(auditActionTone('coefficient.upsert')).toBe('danger');
+    expect(auditActionTone('grade.unflag')).toBe('danger');
+    // …and an uncounted code stays neutral, or every row would look counted.
+    expect(auditActionTone('grade.flag')).toBe('neutral');
+    expect(auditActionTone('zz.not_a_real_code')).toBe('neutral');
+  });
+
+  it('the FOURTH vocabulary is gone: AuditTable no longer substring-matches the action', () => {
+    const table = CONSUMER_SOURCES.get('apps/web/src/app/admin/audit/AuditTable.tsx') ?? '';
+    expect(table).not.toBe('');
+    expect(table).not.toMatch(/function pickActionTone/);
+    expect(table).not.toMatch(/\.includes\(/);
+    expect(table).toMatch(/auditActionTone/);
+  });
+});
+
+describe('V-11 / PF-123 — « Sans portail » is a reserved sentinel, decoded server-side', () => {
+  it('does not collide with any declared portal, and is not itself a portal', () => {
+    expect(AUDIT_PORTALS.map((p) => p.code)).not.toContain(AUDIT_PORTAL_NONE);
+    // Deliberately NOT canonical: the resolver must report it as unclassified
+    // rather than invent a fifth portal.
+    expect(classifyAuditPortal(AUDIT_PORTAL_NONE).vocabulary).toBe('unknown');
+    // Never the empty string — indistinguishable from "no filter" on the wire.
+    expect(AUDIT_PORTAL_NONE).not.toBe('');
+    expect(isAuditPortalNone(AUDIT_PORTAL_NONE)).toBe(true);
+    expect(isAuditPortalNone('admin')).toBe(false);
+    expect(isAuditPortalNone(null)).toBe(false);
+  });
+
+  it('the facet stopped excluding nulls, and the decode happens in the service', () => {
+    const analytics =
+      CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+    expect(analytics).not.toMatch(/portal: \{ not: null \}/);
+    // Still a distinct portal facet — S-E04-7 is not pre-empted.
+    expect(analytics).toMatch(/distinct: \['portal'\]/);
+    // The sentinel is translated here, never handed to Prisma as a literal.
+    expect(analytics).toMatch(/isAuditPortalNone\(portal\)/);
+  });
+});
+
+describe('V-11 / AC-1, AC-6, AC-7 — one window helper, one timezone source, no date library', () => {
+  it('both consumers resolve both bounds through the SAME helper', () => {
+    const analytics =
+      CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+    const generator =
+      CONSUMER_SOURCES.get(
+        'apps/worker/src/modules/exports/generators/audit-csv.generator.ts',
+      ) ?? '';
+    expect(generator).not.toBe('');
+    for (const [name, source] of [
+      ['analytics.service.ts', analytics],
+      ['audit-csv.generator.ts', generator],
+    ] as Array<[string, string]>) {
+      expect({ name, uses: /resolveAuditWindow\(/.test(source) }).toEqual({ name, uses: true });
+      // Both bounds that shipped before, both gone.
+      expect({ name, legacy: /lte: new Date\(/.test(source) }).toEqual({ name, legacy: false });
+      expect({ name, legacy: /gte: new Date\(from\)/.test(source) }).toEqual({
+        name,
+        legacy: false,
+      });
+    }
+    // No server-zone arithmetic survives in the audit region.
+    const region = auditKpiRegion();
+    expect(region).not.toMatch(/setHours\(/);
+    expect(region).not.toMatch(/new Date\((?:from|to)\)/);
+  });
+
+  it('the helper uses Intl only — no date library entered apps/api (pinned stack)', () => {
+    const windowSource = CONSUMER_SOURCES.get('packages/contracts/src/audit/window.ts') ?? '';
+    expect(windowSource).not.toBe('');
+    for (const lib of ['luxon', 'date-fns', 'dayjs', '@js-temporal', 'moment']) {
+      expect({ lib, present: windowSource.includes(lib) }).toEqual({ lib, present: false });
+    }
+    expect(windowSource).toMatch(/Intl\.DateTimeFormat/);
+    // DST: a day is never a fixed number of milliseconds.
+    expect(windowSource).not.toMatch(/86_?400_?000/);
+    const apiPkg = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'apps', 'api', 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    for (const lib of ['luxon', 'date-fns', 'date-fns-tz', 'dayjs', '@js-temporal/polyfill']) {
+      expect({ lib, declared: lib in (apiPkg.dependencies ?? {}) }).toEqual({
+        lib,
+        declared: false,
+      });
+    }
+  });
+
+  it('AC-7 — the timezone is never a query parameter, a header or a cookie', () => {
+    const controller = stripCommentsPreservingLines(
+      readFileSync(
+        join(REPO_ROOT, 'apps', 'api', 'src', 'modules', 'analytics', 'analytics.controller.ts'),
+        'utf8',
+      ),
+    );
+    expect(controller).toMatch(/@Query\(['"]from['"]\)/); // the scan reaches the method
+    expect(controller).not.toMatch(/@Query\(\s*['"]timezone['"]/);
+    expect(controller).not.toMatch(/@Headers\([^)]*timezone/i);
+    expect(controller).not.toMatch(/cookies?\[[^\]]*timezone/i);
+    // It is read from the tenant row instead, by primary key.
+    const analytics =
+      CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+    expect(analytics).toMatch(/tenant\.findUnique\(\{[\s\S]{0,120}select: \{ timezone: true \}/);
+  });
+
+  it('AC-6 — the migration is a reviewed FILE, expand-only, and `db push` appears nowhere', () => {
+    const dir = join(REPO_ROOT, 'apps', 'api', 'prisma', 'migrations');
+    const entries = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+    expect(entries[0]).toBe('0_baseline');
+    const tz = entries.find((e) => e.endsWith('_tenant_timezone'));
+    expect({ entries, found: typeof tz }).toEqual({ entries, found: 'string' });
+    const sql = readFileSync(join(dir, tz as string, 'migration.sql'), 'utf8');
+    // ONE statement, additive, non-volatile default (no table rewrite on PG 11+).
+    expect(sql).toMatch(
+      /ALTER TABLE "tenant" ADD COLUMN "timezone" TEXT NOT NULL DEFAULT 'Europe\/Paris';/,
+    );
+    const statements = sql
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n')
+      .split(';')
+      .filter((s) => s.trim().length > 0);
+    expect(statements).toHaveLength(1);
+    for (const forbidden of [/DROP TABLE/i, /DELETE FROM/i, /UPDATE "audit_log"/i]) {
+      expect({ forbidden: String(forbidden), hit: forbidden.test(sql) }).toEqual({
+        forbidden: String(forbidden),
+        hit: false,
+      });
+    }
+    // The rollback and the expand/contract posture are STATED, not implied.
+    expect(sql).toMatch(/ALTER TABLE "tenant" DROP COLUMN "timezone";/);
+    expect(sql).toMatch(/expand-only/i);
+    // …and the datamodel declares the same column, or the drift check would.
+    const schema = readFileSync(join(REPO_ROOT, 'apps', 'api', 'prisma', 'schema.prisma'), 'utf8');
+    expect(schema).toMatch(/timezone\s+String\s+@default\("Europe\/Paris"\)/);
   });
 });
