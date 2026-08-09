@@ -20,10 +20,16 @@ import type { Metadata } from 'next';
 import type { AuditEntry } from './AuditDetailDrawer';
 import { AuditPageFilters } from './AuditPageFilters';
 import { AuditTable } from './AuditTable';
+import { VocabularyMarker } from './VocabularyMarker';
 import { exportAuditAction } from './actions';
-// Module neutre, jamais `'use client'` : cette page est un composant serveur et
-// **appelle** ces fonctions (PF-14 / S-E04-2). Voir `audit-labels.ts`.
-import { hasNoProvenance, humanizePortal, humanizeResourceType } from './audit-labels';
+// Modules neutres, jamais `'use client'` : cette page est un composant serveur
+// et **appelle** ces fonctions (PF-14 / S-E04-2). Voir `audit-labels.ts`.
+import {
+  classifyAuditPortal,
+  classifyAuditResourceType,
+  hasNoProvenance,
+  type AuditVocabularyResolution,
+} from './audit-labels';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
@@ -38,7 +44,13 @@ interface AuditResponse {
     today: number;
     criticalChanges: number;
     sensitiveExports: number;
-    adminLogins: number;
+    /**
+     * `null` = **non instrumenté**. Aucun site d'écriture n'émet d'action de
+     * connexion : un `0` ici se lirait « nous avons vérifié, il n'y en a pas
+     * eu », ce qui est faux. DNC-09 : aucune carte ne peut structurellement ne
+     * lire que 0.
+     */
+    adminLogins: number | null;
   };
 }
 
@@ -59,6 +71,34 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 }
 
 const PAGE_SIZE = 20;
+
+const VOCABULARY_ORDER: Record<string, number> = { canonical: 0, legacy: 1, unknown: 2 };
+
+/**
+ * Canoniques d'abord (alphabétiquement par libellé français), puis hérités,
+ * puis non répertoriés. Rien n'est retiré ni regroupé — `SelectFilter` n'a pas
+ * de groupes d'options et on n'en ajoute pas ici (ce serait une modification de
+ * `packages/ui`) : l'ordre plus le marqueur par option suffisent, et sont
+ * gratuits.
+ */
+function sortByVocabulary(
+  resolutions: AuditVocabularyResolution[],
+): AuditVocabularyResolution[] {
+  return [...resolutions].sort(
+    (a, b) =>
+      (VOCABULARY_ORDER[a.vocabulary] ?? 3) - (VOCABULARY_ORDER[b.vocabulary] ?? 3) ||
+      a.label.localeCompare(b.label, 'fr'),
+  );
+}
+
+function VocabularyOptionLabel({ resolution }: { resolution: AuditVocabularyResolution }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {resolution.label}
+      <VocabularyMarker vocabulary={resolution.vocabulary} />
+    </span>
+  );
+}
 
 export default async function AuditPage({
   searchParams,
@@ -95,18 +135,28 @@ export default async function AuditPage({
   const audit = resp ?? {
     data: [],
     total: 0,
-    kpis: { today: 0, criticalChanges: 0, sensitiveExports: 0, adminLogins: 0 },
+    kpis: { today: 0, criticalChanges: 0, sensitiveExports: 0, adminLogins: null },
   };
   const facetData = facets ?? { resourceTypes: [], portals: [], actions: [], actors: [] };
 
-  const resourceTypeOptions: SelectOption[] = facetData.resourceTypes.map((rt) => ({
-    value: rt,
-    label: humanizeResourceType(rt),
-    hint: rt,
+  // Les facettes restent **dérivées de l'observé** : elles listent ce que les
+  // lignes portent réellement. On n'y ajoute pas un portail que personne
+  // n'écrit (un filtre `student` serait vide en permanence), et surtout on n'en
+  // retire rien — pas de `.filter(` entre le tableau de facettes et son
+  // `.map(` : une valeur inclassable reste visible (DNC-08). Le tri met les
+  // codes canoniques d'abord, puis les hérités, puis les non répertoriés.
+  const resourceTypeOptions: SelectOption[] = sortByVocabulary(
+    facetData.resourceTypes.map(classifyAuditResourceType),
+  ).map((r) => ({
+    value: r.code,
+    label: <VocabularyOptionLabel resolution={r} />,
+    hint: r.code,
   }));
-  const portalOptions: SelectOption[] = facetData.portals.map((p) => ({
-    value: p,
-    label: humanizePortal(p),
+  const portalOptions: SelectOption[] = sortByVocabulary(
+    facetData.portals.map(classifyAuditPortal),
+  ).map((r) => ({
+    value: r.code,
+    label: <VocabularyOptionLabel resolution={r} />,
   }));
   const actorOptions: SelectOption[] = facetData.actors.map((a) => ({
     value: a.id,
@@ -148,7 +198,10 @@ export default async function AuditPage({
           label="MODIFICATIONS CRITIQUES"
           value={audit.kpis.criticalChanges}
         >
-          Suppressions et révisions
+          {/* Le prédicat couvre le vocabulaire canonique **et** les alias
+              hérités gelés : un compteur qui enjambe silencieusement deux
+              vocabulaires est interdit — il s'énonce. */}
+          Suppressions et révisions · vocabulaire actuel et hérité
         </KpiCard>
         <KpiCard
           icon={FileSearch}
@@ -156,15 +209,19 @@ export default async function AuditPage({
           label="EXPORTS SENSIBLES"
           value={audit.kpis.sensitiveExports}
         >
-          Téléchargements de données
+          {/* Les codes canoniques sont `export.*.request` : une demande n'est
+              pas un téléchargement. */}
+          Demandes d&apos;export de données
         </KpiCard>
         <KpiCard
           icon={UserCheck}
           tone="green"
           label="CONNEXIONS ADMIN"
-          value={audit.kpis.adminLogins}
+          value={audit.kpis.adminLogins ?? 'Non instrumenté'}
         >
-          Sessions ouvertes
+          {audit.kpis.adminLogins === null
+            ? "Aucune action de connexion n'est journalisée à ce jour."
+            : 'Sessions ouvertes'}
         </KpiCard>
       </div>
 

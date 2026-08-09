@@ -14,6 +14,10 @@
       "types": "./src/enums/index.ts",
       "default": "./dist/enums/index.js"
     },
+    "./audit": {
+      "types": "./src/audit/index.ts",
+      "default": "./dist/audit/index.js"
+    },
     "./dto": {
       "types": "./src/dto/index.ts",
       "default": "./dist/dto/index.js"

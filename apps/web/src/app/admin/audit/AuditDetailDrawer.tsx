@@ -6,7 +6,14 @@ import { useState } from 'react';
 
 
 import { AuditProvenance } from './AuditProvenance';
-import { humanizePortal, humanizeResourceType, humanizeUserAgent } from './audit-labels';
+import { VocabularyMarker } from './VocabularyMarker';
+import {
+  auditVocabularyExplanation,
+  classifyAuditAction,
+  classifyAuditResourceType,
+  humanizePortal,
+  humanizeUserAgent,
+} from './audit-labels';
 
 export interface AuditEntry {
   id: string;
@@ -64,26 +71,38 @@ export function AuditDetailDrawer({ entry, onClose }: AuditDetailDrawerProps) {
 
   if (!entry) return null;
 
+  // Le tiroir est l'endroit de la précision : marqueur **par champ**, pas une
+  // seule puce de ligne comme dans la table.
+  const action = classifyAuditAction(entry.action);
+  const resourceType = classifyAuditResourceType(entry.resourceType);
+  const resourceExplanation =
+    auditVocabularyExplanation(action.vocabulary) ??
+    auditVocabularyExplanation(resourceType.vocabulary);
+
   return (
     <DetailDrawer
       open={!!entry}
       onClose={onClose}
       size="xl"
       title={
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <StatusBadge
-            label={entry.action}
+            label={action.label}
             tone={pickActionTone(entry.action)}
             size="sm"
             withDot
           />
-          <span className="text-base font-semibold text-slate-900">
-            {humanizeResourceType(entry.resourceType)}
-          </span>
+          <VocabularyMarker vocabulary={action.vocabulary} />
+          <span className="text-base font-semibold text-slate-900">{resourceType.label}</span>
         </div>
       }
       description={
         <span className="text-xs text-slate-500">
+          {/* Le libellé court est une aide à la lecture posée **au-dessus** de
+              la valeur réelle — il ne la remplace jamais. Le code machine reste
+              donc lisible ici, sous le titre. */}
+          <code className="font-mono text-[11px] text-slate-600">{entry.action}</code>
+          {' · '}
           {formatDateLong(entry.createdAt)} · ID&nbsp;<code className="font-mono">{entry.id}</code>
         </span>
       }
@@ -117,9 +136,14 @@ export function AuditDetailDrawer({ entry, onClose }: AuditDetailDrawerProps) {
           <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
             <div>
               <div className="text-[11px] uppercase tracking-wider text-slate-400">Type</div>
-              <div className="font-medium text-slate-800">
-                {humanizeResourceType(entry.resourceType)}
+              <div className="flex flex-wrap items-center gap-1.5 font-medium text-slate-800">
+                {resourceType.label}
+                <VocabularyMarker vocabulary={resourceType.vocabulary} />
               </div>
+              {/* Pas de second rendu du code brut ici : hors canonique,
+                  `label === code` (verbatim) — la valeur réelle est déjà celle
+                  qu'on lit. Le code de l'**action**, lui, est distinct de son
+                  libellé : il est rendu sous le titre. */}
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-wider text-slate-400">ID</div>
@@ -128,6 +152,11 @@ export function AuditDetailDrawer({ entry, onClose }: AuditDetailDrawerProps) {
               </div>
             </div>
           </div>
+          {/* La phrase d'explication est écrite **une fois**, au bas de la
+              section — pas répétée à côté de chaque puce. */}
+          {resourceExplanation && (
+            <p className="mt-3 text-[11px] leading-snug text-slate-600">{resourceExplanation}</p>
+          )}
         </section>
 
         {entry.detail && (

@@ -151,7 +151,17 @@ export function SelectFilter({
               >
                 <div className="min-w-0">
                   <div className="truncate">{o.label}</div>
-                  {o.hint && <div className="truncate text-[11px] text-slate-500">{o.hint}</div>}
+                  {/*
+                    `slate-600`, not `slate-500`. The hint is the only place some
+                    callers show the machine value behind a humanised label (e.g.
+                    the admin audit facet passes the raw `resource_type` code), so
+                    it has to clear AA on every background this row can take:
+                    slate-500 measures 4.37:1 on the selected row's `bg-blue-50`
+                    and fails; slate-600 gives 6.96:1 there, 7.58:1 on white and
+                    7.24:1 on the `hover:bg-slate-50` row. Do not harmonise this
+                    back to slate-500.
+                  */}
+                  {o.hint && <div className="truncate text-[11px] text-slate-600">{o.hint}</div>}
                 </div>
                 {active && <Check className="h-4 w-4 shrink-0" />}
               </li>

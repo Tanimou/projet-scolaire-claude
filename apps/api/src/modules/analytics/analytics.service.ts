@@ -1,4 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import {
+  AUDIT_CRITICAL_ACTIONS,
+  AUDIT_EXPORT_ACTIONS,
+  AUDIT_LOGIN_ACTIONS,
+  LEGACY_AUDIT_CRITICAL_ALIASES,
+  LEGACY_AUDIT_EXPORT_ALIASES,
+} from '@pilotage/contracts';
 import type { RemediationProgressDto, SnapshotFreshness } from '@pilotage/contracts';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -8,6 +15,60 @@ import { RemediationService } from '../remediation/remediation.service';
 export interface SparklinePoint {
   x: string; // ISO date
   y: number;
+}
+
+// =============================================================================
+// Audit KPI predicates — read from the ONE declaration (S-E04-4, ADR-037)
+// =============================================================================
+
+/**
+ * The two populated audit KPI predicates, as **exported pure functions** rather
+ * than inline arrays, so a gate can drive the *real* predicate instead of a
+ * re-implementation of it (G-TRUTH: three re-implementations compared to each
+ * other prove nothing).
+ *
+ * Each returns the union of two declared halves, and **both halves are
+ * load-bearing** (DNC-09):
+ *
+ *  - the canonical codes, so the card counts what the API writes **today**;
+ *  - the frozen legacy aliases, so the card keeps counting the 54 pre-V3 rows
+ *    that carry French display strings in `action`. Drop that half and the card
+ *    silently reads 0 on every existing tenant — the demo tenant has nothing
+ *    else to count.
+ *
+ * Neither half is spelled out here. `criticalChanges` used to be the inline
+ * `['delete', 'Suppression', 'Révision', 'revise']`, of which exactly ONE string
+ * could ever match anything in the data; `sensitiveExports` used to be
+ * `contains: 'Export'` — a substring match over a free-text column, which is how
+ * a future `conversation.report_export` row would have been counted as an
+ * export. A substring is not a vocabulary.
+ */
+export function auditCriticalActionCodes(): string[] {
+  return [...AUDIT_CRITICAL_ACTIONS, ...LEGACY_AUDIT_CRITICAL_ALIASES];
+}
+
+export function auditExportActionCodes(): string[] {
+  return [...AUDIT_EXPORT_ACTIONS, ...LEGACY_AUDIT_EXPORT_ALIASES];
+}
+
+/**
+ * DNC-09 — « Connexions admin » is **not instrumented**, and now says so.
+ *
+ * Measured: no call site in `apps/api/src` or `packages/imports-core/src` writes
+ * any authentication action, and none of the 54 legacy rows contains the
+ * substring `login`. The old predicate (`action: { contains: 'login' }`, scoped
+ * `portal: 'admin'`) could therefore only ever read `0` — forever — which is
+ * exactly the card DNC-09 forbids.
+ *
+ * Pointing that query at the (empty) `AUDIT_LOGIN_ACTIONS` would have been
+ * worse: a `{ in: [] }` count is a *canonically* broken card, harder to see than
+ * the inline one. So the query is **skipped** and the KPI is `null`; the page
+ * renders « Non instrumenté » instead of a `0` that reads as "we looked, there
+ * were none". Instrumenting login is a new privileged write path — a later
+ * slice, not this one.
+ */
+export function auditLoginActionCodes(): string[] {
+  return [...AUDIT_LOGIN_ACTIONS];
 }
 
 // =============================================================================
@@ -3233,7 +3294,11 @@ export class AnalyticsService {
       today: number;
       criticalChanges: number;
       sensitiveExports: number;
-      adminLogins: number;
+      /**
+       * `null` = **not instrumented** (DNC-09). Never `0` by construction — see
+       * `auditLoginActionCodes()`. The page renders « Non instrumenté ».
+       */
+      adminLogins: number | null;
     };
   }> {
     const { tenantId, from, to, actorId, action, resourceType, portal, take, skip } = opts;
@@ -3307,23 +3372,34 @@ export class AnalyticsService {
     // KPI counts
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const [today, criticalChanges, sensitiveExports, adminLogins] = await Promise.all([
+    // THREE counts, not four. The fourth card is not instrumented and reports
+    // that instead of counting nothing (DNC-09 — see `auditLoginActionCodes`).
+    const [today, criticalChanges, sensitiveExports] = await Promise.all([
       this.prisma.auditLog.count({
         where: { tenantId, createdAt: { gte: todayStart } },
       }),
       this.prisma.auditLog.count({
-        where: {
-          tenantId,
-          action: { in: ['delete', 'Suppression', 'Révision', 'revise'] },
-        },
+        where: { tenantId, action: { in: auditCriticalActionCodes() } },
       }),
       this.prisma.auditLog.count({
-        where: { tenantId, action: { contains: 'Export', mode: 'insensitive' } },
-      }),
-      this.prisma.auditLog.count({
-        where: { tenantId, portal: 'admin', action: { contains: 'login', mode: 'insensitive' } },
+        where: { tenantId, action: { in: auditExportActionCodes() } },
       }),
     ]);
+    // No query is issued while the declared set is empty: a `{ in: [] }` count
+    // is a card that can only read 0, which is what DNC-09 forbids. When a slice
+    // instruments login, adding the code to `AUDIT_LOGIN_ACTIONS` is the whole
+    // change — this branch starts counting on its own.
+    const loginActions = auditLoginActionCodes();
+    const adminLogins =
+      loginActions.length === 0
+        ? null
+        : await this.prisma.auditLog.count({
+            // `portal: 'admin'` is part of the card's own claim — it reads
+            // « CONNEXIONS ADMIN ». The predicate this branch replaced carried
+            // that scope, and dropping it would make the card count teacher and
+            // parent logins the day login becomes instrumented (PF-138).
+            where: { tenantId, portal: 'admin', action: { in: loginActions } },
+          });
 
     return {
       data,

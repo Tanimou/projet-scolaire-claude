@@ -21,94 +21,49 @@
  * `page.tsx` (serveur) et `AuditPageFilters` / `AuditTable` / `AuditDetailDrawer`
  * (client).
  *
- * Portée (mise à jour par `S-E04-4` / ADR-037) : les deux cartes de libellés qui
- * vivaient ici — `RESOURCE_TYPE_LABELS` (13 clés, dont 7 que **personne**
- * n'écrit) et `PORTAL_LABELS` (3 portails sur 4) — ont été **supprimées**. Le
- * vocabulaire est désormais déclaré une seule fois, dans
- * `packages/contracts/src/audit/`, et les trois consommateurs le lisent : cette
- * couche web, les prédicats KPI de l'API, et le générateur de CSV du worker.
- * Ce fichier n'est plus qu'un **adaptateur mince** : il ne déclare aucun
- * libellé d'audit et ne doit jamais recommencer à en déclarer.
- *
- * Il garde en revanche les déclarations de provenance de `S-E04-3`
- * (`PROVENANCE_UNAVAILABLE`, `hasNoProvenance`, `humanizeUserAgent`) — ce n'est
- * pas du vocabulaire d'audit, c'est de la lecture de `User-Agent`.
+ * Portée : ces libellés restent locaux au portail admin. `S-E04-4` (ADR-037) doit
+ * les remonter dans `packages/contracts` pour que les quatre portails partagent un
+ * vocabulaire unique ; ce fichier est l'étape intermédiaire, pas la destination.
  */
 
-import {
-  auditVocabularyExplanation,
-  auditVocabularyMarker,
-  classifyAuditAction,
-  classifyAuditPortal,
-  classifyAuditResourceType,
-  type AuditVocabularyKind,
-  type AuditVocabularyResolution,
-} from '@pilotage/contracts';
-
-export {
-  auditVocabularyExplanation,
-  auditVocabularyMarker,
-  classifyAuditAction,
-  classifyAuditPortal,
-  classifyAuditResourceType,
+const RESOURCE_TYPE_LABELS: Record<string, string> = {
+  user_profile: 'Utilisateurs',
+  role: 'Rôles',
+  assessment: 'Évaluations',
+  academic_year: 'Année scolaire',
+  subject_coefficient: 'Coefficients',
+  import_batch: 'Imports',
+  enrollment: 'Inscriptions',
+  enrollment_request: 'Demandes',
+  student: 'Élèves',
+  class_section: 'Classes',
+  teacher_profile: 'Enseignants',
+  grade: 'Notes',
+  announcement: 'Annonces',
 };
-export type { AuditVocabularyKind, AuditVocabularyResolution };
+
+const PORTAL_LABELS: Record<string, string> = {
+  admin: 'Admin',
+  teacher: 'Professeur',
+  parent: 'Parent',
+};
 
 /**
- * Libellé d'un type de ressource.
- *
- * Une valeur inclassable reste **visible et verbatim** (DNC-08). Le repli
- * « dé-souligner et capitaliser » a été retiré : `calendar_event` devenait
- * « Calendar event », un libellé deviné indiscernable d'un libellé canonique —
- * ce qui masquait précisément le trou que la complétude bidirectionnelle existe
- * pour révéler. C'est maintenant le marqueur qui porte le signal
- * (ADR-037 D4).
+ * Un type de ressource inconnu reste **visible** — on le dé-souligne et on le
+ * capitalise plutôt que de le masquer derrière un libellé générique (DNC-08).
  */
 export function humanizeResourceType(rt: string): string {
-  return classifyAuditResourceType(rt).label;
-}
-
-export function humanizeAction(action: string): string {
-  return classifyAuditAction(action).label;
+  return (
+    RESOURCE_TYPE_LABELS[rt] ??
+    rt
+      .replace(/_/g, ' ')
+      .replace(/^./, (c) => c.toUpperCase())
+  );
 }
 
 export function humanizePortal(p: string | null): string {
   if (!p) return '—';
-  return classifyAuditPortal(p).label;
-}
-
-/**
- * Décrit en français **quels champs** d'une entrée sortent du vocabulaire
- * canonique, pour la phrase `sr-only` du tableau.
- *
- * Calculée, jamais figée : une ligne dont seule l'action est héritée ne doit
- * pas annoncer que son type de ressource l'est aussi.
- */
-export function describeNonCanonicalFields(entry: {
-  action: string;
-  resourceType: string;
-}): { kind: AuditVocabularyKind; marker: string; explanation: string; fields: string } | null {
-  const action = classifyAuditAction(entry.action);
-  const resourceType = classifyAuditResourceType(entry.resourceType);
-  const offenders: Array<{ name: string; kind: AuditVocabularyKind }> = [];
-  if (action.vocabulary !== 'canonical') {
-    offenders.push({ name: "l’action", kind: action.vocabulary });
-  }
-  if (resourceType.vocabulary !== 'canonical') {
-    offenders.push({ name: 'le type de ressource', kind: resourceType.vocabulary });
-  }
-  if (offenders.length === 0) return null;
-  // Quand les deux champs divergent, on annonce le plus prudent des deux :
-  // « non répertorié » ne prétend rien sur l'ancienneté de la ligne.
-  const kind: AuditVocabularyKind = offenders.some((o) => o.kind === 'unknown')
-    ? 'unknown'
-    : 'legacy';
-  return {
-    kind,
-    marker: auditVocabularyMarker(kind) ?? '',
-    explanation: auditVocabularyExplanation(kind) ?? '',
-    fields: offenders.map((o) => o.name).join(' et '),
-  };
+  return PORTAL_LABELS[p] ?? p;
 }
 
 /**

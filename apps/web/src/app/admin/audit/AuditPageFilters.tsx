@@ -6,7 +6,21 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useTransition } from 'react';
 
 
-import { humanizePortal, humanizeResourceType } from './audit-labels';
+import {
+  auditVocabularyMarker,
+  classifyAuditPortal,
+  classifyAuditResourceType,
+} from './audit-labels';
+
+/**
+ * Puce de filtre actif : le marqueur y est une **parenthèse**, pas une puce
+ * imbriquée — une puce dans une puce est illisible à 320 px et redondante à
+ * la lecture d'écran.
+ */
+function withVocabularyNote(label: string, vocabulary: 'canonical' | 'legacy' | 'unknown'): string {
+  const marker = auditVocabularyMarker(vocabulary);
+  return marker ? `${label} (${marker.toLowerCase()})` : label;
+}
 
 export interface AuditPageFiltersProps {
   initialQ: string;
@@ -65,8 +79,10 @@ export function AuditPageFilters({
     <div className="space-y-3">
       <FilterBar
         search={
+          /* « login » enseignait un vocabulaire qui n'existe pas : aucun site
+             d'écriture n'émet d'action de connexion (mesuré, S-E04-4). */
           <SearchInput
-            placeholder="Rechercher une action (login, publish, export…)"
+            placeholder="Rechercher une action (export, import, publish…)"
             value={initialQ}
             onChange={(v) => update({ action: v || undefined })}
           />
@@ -160,13 +176,19 @@ export function AuditPageFilters({
           )}
           {initialResourceType && (
             <FilterChip
-              label={`Ressource : ${humanizeResourceType(initialResourceType)}`}
+              label={`Ressource : ${withVocabularyNote(
+                classifyAuditResourceType(initialResourceType).label,
+                classifyAuditResourceType(initialResourceType).vocabulary,
+              )}`}
               onClear={() => update({ resourceType: undefined })}
             />
           )}
           {initialPortal && (
             <FilterChip
-              label={`Portail : ${humanizePortal(initialPortal)}`}
+              label={`Portail : ${withVocabularyNote(
+                classifyAuditPortal(initialPortal).label,
+                classifyAuditPortal(initialPortal).vocabulary,
+              )}`}
               onClear={() => update({ portal: undefined })}
             />
           )}

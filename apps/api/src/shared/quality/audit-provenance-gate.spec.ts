@@ -296,12 +296,30 @@ describe('G-2 / AC-2 — no hard-coded actorRole or portal remains in apps/api/s
   });
 
   it("the only surviving portal: 'admin' is a where: FILTER, and there is exactly one", () => {
-    // Stated over the SHAPE, not over a path. A path exclusion for
-    // `analytics.service.ts` would silently cover a future WRITE added to the same
-    // file — and `analytics.service.ts:3324` is the `adminLogins` KPI's query
-    // (`where: { tenantId, portal: 'admin', ... }`). Changing it changes a KPI,
-    // which is `S-E04-5`'s work, so it is excluded by being a filter, not by being
-    // in a listed file.
+    // FLIPPED BACK, exactly as the S-E04-4 inversion said it would be — and by
+    // the protocol that inversion wrote down, not by deleting the case.
+    //
+    // The history, because the count has now moved twice and the reason matters
+    // more than the number:
+    //
+    //  * `S-E04-1` measured exactly ONE surviving literal and stated the rule
+    //    over its SHAPE (a `where:` filter, never a write) rather than over a
+    //    path, so a future WRITE added to `analytics.service.ts` could not hide
+    //    behind a file exclusion. That literal was the `adminLogins` KPI query.
+    //  * `S-E04-4` measured that **no call site writes any login action** and no
+    //    legacy row carries the substring, so the card could only ever read 0 —
+    //    a live DNC-09 violation. It stopped issuing the query and reported
+    //    `adminLogins: null` («Non instrumenté»), and the filter went with it,
+    //    so the case was inverted to length 0.
+    //  * The same run's escalation panel then found that the re-armable branch
+    //    had silently dropped the scope (`PF-138`): the query that wakes up when
+    //    `AUDIT_LOGIN_ACTIONS` gains a code would have counted teacher, parent
+    //    and student logins behind a card labelled « CONNEXIONS ADMIN ». Scope
+    //    restored in the same run, so the literal is back — as a FILTER.
+    //
+    // The invariant never moved: no production file under `apps/api/src` DECIDES
+    // a portal by writing the literal `'admin'`. One read-side filter is legal
+    // and is pinned here by shape; a write is not, at any count.
     const occurrences: { path: string; line: string }[] = [];
     for (const [path, source] of PRODUCTION) {
       for (const line of source.split(/\r?\n/)) {
