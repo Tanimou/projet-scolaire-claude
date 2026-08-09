@@ -793,3 +793,84 @@ describe('AnalyticsService.teacherReports — E6-S3 freshness', () => {
     expect(res.freshness!.recomputing).toBe(false);
   });
 });
+
+// ===========================================================================
+// S-E04-4 — the audit KPI predicates read the ONE declaration (DNC-09, AC-8)
+// ===========================================================================
+
+describe('AnalyticsService.auditList — KPI predicates (S-E04-4 / DNC-09)', () => {
+  const AUDIT_TENANT = 'tenant-audit';
+
+  function makeAuditService() {
+    const count = jest.fn().mockResolvedValue(7);
+    const prisma = {
+      auditLog: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count,
+      },
+      userProfile: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new AnalyticsService(prisma as never, {} as never, {} as never);
+    return { service, count };
+  }
+
+  /** The `where` objects of every `auditLog.count` EXCEPT the "today" one. */
+  function kpiWheres(count: jest.Mock): Array<Record<string, unknown>> {
+    return count.mock.calls
+      .map((c) => c[0].where as Record<string, unknown>)
+      .filter((w) => 'action' in w && typeof (w.action as { in?: unknown }).in !== 'undefined');
+  }
+
+  it('criticalChanges spans BOTH vocabularies — a canonical code AND a frozen legacy alias', async () => {
+    // The old predicate was the inline `['delete','Suppression','Révision','revise']`,
+    // of which only `'Suppression'` could ever match a row that exists. Sourcing
+    // it from the declaration must not lose that half: the 54 legacy rows are the
+    // only data a demo tenant has (DNC-09).
+    const { service, count } = makeAuditService();
+    await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
+    const critical = kpiWheres(count)[0]!.action as { in: string[] };
+    expect(critical.in).toContain('role.delete');
+    expect(critical.in).toContain('Suppression');
+    for (const dead of ['delete', 'revise', 'Révision']) {
+      expect(critical.in).not.toContain(dead);
+    }
+  });
+
+  it('sensitiveExports is an exact set, not a substring match over a display string', async () => {
+    const { service, count } = makeAuditService();
+    await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
+    const exports = kpiWheres(count)[1]!.action as { in: string[] };
+    expect(exports.in).toContain('export.bulletin.request');
+    expect(exports.in).toContain('export.grade_grid.request');
+    expect(exports.in).toContain('Export');
+    // No `contains` anywhere in the KPI block — a substring is not a vocabulary.
+    for (const call of count.mock.calls) {
+      expect(JSON.stringify(call[0].where)).not.toContain('contains');
+    }
+  });
+
+  it('every KPI count stays tenant-scoped (G-TENANT unchanged)', async () => {
+    const { service, count } = makeAuditService();
+    await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
+    for (const call of count.mock.calls) {
+      expect(call[0].where.tenantId).toBe(AUDIT_TENANT);
+    }
+  });
+
+  it('DNC-09 — THREE counts are issued, not four, and adminLogins is null', async () => {
+    // The un-instrumented card must not run a query that can only read 0. The
+    // count budget is asserted because "returns null" alone would still pass if
+    // a `{ in: [] }` query were issued and its result discarded.
+    const { service, count } = makeAuditService();
+    const res = await service.auditList({ tenantId: AUDIT_TENANT, take: 10, skip: 0 });
+    // 1 × total (the `where` list count) + 3 × KPI = 4 calls in all.
+    expect(count).toHaveBeenCalledTimes(4);
+    expect(res.kpis.adminLogins).toBeNull();
+    expect(res.kpis.criticalChanges).toBe(7);
+    expect(res.kpis.sensitiveExports).toBe(7);
+    // No count carries the old `portal: 'admin'` filter — the whole query is gone.
+    for (const call of count.mock.calls) {
+      expect(call[0].where.portal).toBeUndefined();
+    }
+  });
+});

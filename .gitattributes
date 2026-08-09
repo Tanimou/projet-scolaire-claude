@@ -22,3 +22,8 @@ docs/daily-improvement-v3/routine/*.md  text eol=lf
 # normalises `\r\n` before hashing, so losing this line degrades gracefully rather
 # than going red — belt and braces, because the digest is the tamper signal.)
 apps/api/src/shared/audit/__fixtures__/pre-fix/*.ts.txt  text eol=lf
+
+# S-E04-4 — same arrangement for the audit-vocabulary gate's AC-1 positive
+# control (the recorded pre-fix `audit-labels.ts`, whose sha256 is pinned in
+# `audit-vocabulary-gate.spec.ts`).
+apps/api/src/shared/quality/__fixtures__/pre-fix/*.ts.txt  text eol=lf

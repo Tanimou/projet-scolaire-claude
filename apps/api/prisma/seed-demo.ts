@@ -1053,42 +1053,60 @@ async function main() {
   console.info('     ✓ Notes calibrées créées');
 
   // ───────────────────────────────────────────────────────────────────────
-  // STEP 13 — AuditLog (50 generic + 4 named)
+  // STEP 13 — AuditLog (4 named + 50 generic, canonical + 3 legacy fixtures)
+  //
+  // S-E04-4 / ADR-037. Until this slice the seed was the LARGEST writer of the
+  // wrong vocabulary: it put French display strings (« Création », « Élève »)
+  // into the structural `action` / `resource_type` columns, while every API call
+  // site wrote machine codes. A fresh local seed therefore taught the admin
+  // portal a vocabulary the application does not speak.
+  //
+  // The 54 rows below now write CANONICAL codes, taken from the one declaration
+  // in `packages/contracts/src/audit/`. They are spelled as literals rather than
+  // imported: this file is executed by `tsx` at operator time, and a value
+  // import of `@pilotage/contracts` would make the seed fail on any machine
+  // whose `contracts/dist` is stale — the seed would then be broken by a build
+  // ordering problem instead of a data problem. The equivalence is not left to
+  // trust: `audit-vocabulary-gate.spec.ts` (V-10) parses THIS file and asserts
+  // every literal below is a member of the declaration, or is inside the
+  // `legacyFormatFixtureRows` block.
+  //
+  // NOTHING here updates or deletes an existing audit row (append-only).
   // ───────────────────────────────────────────────────────────────────────
-  console.info('  ▸ Journal d\'audit (50 entrées + 4 nommées)…');
+  console.info('  ▸ Journal d\'audit (4 nommées + 50 génériques + 3 héritées)…');
 
-  // 4 NAMED entries (timeline cible)
+  // 4 NAMED entries (timeline cible) — canonical codes.
   const namedAuditEntries = [
     {
       createdAt: new Date('2024-05-08T10:32:00Z'),
       actorId: userDupont.id,
       actorRole: 'school_admin',
-      action: 'Création',
-      resourceType: 'Année scolaire',
+      action: 'academic_year.create',
+      resourceType: 'academic_year',
       after: { detail: "Création de l'année scolaire 2024–2025" },
     },
     {
       createdAt: new Date('2024-05-08T09:18:00Z'),
       actorId: userLefebvre.id,
       actorRole: 'school_admin',
-      action: 'Mise à jour',
-      resourceType: 'Professeur',
-      after: { detail: "Modification de l'affectation de M. Laurent" },
+      action: 'role.update',
+      resourceType: 'role',
+      after: { detail: "Modification du rôle de M. Laurent" },
     },
     {
       createdAt: new Date('2024-05-07T16:45:00Z'),
       actorId: userDupont.id,
       actorRole: 'school_admin',
-      action: 'Validation',
-      resourceType: 'Inscription',
+      action: 'guardianship.claim_approved',
+      resourceType: 'guardianship_claim',
       after: { detail: 'Validation de la demande de Lucas Lefèvre' },
     },
     {
       createdAt: new Date('2024-05-07T11:03:00Z'),
       actorId: tGirard!.userProfileId,
       actorRole: 'teacher',
-      action: 'Export',
-      resourceType: 'Résultats',
+      action: 'export.grade_grid.request',
+      resourceType: 'export_job',
       after: { detail: 'Export des résultats – 3e trimestre' },
     },
   ];
@@ -1107,9 +1125,22 @@ async function main() {
     });
   }
 
-  // 50 generic audit entries (older — make the journal feel alive)
-  const auditActions = ['Création', 'Mise à jour', 'Validation', 'Suppression', 'Export'];
-  const auditResources = ['Élève', 'Professeur', 'Classe', 'Évaluation', 'Note', 'Inscription'];
+  // 50 generic audit entries (older — make the journal feel alive), canonical.
+  const auditActions = [
+    'role.create',
+    'role.update',
+    'assessment.publish',
+    'grade.flag',
+    'export.bulletin.request',
+  ];
+  const auditResources = [
+    'student',
+    'user_profile',
+    'role',
+    'assessment',
+    'grade',
+    'academic_year',
+  ];
   for (let i = 0; i < 50; i++) {
     await prisma.auditLog.create({
       data: {
@@ -1123,7 +1154,51 @@ async function main() {
       },
     });
   }
-  console.info('     ✓ 54 entrées d\'audit créées');
+
+  // Trois lignes délibérément au format hérité : sans elles, un seed frais ne
+  // peut plus démontrer le rendu « format hérité » (AC-4) ni l'appariement des
+  // alias hérités par les KPI (DNC-09). Elles ne sont jamais mises à jour et ne
+  // servent pas de modèle d'écriture.
+  //
+  // Chacune couvre un cas que le reste du seed ne couvre plus : un alias
+  // « critique », un alias « export », et une paire dont les DEUX axes sont
+  // hérités. Ce sont les seules valeurs françaises que ce fichier écrit encore,
+  // et le garde V-10 vérifie qu'il n'y en a pas une quatrième ailleurs.
+  const legacyFormatFixtureRows = [
+    {
+      createdAt: new Date('2024-03-12T08:05:00Z'),
+      action: 'Suppression',
+      resourceType: 'Élève',
+      after: { detail: 'Ligne antérieure à l’unification du vocabulaire (S-E04-4)' },
+    },
+    {
+      createdAt: new Date('2024-03-11T14:20:00Z'),
+      action: 'Export',
+      resourceType: 'Résultats',
+      after: { detail: 'Ligne antérieure à l’unification du vocabulaire (S-E04-4)' },
+    },
+    {
+      createdAt: new Date('2024-03-10T09:40:00Z'),
+      action: 'Mise à jour',
+      resourceType: 'Professeur',
+      after: { detail: 'Ligne antérieure à l’unification du vocabulaire (S-E04-4)' },
+    },
+  ];
+  for (const e of legacyFormatFixtureRows) {
+    await prisma.auditLog.create({
+      data: {
+        tenantId: T,
+        actorId: userDupont.id,
+        actorRole: 'school_admin',
+        portal: 'admin',
+        action: e.action,
+        resourceType: e.resourceType,
+        after: e.after,
+        createdAt: e.createdAt,
+      },
+    });
+  }
+  console.info('     ✓ 57 entrées d\'audit créées (54 canoniques + 3 au format hérité)');
 
   // ───────────────────────────────────────────────────────────────────────
   // STEP 14 — Exports récents (3 named ExportJob rows)

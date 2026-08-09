@@ -4,7 +4,7 @@
 **Depends on** `V3-E02` (`code-complete` 2026-08-08 — dependency satisfied) · **Blocks** `V3-E03`, `V3-E11`
 **Risks** `R-10` (accepted), `A-01` (permanent) · **Referenced, not fixed:** `PF-96`
 
-**Status (2026-08-08, after `S-E04-3`)** — **`in-progress`. 3 of 8 slices shipped.**
+**Status (2026-08-09, after `S-E04-4`)** — **`in-progress`. 4 of 8 slices shipped.**
 
 The `epic-spec` run wrote `spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `ux.md`, `tasks.md`,
 `quickstart.md` and this file, and touched no code. **`S-E04-1` then shipped** the shared provenance home, the eight
@@ -12,37 +12,53 @@ The `epic-spec` run wrote `spec.md`, `plan.md`, `data-model.md`, `contracts/open
 specs — evidence in § `S-E04-1` below. **`S-E04-2` shipped** the authenticated render (verdict: **HTTP 500**,
 `PF-14` reproduces) and its fix, plus the `/admin/reports` retirement. **`S-E04-3` shipped** `trust proxy`, the
 client-hints seam, the `apps/web` producer on **both** server seams, and the honest-blank UI — evidence in
-§ `S-E04-3` below. `S-E04-4`…`S-E04-8` remain **open**, and every gate they own is still described by **how it will
-be evidenced**, never as met.
+§ `S-E04-3` below. **`S-E04-4` shipped** the one canonical vocabulary in `packages/contracts/src/audit/`, its three
+consumers (web adapter, API KPI predicates, worker CSV), the AST extractor and its gate, `ADR-037`, and the honest
+« Non instrumenté » card — evidence in § `S-E04-4` below. `S-E04-5`…`S-E04-8` remain **open**, and every gate they
+own is still described by **how it will be evidenced**, never as met.
 
-> ### ▶ Next slice → **`S-E04-4`** — one canonical audit vocabulary, declared once, in `packages/contracts`
+> ### ▶ Next slice → **`S-E04-5`** — the KPIs share the table's scope, and the `to` filter includes its own day
 >
-> `[contracts][web][api][seed]` · size **M** · `G-MIGRATION` **does not trigger — deliberately** · ships **`ADR-037`**
-> · **blockedBy** `S-E04-2` ✅.
+> `[schema][api][web][truth]` · size **M** · **`G-MIGRATION` TRIGGERS** (`Tenant.timezone` — the *first* slice in this
+> epic where it does) · no ADR of its own · **blockedBy** `S-E04-4` ✅.
 >
-> Start at `tasks.md` § `S-E04-4`. Two things `S-E04-3` handed it, neither of which it may silently re-decide:
+> Start at `tasks.md` § `S-E04-5`. Three things `S-E04-4` handed it, none of which it may silently re-decide:
 >
-> 1. **`audit-labels.ts` is now bigger, and it is still the wrong home.** `S-E04-2` created it (as the *neutral*
->    module `PF-14` cost a 500 to establish) and `S-E04-3` added `PROVENANCE_UNAVAILABLE`, `hasNoProvenance` and
->    `humanizeUserAgent` to it. That file's own header says it is an intermediate step inside the admin portal, not
->    the canonical vocabulary — `S-E04-4` retires it into `packages/contracts`. Adding a *second* canonical home
->    beside it would be the exact defect this epic is about.
-> 2. **There are two actor vocabularies in one column, and one of them is not a realm role.** `PF-122`
->    (`child-claims.service.ts`) still writes `actorRole: 'admin'`. Declare the enum against what is **measured in
->    the database**, not against what `ROLE_PRECEDENCE` can produce, or the enum is wrong on live rows the day it
->    ships.
+> 1. **The `kpis` response shape is about to take its second breaking change in two slices, and this epic's own
+>    contract file is currently stale against shipped code.** `S-E04-4` shipped `adminLogins: number | null` with
+>    « Non instrumenté » — exactly what its story §2.6 mandated. But `contracts/openapi.yaml` (`AuditKpis`:
+>    `required: [eventsInRange, criticalChanges, sensitiveExports, distinctActors]`) and `data-model.md` `D-23` rule
+>    the opposite and assign it **here**: `adminLogins` is *removed*, `distinctActors` replaces it, and each KPI
+>    becomes a `{value, scope}` envelope (`AC-10`). So the same response takes `number` → `number | null` → key-gone
+>    one slice apart, each requiring a `page.tsx` edit. **Reconcile `openapi.yaml` in this diff** — do not leave the
+>    contract disagreeing with the code inside an epic whose thesis is *no surface may assert what it cannot justify*.
+> 2. **`sensitiveExports` is defined two ways, and the two disagree on the seeded data.** `S-E04-4` implements it as
+>    an **action** predicate (`AUDIT_EXPORT_ACTIONS` ∪ the legacy `'Export'` alias); the contract defines it
+>    **structurally** (`resourceType = 'export_job'`). The legacy fixture row the seed now writes carries
+>    `action: 'Export'` with `resourceType: 'Résultats'` — it is counted by one definition and not the other. Pick
+>    one *in writing*; the number will move either way, and a governance KPI that moves without a recorded reason is
+>    the defect this epic exists to remove.
+> 3. **The re-armable `adminLogins` branch lost its portal scope.** The deleted query was
+>    `where: { tenantId, portal: 'admin', action: { contains: 'login' } }`; the replacement is
+>    `where: { tenantId, action: { in: AUDIT_LOGIN_ACTIONS } }` with **no portal filter**. `AUDIT_LOGIN_ACTIONS` is
+>    empty, so it is unreachable today — but its own comment says *"adding the code is the whole change"*, which
+>    means the first slice that instruments login makes a card labelled « CONNEXIONS ADMIN » count parent, teacher
+>    and student logins too. The trap is sharpened by the fact that `audit-provenance-gate.spec.ts` now asserts
+>    **zero** `portal: 'admin'` literals in `apps/api/src`, so restoring the scope requires flipping that gate back
+>    (the reason is written into the test body). Fix it while it is free, or rename the card.
 >
-> Read § *The read side of `portal` was never inventoried* (below, raised by `S-E04-1`, untouched by `S-E04-2` and
-> `S-E04-3`) before touching the facet query: `analytics.service.ts:3358-3364` builds the portal facet
+> Read § *The read side of `portal` was never inventoried* (below, raised by `S-E04-1`, untouched by `S-E04-2`,
+> `S-E04-3` and `S-E04-4`) before touching the facet query: `analytics.service.ts` builds the portal facet
 > `where: { portal: { not: null } }`, so a `null`-portal row — which is what `PF-123` writes — is reachable by **no
-> offered filter value at all**. That is the half of `PF-32` a label map cannot fix.
+> offered filter value at all**. That is the half of `PF-32` a label map could not fix, and `S-E04-4` correctly did
+> not try. A scope slice can.
 >
 > **Do not start with `S-E04-8`.** The chain is last by product ruling, not by convenience — see the ordering note
 > below. Run `quickstart.md` §5 before writing code: the measurement table is meant to be **falsified**, not trusted.
 >
-> **`S-E04-6` is also unblocked now** (its `blockedBy` was `S-E04-1` + `S-E04-3`, both shipped). It is the
+> **`S-E04-6` is also unblocked** (its `blockedBy` was `S-E04-1` + `S-E04-3`, both shipped). It is the
 > transactionality slice, and `ADR-035` is its ADR — re-check the number against `docs/adr/` immediately before
-> creating the file (`PF-110`'s precedence rule).
+> creating the file (`PF-110`'s precedence rule; note `ADR-037` was taken by `S-E04-4`).
 
 ---
 
@@ -118,20 +134,20 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 
 ---
 
-## Slice backlog (`tasks.md` is the contract; 1 of 8 has shipped)
+## Slice backlog (`tasks.md` is the contract; 4 of 8 have shipped)
 
 | Story | Title | State | blockedBy | `G-MIGRATION` | ADR |
 |---|---|---|---|---|---|
 | **`S-E04-1`** | Shared audit provenance: one home, one decision, one real actor role | **`shipped`** 2026-08-08 | — | no | **`ADR-036`** ✅ |
 | **`S-E04-2`** | `/admin/audit` measured under authentication; the dead admin reports link is retired | **`shipped`** 2026-08-08 | — | no | — |
 | **`S-E04-3`** | The operator's real IP and User-Agent reach the API — or the field stays blank | **`shipped`** 2026-08-08 | `S-E04-1` ✅ | no | **`ADR-036`** *(amended: D9/D10)* |
-| `S-E04-4` | One canonical audit vocabulary, declared once, in `packages/contracts` | `todo` ◀ **next** | `S-E04-2` ✅ | no | **`ADR-037`** |
-| `S-E04-5` | The KPIs share the table's scope, and the `to` filter includes its own day | `todo` | `S-E04-4` | **YES** (`Tenant.timezone`) | — |
+| **`S-E04-4`** | One canonical audit vocabulary, declared once, in `packages/contracts` | **`shipped`** 2026-08-09 | `S-E04-2` ✅ | no | **`ADR-037`** ✅ |
+| `S-E04-5` | The KPIs share the table's scope, and the `to` filter includes its own day | `todo` ◀ **next** | `S-E04-4` ✅ | **YES** (`Tenant.timezone`) | — |
 | `S-E04-6` | Five privileged families write their audit row **in the same transaction** | `todo` *(unblocked)* | `S-E04-1` ✅, `S-E04-3` ✅ | no | **`ADR-035`** |
 | `S-E04-7` | The remaining call sites move onto the seam, and a blocking gate keeps them there | `todo` | `S-E04-6` | no | — |
 | `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` | `S-E04-3`, `S-E04-6`, `S-E04-7` | **YES** | `ADR-035` *(amendment)* |
 
-**8 slices · 5 `todo` · 0 in progress · 3 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
+**8 slices · 4 `todo` · 0 in progress · 4 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
 (or `blocked`, with the blocking decision id). A slice moves to `shipped` only when its own acceptance criteria are
 evidenced in its PR — never because the code merged.
 
@@ -788,6 +804,151 @@ asymmetry a third time.
 - **It did not touch the read side of `portal`**, the vocabulary, transactionality, or the hash chain.
 
 ---
+
+## `S-E04-4` — shipped 2026-08-09 · one canonical audit vocabulary, declared once
+
+**Branch** `ci/2026-08-08-v3-E04-4-audit-vocabulary` · **Risk** P1 · **Gates** `G-TRUTH`, `G-PORTAL`, `G-DNC`
+(DNC-08 + DNC-09) · **`G-MIGRATION` did not trigger** · **Ships `ADR-037`** · **Advances `PF-32`** (vocabulary half)
+
+### What landed
+
+| # | Change | Where |
+|---|---|---|
+| FR1 | The **one** home — a pure module, no Prisma, no Nest, no `node:*`, no new dependency | new `packages/contracts/src/audit/{vocabulary,labels,index}.ts`; wired **both** through `src/index.ts` (`export * from './audit'`) **and** a `"./audit"` entry in `package.json` `exports` (pre-mortem #2 needs both, not one) |
+| FR2 | The declaration itself | **48** action codes (each carrying its French label and its `critical` / `export` flags), **22** resource types, **4** portals — `student` included, which ADR-003 has had since day one and the old three-entry map rendered as a raw token |
+| FR3 | The **frozen** legacy alias table — declared, never inlined | **5** action aliases + **8** resource-type aliases, the exact strings the pre-fix seed wrote |
+| FR4 | Consumer 1 — web | `RESOURCE_TYPE_LABELS` and `PORTAL_LABELS` **deleted** from `apps/web/src/app/admin/audit/audit-labels.ts`, which becomes a thin adapter over `classifyAudit*`. No `'use client'` added; the four `S-E04-3` provenance declarations untouched |
+| FR5 | Consumer 2 — API KPI predicates | `analytics.service.ts` — `criticalChanges` / `sensitiveExports` now read `AUDIT_CRITICAL_ACTIONS` / `AUDIT_EXPORT_ACTIONS` **∪ their legacy aliases**; every surviving `auditLog.count` keeps `tenantId` |
+| FR6 | Consumer 3 — the worker CSV **nobody had counted** | `apps/worker/src/modules/exports/generators/audit-csv.generator.ts` — three derived columns added (`action_label`, `resource_type_label`, `vocabulary`); the raw `action` / `resource_type` columns are byte-for-byte unchanged (§2.8: labels are *additional*, a regulator never receives an interpretation in place of the record) |
+| FR7 | The markers | new `apps/web/src/app/admin/audit/VocabularyMarker.tsx` — neutral slate, no `tone="warning"`, no alert-semantic icon (pre-mortem #5: 54 correctly-recorded rows must not read as 54 defects). Rendered in `AuditTable.tsx` and `AuditDetailDrawer.tsx` |
+| FR8 | DNC-09 — the card that could only ever read `0` | `adminLogins` query **removed**; the API returns `number \| null` and `page.tsx` renders **« Non instrumenté »**, never a fabricated `0` |
+| FR9 | The seed writes canonical codes | `seed-demo.ts` — 54 generic rows moved to canonical codes, plus a **named** 3-row `legacyFormatFixtureRows` block so the legacy path has live data (**57** rows total) |
+| FR10 | The gate | new `apps/api/src/shared/quality/audit-vocabulary-gate.spec.ts` (V-0…V-10) + new `apps/worker/.../audit-csv.generator.spec.ts` + new cases in `analytics.service.spec.ts` |
+| FR11 | The inverted case, **not** the skipped one | `audit-provenance-gate.spec.ts`'s `portal: 'admin'` case flipped to `toHaveLength(0)` with the reason written into the test body (pre-mortem #7 is precisely someone `.skip`ping it and taking the whole single-decision invariant with them) |
+| FR12 | Test-infrastructure change, repo-wide in scope | both `apps/api/jest.config.js` and `apps/worker/jest.config.js` map `@pilotage/contracts` to `packages/contracts/src`, because `scripts/test-ratchet.js` spawns jest with `cwd: appDir` and so bypasses turbo's `test → ^build`. Documented in both configs — and see *Not claimed* below, because it has a cost |
+
+### AC-7 — the vocabulary was **extracted**, not transcribed
+
+`§1.2` of the story is the load-bearing measurement, and it is recorded here as the slice's own correction to the
+run brief. The brief's inventory of **27** action codes came from `grep -rhoE "action:\s*'[a-z_]+'"`. That grep is
+one-directional in the same way that let `calendar_event` go missing, it picks up at least one code that exists only
+in a `*.spec.ts`, and it is blind to **five** distinct literal shapes in production sources:
+
+| Shape | Real example | What the grep misses |
+|---|---|---|
+| Ternary in the key | `grades.controller.ts:345` `action: body.flagged ? 'grade.flag' : 'grade.unflag'` | `grade.unflag` |
+| Union-typed helper parameter | `alerts.service.ts:617`, `remediation.controller.ts:889/:924/:994` | `remediation.plan_reopened`, `.tutor_updated`, `.availability_updated` |
+| Positional argument to a private `audit()` helper | `academic-years.controller.ts:111/:154/:184` | `academic_year.update`, `academic_year.delete` |
+| `action: string` helper parameter | `child-claims.service.ts:717`, `integrations.service.ts:637` | the five `guardianship.claim_*`, `integration.roster_source.created`, `import.sync.pull` |
+| Template-literal **type** — an open set | `remediation.controller.ts:1020` `` action: `remediation.booking_${string}` `` | `remediation.booking_created`, `.booking_cancelled` |
+
+**A declaration built from the brief's 27 would have shipped missing roughly fourteen labels on day one** — exactly
+the defect this slice exists to end. So `audit-vocabulary-gate.spec.ts` runs a **TypeScript AST walker** over
+`apps/api/src` + `packages/imports-core/src` (specs excluded) and the declaration is written to match *it*, not to
+match any prose list — including the one in the story's own §3.1. The trap the brief did name is handled in the
+negative: `orderBy: { action: 'asc' }` (and the array form at `roles.controller.ts:92`) must not yield the bogus
+codes `asc` / `desc` and then force a French label onto a sort direction — V-1 asserts they do not.
+
+The shipped declaration carries **48** canonical action codes and **22** resource types; the extractor's derived
+`WRITTEN_*` sets are asserted at ≥ 40 / ≥ 20 rather than pinned to an exact number, deliberately — an exact count
+would go red on the next legitimate audited action and teach the next author to edit the assertion.
+
+**The guard runs in both directions.** Forward: every written code has a label. **Reverse:** no *declared* code is
+written by nothing (families excepted) — which is what retires the 7 dead keys `AC-2` names, and which is also why
+`seed-demo.ts` is now load-bearing for the gate: its `auditActions` / `auditResources` arrays are the only writer of
+several labels. Editing the seed will redden V-1. That is intended; it is stated here so it is not mistaken for a
+flaky test.
+
+### AC-5 / G-PORTAL — all four portals, measured per portal
+
+| Portal | Renders audit vocabulary? | What was checked | Result |
+|---|---|---|---|
+| `admin` | **Yes** — `/admin/audit` is the only page in the product that renders it | facet options, table chips, drawer, the « Format hérité » marker; `grep -rl "audit-labels\|classifyAudit" apps/web/src/app/admin` | **7 files**: `audit-labels.ts`, `page.tsx`, `AuditTable.tsx`, `AuditDetailDrawer.tsx`, `AuditPageFilters.tsx`, `AuditProvenance.tsx`, `VocabularyMarker.tsx` |
+| `teacher` | **No page today** | `grep -rl "audit-labels\|classifyAudit" apps/web/src/app/teacher` | **0 files** |
+| `parent` | **No page today** — the transparency panel « Qui a consulté les données de mon enfant » is explicitly a later epic | same grep over `apps/web/src/app/parent` | **0 files** |
+| `student` | **No page today — but the label must exist**, because a row *can* carry `portal: 'student'` the moment a writer emits one | same grep over `apps/web/src/app/student`; plus `classifyAuditPortal('student')` → « Élève » (V-5) | **0 files**; resolver returns the French label, `vocabulary: 'canonical'` |
+
+**No writer emits `portal: 'student'` today, and none was fabricated.** `deriveAuditProvenance` maps three realm
+roles to three portals. Measured: `grep -rn "portal: 'student'"` over `apps/api/src`, `apps/worker/src` and
+`packages/imports-core/src` returns **3 occurrences, all of them test fixtures** — `audit-vocabulary-gate.spec.ts`
+(the unknown-code row, and a comment stating this very fact) and `audit-csv.generator.spec.ts`. Zero production
+writers. The label is declared **ahead** of its writer on purpose: the alternative is that the first `student` row
+ever written renders as a raw token on a governance surface, which is the shape of defect this epic removes.
+
+**`PORTALS` was deliberately not widened** (`ADR-037` D2). `packages/contracts/src/enums/index.ts` still declares
+exactly three, because `dto/auth.ts:10` consumes it as `portal: z.enum(PORTALS)` for **login** — a "unify these two"
+refactor would silently make `student` a legal login portal. The gate asserts the non-widening rather than assuming
+it: `[...PORTALS]` is exactly three **and** `auth.ts` is re-read to confirm the enum is still the one login
+validates against.
+
+### `PF-122` / `PF-123` — read while writing the extractor, deliberately **not** fixed
+
+Both were re-confirmed by this slice and both stay open with owner **`S-E04-7`**, per the story's *Out of scope*
+ruling (« Record, do not fix »):
+
+- **`PF-122`** — `child-claims.service.ts` parametrises both provenance fields (`actor: 'parent' | 'admin' = 'parent'`
+  → `actorRole: actor`, `portal: actor`), with the literal `'admin'` passed at two call sites. A `super_admin`
+  approving a guardianship claim is still audited **`actorRole: 'admin'` — not a realm role at all**. This slice read
+  the file (its `action: string` helper is one of the five extractor shapes above) and changed nothing in it.
+- **`PF-123`** — `assessments.controller.ts:290` writes `assessment.publish` with **no `actorRole` and no `portal`
+  key**. The `null`-portal row it produces is still reachable by no offered filter value (see § *The read side of
+  `portal` was never inventoried*). Unchanged here.
+
+Recording rather than fixing is the right call and also the cheap one: both are single-file provenance edits that
+belong with the rest of the call-site migration, and folding them in would have widened a `[contracts]` slice into
+`PF-31` territory mid-flight.
+
+### Executed, not asserted
+
+| Claim | Command | Observed |
+|---|---|---|
+| The tree typechecks | `pnpm typecheck` (repo root, run once by the test-architect) | **13 successful / 13 total — GREEN.** Includes `apps/api`'s `tsc --noEmit -p prisma/tsconfig.json`, so the rewritten seed STEP 13 is covered |
+| No whitespace damage | `git diff --check` | exit 0. The only output is the expected CRLF-normalisation notice on `analytics.service.spec.ts`, a consequence of the `.gitattributes` addition |
+| The new gate is real and non-vacuous | `apps/api` — `audit-vocabulary-gate.spec.ts` | **PASS, V-0…V-10** (~94 s). The AST extractor, the `asc`/`desc` trap, the five-shapes cases and the pre-fix positive control all fire |
+| The inverted case was inverted, not deleted | `apps/api` — `audit-provenance-gate.spec.ts` | **PASS**, including the `portal: 'admin'` case now asserting `toHaveLength(0)` |
+| The KPI predicates | `apps/api` — `analytics.service.spec.ts` | new `S-E04-4` block **green**; the 7 failures in that file are **all pre-baselined** in `scripts/known-test-failures.json` under `PF-63` — **no regression** |
+| The regulator CSV | `apps/worker` — `audit-csv.generator.spec.ts` | **16 / 16 PASS** |
+| `G-MIGRATION` does not trigger | `git diff --stat` | no `schema.prisma`, no `prisma/migrations/` |
+| The CJS artefact resolves both wire-ups | manual `require` of the built package | `dist/index.js` → `classifyAuditAction: function`, `AUDIT_PORTALS.length === 4`; `dist/audit/index.js` resolves |
+
+### The blocker the gate pass found, and why it was a real defect in the guard
+
+`audit-vocabulary-gate.spec.ts`'s AC-1 single-declaration matcher went **RED on an untouched, unrelated file**:
+`apps/web/src/components/shell/AppShellRoot.tsx`, whose two portal-nav maps contain `student: 'Mes notes'` and
+`student: 'Ton espace élève'`. The matcher's own comment already stated the correct rule — the four portal codes are
+too generic to key on in the *map* form — but the code implemented that exclusion **by omission**, building a
+`CANONICAL_CODES_WITH_PORTALS` set for the descriptor form and passing plain `CANONICAL_CODES` to the map form on the
+assumption that the two sets are disjoint. **They are not:** `student` is the one code that is both a portal and an
+`AUDIT_RESOURCE_TYPES` entry, so the stated exclusion was silently never applied to the only code that needed it.
+
+Fixed by subtracting the portal codes explicitly (`MAP_FORM_CODES = CANONICAL_CODES \ PORTAL_CODES`, 69 of 70)
+rather than by adding a third file exclusion — an exclusion list weakens a shape-stated guard, which is what makes
+it a guard. Measured after the fix, with an independent re-implementation of the matcher over the same 775 files:
+**0 offenders**; the `vocabulary.ts` exclusion still trips at 72 associations; the `RoleBuilderForm.tsx` exclusion
+still trips at **4** — and as a side effect the existing prose claiming it collides on *"exactly four tokens"* became
+true, where it had silently been 5. A regression case was added asserting **both** halves: that the overlap exists at
+all (`AUDIT_PORTALS ∩ CANONICAL_CODES === ['student']`, so a future refactor cannot delete the filter as decorative
+without going red), and that no portal code survives into `MAP_FORM_CODES`.
+
+### Deviations from the story, recorded rather than tidied away
+
+1. **`packages/ui/src/components/SelectFilter.tsx` was edited, and the story forbids it** (§2.6: *"none is permitted
+   in this slice"*; DoD: *"no `packages/ui/`"*). The change is one token — the option `hint` colour `text-slate-500`
+   → `text-slate-600`, a pre-existing WCAG contrast defect. The reasoning is correct and measured, but `hint` is used
+   by ~20 files across admin, teacher and parent, so a one-token change carries cross-portal blast radius with no
+   test. **Kept and recorded here** (the alternative — reverting a real contrast fix to re-land it identically next
+   run — is churn), but it is a scope deviation, not an oversight, and the DS follow-up it belongs with is the
+   placeholder / chevron `slate-400` failures that were deferred.
+2. **`LEGACY_FORMAT_MARKER` shipped as `'Format hérité'` (capitalised)**, where the story contract specified the
+   literal lowercase `'format hérité'`. `AuditPageFilters` compensates with `.toLowerCase()`. Recorded so a later
+   gate or e2e assertion written against the specified literal knows to match case-insensitively.
+3. **The seed's final summary line was not updated with the rest.** `seed-demo.ts` prints
+   `✓ 57 entrées d'audit créées (54 canoniques + 3 au format hérité)` at the per-step line, but the run-summary line
+   further down still prints `AuditLogs 54`. Cosmetic, console-only, no behaviour depends on it — listed because
+   *"check no doc still asserts 54 seeded rows"* is exactly the kind of item that is never checked once it is not
+   written down.
+
+---
 ## Not claimed (kept honest — the whole point of this file)
 
 | Item | Why it is not claimed | Who can close it |
@@ -807,6 +968,10 @@ asymmetry a third time.
 | Retention / legal-hold policy | Out of scope by the epic contract — D-08-adjacent legal input, and `R-13` forbids this routine authoring policy text | human + D-08 |
 | The parent panel « Qui a consulté les données de mon enfant » | **Deliberately not built.** It needs a guardianship-scoped read endpoint, `G-AUTHZ` negatives per role, and a product decision about which action types are parent-visible at all. What this epic owes it is **one** thing: the vocabulary declared in `packages/contracts` (`ADR-037`), so the panel is later a read endpoint and a page rather than a second label map | a later epic |
 | Any UI, a11y or rendering claim in `ux.md` | **No browser was driven.** `apps/web` has no unit runner (Playwright only). Every layout, contrast and a11y statement is read from source or computed from a hex value. No axe scan, no screen-reader pass — that is `VAL-08` | `VAL-08` |
+| **That `/admin/audit` renders after `S-E04-4`** | **NOT OBSERVED.** `S-E04-2` measured the authenticated render *once*, before this diff. Every web claim in § `S-E04-4` is pure-function or textual: `scripts/web-artifact-check.js` proves the route is *emitted*, nothing proves it *renders*. The diff puts a React element into `SelectOption.label` across the RSC boundary and a string into a numeric KPI slot — both legal, neither executed. `PF-135` names the ~25-line Playwright spec that would settle it | `PF-135` / a later slice |
+| **That the tone/icon a row is painted with follows the declared vocabulary** | **IT DOES NOT.** `AuditTable.tsx` kept an inline substring predicate that no test covers, and two declared-critical actions already fall through it to `neutral`. Stated here because the slice's headline claim is *one declaration, every consumer reads it* — three consumers do; a fourth was left behind | `PF-134` |
+| **That the built CJS `packages/contracts/dist` still resolves under test** | **NO TEST CHECKS IT ANY MORE.** Both jest configs now read contracts *source*. The artefact was verified **by hand** in this run (`dist/index.js` and `dist/audit/index.js` both resolve, `AUDIT_PORTALS.length === 4`); that is a one-off observation, not a gate | `PF-142` |
+| **That the legacy alias table is exhaustive on live data** | **NOT MEASURED.** It was derived from the pre-fix seed. No `SELECT DISTINCT action, resource_type FROM audit_log` was run against a deployed tenant, and the routine has no hosted credentials | operator / `PF-143` |
 | That `ADR-035` / `036` / `037` are free numbers | Checked against `docs/adr/` (holds `001`…`028`) and `architecture-impact.md` §4 (reserves `029`…`035`) **on 2026-08-08**. Each slice must **re-check immediately before creating its file** and record any renumber — the precedence rule `S-E02-18` installed (`PF-110`) makes `docs/adr/` the register of record | each owning slice |
 
 ---
@@ -817,7 +982,17 @@ asymmetry a third time.
 |---|---|---|
 | `PF-14` | **open** — specced | Split into an **open measurement** (does the page render authenticated?) and a confirmed dead link. Both owned by `S-E04-2` |
 | `PF-31` | **open** — closed at the **8 + 9 literal sites**, *not* across `apps/api/src` | All 8 `actorRole` literals and all 9 `portal` write literals are gone, plus two anonymous inline derivations the intake had not measured; a `super_admin` minting a role is now audited `super_admin`, and a blocking spec keeps it that way. **This row read "the actor-role half is closed in `apps/api/src`" until the escalation panel falsified it** — see § *Three residuals inside the walk root* below. **Still open:** `PF-121` (`packages/imports-core`), **`PF-122`** (`child-claims.service.ts` parametrises both fields), **`PF-123`** (`assessments.controller.ts` writes neither), all owner `S-E04-7`; the transactionality half (`S-E04-6`); and the families that write **no** audit row at all — role grant/revoke, `modules/schools/`, `modules/enrollments/` (`M-33`) |
-| `PF-32` | **open** — specced, and **widened by measurement** | Four defects plus the vocabulary split (`spec.md` §1.3). Owned by `S-E04-4` + `S-E04-5` |
+| `PF-32` | **open** — the **vocabulary half is closed** by `S-E04-4`; the scope half is not | The three disagreeing populations are now one declaration in `packages/contracts/src/audit/`, read by all three consumers, with a both-directions gate. **Still open and owned by `S-E04-5`:** the KPI/table scope mismatch, the `to` filter excluding its own day, and the `null`-portal facet row that no offered filter value can reach (§ *The read side of `portal` was never inventoried*) |
+| **`PF-134`** | **open** — raised by `S-E04-4`'s own gate pass | `AuditTable.tsx`'s `pickActionTone` / `pickActionIcon` are a **fourth** audit vocabulary the slice left behind — inline substring matchers (`création\|publish\|approve`, `suppression\|delete`, …) sitting next to the declaration they were supposed to replace. It is **already wrong on real data**: `coefficient.upsert` and `grade.unflag` are declared `critical: true`, are counted by the « MODIFICATIONS CRITIQUES » card, and contain none of the tokens the predicate looks for — so they fall through to `neutral`. The card says a critical change happened; the row for it is painted unremarkable. The new seed makes it reachable, because STEP 13 now writes canonical codes where it previously wrote French strings that *did* match. **This is the single highest-value follow-up test** — parse `pickActionTone` with the AST walker the gate spec already imports, assert every `AUDIT_CRITICAL_ACTIONS` code hits a `danger`/`warning` literal, positive-control against `LEGACY_AUDIT_CRITICAL_ALIASES`. The fix that follows is small and in keeping with `ADR-037`: give `AUDIT_ACTIONS` a declared tone (or derive it from `critical`/`export`) and delete the last inline vocabulary |
+| **`PF-135`** | **open** — raised by the gate | **Nothing in this diff executes `/admin/audit`.** All web evidence is pure-function or *textual* (a marker string appears in the component source). That is on the one route in the product that returned **HTTP 500 for every admin** three commits ago (`PF-14` / `S-E04-2`), and this diff introduces a pattern the page never used: a **React element** passed as `SelectOption.label` from a server component across the RSC boundary into a client filter, plus a KPI value that moves from `number` to `number \| string`. It typechecks and *should* render — "should render" is exactly the claim `PF-14` falsified. `apps/web/tests/e2e` has **zero** references to audit. Fix: one ~25-line Playwright spec on the existing `adminPage` fixture asserting status 200, « Non instrumenté », « Format hérité » and that the facet listbox opens — converting three currently-textual acceptance claims into executed evidence and re-arming the `PF-14` tripwire |
+| **`PF-136`** | **open** — raised by the escalation panel and by the a11y lens | **Three consumers, two disagreeing merge rules for a mixed-vocabulary row.** `AuditDetailDrawer.tsx` resolves `auditVocabularyExplanation(action) ?? auditVocabularyExplanation(resourceType)` — action wins — so a row with a **legacy** action and an **unknown** resource type prints « Enregistrée avant l'unification du vocabulaire », claiming historic provenance for a brand-new undeclared code. That is precisely the error class `ADR-037` D4 exists to remove. The table does the cautious thing (`describeNonCanonicalFields` picks `unknown` when any axis is unknown) and the worker has `weakerVocabulary()` for the same merge. Second, in the same mechanism: the resource-type marker is wrapped `aria-hidden`, so a screen-reader user browsing the table cell-by-cell hears « Notes » and **nothing** about the value being outside the declared vocabulary — the entire regulatory signal, absent from the accessibility tree. Fix: resolve and render **per field**, and lift `weakerVocabulary` into `packages/contracts/src/audit/labels.ts` so the three consumers cannot disagree |
+| **`PF-137`** | **open** — owner **`S-E04-5`** | The epic's own `contracts/openapi.yaml` (`AuditKpis`) and `data-model.md` `D-23` are **stale against shipped code**: they specify `adminLogins` removed and replaced by `distinctActors` in four `{value, scope}` envelopes, while `S-E04-4` ships `adminLogins: number \| null`. Both are defensible — the story mandated the interim shape — but leaving a contract file disagreeing with the code, inside an epic whose thesis is *no surface may assert what it cannot justify*, is the defect at the doc layer. Same file, same problem for `sensitiveExports`: the contract defines it structurally (`resourceType = 'export_job'`), the shipped code defines it by action, and the two genuinely disagree on the seeded legacy fixture row |
+| **`PF-138`** | **open** — owner **`S-E04-5`**, free to fix while the file is open | The re-armable `adminLogins` branch **lost the `portal: 'admin'` scope** the deleted query carried: `where: { tenantId, action: { in: AUDIT_LOGIN_ACTIONS } }` behind a card labelled « CONNEXIONS ADMIN ». Unreachable today (the list is empty) — but its own comment says adding a code is the whole change, so the slice that instruments login makes an RGPD governance card over-report parent, teacher and student logins. Sharpened by the inverted gate: `audit-provenance-gate.spec.ts` now asserts **zero** `portal: 'admin'` literals in `apps/api/src`, so restoring the correct scope means flipping that gate back, and a future author hits RED first |
+| **`PF-139`** | **open** — raised by the a11y lens | `KpiCard` renders `value` at `font-mono text-3xl font-bold` inside `overflow-hidden`, with `min-w-0` on the *label* group only. « Non instrumenté » has a min-content width of ~11 mono chars at 30 px and cannot break mid-word; at the page's own `xl:grid-cols-4` the card's inner width is smaller than that, so the value or the « CONNEXIONS ADMIN » label is **clipped, not ellipsised** — and it worsens at 200 % zoom (SC 1.4.10 / 1.4.4). Every other string value in the codebase is short (`28/35`, `92%`). Second, same card: `page.tsx`'s `safe()` swallows every `ApiError` to `null` and the fallback hard-codes `adminLogins: null` — the **same sentinel** that means "not instrumented" — so an analytics outage renders as an affirmative claim about the audit log. Fix: `value="—"` with the phrase in the wrapping `children` sub-label, and a `kpisUnavailable = resp === null` flag distinct from the instrumentation gap |
+| **`PF-140`** | **open** — regulator-facing artefact | Three things about the DPO CSV, none asked for by an AC. (i) `action_label`, `resource_type_label` and `vocabulary` are inserted **mid-header**, not appended, and a UTF-8 BOM is now prepended — any index-based or `created_at`-keyed downstream parser breaks. (ii) The single `vocabulary` column is `weakerVocabulary(action, resourceType)`, collapsing two axes, so a regulator cannot tell **which** value was unclassified — while the epic contract models vocabulary per entry, and the file already carries per-axis label columns. (iii) **Latent, not live:** the BOM promotes the file from "text" to "document French Excel opens as a spreadsheet", and `csvEscape` only quotes on `[",\n]` — it does not neutralise a leading `=`/`+`/`-`/`@`/tab, nor a bare `\r`. No exported column is reachable free text **today**, but `audit_log.user_agent` is a raw client header one column away. Fix: append `action_vocabulary` / `resource_type_vocabulary` at the end, and neutralise leading characters before any slice widens the export |
+| **`PF-141`** | **open** — minor, but it is a user-visible contradiction | The table's action badge now renders `action.label` and the **raw stored code appears nowhere in the row**, while the action filter is still a free-text `contains` match against the raw column. A user who sees « Suppression d'un rôle » and types it gets zero rows. This also contradicts the invariant the rest of the slice states explicitly — the drawer renders the raw code under the title precisely because *« le libellé est posé au-dessus de la valeur réelle, il ne la remplace jamais »*, and the CSV keeps the raw column for the same reason. The table is the one surface that dropped it. Fix: a small monospace raw line under the badge, or resolve the query term through `AUDIT_ACTIONS` into an `OR` of codes |
+| **`PF-142`** | **open** — test-infrastructure drift, repo-wide | Both `apps/api/jest.config.js` and `apps/worker/jest.config.js` now map `@pilotage/contracts` to `packages/contracts/src`. The rationale is correct and documented (`test-ratchet.js` spawns jest with `cwd: appDir`, bypassing turbo's `test → ^build`, so specs would otherwise read a stale git-ignored `dist/`) — but the consequence is that **no test in the repository verifies the built CJS artefact any more**, while `audit-csv.generator.ts` value-imports the resolvers at **module load** and sits in the worker's Nest graph. The stated compensating control (`pnpm --filter @pilotage/contracts build` as a landing prerequisite) is a human habit, and with GitHub Actions still billing-locked nothing automated backs it. Fix: make `pnpm --filter @pilotage/contracts build && node scripts/boot-check.js` a repeatable pre-merge step, or restore one spec that resolves the built package |
+| **`PF-143`** | **open** — a measurement that was not taken | The frozen legacy alias table (5 actions, 8 resource types) is derived from the **pre-fix seed**, not from live data, yet the KPI predicates now depend on it being exhaustive. Any pre-V3 French value a deployed tenant carries outside those 13 resolves `unknown`, renders « Code non répertorié » instead of « Format hérité », and — for actions — silently leaves the `criticalChanges` count. Concretely: the old predicate listed `'Révision'` and `'revise'`; both were dropped with no alias replacing them. Nothing in this slice ran `SELECT DISTINCT action, resource_type FROM audit_log` against a real tenant. Fix: an operator step (or a one-off script) diffing the live distinct sets against `LEGACY_AUDIT_*_ALIASES` **before** the DPO sees a « Code non répertorié » |
 | `PF-96` | **open** — referenced, not fixed | Posture to be stated in `ADR-035` |
 | `PF-121` | **open** — raised and registered by `S-E04-1` | The two `tx.auditLog.create` calls in `packages/imports-core/src/engine.ts` still hard-code both provenance fields, on a call path with no JWT (the worker drains a BullMQ job). Deliberately out of `S-E04-1`'s scope: `AC-2` is scoped to `apps/api/src`, and a job-written row needs provenance captured at *enqueue* plus a ruling on what portal a job acted through. Owner `S-E04-7` |
 | **`PF-122`** | **open** — raised by the escalation panel, registered by this land pass | `child-claims.service.ts:722-729` is a **fourth decision site inside `apps/api/src`**: `actor: 'parent' \| 'admin' = 'parent'` → `actorRole: actor`, `portal: actor`, with the literal `'admin'` passed at `:522`/`:609`. A `super_admin` approving a guardianship claim is audited **`actorRole: 'admin'` — not a realm role at all**, so `/admin/audit`'s role facet carries a fifth orphan token no label map knows. Invisible to all four gate matchers by construction. Owner `S-E04-7` |

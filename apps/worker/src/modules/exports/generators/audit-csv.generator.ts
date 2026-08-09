@@ -1,10 +1,41 @@
+import {
+  classifyAuditAction,
+  classifyAuditResourceType,
+  type AuditVocabularyKind,
+} from '@pilotage/contracts';
+
 import type { GenerateArgs, GenerateResult } from './types';
+
+/**
+ * U+FEFF, declared once and named — an invisible character nobody can review,
+ * and therefore one nobody may delete by accident. See the return below.
+ */
+const UTF8_BOM = '\uFEFF';
 
 /**
  * Audit CSV — append-only export of the audit log.
  *
  * Parameters (optional):
  *   - from / to: ISO dates bounding `created_at`
+ *
+ * **This is the file a DPO hands to a regulator** — the third consumer of the
+ * audit vocabulary that a web+API fix would have left drifting (S-E04-4, AC-6).
+ *
+ * Two rules govern every column below, and they are in tension on purpose:
+ *
+ *  1. **The record is reproduced, never interpreted.** `action` and
+ *     `resource_type` carry the stored value **byte-for-byte**. The French
+ *     labels are *additional* columns, laid beside the raw value, never on top
+ *     of it. A regulator must be able to read what the system actually wrote.
+ *  2. **What cannot be classified stays visible** (DNC-08). An unrecognised code
+ *     is exported with `*_label` equal to the code itself and `vocabulary` =
+ *     `unknown`. It is never dropped from the file, never bucketed into a
+ *     generic label, and never swallowed by a `try/catch` — the resolvers are
+ *     total functions and are deliberately not wrapped.
+ *
+ * The labels come from `@pilotage/contracts` at **module load**, so a missing
+ * or stale `contracts/dist` in the worker image fails loudly at boot rather than
+ * halfway through a regulator's export (ADR-037 D5).
  */
 export async function generateAuditCsv(args: GenerateArgs): Promise<GenerateResult> {
   const { prisma, tenantId, parameters } = args;
@@ -26,20 +57,30 @@ export async function generateAuditCsv(args: GenerateArgs): Promise<GenerateResu
     'created_at',
     'actor_id',
     'portal',
+    // Raw, as stored. The `*_label` columns are appended beside them, never
+    // interleaved with them and never in their place.
     'action',
+    'action_label',
     'resource_type',
+    'resource_type_label',
+    'vocabulary',
     'resource_id',
     'ip_address',
   ];
   const lines = [header.map(csvEscape).join(',')];
   for (const r of rows) {
+    const action = classifyAuditAction(r.action);
+    const resourceType = classifyAuditResourceType(r.resourceType);
     lines.push(
       [
         r.createdAt.toISOString(),
         r.actorId ?? '',
         r.portal ?? '',
         r.action,
+        action.label,
         r.resourceType,
+        resourceType.label,
+        weakerVocabulary(action.vocabulary, resourceType.vocabulary),
         r.resourceId ?? '',
         r.ipAddress ?? '',
       ]
@@ -49,9 +90,28 @@ export async function generateAuditCsv(args: GenerateArgs): Promise<GenerateResu
   }
 
   return {
-    buffer: Buffer.from(lines.join('\n'), 'utf-8'),
+    // UTF-8 BOM. Without it French Excel — the tool a DPO actually opens this
+    // in — decodes the file as Windows-1252 and renders « Évaluation » as
+    // « Ã‰valuation ». The accented values were already there in the legacy
+    // rows; adding French label columns turns a latent defect into every row.
+    // One character, no effect on any other consumer.
+    buffer: Buffer.from(UTF8_BOM + lines.join('\n'), 'utf-8'),
     contentType: 'text/csv; charset=utf-8',
   };
+}
+
+/**
+ * A row is only as classified as its weakest axis: `unknown` beats `legacy`
+ * beats `canonical`. Reporting a half-unknown row as `canonical` would be the
+ * export telling a regulator the system understood something it did not.
+ */
+export function weakerVocabulary(
+  a: AuditVocabularyKind,
+  b: AuditVocabularyKind,
+): AuditVocabularyKind {
+  if (a === 'unknown' || b === 'unknown') return 'unknown';
+  if (a === 'legacy' || b === 'legacy') return 'legacy';
+  return 'canonical';
 }
 
 function csvEscape(v: unknown): string {

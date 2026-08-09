@@ -25,7 +25,13 @@ import { useState, type ComponentType } from 'react';
 
 import { AuditDetailDrawer, type AuditEntry } from './AuditDetailDrawer';
 import { AuditProvenance } from './AuditProvenance';
-import { humanizePortal, humanizeResourceType } from './audit-labels';
+import { VocabularyMarker } from './VocabularyMarker';
+import {
+  classifyAuditAction,
+  classifyAuditResourceType,
+  describeNonCanonicalFields,
+  humanizePortal,
+} from './audit-labels';
 
 interface AuditTableProps {
   rows: AuditEntry[];
@@ -35,8 +41,19 @@ const PORTAL_TONE: Record<string, string> = {
   admin: 'bg-violet-50 text-violet-700 ring-violet-200',
   teacher: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   parent: 'bg-amber-50 text-amber-700 ring-amber-200',
+  // Le quatrième portail (G-PORTAL). Sans cette entrée, une ligne `student`
+  // tombait sur le repli gris pendant que les trois autres avaient une couleur :
+  // un rendu de seconde classe, silencieux. `sky` sur `sky-700` = 5.56:1 (AA ✓)
+  // et se distingue du violet, de l'émeraude, de l'ambre et de l'ardoise.
+  student: 'bg-sky-50 text-sky-700 ring-sky-200',
 };
 
+/**
+ * `pickActionTone` / `pickActionIcon` reçoivent le **code brut**, jamais le
+ * libellé français. Les deux font des correspondances de sous-chaîne sur
+ * `create` / `delete` / `export` : leur passer « Suppression du rôle » re-teint
+ * silencieusement chaque ligne. Ne pas « simplifier » en leur passant le label.
+ */
 function pickActionTone(action: string): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
   const a = action.toLowerCase();
   if (a.includes('création') || a.includes('publish') || a.includes('approve') || a.includes('create'))
@@ -91,6 +108,10 @@ export function AuditTable({ rows }: AuditTableProps) {
           <tbody className="divide-y divide-slate-100">
             {rows.map((a) => {
               const Icon = pickActionIcon(a.action, a.resourceType);
+              const action = classifyAuditAction(a.action);
+              const resourceType = classifyAuditResourceType(a.resourceType);
+              const nonCanonical = describeNonCanonicalFields(a);
+              // Repli ardoise conservé pour tout portail non reconnu (DNC-08).
               const portalCls = a.portal ? PORTAL_TONE[a.portal] ?? 'bg-slate-100 text-slate-600 ring-slate-200' : '';
               return (
                 <tr
@@ -118,17 +139,43 @@ export function AuditTable({ rows }: AuditTableProps) {
                         <Icon className="h-3.5 w-3.5" />
                       </span>
                       <StatusBadge
-                        label={a.action}
+                        label={action.label}
                         tone={pickActionTone(a.action)}
                         size="sm"
                         withDot
                       />
                     </div>
+                    {/* Le marqueur est posé **en bloc**, sous la puce d'action :
+                        la table défile horizontalement, une puce en ligne
+                        élargirait la rangée à 320 px sans rien apporter.
+                        La phrase `sr-only` est écrite **une seule fois** par
+                        ligne, ici, et nomme les champs concernés — calculée,
+                        pour qu'elle ne puisse pas mentir sur une ligne mixte
+                        (le marqueur du type de ressource, lui, reste muet pour
+                        les lecteurs d'écran afin de ne pas annoncer deux fois
+                        la même chose). */}
+                    {action.vocabulary !== 'canonical' && (
+                      <span className="mt-1 block">
+                        <VocabularyMarker vocabulary={action.vocabulary} />
+                      </span>
+                    )}
+                    {nonCanonical && (
+                      <span className="sr-only">
+                        {` Pour cette entrée, ${nonCanonical.fields} ${
+                          nonCanonical.fields.includes(' et ') ? 'sortent' : 'sort'
+                        } du vocabulaire d’audit déclaré. ${nonCanonical.explanation}`}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 align-top text-sm text-slate-700">
                     <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                      {humanizeResourceType(a.resourceType)}
+                      {resourceType.label}
                     </span>
+                    {resourceType.vocabulary !== 'canonical' && (
+                      <span className="mt-1 block" aria-hidden>
+                        <VocabularyMarker vocabulary={resourceType.vocabulary} />
+                      </span>
+                    )}
                     {a.resourceId && (
                       <div className="mt-1 truncate font-mono text-[10px] text-slate-400" title={a.resourceId}>
                         {a.resourceId.slice(0, 8)}…

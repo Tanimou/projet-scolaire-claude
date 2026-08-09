@@ -1,113 +1,135 @@
-# NEXT — written by run 31 (`S-E04-3`), 2026-08-08
+# NEXT — written by run 32 (`S-E04-4`), 2026-08-09
 
 > Read this at Step 1. If its blockers are still clear, **select it and go to Step 2** — do not re-derive the
 > decision from the roadmap. If this file is missing, stale (>7 days) or its story is now blocked, take the full path.
 
-## ▶ Next story → `S-E04-4`
+## ▶ Next story → `S-E04-5`
 
 | | |
 |---|---|
-| **Story** | `S-E04-4` — One canonical audit vocabulary, declared once, in `packages/contracts` |
+| **Story** | `S-E04-5` — The KPIs share the table's scope, and the `to` filter includes its own day |
 | **Epic** | `V3-E04` — Audit trail and governance surfaces |
 | **Layer** | **L0** |
-| **Size** | M · `[contracts][api][web][worker]` |
-| **Gates** | `G-TRUTH`, `G-PORTAL`, `G-DNC` *(DNC-09, DNC-08)* · **ships `ADR-037`** |
-| **`G-MIGRATION`** | does **not** trigger — deliberately (no Prisma enum; `data-model.md` says why) |
-| **blockedBy** | **nothing** — `S-E04-2` shipped the render verdict (run 30), which was its only blocker |
-| **Contract** | `docs/spec/features/v3-e04/tasks.md` § `S-E04-4` (lines 207-260) — read it verbatim, it is the contract |
+| **Size** | M · `[schema][api][web][truth]` |
+| **Gates** | **`G-MIGRATION`** *(first slice in this epic where it triggers)*, `G-TRUTH`, `G-TENANT`, `G-DNC` *(DNC-09)* |
+| **blockedBy** | **nothing** — `S-E04-4` shipped the declared vocabulary (run 32), which was its only blocker |
+| **Contract** | `docs/spec/features/v3-e04/tasks.md` § `S-E04-5` (from line 264) — read it verbatim, it is the contract |
 
-### Why this one and not `S-E04-6`
+### `G-MIGRATION` triggers, and it is not obvious why
 
-Selection rule 3 takes the first story in the epic whose `blockedBy` is empty. After run 31, `S-E04-3` is done, so the
-live candidates are `S-E04-4` (blocked by `S-E04-2` ✅) and `S-E04-6` (blocked by `S-E04-1` ✅ **and** `S-E04-3` ✅ —
-now unblocked). `S-E04-4` is ordered first **and** it is the cheaper prerequisite: `S-E04-6` spreads provenance to five
-more write families, and doing that *before* the vocabulary is canonical means writing five more call sites against
-codes that `S-E04-4` will then redefine.
+A day-inclusive `to` is meaningless without a declared timezone, and **`Tenant` has no `timezone` column** — measured:
+only `School.timezone` exists (default `Europe/Paris`), and `Tenant` carries `settings Json`. Computing the boundary in
+the *server's* zone is the defect at a new address. This wants a reviewed migration, an expand/contract plan and a
+stated rollback — never `db push`. Budget for it: the `schema drift` gate stage alone took **107 s** on run 32.
 
-### What `S-E04-4` must not get wrong
+### Carry these three with it — they are in the file you will already have open
 
-The contract's own trap is that completeness must be checked **in both directions** — every code a call site writes has
-a label, **and** every label corresponds to a code something writes. One-directional checking is exactly how
-`calendar_event` went missing, and it is the same asymmetry as `PF-127` (the link gate) and `PF-105` (`A ≡ A` proves
-nothing). Drive the test off the **actual** literals reachable in `apps/api/src` *and* `packages/imports-core/src`,
-never off a hand-written list.
+1. **`PF-138` is already closed** (run 32 restored the `portal: 'admin'` scope and flipped the provenance gate back to
+   length 1). Do not re-fix it; do not re-invert the gate.
+2. **`PF-137`** — reconcile `contracts/openapi.yaml` `AuditKpis` and `data-model.md` D-23 with whatever shape you ship.
+   They currently specify `adminLogins` *removed* and `distinctActors` in four `{value, scope}` envelopes; the code
+   ships `adminLogins: number | null`. Pick one and make the other agree. Same file, same problem for
+   `sensitiveExports`: the contract defines it structurally (`resourceType = 'export_job'`), the code by action.
+3. **`PF-139`** — the KPI card work is yours anyway: « Non instrumenté » is **clipped, not ellipsised**, in
+   `KpiCard`'s `font-mono text-3xl` slot, and `page.tsx`'s `safe()` collapses an analytics **outage** onto the same
+   `adminLogins: null` sentinel that means "not instrumented". An outage must not render as a claim.
 
-Three consumers, not two: the web label map, the API KPI predicates, **and**
-`apps/worker/.../exports/generators/audit-csv.generator.ts:16`, which exports `action` **raw**. A two-consumer fix
-leaves the CSV export drifting, and the CSV export is what a DPO hands to a regulator.
+### The read-side half of `portal` that a label map could not fix
 
-### What run 31 hands it directly
-
-1. **`PF-121`/`PF-122`/`PF-123` are still open and still unowned by this slice.** They belong to `S-E04-7`. Run 31 did
-   not touch the audit read path, exactly as run 30 did not.
-2. **The `portal` column now has four legal values in practice but three in `packages/contracts`.** `S-E04-4`'s AC-3
-   requires four. `deriveAuditProvenance` maps only `admin`/`teacher`/`parent`, so a `student` portal row cannot yet be
-   *written* — decide whether AC-3 is satisfied by the label existing or requires the writer too, and say which.
+`analytics.service.ts` builds the portal facet `where: { portal: { not: null } }` while the row filter matches `portal`
+exactly — so a `null`-portal row is reachable by **no offered filter value at all** (there is no « sans portail »
+option). That is `PF-123`'s read half and it belongs with the filter work, not with `S-E04-7`.
 
 ---
 
-## ✅ What run 31 measured, so the next run does not re-measure it
+## ✅ What run 32 shipped, so the next run does not re-derive it
 
-`S-E04-3` is **measured, not asserted**. Baseline `54 / 0 / 0` → after `59 / 4 / 4` on
-`select count(*), count(ip_address), count(user_agent) from audit_log`. Six probes on
-`PUT /api/v1/subjects/coefficients/matrix`, all read back from Postgres — full table in
-`docs/spec/features/v3-e04/PROGRESS.md` § "MEASURED". `TRUST_PROXY_HOPS` is now in `REQUIRED_ENV`, so **the API
-refuses to boot without it**; `.env`, `.env.example`, `.env.prod.example` and both compose files declare it.
+`S-E04-4` closed the **vocabulary half of `PF-32`**. One declaration now exists — `packages/contracts/src/audit/`
+(`vocabulary.ts` + `labels.ts` + a re-export-only `index.ts`), exported as `@pilotage/contracts/audit`, CJS-built.
+It carries `AUDIT_RESOURCE_TYPES`, `AUDIT_ACTIONS` (each code with its French label and `critical`/`export` flags),
+`AUDIT_PORTALS` (**four**), and a **frozen** `LEGACY_AUDIT_*_ALIASES` table. `ADR-037` records five decisions.
 
-**`pilotage_api` was rebuilt and recreated by run 31 and is healthy on the new code.** `pilotage_web` was **not** —
-see below. The stack was left running.
+**Three consumers read it and hold no local copy:** the web label map (`RESOURCE_TYPE_LABELS` / `PORTAL_LABELS`
+deleted), the API KPI predicates, and the worker `audit-csv` generator that every prior reading had missed.
 
----
+**The written set was extracted by a TypeScript AST walker, not transcribed** — and it falsified the brief's own
+hand-count, which was short by roughly a third across five literal shapes. The `asc`/`desc` trap (Prisma `orderBy`,
+in both object and array form) is excluded by construction and asserted absent. Completeness is set equality in
+**both** directions.
 
-## ⚠️ Two container-state facts that will otherwise waste your Step 2
+**Measured on the live local database, not asserted:**
 
-1. **`pilotage_web` still serves an image from 2026-08-07.** It has neither `S-E04-2`'s `/admin/audit` render fix nor
-   `S-E04-3`'s provenance forwarding. `http://localhost:3000/admin/audit` may still fail — that is the **old bundle**,
-   not a regression, and not something to debug. Unchanged from run 30.
-2. **`PF-126` still blocks every `web` rebuild** — `next build` inside BuildKit cannot fetch `Inter` from Google
-   Fonts, and the two obvious explanations are already falsified (host: 200; bare `docker run alpine`: 200). Do not
-   re-test connectivity. Fix direction is `next/font/local`; owner `V3-E02`.
-
-**A sweep is still not schedulable** for the same reason run 30 gave: a sweep's mechanism is one
-`docker compose build` + `--force-recreate`, and the `web` half of that is exactly what is broken.
-
----
-
-## Findings raised by run 31 and still open
-
-| Finding | Owner | One line |
+| | before | after |
 |---|---|---|
-| `PF-129` | `V3-E04` `S-E04-7` | a **third** `apps/web` server-side fetch (`parent/register/actions.ts:25`) bypasses `clientProvenanceHeaders`; latent until parent registration becomes audited |
-| `PF-130` | `V3-E04` `S-E04-7` | nginx passes the three `x-pilotage-*` headers through from the internet, so any authenticated actor can blank **their own** row with one header, indistinguishably from an honest absence |
-| `PF-131` | `V3-E04` | `location /api/v1/notifications/stream` sets no `X-Forwarded-For`, so the `N = 2` pin is not uniform across the public surface; a **padded** chain defeats the short-chain guard |
-| `PF-132` | `V3-E04` `S-E04-7` | **PARTIAL** — both example files now ship `AUDIT_FORWARD_TOKEN=` empty (run 31), but nothing *refuses* a weak or published token at the read site. `PF-54`'s shape exactly |
-| `PF-133` | `V3-E02` | a `'use client'` file imported a **value** from a server module; no artefact asserts that boundary, `tsc` cannot see it, and `next build` only sees it once a hard server-only import exists. Instance fixed, **class open** |
+| `criticalChanges` | **9** (matched only the French `Suppression` out of four listed strings) | **18** (declared critical set + declared legacy aliases) |
+| `adminLogins` | **0**, structurally forever | **`null`** — «Non instrumenté», and **no query is issued** |
+| legacy values outside the frozen alias table | never measured | **0** on both axes (`PF-143` discharged) |
 
-`PF-124`, `PF-125`, `PF-126`, `PF-127` from run 30 are all still open and untouched — run 31 was not their owner.
-
-### The two most useful of those, if a gate slice is ever picked up
-
-`PF-129` and `PF-133` are the **same missing artefact**: there is no web-side quality gate at all. One spec could
-assert both invariants — every server-side `fetch` to `API_URL` goes through `clientProvenanceHeaders`, and nothing
-reachable from a `'use client'` entry imports `@/lib/api-client` / `next/headers` / `@/auth`. Build them together.
+`PORTALS` was deliberately **not** widened: it backs `dto/auth.ts` `portal: z.enum(PORTALS)` for **login**, so adding
+`student` there would have made it a legal login portal. `AUDIT_PORTALS` is a separate 4-valued declaration and
+`ADR-037` D2 says why. **No writer emits `portal: 'student'` yet** — `deriveAuditProvenance` maps three — and none was
+fabricated to satisfy AC-3.
 
 ---
 
-cleanup-pending: C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\pensive-raman-4baf7c
+## ⚠️ Container-state facts that will otherwise waste your Step 2
 
-> Step 0.5 D: run 31 executed inside that worktree and could not delete the ground it stood on. Apply the three
+1. **`pilotage_web` still serves an image from 2026-08-07.** Unchanged from runs 30, 31 and 32. It has none of
+   `S-E04-2`'s render fix, `S-E04-3`'s provenance forwarding or `S-E04-4`'s vocabulary.
+   `http://localhost:3000/admin/audit` failing is the **old bundle**, not a regression, and not something to debug.
+2. **`PF-126` still blocks every `web` rebuild** — `next build` inside BuildKit cannot fetch `Inter` from Google
+   Fonts, and the two obvious explanations are already falsified (host: 200; bare `docker run alpine`: 200). **Do not
+   re-test connectivity.** Fix direction is `next/font/local`; owner `V3-E02`. Run 32 did not rebuild anything.
+3. **A sweep is still not schedulable**, for the reason runs 30–32 all gave: a sweep's mechanism is one
+   `docker compose build` + `--force-recreate`, and the `web` half of that is exactly what is broken.
+
+`pilotage_api` is healthy on run 31's image. Run 32 changed API source but did **not** rebuild it — the gate's
+`pnpm build` and `boot-check` are the evidence that the new code compiles and boots, not the running container.
+
+---
+
+## Findings raised by run 32 and still open
+
+| Finding | Priority | Owner | One line |
+|---|---|---|---|
+| `PF-134` | **P1** | `S-E04-5` | a **fourth** audit vocabulary survives in `AuditTable.tsx`'s inline `pickActionTone`, and it is **already wrong**: `coefficient.upsert` and `grade.unflag` are declared critical, counted by the card, and painted `neutral` |
+| `PF-135` | **P1** | `S-E04-5` | **nothing executes `/admin/audit`** — all web evidence is textual, on the one route that has already 500'd for every admin. ~25 lines of Playwright on the existing `adminPage` fixture |
+| `PF-140` | **P1** | `S-E04-7` | the DPO CSV changed bytes with no AC asking (three columns **mid-header**, new BOM), collapses two vocabulary axes into one column, and `csvEscape` neutralises no leading `=`/`+`/`-`/`@` one column from a raw client header |
+| `PF-136` | P2 | `S-E04-7` | drawer, table and worker use **three different** merge rules for a mixed-vocabulary row; the marker is `aria-hidden`, so the regulatory signal is absent from the accessibility tree |
+| `PF-137` | P2 | `S-E04-5` | `openapi.yaml` + `data-model.md` D-23 disagree with shipped code |
+| `PF-139` | P2 | `S-E04-5` | « Non instrumenté » is clipped in `KpiCard`; an analytics outage renders as an affirmative claim |
+| `PF-141` | P2 | `S-E04-7` | the table shows the label and **drops the raw code**, while its own filter still matches the raw column |
+| `PF-142` | P2 | `V3-E02` | both jest configs now read contracts **source**, so nothing verifies the built CJS artefact Node actually loads |
+
+`PF-138` and `PF-143` were raised **and closed** by run 32 — they are in `traceability/CLOSED-L0.md`, not here.
+`PF-121`, `PF-122`, `PF-123` (`S-E04-7`) and `PF-124`…`PF-127` from run 30 are all still open and untouched.
+
+### The three worth doing together, if a gate slice is ever picked up
+
+`PF-129`, `PF-133` and now `PF-135` are the **same missing artefact**: there is no web-side quality gate at all, and no
+web unit runner (`apps/web` has Playwright only — that is also `PF-100`'s blocker and part of `VAL-08`). One spec could
+assert all of it: every server-side `fetch` to `API_URL` goes through `clientProvenanceHeaders`; nothing reachable from
+a `'use client'` entry imports `@/lib/api-client` / `next/headers` / `@/auth`; and `/admin/audit` returns 200 for an
+admin. Build them together.
+
+---
+
+cleanup-pending: C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\awesome-spence-9e6f69
+
+> Step 0.5 D: run 32 executed inside that worktree and could not delete the ground it stood on. Apply the three
 > Step 0.5 C tests (not mine · clean · merged or no open PR) and remove it, then clear this line.
 >
-> **Leftover directories — run 31 deregistered one more, and the handling still differs:**
+> **Run 31's handoff (`pensive-raman-4baf7c`) is discharged at the git level** — run 32 deregistered it along with
+> `musing-archimedes-77d454` and `youthful-jones-758d15`; `git worktree list` shows none of the three. All three
+> **directories** survive on disk: `Remove-Item -Recurse -Force` failed with *"being used by another process"* for
+> each. They are inert leftover bytes, not worktrees; no git command is needed, just delete them when the holding
+> process is gone. Same for `agitated-cerf-ad2bdf`, `elated-ellis-40bb4a`, `inspiring-mclaren-a76c8e`,
+> `sharp-albattani-ec7c4d` and `stoic-allen-b8284b`.
 >
-> 1. `stoic-allen-b8284b` (run 30's handoff) was **discharged at the git level** by run 31: `git worktree list` no
->    longer shows it and its branch was merged. `git worktree remove --force` then failed with **Permission denied**,
->    and a plain `rmdir` on the now-empty directory failed with **Device or resource busy** — a process outside this
->    session holds a handle. It is **inert leftover bytes**, not a worktree; no git command is needed, just delete the
->    directory when the holding process is gone. The same is true of `agitated-cerf-ad2bdf`, `elated-ellis-40bb4a`,
->    `inspiring-mclaren-a76c8e` and `sharp-albattani-ec7c4d` — all empty, all deregistered, all held.
-> 2. `laughing-wing-54e738` is **not registered** as a worktree but is **not empty** (~1.4 MB: `PLAN.md`, `packages/`,
->    `upcomingicsexport.patch`). Nothing in git points at it, so its contents are unreachable *and* unattributable —
->    run 31 left it alone rather than delete work it could not identify. A human decides.
-> 3. `youthful-chaum-6aad5c` is **dirty** (a large set of staged deletions under `docs/`). The hard rule forbids
->    removing a dirty worktree. Leave it. Runs 29, 30 and 31 have all said this and it is still true.
+> Unchanged and still requiring a human, said now by runs 29–32: `laughing-wing-54e738` is unregistered but **not
+> empty** (~1.4 MB: `PLAN.md`, `packages/`, `upcomingicsexport.patch`) — unreachable *and* unattributable, so it is not
+> deleted. `youthful-chaum-6aad5c` is **dirty** (staged deletions under `docs/`); the hard rule forbids removing it.
+>
+> **Remote `ci/*` branch deletion was denied to run 32 by the permission classifier** (`git push origin --delete`).
+> All 38 remote `ci/*` branches are merged and back no open PR; they are safe to delete whenever the permission
+> allows. No local `ci/*` branches remain.

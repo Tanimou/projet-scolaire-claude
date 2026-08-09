@@ -1,4 +1,5 @@
 export * from './enums';
+export * from './audit';
 export * from './dto';
 export * from './events';
 export * from './release';
