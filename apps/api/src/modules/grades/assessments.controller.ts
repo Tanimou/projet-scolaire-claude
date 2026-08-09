@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -28,6 +29,12 @@ import {
   MinLength,
 } from 'class-validator';
 
+import {
+  type ClientHintsRequest,
+  extractAuditClientHints,
+} from '../../shared/audit/client-hints';
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
+import { writeAudit } from '../../shared/audit/write-audit';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -258,8 +265,15 @@ export class AssessmentsController {
   /** Publish all grades for this assessment (atomic). Idempotent. */
   @Post(':id/publish')
   @RequiresPermission('grades.publish')
-  async publish(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
+  async publish(
+    @Param('id') id: string,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Req() req: ClientHintsRequest,
+  ) {
     const me = await this.users.ensureUser(jwt);
+    // Derived BEFORE `$transaction` opens (S-E06-6): sanitisation of the `@db.Inet`
+    // value must never be able to roll back the publish it traces.
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     const a = await this.prisma.assessment.findUnique({
       where: { id },
       include: { grades: true },
@@ -287,15 +301,19 @@ export class AssessmentsController {
         where: { assessmentId: id, status: 'draft' },
         data: { status: 'published', publishedAt: now },
       });
-      await tx.auditLog.create({
-        data: {
-          tenantId: me.tenantId,
-          actorId: me.id,
-          action: 'assessment.publish',
-          resourceType: 'assessment',
-          resourceId: id,
-          after: { gradeCount: a.grades.length },
-        },
+      // S-E04-6 — moved onto the shared seam. It was already the ONE site writing
+      // inside its transaction, and it is now the site that proves the seam does
+      // not weaken what already worked. It also GAINS provenance it never had:
+      // before this slice the row carried no `actorRole`, no `portal`, no
+      // ip/user-agent at all (PF-123, write half).
+      await writeAudit(tx, {
+        tenantId: me.tenantId,
+        actorId: me.id,
+        action: 'assessment.publish',
+        resourceType: 'assessment',
+        resourceId: id,
+        provenance,
+        after: { gradeCount: a.grades.length },
       });
       return tx.assessment.findUnique({
         where: { id },

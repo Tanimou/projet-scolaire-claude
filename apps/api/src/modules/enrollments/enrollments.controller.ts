@@ -10,12 +10,19 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { EnrollmentStatus, Prisma } from '@prisma/client';
 import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
+import {
+  type ClientHintsRequest,
+  extractAuditClientHints,
+} from '../../shared/audit/client-hints';
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
+import { writeAudit } from '../../shared/audit/write-audit';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -140,10 +147,31 @@ export class EnrollmentsController {
     return { data };
   }
 
+  /**
+   * S-E04-6 — the enrollment and its audit row commit together.
+   *
+   * TWO BOUNDARIES THAT MUST HOLD (`ADR-035` D5), both stated rather than
+   * assumed by the next reader:
+   *
+   *  • The capacity check below reads `_count` OUTSIDE the transaction and STAYS
+   *    there. Wrapping the write did NOT close that TOCTOU race — two concurrent
+   *    requests can still both pass it and over-fill a class. Unchanged by this
+   *    slice, and said out loud so nobody reads the new `$transaction` as a fix.
+   *  • `notifyGuardiansOfEnrollment` stays AFTER the commit. It reads every
+   *    guardianship and writes N notifications; inside the transaction, a large
+   *    roster would blow Prisma's 5 s interactive-transaction timeout and roll
+   *    back a valid enrollment, and its swallowed error would become a rollback
+   *    trigger for the very thing it is best-effort about.
+   */
   @Post()
   @RequiresPermission('enrollments.write')
-  async create(@Body() body: CreateEnrollmentDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
+  async create(
+    @Body() body: CreateEnrollmentDto,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Req() req: ClientHintsRequest,
+  ) {
     const me = await this.users.ensureUser(jwt);
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     const [student, classSection] = await Promise.all([
       this.prisma.student.findUnique({ where: { id: body.studentId } }),
       this.prisma.classSection.findUnique({
@@ -185,19 +213,36 @@ export class EnrollmentsController {
       );
     }
 
-    const created = await this.prisma.enrollment.create({
-      data: {
+    const created = await this.prisma.$transaction(async (tx) => {
+      const enrollment = await tx.enrollment.create({
+        data: {
+          tenantId: me.tenantId,
+          studentId: body.studentId,
+          classSectionId: body.classSectionId,
+          academicYearId: classSection.academicYearId,
+          status: body.status ?? 'active',
+          enrolledAt: new Date(),
+        },
+        include: {
+          classSection: { include: { gradeLevel: true } },
+          academicYear: true,
+        },
+      });
+      await writeAudit(tx, {
         tenantId: me.tenantId,
-        studentId: body.studentId,
-        classSectionId: body.classSectionId,
-        academicYearId: classSection.academicYearId,
-        status: body.status ?? 'active',
-        enrolledAt: new Date(),
-      },
-      include: {
-        classSection: { include: { gradeLevel: true } },
-        academicYear: true,
-      },
+        actorId: me.id,
+        action: 'enrollment.create',
+        resourceType: 'enrollment',
+        resourceId: enrollment.id,
+        provenance,
+        after: {
+          studentId: enrollment.studentId,
+          classSectionId: enrollment.classSectionId,
+          academicYearId: enrollment.academicYearId,
+          status: enrollment.status,
+        },
+      });
+      return enrollment;
     });
 
     // R8 fan-out — only notify guardians for active enrollments (skip pending).
@@ -221,21 +266,40 @@ export class EnrollmentsController {
     @Param('id') id: string,
     @Body() body: EndEnrollmentDto,
     @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Req() req: ClientHintsRequest,
   ) {
     const me = await this.users.ensureUser(jwt);
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     const enrollment = await this.prisma.enrollment.findUnique({ where: { id } });
     if (!enrollment || enrollment.tenantId !== me.tenantId) throw new NotFoundException();
 
     const isEnding = body.status !== 'active' && body.status !== 'pending';
     const becameActive = enrollment.status !== 'active' && body.status === 'active';
 
-    const updated = await this.prisma.enrollment.update({
-      where: { id },
-      data: {
-        status: body.status,
-        ...(isEnding && !enrollment.endedAt ? { endedAt: new Date(), endReason: body.reason } : {}),
-      },
-      include: { classSection: { select: { name: true } } },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const next = await tx.enrollment.update({
+        where: { id },
+        data: {
+          status: body.status,
+          ...(isEnding && !enrollment.endedAt ? { endedAt: new Date(), endReason: body.reason } : {}),
+        },
+        include: { classSection: { select: { name: true } } },
+      });
+      await writeAudit(tx, {
+        tenantId: me.tenantId,
+        actorId: me.id,
+        action: 'enrollment.status_change',
+        resourceType: 'enrollment',
+        resourceId: id,
+        provenance,
+        before: { status: enrollment.status, endedAt: enrollment.endedAt?.toISOString() ?? null },
+        after: {
+          status: next.status,
+          endedAt: next.endedAt?.toISOString() ?? null,
+          endReason: next.endReason ?? null,
+        },
+      });
+      return next;
     });
 
     if (becameActive || (isEnding && !enrollment.endedAt)) {
@@ -252,15 +316,35 @@ export class EnrollmentsController {
     return updated;
   }
 
-  /** Transfer student from current active enrollment to a new class (same academic year). */
+  /**
+   * Transfer student from current active enrollment to a new class (same academic year).
+   *
+   * S-E04-6 — converted from the ARRAY `$transaction([...])` form to the
+   * interactive one, because the array form exposes no `tx` client and therefore
+   * cannot host the audit write at all.
+   *
+   * THE RESPONSE SHAPE IS UNCHANGED, ON PURPOSE. The array form resolved to the
+   * two-element tuple `[closed, opened]`; the callback returns exactly that tuple,
+   * in that order. A consumer reading `res[1].id` must keep working — a silent
+   * drift here would be a 200 with the wrong body, which no test of the audit row
+   * would ever catch. Pinned in `enrollments.controller.spec.ts`.
+   *
+   * ONE row, not two. The transfer is one decision; writing an
+   * `enrollment.transfer` row per affected enrollment would leave an auditor with
+   * two unlinked rows and no way to reconstruct the move. `resourceId` is the
+   * CLOSED enrollment (the one the operator acted on); the opened one is named in
+   * `after`.
+   */
   @Post(':id/transfer')
   @RequiresPermission('enrollments.write')
   async transfer(
     @Param('id') id: string,
     @Body() body: TransferEnrollmentDto,
     @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Req() req: ClientHintsRequest,
   ) {
     const me = await this.users.ensureUser(jwt);
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     const current = await this.prisma.enrollment.findUnique({
       where: { id },
       include: { classSection: { include: { academicYear: true } } },
@@ -288,16 +372,16 @@ export class EnrollmentsController {
       throw new ConflictException(`Capacité atteinte sur « ${target.name} ».`);
     }
 
-    return this.prisma.$transaction([
-      this.prisma.enrollment.update({
+    return this.prisma.$transaction(async (tx) => {
+      const closed = await tx.enrollment.update({
         where: { id },
         data: {
           status: 'transferred_out',
           endedAt: new Date(),
           endReason: body.reason ?? `Transféré vers ${target.name}`,
         },
-      }),
-      this.prisma.enrollment.create({
+      });
+      const opened = await tx.enrollment.create({
         data: {
           tenantId: me.tenantId,
           studentId: current.studentId,
@@ -305,24 +389,87 @@ export class EnrollmentsController {
           academicYearId: current.academicYearId,
           status: 'active',
         },
-      }),
-    ]);
+      });
+      await writeAudit(tx, {
+        tenantId: me.tenantId,
+        actorId: me.id,
+        action: 'enrollment.transfer',
+        resourceType: 'enrollment',
+        resourceId: closed.id,
+        provenance,
+        before: { classSectionId: current.classSectionId, status: current.status },
+        after: {
+          closedEnrollmentId: closed.id,
+          openedEnrollmentId: opened.id,
+          classSectionId: opened.classSectionId,
+          reason: body.reason ?? null,
+        },
+      });
+      // The array form's resolved value, byte-for-byte. Do not "tidy" this into
+      // an object — it is the shipped response body.
+      return [closed, opened];
+    });
   }
 
+  /**
+   * S-E04-6 — cancellation and its audit row commit together, on BOTH branches.
+   *
+   * The `pending` branch HARD-deletes. `AuditLog` has no FK to `Enrollment` (and
+   * none is added here — PF-96's posture is stated in `ADR-035`, not changed), so
+   * the row will point at an id that no longer resolves. `before` therefore
+   * carries the full payload: after the delete, the audit row is the only record
+   * that the enrollment ever existed.
+   */
   @Delete(':id')
   @RequiresPermission('enrollments.delete')
-  async remove(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
+  async remove(
+    @Param('id') id: string,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Req() req: ClientHintsRequest,
+  ) {
     const me = await this.users.ensureUser(jwt);
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     const enrollment = await this.prisma.enrollment.findUnique({ where: { id } });
     if (!enrollment || enrollment.tenantId !== me.tenantId) throw new NotFoundException();
     // Allow hard-delete only when status is pending. Otherwise mark as dropped (soft).
     if (enrollment.status === 'pending') {
-      await this.prisma.enrollment.delete({ where: { id } });
+      await this.prisma.$transaction(async (tx) => {
+        await tx.enrollment.delete({ where: { id } });
+        await writeAudit(tx, {
+          tenantId: me.tenantId,
+          actorId: me.id,
+          action: 'enrollment.cancel',
+          resourceType: 'enrollment',
+          resourceId: id,
+          provenance,
+          before: {
+            studentId: enrollment.studentId,
+            classSectionId: enrollment.classSectionId,
+            academicYearId: enrollment.academicYearId,
+            status: enrollment.status,
+            enrolledAt: enrollment.enrolledAt.toISOString(),
+            hardDeleted: true,
+          },
+        });
+      });
       return { ok: true, deleted: true };
     }
-    return this.prisma.enrollment.update({
-      where: { id },
-      data: { status: 'dropped', endedAt: new Date(), endReason: 'Annulation administrative' },
+    return this.prisma.$transaction(async (tx) => {
+      const dropped = await tx.enrollment.update({
+        where: { id },
+        data: { status: 'dropped', endedAt: new Date(), endReason: 'Annulation administrative' },
+      });
+      await writeAudit(tx, {
+        tenantId: me.tenantId,
+        actorId: me.id,
+        action: 'enrollment.cancel',
+        resourceType: 'enrollment',
+        resourceId: id,
+        provenance,
+        before: { status: enrollment.status, hardDeleted: false },
+        after: { status: dropped.status, endReason: dropped.endReason ?? null },
+      });
+      return dropped;
     });
   }
 

@@ -77,7 +77,7 @@ codebase** (a hosted stack trace references a file absent from the repository). 
 | ~~**ADR-025**~~ → **ADR-032** | Tenant enforcement: RLS + application predicate, fail-closed, parameterised GUC | V3-E01 | yes |
 | ~~**ADR-026**~~ → **ADR-033** | Migration policy: baseline, expand/contract, preflight, no `db push`, seed prohibition | V3-E02 | yes |
 | ~~**ADR-027**~~ → **ADR-034** | Canonical read projections: versioning, freshness contract, KPI envelope | V3-E03 | yes |
-| ~~**ADR-028**~~ → **ADR-035** | Audit in-transaction, chain genesis, and the accepted pre-V3 gap | V3-E04 | yes |
+| ~~**ADR-028**~~ → **ADR-035** — **✅ WRITTEN 2026-08-09, no longer a reservation** | Audit in-transaction, chain genesis, and the accepted pre-V3 gap | V3-E04 | ~~yes~~ — **shipped by `S-E04-6`** as `docs/adr/ADR-035-audit-in-transaction.md`. It carries D1…D10: the branded transaction-client seam, **fail-closed audit** (an audit-insert failure rolls back the mutation), pre-transaction sanitisation, the fan-out boundary, the vocabulary/seam rule, `PF-96` **stated not changed**, DNC-10, what it does not claim, and the three behaviour changes. `S-E04-8` **amends** it with the chain genesis — that half is still unwritten |
 | **ADR-029** | Branded identifier types across route and service boundaries | V3-E07 | no |
 | **ADR-030** | Audience resolution as a single shared service | V3-E11 | no |
 | **ADR-031** | Finance as an immutable ledger (supersedes the deferral in ADR-018) | V3-E15 | yes, when L3 opens |
@@ -105,6 +105,11 @@ slices then shipped ADR *files* under the same numbers for **different** decisio
 Applying it: the four still-unwritten reserved decisions **renumber from `ADR-032`** — tenant enforcement →
 `ADR-032` (V3-E01), migration policy → `ADR-033` (V3-E02), canonical read projections → `ADR-034` (V3-E03), audit
 in-transaction → `ADR-035` (V3-E04). `ADR-029`/`ADR-030`/`ADR-031` keep their numbers: no file has taken them.
+**Update 2026-08-09 (`S-E04-6`):** `ADR-035` is no longer a reservation — `docs/adr/ADR-035-audit-in-transaction.md`
+exists and is tracked, so by the rule above it is `docs/adr/` that now holds the number and this table has stopped
+being its home. Three decisions remain reserved and unwritten: `ADR-032`, `ADR-033`, `ADR-034`. *(Note for readers
+arriving from the ADR or from `S-E04-6.md`, both of which cite « `architecture-impact.md` §4 » without a path: this
+file lives under `docs/daily-improvement-v3/`, **not** under `docs/spec/features/v3-e04/`.)*
 `docs/adr/ADR-028-queue-metrics-single-collector.md` carries a `Numbering` header note pointing back here, and is
 **not** renumbered.
 

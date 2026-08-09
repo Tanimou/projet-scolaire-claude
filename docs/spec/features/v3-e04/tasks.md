@@ -323,7 +323,17 @@ all-time counts beside a filtered table, silently disagreeing with it. `adminLog
 
 ---
 
-## [ ] S-E04-6 — Five privileged families write their audit row in the same transaction
+## [x] S-E04-6 — Five privileged families write their audit row in the same transaction  ·  **shipped 2026-08-09**
+
+> **Shipped.** Evidence in `PROGRESS.md` § `S-E04-6`; decisions in `docs/adr/ADR-035-audit-in-transaction.md`.
+> Three corrections made by measurement rather than assumption, all recorded rather than back-edited into the
+> notes below: **(a)** implementation note 1 is **wrong as written** — typing the first parameter
+> `Prisma.TransactionClient` does **not** make `writeAudit(this.prisma, …)` a type error (`Omit` removes members,
+> it does not forbid them; TypeScript is structural). The shipped `AuditTransactionClient` re-adds the two
+> deny-listed members as optional `never`, which does, and a `@ts-expect-error` control pins it in the typecheck
+> gate. **(b)** note 2's finance clause: measured **26** modules under `apps/api/src/modules`, none finance —
+> `AC-4` recorded **vacuous, NOT ticked**. **(c)** the "~18 remaining non-transactional sites" measured **27
+> across 15 files** after the change; `S-E04-7` owns them, plus the pinned-inventory allow-list gate.
 
 | | |
 |---|---|

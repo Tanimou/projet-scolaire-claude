@@ -1,16 +1,20 @@
 import 'reflect-metadata';
 
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 
 import { AnalyticsController } from '../../modules/analytics/analytics.controller';
 import type { AnalyticsService } from '../../modules/analytics/analytics.service';
 import type { SchoolPerformanceDrilldownService } from '../../modules/analytics/school-performance-drilldown.service';
 import type { SnapshotOpsService } from '../../modules/analytics/snapshot-ops.service';
+import { EnrollmentsController } from '../../modules/enrollments/enrollments.controller';
 import type { ExportsService } from '../../modules/exports/exports.service';
+import { AssessmentsController } from '../../modules/grades/assessments.controller';
 import { GradesController } from '../../modules/grades/grades.controller';
 import type { GradesService } from '../../modules/grades/grades.service';
 import { InviteController } from '../../modules/identity/invite.controller';
 import { RolesController } from '../../modules/identity/roles.controller';
+import { UsersController } from '../../modules/identity/users.controller';
 import { ImportsController } from '../../modules/imports/imports.controller';
 import type { ImportsService } from '../../modules/imports/imports.service';
 import { IntegrationsController } from '../../modules/integrations/integrations.controller';
@@ -19,9 +23,11 @@ import { ParentExportsController } from '../../modules/parent-exports/parent-exp
 import { AcademicYearsController } from '../../modules/school-structure/academic-years.controller';
 import type { SchoolContextService } from '../../modules/school-structure/school-context.service';
 import { SubjectsController } from '../../modules/school-structure/subjects.controller';
+import { SchoolsController } from '../../modules/schools/schools.controller';
 import type { StudentAccessService } from '../../modules/students/student-access.service';
 import type { TeacherProfileService } from '../../modules/teaching/teacher-profile.service';
 import type { KeycloakJwtPayload } from '../auth/jwt.strategy';
+import { PermissionsGuard, permissionsFromRealmRoles } from '../auth/permissions.guard';
 import { PERMISSIONS_META_KEY } from '../auth/requires-permission.decorator';
 import type { UserSyncService } from '../auth/user-sync.service';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -629,6 +635,20 @@ describe('AC-13 / G-AUTHZ — @RequiresPermission is unchanged on every edited h
     ['AnalyticsController.snapshotRebuild', AnalyticsController.prototype, 'snapshotRebuild', ['schools.read']],
     ['GradesController.flag', GradesController.prototype, 'flag', ['grades.write']],
     ['ParentExportsController.createBulletin', ParentExportsController.prototype, 'createBulletin', ['exports.execute.parent']],
+    // S-E04-6 — the ten handlers this slice edited, EXTENDING this table rather
+    // than building a parallel one beside each family's spec. One table is the
+    // whole point: "which permission does this handler require" must have exactly
+    // one answer, in exactly one place.
+    ['UsersController.assignRole', UsersController.prototype, 'assignRole', ['roles.assign']],
+    ['UsersController.revokeRole', UsersController.prototype, 'revokeRole', ['roles.assign']],
+    ['SchoolsController.create', SchoolsController.prototype, 'create', ['schools.write']],
+    ['SchoolsController.update', SchoolsController.prototype, 'update', ['schools.write']],
+    ['SchoolsController.remove', SchoolsController.prototype, 'remove', ['schools.write']],
+    ['EnrollmentsController.create', EnrollmentsController.prototype, 'create', ['enrollments.write']],
+    ['EnrollmentsController.update', EnrollmentsController.prototype, 'update', ['enrollments.write']],
+    ['EnrollmentsController.transfer', EnrollmentsController.prototype, 'transfer', ['enrollments.write']],
+    ['EnrollmentsController.remove', EnrollmentsController.prototype, 'remove', ['enrollments.delete']],
+    ['AssessmentsController.publish', AssessmentsController.prototype, 'publish', ['grades.publish']],
   ];
 
   it.each(CASES)('%s still requires exactly %p', (_label, proto, handler, expected) => {
@@ -644,5 +664,67 @@ describe('AC-13 / G-AUTHZ — @RequiresPermission is unchanged on every edited h
     // everything would make every case above pass by comparing nothing.
     const codes = Reflect.getMetadata(PERMISSIONS_META_KEY, function unDecorated() {});
     expect(codes).toBeUndefined();
+  });
+});
+
+/* ================================================================== *
+ * S-E04-6 / AC-8 / G-AUTHZ — the denied role is REFUSED, per family
+ * ================================================================== */
+
+/**
+ * The metadata table above proves nothing was widened. This proves the wall is
+ * load-bearing for the four families S-E04-6 touched, by driving the REAL
+ * `PermissionsGuard` — the only honest way, because instantiating a controller
+ * directly never runs a guard, and "call the handler as a parent and watch it
+ * succeed" would assert a forbidden success path (pre-mortem P1-5).
+ *
+ * `effectivePermissions` is the real `permissionsFromRealmRoles` derivation, not
+ * a hand-written set: a test that invented the permission list would be asserting
+ * against its own copy of ADR-015's table.
+ */
+describe('S-E04-6 / AC-8 / G-AUTHZ — a role that must be denied IS denied, and no handler runs', () => {
+  function makeGuard() {
+    const users = {
+      effectivePermissions: jest.fn(async (_sub: string, realmRoles: string[]) =>
+        permissionsFromRealmRoles(realmRoles),
+      ),
+    };
+    return new PermissionsGuard(new Reflector(), users as unknown as UserSyncService);
+  }
+
+  function contextFor(proto: object, handler: string, cls: object, roles: string[]): ExecutionContext {
+    const fn = (proto as Record<string, unknown>)[handler] as () => unknown;
+    return {
+      getHandler: () => fn,
+      getClass: () => cls,
+      switchToHttp: () => ({ getRequest: () => ({ user: jwt(roles) }) }),
+    } as unknown as ExecutionContext;
+  }
+
+  const DENIALS: [string, object, string, object, string][] = [
+    ['teacher → users.assignRole', UsersController.prototype, 'assignRole', UsersController, 'teacher'],
+    ['parent → schools.create', SchoolsController.prototype, 'create', SchoolsController, 'parent'],
+    ['parent → schools.remove', SchoolsController.prototype, 'remove', SchoolsController, 'parent'],
+    ['parent → enrollments.create', EnrollmentsController.prototype, 'create', EnrollmentsController, 'parent'],
+    ['parent → enrollments.remove', EnrollmentsController.prototype, 'remove', EnrollmentsController, 'parent'],
+    ['parent → assessments.publish', AssessmentsController.prototype, 'publish', AssessmentsController, 'parent'],
+  ];
+
+  it.each(DENIALS)('%s is refused by the real guard', async (_label, proto, handler, cls, role) => {
+    const guard = makeGuard();
+    await expect(
+      guard.canActivate(contextFor(proto, handler, cls, [role])),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('the positive control — a school_admin IS allowed through the same four gates', async () => {
+    // Without this, every denial above could be true because the guard refuses
+    // everyone, which would prove nothing about the permission codes.
+    for (const [, proto, handler, cls] of DENIALS) {
+      const guard = makeGuard();
+      await expect(
+        guard.canActivate(contextFor(proto, handler, cls, ['school_admin'])),
+      ).resolves.toBe(true);
+    }
   });
 });
