@@ -56,10 +56,22 @@ for (const portal of ACTIVE_PORTALS) {
 
     const user = portalUser(portal as Portal);
 
-    // Drive the genuine login form (selectors proven in smoke.spec.ts).
+    // Drive the genuine login form.
+    //
+    // `getByRole('textbox')`, not `getByLabel` — and the difference had killed
+    // this file. The login form gained a « Afficher le mot de passe » toggle
+    // button whose `aria-label` also contains "Mot de passe", so
+    // `getByLabel('Mot de passe')` began resolving to TWO elements and every
+    // `authenticate *` setup died on a strict-mode violation. Because the
+    // authenticated projects `dependencies: ['setup']`, that took the whole
+    // authenticated layer down with it: every `@journey` and authenticated
+    // `@a11y` spec has been failing or skipping, silently, since the toggle
+    // shipped. Nothing noticed, because `ci-gate.sh` does not run Playwright.
+    // Recorded as `PF-144`. Scoping the query by ROLE cannot be re-broken by
+    // adding another control with an overlapping accessible name.
     await page.goto(`/${portal}/login`);
-    await page.getByLabel('Email').fill(user.email);
-    await page.getByLabel('Mot de passe').fill(user.password);
+    await page.getByRole('textbox', { name: 'Email' }).fill(user.email);
+    await page.getByRole('textbox', { name: 'Mot de passe' }).fill(user.password);
     await page.getByRole('button', { name: /Se connecter$/i }).click();
 
     // Gate 1 — landed on the portal landing (guards storageState/cookie drift, PM-6).

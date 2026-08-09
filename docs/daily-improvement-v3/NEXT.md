@@ -74,17 +74,24 @@ fabricated to satisfy AC-3.
 
 ## ⚠️ Container-state facts that will otherwise waste your Step 2
 
-1. **`pilotage_web` still serves an image from 2026-08-07.** Unchanged from runs 30, 31 and 32. It has none of
-   `S-E04-2`'s render fix, `S-E04-3`'s provenance forwarding or `S-E04-4`'s vocabulary.
-   `http://localhost:3000/admin/audit` failing is the **old bundle**, not a regression, and not something to debug.
-2. **`PF-126` still blocks every `web` rebuild** — `next build` inside BuildKit cannot fetch `Inter` from Google
+1. **`pilotage_api` was rebuilt and recreated by run 32, and is healthy on `S-E04-4`'s code.** Measured both sides:
+   `grep -c auditLoginActionCodes dist/modules/analytics/analytics.service.js` inside the container returned **0**
+   before and **3** after. The rebuild was the rationed one, and it was necessary — `adminLogins` was still being
+   served by pre-`S-E04-4` code, so AC-3 could not otherwise be evidenced.
+2. **`pilotage_web` still serves an image from 2026-08-07.** Unchanged from runs 30, 31 and 32.
+   `http://localhost:3000/admin/audit` served by the *container* is the **old bundle** — not a regression, not
+   something to debug.
+3. **`PF-126` still blocks every `web` image rebuild** — `next build` inside BuildKit cannot fetch `Inter` from Google
    Fonts, and the two obvious explanations are already falsified (host: 200; bare `docker run alpine`: 200). **Do not
-   re-test connectivity.** Fix direction is `next/font/local`; owner `V3-E02`. Run 32 did not rebuild anything.
-3. **A sweep is still not schedulable**, for the reason runs 30–32 all gave: a sweep's mechanism is one
-   `docker compose build` + `--force-recreate`, and the `web` half of that is exactly what is broken.
-
-`pilotage_api` is healthy on run 31's image. Run 32 changed API source but did **not** rebuild it — the gate's
-`pnpm build` and `boot-check` are the evidence that the new code compiles and boots, not the running container.
+   re-test connectivity.** Fix direction is `next/font/local`; owner `V3-E02`.
+4. **But `PF-126` does not block *executing* the web code, and run 32 proved that.** The **host** `next build` works
+   (the gate emits 116 routes), so the way to drive the real page is: `docker stop pilotage_web`, run
+   `npx next dev --port 3000` from `apps/web` with `AUTH_URL=http://localhost:3000`, drive Playwright at it, then
+   `docker start pilotage_web`. **Port 3000 specifically** — the Keycloak clients only list
+   `http://localhost:3000/*` as a redirect URI, so any other port fails login, and widening that list is not worth
+   doing. Warm each route first: a cold `next dev` compile takes 5–17 s and trips the harness's 4 s probe (`PF-146`).
+5. **A sweep is still not schedulable** for the same reason runs 30–32 gave: its mechanism is one
+   `docker compose build` + `--force-recreate`, and the `web` half of that is what is broken.
 
 ---
 
@@ -93,24 +100,25 @@ fabricated to satisfy AC-3.
 | Finding | Priority | Owner | One line |
 |---|---|---|---|
 | `PF-134` | **P1** | `S-E04-5` | a **fourth** audit vocabulary survives in `AuditTable.tsx`'s inline `pickActionTone`, and it is **already wrong**: `coefficient.upsert` and `grade.unflag` are declared critical, counted by the card, and painted `neutral` |
-| `PF-135` | **P1** | `S-E04-5` | **nothing executes `/admin/audit`** — all web evidence is textual, on the one route that has already 500'd for every admin. ~25 lines of Playwright on the existing `adminPage` fixture |
 | `PF-140` | **P1** | `S-E04-7` | the DPO CSV changed bytes with no AC asking (three columns **mid-header**, new BOM), collapses two vocabulary axes into one column, and `csvEscape` neutralises no leading `=`/`+`/`-`/`@` one column from a raw client header |
 | `PF-136` | P2 | `S-E04-7` | drawer, table and worker use **three different** merge rules for a mixed-vocabulary row; the marker is `aria-hidden`, so the regulatory signal is absent from the accessibility tree |
 | `PF-137` | P2 | `S-E04-5` | `openapi.yaml` + `data-model.md` D-23 disagree with shipped code |
 | `PF-139` | P2 | `S-E04-5` | « Non instrumenté » is clipped in `KpiCard`; an analytics outage renders as an affirmative claim |
 | `PF-141` | P2 | `S-E04-7` | the table shows the label and **drops the raw code**, while its own filter still matches the raw column |
 | `PF-142` | P2 | `V3-E02` | both jest configs now read contracts **source**, so nothing verifies the built CJS artefact Node actually loads |
+| `PF-145` | **P1** | `V3-E05` | **only `admin` can be authenticated by the e2e harness** — teacher, parent and student all fail `otp_required`, so a repaired authenticated layer still covers one portal of four. Measure `requiredActions` on the seeded users before writing the story |
+| `PF-146` | P2 | `V3-E02` | the e2e reachability probe aborts at **4 s** and calls the abort "stack down → green skip", while a cold `next dev` route takes 5–17 s. DNC-08 inverted: cannot-tell reported as pass. It is how `PF-144` stayed hidden |
 
-`PF-138` and `PF-143` were raised **and closed** by run 32 — they are in `traceability/CLOSED-L0.md`, not here.
+`PF-138`, `PF-143`, **`PF-135`** and **`PF-144`** were raised **and closed** by run 32 — they are in
+`traceability/CLOSED-L0.md`, not here.
 `PF-121`, `PF-122`, `PF-123` (`S-E04-7`) and `PF-124`…`PF-127` from run 30 are all still open and untouched.
 
 ### The three worth doing together, if a gate slice is ever picked up
 
-`PF-129`, `PF-133` and now `PF-135` are the **same missing artefact**: there is no web-side quality gate at all, and no
+`PF-129` and `PF-133` are the **same missing artefact**: there is no web-side quality gate at all, and no
 web unit runner (`apps/web` has Playwright only — that is also `PF-100`'s blocker and part of `VAL-08`). One spec could
 assert all of it: every server-side `fetch` to `API_URL` goes through `clientProvenanceHeaders`; nothing reachable from
-a `'use client'` entry imports `@/lib/api-client` / `next/headers` / `@/auth`; and `/admin/audit` returns 200 for an
-admin. Build them together.
+a `'use client'` entry imports `@/lib/api-client` / `next/headers` / `@/auth`; Build them together. (`/admin/audit` itself is now covered — run 32 shipped the Playwright spec while closing `PF-135`.)
 
 ---
 
