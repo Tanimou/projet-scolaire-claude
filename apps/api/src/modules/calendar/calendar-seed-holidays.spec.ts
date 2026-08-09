@@ -388,13 +388,27 @@ describe('AC-4 (G-AUDIT) — l’audit vit dans la transaction de l’import', (
 
   it('T9b — quand `auditLog.create` échoue, aucun événement n’est commité non plus', async () => {
     const h = makeHarness({ academicYears: [YEAR_A, YEAR_B], failAudit: true });
+    // S-E04-7 : l'écriture passe désormais par le seam `writeAudit`, qui RE-LANCE
+    // l'échec enveloppé dans la phrase française destinée à l'opérateur
+    // (`ADR-035` D2 — la ligne n'est jamais avalée, et le message affiché est une
+    // phrase actionnable plutôt qu'une chaîne du pilote). Ce que T9b décide est
+    // inchangé et reste décidé ci-dessous : rien n'est commité. La cause d'origine
+    // est vérifiée aussi, pour que l'enveloppe ne puisse pas devenir un moyen de
+    // perdre l'erreur réelle.
     await expect(service(h).seedFrenchHolidays(args())).rejects.toThrow(
-      'auditLog.create a échoué',
+      /la trace d’audit n’a pas pu être enregistrée/,
     );
     expect(h.events).toHaveLength(0);
     expect(h.audits).toHaveLength(0);
     // L'appel a bien eu lieu sur le client de TRANSACTION.
     expect(h.recorded.auditClients).toEqual(['tx']);
+
+    const fresh = makeHarness({ academicYears: [YEAR_A, YEAR_B], failAudit: true });
+    await expect(service(fresh).seedFrenchHolidays(args())).rejects.toMatchObject({
+      cause: expect.objectContaining({
+        message: expect.stringContaining('auditLog.create a échoué'),
+      }),
+    });
   });
 
   it('T10 — exactement une ligne, avec acteur, locataire, action, type et `after` cohérent avec la réponse', async () => {

@@ -22,6 +22,30 @@ function mkSvc(prisma: unknown, notifications: unknown = fakeNotifications()) {
   return new ChildClaimsService(prisma as never, notifications as never);
 }
 
+/**
+ * S-E04-7 / PF-122 — the provenance the CONTROLLER derives from the JWT.
+ *
+ * The service used to take `actor: 'parent' | 'admin'` and write it into both
+ * `actorRole` and `portal`. `portal: 'admin'` was right; `actorRole: 'admin'` was
+ * not — **`admin` is not a Keycloak realm role**; an administrator authenticates
+ * as `school_admin`. The value now travels in from `deriveAuditProvenance(jwt, …)`
+ * called above the transaction, so these fixtures are shaped like real JWT
+ * derivations rather than like the two literals they replace.
+ */
+const PARENT_PROVENANCE = {
+  actorRole: 'parent',
+  portal: 'parent',
+  ipAddress: null,
+  userAgent: null,
+} as const;
+
+const ADMIN_PROVENANCE = {
+  actorRole: 'school_admin',
+  portal: 'admin',
+  ipAddress: '203.0.113.9',
+  userAgent: 'Mozilla/5.0 (X11)',
+} as const;
+
 function baseArgs(overrides: Partial<SubmitClaimArgs> = {}): SubmitClaimArgs {
   return {
     tenantId: TENANT,
@@ -32,6 +56,7 @@ function baseArgs(overrides: Partial<SubmitClaimArgs> = {}): SubmitClaimArgs {
     lastName: 'Dupont',
     birthDate: '2012-04-05',
     relationship: 'mother',
+    provenance: { ...PARENT_PROVENANCE },
     ...overrides,
   };
 }
@@ -279,7 +304,7 @@ describe('ChildClaimsService.withdraw — self-scoped, double-withdraw no-op', (
     const svc = mkSvc({
       guardianshipClaim: { findFirst: jest.fn(async () => null) },
     });
-    const ok = await svc.withdraw({ tenantId: TENANT, guardianId: GUARDIAN, actorId: ACTOR, claimId: 'nope' });
+    const ok = await svc.withdraw({ provenance: { ...PARENT_PROVENANCE }, tenantId: TENANT, guardianId: GUARDIAN, actorId: ACTOR, claimId: 'nope' });
     expect(ok).toBe(false);
   });
 
@@ -300,7 +325,7 @@ describe('ChildClaimsService.withdraw — self-scoped, double-withdraw no-op', (
       ),
     };
     const svc = mkSvc(prisma);
-    const ok = await svc.withdraw({ tenantId: TENANT, guardianId: GUARDIAN, actorId: ACTOR, claimId: 'c1' });
+    const ok = await svc.withdraw({ provenance: { ...PARENT_PROVENANCE }, tenantId: TENANT, guardianId: GUARDIAN, actorId: ACTOR, claimId: 'c1' });
     expect(ok).toBe(true);
     expect(claimUpdateMany).toHaveBeenCalled();
     // Withdraw must DECOUPLE the claim from its link (guardianshipId: null) so a later
@@ -491,7 +516,7 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
     );
     const f = fakeAdminPrisma({ claim: submittedClaim() });
     const svc = mkSvc(f.prisma, fakeNotifications(notify));
-    const res = await svc.approveClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
+    const res = await svc.approveClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
 
     expect(res).toEqual({
       claimId: 'claim-1',
@@ -509,7 +534,12 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
     );
     expect(f.claimUpdates[0]!.status).toBe('approved');
     expect(f.audits[0]!.action).toBe('guardianship.claim_approved');
-    expect(f.audits[0]!.actorRole).toBe('admin'); // Winston CONCERN #4: admin, not parent.
+    // PF-122 (S-E04-7): the REAL Keycloak realm role, derived from the JWT at the
+    // controller. It used to be the literal 'admin' — a value no realm issues — and
+    // routing that through the canonical seam would have given it the seam's
+    // authority. `portal` stays 'admin' because that IS the portal.
+    expect(f.audits[0]!.actorRole).toBe('school_admin');
+    expect(f.audits[0]!.actorRole).not.toBe('admin');
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]![0][0]!.kind).toBe('enrollment_status'); // FM-9: reused kind.
     expect(notify.mock.calls[0]![0][0]!.sourceType).toBe('guardianship_claim_approved');
@@ -522,7 +552,7 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
       activeLink: { id: 'link-1' }, // the link is already active
     });
     const svc = mkSvc(f.prisma, fakeNotifications(notify));
-    const res = await svc.approveClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
+    const res = await svc.approveClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
     expect(res.status).toBe('approved');
     expect(res.guardianshipStatus).toBe('active');
     expect(f.audits).toHaveLength(0); // no second audit row
@@ -533,7 +563,7 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
     const f = fakeAdminPrisma({ claim: submittedClaim(), linkUpdateCount: 0 });
     const svc = mkSvc(f.prisma);
     await expect(
-      svc.approveClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' }),
+      svc.approveClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' }),
     ).rejects.toMatchObject({ status: 409 });
   });
 
@@ -543,7 +573,7 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
     });
     const svc = mkSvc(f.prisma);
     await expect(
-      svc.approveClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' }),
+      svc.approveClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' }),
     ).rejects.toMatchObject({ status: 409 });
     expect(f.linkUpdates).toHaveLength(0);
   });
@@ -552,7 +582,7 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
     const f = fakeAdminPrisma({ claim: null });
     const svc = mkSvc(f.prisma);
     await expect(
-      svc.approveClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'nope' }),
+      svc.approveClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'nope' }),
     ).rejects.toMatchObject({ status: 404 });
   });
 
@@ -562,7 +592,7 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
     });
     const f = fakeAdminPrisma({ claim: submittedClaim() });
     const svc = mkSvc(f.prisma, fakeNotifications(notify));
-    const res = await svc.approveClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
+    const res = await svc.approveClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
     expect(res.guardianshipStatus).toBe('active'); // commit stands despite the notify throw
     expect(f.claimUpdates[0]!.status).toBe('approved');
   });
@@ -571,7 +601,7 @@ describe('ChildClaimsService.approveClaim — atomic grant, race-safe, idempoten
     const notify = jest.fn(async () => ({ created: 1 }));
     const f = fakeAdminPrisma({ claim: submittedClaim(), guardian: { userProfileId: null } });
     const svc = mkSvc(f.prisma, fakeNotifications(notify));
-    const res = await svc.approveClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
+    const res = await svc.approveClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1' });
     expect(res.guardianshipStatus).toBe('active');
     expect(notify).not.toHaveBeenCalled();
   });
@@ -589,6 +619,7 @@ describe('ChildClaimsService.rejectClaim — reason-required, revoke, notify (AC
       actorId: ACTOR,
       claimId: 'claim-1',
       reason: '  La date de naissance ne correspond pas.  ',
+      provenance: { ...ADMIN_PROVENANCE },
     });
     expect(res).toEqual({ claimId: 'claim-1', status: 'rejected' });
     expect(f.claimUpdates[0]!.status).toBe('rejected');
@@ -601,7 +632,10 @@ describe('ChildClaimsService.rejectClaim — reason-required, revoke, notify (AC
       }),
     );
     expect(f.audits[0]!.action).toBe('guardianship.claim_rejected');
-    expect(f.audits[0]!.actorRole).toBe('admin');
+    // PF-122 (S-E04-7): the real Keycloak realm role, never the 'admin' literal —
+    // see the approveClaim case above for the full reason.
+    expect(f.audits[0]!.actorRole).toBe('school_admin');
+    expect(f.audits[0]!.actorRole).not.toBe('admin');
     expect(notify.mock.calls[0]![0][0]!.kind).toBe('enrollment_status');
     expect(notify.mock.calls[0]![0][0]!.sourceType).toBe('guardianship_claim_rejected');
   });
@@ -610,7 +644,7 @@ describe('ChildClaimsService.rejectClaim — reason-required, revoke, notify (AC
     const f = fakeAdminPrisma({ claim: submittedClaim({ status: 'rejected' }) });
     const svc = mkSvc(f.prisma);
     await expect(
-      svc.rejectClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1', reason: 'x' }),
+      svc.rejectClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'claim-1', reason: 'x' }),
     ).rejects.toMatchObject({ status: 409 });
   });
 
@@ -618,7 +652,7 @@ describe('ChildClaimsService.rejectClaim — reason-required, revoke, notify (AC
     const f = fakeAdminPrisma({ claim: null });
     const svc = mkSvc(f.prisma);
     await expect(
-      svc.rejectClaim({ tenantId: TENANT, actorId: ACTOR, claimId: 'nope', reason: 'x' }),
+      svc.rejectClaim({ provenance: { ...ADMIN_PROVENANCE }, tenantId: TENANT, actorId: ACTOR, claimId: 'nope', reason: 'x' }),
     ).rejects.toMatchObject({ status: 404 });
   });
 });

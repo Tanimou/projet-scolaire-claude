@@ -9,11 +9,17 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { GUARDIANSHIP_CLAIM_STATUS, type GuardianshipClaimStatus } from '@pilotage/contracts';
 
+import {
+  extractAuditClientHints,
+  type ClientHintsRequest,
+} from '../../shared/audit/client-hints';
+import { deriveAuditProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -69,9 +75,23 @@ export class AdminChildClaimsController {
   @HttpCode(HttpStatus.OK)
   @RequiresPermission('guardianships.approve')
   @ApiOperation({ summary: 'Approve a pending claim — atomic pending→active grant (idempotent, race-safe)' })
-  async approve(@CurrentJwt() jwt: KeycloakJwtPayload, @Param('id', ParseUUIDPipe) id: string) {
+  async approve(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: ClientHintsRequest,
+  ) {
     const me = await this.users.ensureUser(jwt);
-    return this.service.approveClaim({ tenantId: me.tenantId, actorId: me.id, claimId: id });
+    // PF-122 (write half) + S-E06-6's ordering rule: derived HERE, before the
+    // service opens its transaction. `AuditLog.ipAddress` is `@db.Inet`, so a
+    // failed cast inside the transaction would roll back the grant its own row
+    // exists to trace. Who may approve is unchanged — `guardianships.approve`.
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
+    return this.service.approveClaim({
+      tenantId: me.tenantId,
+      actorId: me.id,
+      claimId: id,
+      provenance,
+    });
   }
 
   @Post(':id/reject')
@@ -82,13 +102,17 @@ export class AdminChildClaimsController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RejectChildClaimDto,
+    @Req() req: ClientHintsRequest,
   ) {
     const me = await this.users.ensureUser(jwt);
+    // Same derivation, same reason as approve() above (PF-122, S-E06-6).
+    const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
     return this.service.rejectClaim({
       tenantId: me.tenantId,
       actorId: me.id,
       claimId: id,
       reason: dto.reason,
+      provenance,
     });
   }
 }

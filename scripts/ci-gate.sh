@@ -100,7 +100,30 @@ run_stage "production artefacts (string scan)" node scripts/production-artefact-
 # .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
 run_stage "compose invocation (documented command = documented stack)" node scripts/compose-invocation-check.js
 
-# Stage 0d — schema drift. Editing apps/api/prisma/schema.prisma WITHOUT writing
+# Stage 0d — audit writes (S-E04-7, gates G-AUDIT / G-DNC, ADR-035 D11-D14).
+#
+# PF-31 stayed open across two epics because each fix closed sites while nothing
+# stopped the next one being written the old way. This stage is the ratchet:
+# every audit write under apps/api/src + apps/worker/src +
+# packages/imports-core/src is either behind writeAudit(tx, {…}) inside a
+# transaction, or carries a reviewed baseline row with a class, a reason, and a
+# finding id that RESOLVES against docs/daily-improvement-v3/audit-findings-index.md
+# — resolves, not merely matches PF-nnn, which is the S-E06-5 defect measured and
+# turned into a check. It also fails any writeAudit call given a non-transactional
+# first argument, a non-literal second argument, or sitting inside a try block.
+#
+# The walk root is stated because a gate rooted at apps/api alone would be blind
+# to the two audit writes in packages/imports-core/src/engine.ts — S-E06-5 (a
+# package bundled into every portal but outside the gate's walk root) recurring at
+# a second address.
+#
+# It reads SOURCE only — no build, no database, no generated client — so it runs
+# here, early, and it sits deliberately OUTSIDE every --quick guard: a documented
+# flag that skips the audit gate is a DNC-10 hole with a house-style alibi.
+# Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
+run_stage "audit writes (every audit row through the seam, or baselined with an owner)" node scripts/audit-write-check.js
+
+# Stage 0e — schema drift. Editing apps/api/prisma/schema.prisma WITHOUT writing
 # a migration passed every stage in this file. Stage 1 below runs `prisma
 # generate`, which happily generates a client for a schema no migration produces;
 # lint, typecheck, build and boot then all validate against that fiction, and

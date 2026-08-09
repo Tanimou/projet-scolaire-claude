@@ -126,6 +126,27 @@ function makeService(
       findMany: jest.fn().mockResolvedValue(opts.managedStudents ?? []),
     },
     auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+    /**
+     * S-E04-7 — `connect()` and the success flip of `sync()` now write their
+     * roster-source mutation and its audit row in ONE transaction (`ADR-035` D1).
+     * The callback is RUN, against a client that forwards to the very same spies,
+     * so every assertion in this file still decides what it decided before the
+     * sweep: the mutation happened, the audit row was written once, and the raw
+     * credential never left the service. Only the client they ran on moved.
+     *
+     * The transaction is deliberately TIGHT — the OneRoster fetch, the mapping and
+     * the batch creation all stay OUTSIDE it, so this slice adds no new
+     * interactive-transaction timeout surface (Prisma's default is 5 s).
+     */
+    $transaction: jest.fn(
+      async (callback: (tx: Record<string, unknown>) => Promise<unknown>): Promise<unknown> =>
+        callback({
+          rosterSource: prisma.rosterSource,
+          importBatch: prisma.importBatch,
+          importRow: prisma.importRow,
+          auditLog: prisma.auditLog,
+        }),
+    ),
   };
   const ctx = {
     // `sync` now calls `forTenant(tenantId, source.schoolId)`. We echo back the

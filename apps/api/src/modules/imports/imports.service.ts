@@ -21,6 +21,7 @@ import { Queue } from 'bullmq';
 import { parse, type ParseResult } from 'papaparse';
 
 import { type AuditActorProvenance } from '../../shared/audit/provenance';
+import { writeAudit } from '../../shared/audit/write-audit';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_IMPORTS } from '../../shared/queue/queue.module';
 import { SchoolContextService } from '../school-structure/school-context.service';
@@ -434,24 +435,31 @@ export class ImportsService {
 
       // Append-only audit — the decision + the arbitrated fields, never a silent
       // overwrite (AC-6/AC-7).
-      await tx.auditLog.create({
-        data: {
-          tenantId: actor.tenantId,
-          actorId: actor.id,
+      // S-E04-7 — moved onto the seam. Same transaction, same row. `actor` only
+      // carries the role/portal half (`AuditActorProvenance`), so the two client
+      // hints are stated as the honest blank they already were rather than
+      // silently omitted: this path captured no IP/UA before this slice either,
+      // and inventing one would be worse than recording none (ADR-036).
+      await writeAudit(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.id,
+        action: 'import.conflict.resolve',
+        resourceType: 'import_row',
+        resourceId: row.id,
+        provenance: {
           actorRole: actor.actorRole,
           portal: actor.portal,
-          action: 'import.conflict.resolve',
-          resourceType: 'import_row',
-          resourceId: row.id,
-          after: {
-            batchId: batch.id,
-            type: batch.type,
-            decision,
-            entityId: res.entityId,
-            reconciliation: res.reconciliation,
-            fields: conflictFields,
-          } as Prisma.InputJsonValue,
+          ipAddress: null,
+          userAgent: null,
         },
+        after: {
+          batchId: batch.id,
+          type: batch.type,
+          decision,
+          entityId: res.entityId,
+          reconciliation: res.reconciliation,
+          fields: conflictFields,
+        } as Prisma.InputJsonValue,
       });
 
       return res;

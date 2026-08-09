@@ -35,6 +35,7 @@ import {
   extractAuditClientHints,
 } from '../../shared/audit/client-hints';
 import { deriveAuditProvenance } from '../../shared/audit/provenance';
+import { writeAudit } from '../../shared/audit/write-audit';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -243,18 +244,23 @@ export class SubjectsController {
           },
         });
       }
-      await tx.auditLog.create({
-        data: {
-          tenantId: me.tenantId,
-          actorId: me.id,
+      // S-E04-7 — same transaction, same row, now through the shared seam. The
+      // provenance was already destructured ABOVE the `$transaction` call (line
+      // ~228), which is S-E06-6's ordering rule and the reason this site needed
+      // no re-ordering to convert.
+      await writeAudit(tx, {
+        tenantId: me.tenantId,
+        actorId: me.id,
+        action: 'coefficient.upsert',
+        resourceType: 'subject_coefficient',
+        resourceId: null,
+        provenance: {
           actorRole,
           portal,
-          action: 'coefficient.upsert',
-          resourceType: 'subject_coefficient',
-          after: { count: body.entries.length },
           ipAddress,
           userAgent,
         },
+        after: { count: body.entries.length },
       });
     });
 

@@ -572,7 +572,12 @@ describe('G-5 / AC-9 — the old homes do not exist, and nothing re-exports them
     expect(subjects).not.toBe('');
     expect(subjects).toMatch(/extractAuditClientHints\(req\)/);
     expect(subjects).toMatch(/deriveAuditProvenance\(\s*jwt,/);
-    expect(subjects).toMatch(/auditLog\.create/);
+    // S-E04-7 AMENDED this needle rather than deleting it. The row is still
+    // written inside the same transaction carrying the same four provenance
+    // fields; it goes through the shared seam now (`writeAudit`), which is the
+    // property `ADR-035` D1 exists to make true. Asserting the old spelling would
+    // make a successful migration read as a regression.
+    expect(subjects).toMatch(/writeAudit\(tx, \{/);
     expect(subjects).toMatch(/ipAddress,/);
     expect(subjects).toMatch(/userAgent,/);
   });
@@ -668,24 +673,43 @@ describe('G-6 / AC-6 / DNC-10 — nothing can change what deriveAuditProvenance 
  * ================================================================== */
 
 describe('G-AUDIT — the touched write sites still write their audit row, with a derived value', () => {
+  /**
+   * S-E04-7 — the needle is "writes an audit row", not "spells `auditLog.create`".
+   *
+   * Six of these eight sites moved onto the shared seam in S-E04-7, so the literal
+   * `auditLog.create` is gone from them. What this suite exists to prove is
+   * unchanged and is still proven: the row is still written, and the value in it
+   * is still DERIVED rather than hard-coded. Asserting the old spelling would have
+   * made a successful migration read as a regression — and the fix a reviewer
+   * would reach for is to un-migrate, which is the wrong direction.
+   *
+   * The two that did NOT move (`snapshot-ops`, `grades`) are baselined in
+   * `scripts/audit-write-baseline.json` with an owning finding, so their old
+   * spelling is still the true one and the alternation covers both honestly.
+   */
+  const WRITES_AN_AUDIT_ROW = /auditLog\.create|writeAudit\(/;
   const WRITE_SITES: [string, RegExp][] = [
-    ['apps/api/src/modules/identity/invite.controller.ts', /auditLog\.create/],
-    ['apps/api/src/modules/identity/roles.controller.ts', /auditLog\.create/],
-    ['apps/api/src/modules/imports/imports.service.ts', /auditLog\.create/],
-    ['apps/api/src/modules/integrations/integrations.service.ts', /auditLog\.create/],
-    ['apps/api/src/modules/school-structure/academic-years.controller.ts', /auditLog\.create/],
-    ['apps/api/src/modules/school-structure/subjects.controller.ts', /auditLog\.create/],
-    ['apps/api/src/modules/analytics/snapshot-ops.service.ts', /auditLog\.create/],
-    ['apps/api/src/modules/grades/grades.controller.ts', /auditLog\.create/],
+    ['apps/api/src/modules/identity/invite.controller.ts', WRITES_AN_AUDIT_ROW],
+    ['apps/api/src/modules/identity/roles.controller.ts', WRITES_AN_AUDIT_ROW],
+    ['apps/api/src/modules/imports/imports.service.ts', WRITES_AN_AUDIT_ROW],
+    ['apps/api/src/modules/integrations/integrations.service.ts', WRITES_AN_AUDIT_ROW],
+    ['apps/api/src/modules/school-structure/academic-years.controller.ts', WRITES_AN_AUDIT_ROW],
+    ['apps/api/src/modules/school-structure/subjects.controller.ts', WRITES_AN_AUDIT_ROW],
+    ['apps/api/src/modules/analytics/snapshot-ops.service.ts', WRITES_AN_AUDIT_ROW],
+    ['apps/api/src/modules/grades/grades.controller.ts', WRITES_AN_AUDIT_ROW],
   ];
 
-  it.each(WRITE_SITES)('%s still calls auditLog.create', (path, needle) => {
+  it.each(WRITE_SITES)('%s still writes an audit row', (path, needle) => {
     expect(EXECUTABLE.get(path) ?? '').toMatch(needle);
   });
 
   it('roles.controller.ts still writes THREE audit rows (create / update / delete)', () => {
     const source = EXECUTABLE.get('apps/api/src/modules/identity/roles.controller.ts') ?? '';
-    expect((source.match(/auditLog\.create/g) ?? []).length).toBe(3);
+    // S-E04-7: three rows, each now INSIDE the transaction that performs the
+    // mutation. The direct spelling is gone from this file entirely, and that is
+    // asserted in the negative so a regression to two statements is loud.
+    expect((source.match(/writeAudit\(tx, \{/g) ?? []).length).toBe(3);
+    expect(source).not.toMatch(/auditLog\.create/);
     expect((source.match(/deriveAuditProvenance\(jwt\)/g) ?? []).length).toBe(3);
   });
 

@@ -13,6 +13,7 @@ import { UserStatus } from '@prisma/client';
 import { IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 import { deriveAuditProvenance } from '../../shared/audit/provenance';
+import { writeAudit } from '../../shared/audit/write-audit';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -76,7 +77,10 @@ export class InviteController {
   @ApiOkResponse({ description: 'Invitation envoyée par email' })
   async invite(@Body() body: InviteUserDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
-    const { actorRole, portal } = deriveAuditProvenance(jwt);
+    // Derived BEFORE the transaction opens (S-E06-6's rule). No `@Req()` on this
+    // handler, so the client hints stay the honest blank they already were —
+    // capturing them is PF-123's remaining half, not taken in this slice.
+    const provenance = deriveAuditProvenance(jwt);
     const email = body.email.toLowerCase();
 
     // 1. Refuse if a Keycloak user already exists with this email
@@ -125,47 +129,53 @@ export class InviteController {
       });
     }
 
-    // 5. Pre-create our user_profile row so it shows up in /admin/users immediately
-    const profile = await this.prisma.userProfile.create({
-      data: {
-        tenantId: me.tenantId,
-        authProviderId: kcUserId,
-        email,
-        firstName: body.firstName,
-        lastName: body.lastName,
-        status: UserStatus.active,
-      },
-    });
-
-    // 6. Optionally assign a custom DB role
-    if (body.customRoleSlug) {
-      const role = await this.prisma.role.findFirst({
-        where: { slug: body.customRoleSlug },
+    // 5-7. S-E04-7 — the local profile, its optional custom role and the audit
+    // row are now written in ONE transaction. They were three separate
+    // statements, so a failure after step 5 left a user_profile with no trace of
+    // who invited it. Every Keycloak call (steps 1-4) stays OUTSIDE: an HTTP
+    // round-trip inside an interactive transaction is how a 5 s Prisma timeout
+    // becomes a production incident.
+    const profile = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.userProfile.create({
+        data: {
+          tenantId: me.tenantId,
+          authProviderId: kcUserId,
+          email,
+          firstName: body.firstName,
+          lastName: body.lastName,
+          status: UserStatus.active,
+        },
       });
-      if (role) {
-        await this.prisma.userRole.create({
-          data: { userProfileId: profile.id, roleId: role.id, grantedBy: me.id },
-        });
-      }
-    }
 
-    // 7. Audit
-    await this.prisma.auditLog.create({
-      data: {
+      // 6. Optionally assign a custom DB role
+      if (body.customRoleSlug) {
+        const role = await tx.role.findFirst({
+          where: { slug: body.customRoleSlug },
+        });
+        if (role) {
+          await tx.userRole.create({
+            data: { userProfileId: created.id, roleId: role.id, grantedBy: me.id },
+          });
+        }
+      }
+
+      // 7. Audit — same transaction, fail-closed (ADR-035 D2).
+      await writeAudit(tx, {
         tenantId: me.tenantId,
         actorId: me.id,
-        actorRole,
-        portal,
         action: 'user.invite',
         resourceType: 'user_profile',
-        resourceId: profile.id,
+        resourceId: created.id,
+        provenance,
         after: {
           email,
           realmRole: body.realmRole,
           customRoleSlug: body.customRoleSlug ?? null,
           requiredActions,
         },
-      },
+      });
+
+      return created;
     });
 
     return {

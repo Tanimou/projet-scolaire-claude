@@ -14,8 +14,12 @@
 - **Scope of this file, and what S-E04-8 appends.** The reservation names three subjects: *audit
   in-transaction*, *chain genesis*, and *the accepted pre-V3 gap*. **Only the first is decided here.**
   `data-model.md` §4 says the whole ADR lands "avec la slice chaîne" — that line is now stale:
-  `PROGRESS.md` §144–146 has it right, `S-E04-6` writes the file and `S-E04-8` **amends** it with D-8…D-11
-  and D-18…D-20 (genesis, field list, hash function, serialisation, A-01). Nothing below constrains those.
+  `PROGRESS.md` §144–146 has it right, `S-E04-6` writes the file and `S-E04-8` **amends** it with **D15
+  onward** (genesis, field list, hash function, serialisation, A-01). Nothing below constrains those.
+  **Reservation corrected by `S-E04-7`.** This line originally reserved *D-8…D-11 and D-18…D-20* for
+  `S-E04-8`, while the shipped file already contained **D8, D9 and D10**, written by `S-E04-6` — the
+  reservation was violated before it was ever read. `S-E04-7` is the first amender and therefore uses
+  **D11–D14** and moves the reservation clear of them, so the next amendment cannot land on a collision.
 
 ---
 
@@ -314,3 +318,161 @@ changes an API response, or the code an event is filed under, is the shape this 
    `opened.id`. The code's reasoning is better and is kept: the operator acted on the enrollment they
    transferred *out of*, and `after` carries both ids. The **story** is the document that is wrong here, not
    the code — recorded so `S-E04-7`'s sweep does not "correct" it back.
+
+---
+
+## S-E04-7 amendment — the sweep, the ratchet, and the vocabulary as a compile-time invariant
+
+> **Amendment, not a new file.** `tasks.md` cross-slice ruling #9 allocates exactly three ADRs to this epic
+> and `S-E04-7` is not one of them; creating an `ADR-038` here would itself be the ADR-drift finding this
+> epic exists to remove. Four decisions land below, numbered **D11–D14**.
+>
+> **Numbering defect corrected in the same edit.** The header above reserves *"D-8…D-11 and D-18…D-20"* for
+> `S-E04-8`, while the shipped file already contains **D8, D9 and D10** written by `S-E04-6`. The
+> reservation was violated before it was read. `S-E04-7` is the first amender and therefore fixes it:
+> **`S-E04-8` reserves D15 onward.** One line, and it stops the next amendment landing on a collision.
+
+### The measurement, with its root — because a number without its root is the defect
+
+Walk root `apps/api/src` + `apps/worker/src` + `packages/imports-core/src`, production `.ts`, excluding
+`*.spec.ts` and the seam itself, re-measured on `ci/2026-08-09-v3-e04-s7` (HEAD `64f64dd`):
+
+| Root | Sites | Files |
+|---|---|---|
+| `apps/api/src` | 25 | 15 |
+| `apps/worker/src` | **0** | — |
+| `packages/imports-core/src` | 2 | 1 |
+| **Total** | **27** | **16** |
+
+`S-E04-7` converts **10** and baselines **17**. `27 = 10 + 17`, and `scripts/audit-write-check.js` asserts
+that arithmetic by construction rather than in a PR description.
+
+**Three ledger rows are wrong and are corrected here rather than inherited:** `tasks.md` § S-E04-7 AC-1 says
+**30** (stale — the pre-`S-E04-6` figure); **D9 above** says *"27 sites across 15 files"* and attributes all
+of them to `apps/api` (the count is right, the file count is 16, and two sites are in
+`packages/imports-core`); `NEXT.md`'s "27 in `apps/api`" is 25 in `apps/api/src` plus 2 elsewhere.
+
+### D11 — The gate's walk root is three roots, declared as data, and printed on every run
+
+`scripts/audit-write-check.js` walks `apps/api/src` + `apps/worker/src` + `packages/imports-core/src`.
+
+**Why not `apps/api/src` alone**, which is where 25 of the 27 sites live: `packages/imports-core/src/engine.ts`
+writes two audit rows, and a gate rooted at the API would report green over them forever. That is `S-E06-5`
+precisely — `packages/ui` was bundled into every portal and sat outside that gate's walk root, so the gate
+certified a surface it could not see. The root is a constant in the script, asserted by the guard spec, and
+printed in the verdict line, so the finance module (`S-E04-6` note 2) is covered by **default** when it
+appears rather than by someone remembering.
+
+**One exclusion, stated rather than left implicit:** `apps/api/prisma/seed-demo.ts` writes audit rows and is
+outside the walk root. A seed is not a mutation path and `S-E02-4` keeps it out of production. An unstated
+exclusion is the `S-E06-5` shape whatever its merits.
+
+### D12 — Baselining is honest; a fake conversion is not. Three classes, and a finding that RESOLVES
+
+A site that cannot honestly convert carries a reviewed row in `scripts/audit-write-baseline.json` with a
+**class**, a **reason**, and a **finding id**. Three classes are declared:
+
+| Class | Count | What it means |
+|---|---|---|
+| `best-effort-post-commit` | 15 | the site swallows its audit failure **by design** and says so in its own comment. Converting it means deleting its catch, which flips the handler to fail-closed — D2's *"real availability trade"*, applied to fifteen more handlers. A semantic change, not a sweep. |
+| `cross-package-seam` | 2 | the write lives in a package that **cannot** import the seam. `@pilotage/imports-core` is a dependency **of** `apps/api`; importing `apps/api/src/shared/audit/write-audit.ts` would invert it, and `write-audit.ts` imports `@nestjs/common` so the seam cannot move into a Nest-free package either (`PF-160`). Structural and permanent until the seam is repackaged. |
+| `no-actor-in-scope` | **0** | declared and deliberately empty, so the next such site lands in a named class instead of inventing one. |
+
+**A path skip for `packages/imports-core` was refused.** A skip is invisible; a baseline row is reviewed and
+ratcheted. The difference between those two is the entire lesson of this epic.
+
+**The finding id is RESOLVED against `docs/daily-improvement-v3/audit-findings-index.md`, never shape-matched.**
+`S-E06-5` measured three live rows in `link-integrity-baseline.json` citing ids that existed nowhere, because
+that gate validated `PF-\d+`. The check reads the register's declared row openers and refuses an id that is
+not among them — driven in both directions by the guard spec (a fabricated `PF-99999` must turn it red; a real
+id must not).
+
+**Consequence recorded rather than worked around:** the register holds `PF-01`…`PF-133`. The ids this epic's
+`traceability/OPEN.md` uses — `PF-136`, `PF-140`, `PF-141`, `PF-149`, `PF-150`, `PF-154`…`PF-162` — resolve
+nowhere yet. The baseline therefore cites only `PF-31` and `PF-121`, both of which resolve. Making the
+resolver accept either register *"to be safe"* was refused: a resolver that cannot fail is the defect
+`S-E06-5` measured, reintroduced by the fix written to delete it.
+
+### D13 — The ratchet is blocking in both harnesses, outside every `--quick` guard, and has no off switch
+
+`node scripts/audit-write-check.js` is stage **0d** of `scripts/ci-gate.sh` and a step in the **lint** job of
+`.github/workflows/ci.yml`, both with zero arguments. It reads source only — no build, no database, no
+generated Prisma client.
+
+**It sits OUTSIDE every `QUICK` guard, deliberately.** Stages 7–12 of `ci-gate.sh` are inside
+`if [ "${QUICK}" -eq 0 ]` because they read build output; wired there by copy-paste this stage would be a
+blocking gate that the routine's most-used invocation never runs — a DNC-10 hole with a house-style alibi.
+It goes in the **lint** job rather than the build job for the same class of reason: the build job needs
+Postgres and a build, and `PF-126` makes it the least reliable place in the harness.
+
+**Five rules, each independently provable red** (`audit-write-gate.spec.ts` drives one mutation per rule):
+(A) an `auditLog.create` under the walk root that is not baselined; (B) a `writeAudit` first argument that is
+not bound by a transaction — and, restated over the whole walk root, a `writeAudit` call inside a `try` block;
+(C) a `writeAudit` second argument that is not an inline object literal, because
+`audit-vocabulary-gate.spec.ts` resolves the codes from the call-site AST; (D) the one-way ratchet — a new
+site, a stale row, or an ambiguous key; (E) an unresolvable finding id.
+
+**DNC-08**: the parser, the seam, the register, the baseline, each walk root, and the number of `.ts` files
+walked in each root are all *inputs*, and an absent or unreadable one exits non-zero **naming which**. The
+failing condition is **zero files walked in a root, never zero writes found** — `apps/worker/src` legitimately
+holds zero audit writes today, and a rule keyed on "zero matches" would be permanently red on correct code.
+
+**DNC-10**: no `process.env` read anywhere; exactly two flags, `--help` and `--update`; an unrecognised
+argument exits non-zero rather than being ignored. `--update` refuses to write while any rule-B or rule-C
+violation is present, and writes new rows with an **empty** class/reason/finding so the gate stays red until a
+human supplies all three. That refusal is what keeps `--update` from being the off switch.
+
+**Site keys are `path#symbol`, never `path:line`.** `remediation.controller.ts` and `messaging.service.ts` are
+exactly the churning files; a line-keyed row silently un-baselines its site — or starts covering a different
+one — on any edit above it.
+
+### D14 — PF-162: D6 stops being a convention and becomes a compile error
+
+`AuditWriteInput.action` is `AuditActionCode` and `.resourceType` is `AuditResourceTypeCode`, both derived
+from the tables in `packages/contracts/src/audit/vocabulary.ts`. An undeclared code is now a **type error at
+the call site**, which is what D6 (*"the code written is a code declared"*) always asserted and never enforced.
+
+**The blocking prerequisite, measured:** both tables were declared
+`export const X: readonly Entry[] = [ … ] as const`. **The annotation wins** — the array's declared element
+type is the interface, so `(typeof X)[number]['code']` resolved to `string` and the `as const` bought nothing.
+PF-162 implemented over that declaration would have shipped green and inert: a named type that forbade
+nothing. Both are now `as const satisfies readonly Entry[]`, which keeps the same compile-time check on every
+row **and** keeps the literal types. `write-audit.spec.ts` carries `@ts-expect-error` controls that go red in
+**both** directions, so a future widening back to `string` is a failing typecheck rather than a silent loss.
+
+Two consequences, written down rather than discovered:
+
+1. **The legacy French aliases are deliberately outside the unions.** A writer emitting one is now a compile
+   error — correct, and the enforcement of `ADR-037` D4: legacy rows are never rewritten and nothing new may
+   be written in that vocabulary.
+2. **A computed family cannot satisfy a closed union by construction.** `remediation.controller.ts` builds
+   a `remediation.booking_` code from a runtime transition. `AUDIT_ACTION_FAMILIES` and the vocabulary gate
+   cover that case; the two halves are complementary and neither replaces the other. That is one reason
+   `remediation.controller.ts` is baselined rather than converted here.
+
+### What this amendment deliberately does NOT change
+
+- **Who may grant a role.** `roles.controller.ts` moves its three audit writes onto the seam and inside the
+  transaction, and changes **not one line** of authorisation. `PF-156` (any `roles.assign` holder can
+  self-grant any role) and `PF-153` (role lookup unfiltered by tenant) stay registered and open. ADR-015
+  exists to stop an authorisation change riding in on another slice, and this is the slice it was written for.
+- **`PF-149`** — nothing in this diff touches a timezone path. `UnknownTimezoneError` stays uncaught, which is
+  the design; it remains pointed at a later slice.
+- **`PF-150`'s id collision** — `traceability/OPEN.md` and `PROGRESS.md` use the id for two different
+  findings. Renumbering must be atomic across both files; this slice cites the id nowhere, so the collision is
+  recorded and left rather than half-fixed.
+- **The chain.** `hash` / `prev_hash` are still written by no call site. `S-E04-8` owns it, and this
+  amendment's D11–D14 constrain nothing about it.
+
+### One latent defect this sweep exposed, fixed in the same diff
+
+`audit-vocabulary-gate.spec.ts`'s Phase B registered a forwarder under `sourceFile.fileName`, which
+`ts.createSourceFile` **normalises** — on Windows the map key built by `join()` carries backslashes while
+`fileName` carries forward slashes, so the next pass's `sources.get(...)` returned `undefined` and the
+forwarder resolved to **nothing, silently**. It was latent because every forwarder used to be registered in
+Phase A, which passes the map key. This slice creates the first **two-hop** chains (call site → private
+`audit` helper → `writeAudit`), whose second hop is registered from inside Phase B — and ten real action codes
+(`academic_year.*`, `guardianship.claim_*`, `import.sync.pull`, `integration.roster_source.created`) dropped
+out of the written set, after which the gate's reverse-completeness direction demanded their real French
+labels be **deleted**. Exactly the failure D6 exists to pre-empt, arriving through a path separator. The
+resolution now iterates map **entries**, and the ten codes are pinned by name.

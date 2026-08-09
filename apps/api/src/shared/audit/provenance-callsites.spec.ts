@@ -103,18 +103,45 @@ function usersMock() {
  * T-1 … T-4, T-10 — RolesController.create (AC-3's named handler)
  * ================================================================== */
 
+/**
+ * S-E04-7 — the harness now RUNS the callback `$transaction` receives.
+ *
+ * `RolesController.create` used to create the role and then, separately, its
+ * audit row: two statements, so a failure between them left a role that existed
+ * unaudited — `write-audit.ts`'s own header cites this handler by name as the
+ * measured example. It now opens ONE transaction and writes both inside it,
+ * through `writeAudit`.
+ *
+ * What this file asserts is UNCHANGED: the derived `actorRole`/`portal` still
+ * reach the audit row, and the row is still written exactly once. Only the client
+ * it is written on moved — from `prisma` to the transaction client — which is
+ * precisely the property `ADR-035` D1 exists to make true. The mock therefore
+ * routes `tx.auditLog.create` to the SAME spy, so every assertion below still
+ * decides the same thing it decided before the sweep.
+ */
 function makeRoles() {
   const auditCreate = jest.fn().mockResolvedValue({ id: 'audit-1' });
+  const roleCreate = jest
+    .fn()
+    .mockResolvedValue({ id: 'role-1', name: 'Surveillant', slug: 'surveillant' });
+  const roleDelete = jest.fn();
+  const permissionFindMany = jest.fn().mockResolvedValue([{ id: 'p1', code: 'roles.read' }]);
+  const tx = {
+    role: { create: roleCreate, update: jest.fn(), delete: roleDelete },
+    rolePermission: { deleteMany: jest.fn(), create: jest.fn() },
+    permission: { findMany: permissionFindMany },
+    auditLog: { create: auditCreate },
+  };
   const prisma = {
     role: {
       findFirst: jest.fn().mockResolvedValue(null),
-      create: jest.fn().mockResolvedValue({ id: 'role-1', name: 'Surveillant', slug: 'surveillant' }),
+      create: roleCreate,
       findUnique: jest.fn(),
-      delete: jest.fn(),
+      delete: roleDelete,
     },
-    permission: { findMany: jest.fn().mockResolvedValue([{ id: 'p1', code: 'roles.read' }]) },
+    permission: { findMany: permissionFindMany },
     auditLog: { create: auditCreate },
-    $transaction: jest.fn(),
+    $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
   };
   const users = usersMock();
   const controller = new RolesController(

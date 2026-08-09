@@ -439,6 +439,23 @@ function extract(sources: Map<string, ts.SourceFile> = SOURCES): Extraction {
   // another's arguments. A SHARED SEAM (see `SHARED_SEAMS`) is the documented
   // exception and is resolved across every writer file, because its call sites
   // are by definition not in the file that declares it.
+  //
+  // S-E04-7 — WHY THE FILE KEY IS TAKEN FROM THE MAP, NOT FROM `sf.fileName`.
+  // `ts.createSourceFile` NORMALISES the name it is given: on Windows the map key
+  // built by `join()` carries backslashes while `sourceFile.fileName` carries
+  // forward slashes. Registering a forwarder under `sf.fileName` therefore made
+  // the next pass's `sources.get(fw.file)` return `undefined`, `searchFiles`
+  // empty, and the forwarder resolve to NOTHING — silently.
+  //
+  // It was latent until this slice, because every forwarder used to be
+  // registered in Phase A, which passes the map key. S-E04-7 creates the first
+  // TWO-HOP chains (call site → private `audit` helper → `writeAudit`), whose
+  // second hop is registered from inside Phase B — and nine real action codes
+  // (`academic_year.*`, `guardianship.claim_*`, `import.sync.pull`,
+  // `integration.roster_source.created`) dropped out of the written set, after
+  // which the REVERSE completeness direction demanded their real French labels be
+  // deleted. Exactly the failure `ADR-035` D6 exists to pre-empt, arriving
+  // through a path separator. Iterating ENTRIES keeps the key canonical.
   const done = new Set<string>();
   for (let pass = 0; pass < 3 && pendingForwarders.length > 0; pass++) {
     const batch = pendingForwarders.splice(0);
@@ -447,11 +464,12 @@ function extract(sources: Map<string, ts.SourceFile> = SOURCES): Extraction {
       if (done.has(key)) continue;
       done.add(key);
       const shared = SHARED_SEAM_KEYS.has(`${repoRel(fw.file)}#${fw.name}`);
-      const searchFiles = shared
-        ? [...sources.values()]
-        : [sources.get(fw.file)].filter((sf): sf is ts.SourceFile => sf !== undefined);
-      for (const sf of searchFiles) {
-        const currentFile = sf.fileName;
+      const searchFiles: Array<[string, ts.SourceFile]> = shared
+        ? [...sources.entries()]
+        : ([[fw.file, sources.get(fw.file)]] as Array<[string, ts.SourceFile | undefined]>).filter(
+            (entry): entry is [string, ts.SourceFile] => entry[1] !== undefined,
+          );
+      for (const [currentFile, sf] of searchFiles) {
         const visit = (node: ts.Node): void => {
           if (ts.isCallExpression(node)) {
             const callee = node.expression;
@@ -577,9 +595,17 @@ const WRITTEN_RESOURCE_TYPES = new Set<string>([
  * The declaration, indexed
  * ================================================================== */
 
-const DECLARED_ACTIONS = AUDIT_ACTIONS.map((a) => a.code);
-const DECLARED_RESOURCE_TYPES = AUDIT_RESOURCE_TYPES.map((r) => r.code);
-const FAMILY_MEMBERS = new Set(AUDIT_ACTION_FAMILIES.flatMap((f) => f.members));
+// Annotated `string[]` ON PURPOSE, not by omission. Since PF-162 the declaration
+// arrays are `as const satisfies`, so `.code` yields `AuditActionCode` /
+// `AuditResourceTypeCode` — closed unions. This gate compares them against codes
+// **scraped from source text by an AST walk**, which are `string` by construction
+// and MUST stay `string`: the whole point of the FORWARD direction is to catch a
+// written code that is NOT in the union, and a `Set<AuditActionCode>` cannot even
+// be asked that question (`Set.has` would reject the argument). Narrowing here
+// would make the gate typecheck by making it unable to fail.
+const DECLARED_ACTIONS: readonly string[] = AUDIT_ACTIONS.map((a) => a.code);
+const DECLARED_RESOURCE_TYPES: readonly string[] = AUDIT_RESOURCE_TYPES.map((r) => r.code);
+const FAMILY_MEMBERS = new Set<string>(AUDIT_ACTION_FAMILIES.flatMap((f) => f.members));
 const LEGACY_ACTION_CODES = LEGACY_AUDIT_ACTION_ALIASES.map((a) => a.code);
 const LEGACY_RESOURCE_TYPE_CODES = LEGACY_AUDIT_RESOURCE_TYPE_ALIASES.map((a) => a.code);
 
@@ -674,6 +700,45 @@ describe('V-1 / AC-2 / AC-7 — every written code has a label, and every label 
     expect(WRITTEN_RESOURCE_TYPES.has('calendar_event')).toBe(true); // AC-2's named miss
     expect(WRITTEN_RESOURCE_TYPES.has('import_batch')).toBe(true); // packages/imports-core
     expect(WRITTEN_RESOURCE_TYPES.has('student')).toBe(true); // the seed
+  });
+
+  it('S-E04-7 — the TWO-HOP chains resolve, by name (call site → private helper → writeAudit)', () => {
+    // Named individually, in V-1's style, because a count would also be satisfied
+    // by an extractor that resolved none of them. Each of these codes is written
+    // ONLY as a positional argument to a private `audit` helper that now relays
+    // into `writeAudit` — so every one of them proves the second hop fired.
+    //
+    // They are also the exact nine that disappeared while the Phase-B file key
+    // came from `sf.fileName` (see the comment above Phase B): a path separator
+    // silently emptied the written set, and the reverse direction below then
+    // demanded these real French labels be deleted.
+    for (const code of [
+      'academic_year.create',
+      'academic_year.update',
+      'academic_year.delete',
+      'guardianship.claim_submitted',
+      'guardianship.claim_match_failed',
+      'guardianship.claim_withdrawn',
+      'guardianship.claim_approved',
+      'guardianship.claim_rejected',
+      'integration.roster_source.created',
+      'import.sync.pull',
+    ]) {
+      expect(WRITTEN_ACTIONS.has(code)).toBe(true);
+    }
+    // …and the ONE-hop codes S-E04-7 wrote directly at a `writeAudit(tx, {…})`
+    // call site, so the arithmetic between the two shapes is visible, not implied.
+    for (const code of [
+      'role.create',
+      'role.update',
+      'role.delete',
+      'user.invite',
+      'coefficient.upsert',
+      'calendar.seed_french_holidays',
+      'import.conflict.resolve',
+    ]) {
+      expect(WRITTEN_ACTIONS.has(code)).toBe(true);
+    }
   });
 
   it('the OPEN-parameter forwarder list is CLOSED — every one is registered by name', () => {

@@ -145,8 +145,23 @@ export function isAuditPortalNone(code: string | null | undefined): boolean {
  * identifiant composite (`userId:roleId`) est refusé pour la même raison qu'une
  * IP non-inet l'est dans `provenance.ts` : PostgreSQL rejette le cast et la
  * ligne d'audit ferait échouer la mutation qu'elle trace.
+ *
+ * ## `as const satisfies`, et pourquoi l'annotation a disparu (PF-162, S-E04-7)
+ *
+ * La déclaration portait `: readonly AuditVocabularyEntry[]` **et** un `as const`
+ * final. L'annotation gagne : le type déclaré du tableau était
+ * `readonly AuditVocabularyEntry[]`, donc
+ * `(typeof AUDIT_RESOURCE_TYPES)[number]['code']` valait `string` — pas une
+ * union. Une dérivation écrite au-dessus de cette forme aurait compilé, exporté
+ * un type nommé, et n'aurait **rien** interdit : le `as const` n'achetait rien.
+ *
+ * `as const satisfies readonly AuditVocabularyEntry[]` garde la vérification
+ * (une entrée mal formée reste une erreur de compilation, au même endroit) et
+ * conserve le type littéral, d'où `AuditResourceTypeCode` plus bas. C'est ce qui
+ * fait de `ADR-035` D6 — « le code écrit est un code déclaré » — un invariant du
+ * compilateur au lieu d'une convention relue.
  */
-export const AUDIT_RESOURCE_TYPES: readonly AuditVocabularyEntry[] = [
+export const AUDIT_RESOURCE_TYPES = [
   { code: 'academic_year', label: 'Année scolaire' },
   { code: 'alert_instance', label: 'Alerte' },
   { code: 'assessment', label: 'Évaluation' },
@@ -178,7 +193,21 @@ export const AUDIT_RESOURCE_TYPES: readonly AuditVocabularyEntry[] = [
   { code: 'tutor_availability', label: 'Disponibilité de tuteur' },
   { code: 'user_profile', label: 'Utilisateur' },
   { code: 'user_role', label: 'Attribution de rôle' },
-] as const;
+] as const satisfies readonly AuditVocabularyEntry[];
+
+/**
+ * L'union des codes de type de ressource **déclarés** (PF-162, `ADR-035` D14).
+ *
+ * Dérivée de la table ci-dessus, jamais d'une seconde liste : `ADR-037` D1 dit
+ * que le vocabulaire est déclaré **une fois**, et une union recopiée à la main
+ * serait exactement la deuxième déclaration que cet ADR interdit.
+ *
+ * Elle **exclut délibérément** `LEGACY_AUDIT_RESOURCE_TYPE_ALIASES` : les lignes
+ * héritées ne sont jamais réécrites (`ADR-037` D4) et rien de neuf ne doit être
+ * écrit dans ce vocabulaire-là. Un écrivain qui émettrait « Inscription » est
+ * donc une erreur de compilation, et c'est le comportement voulu.
+ */
+export type AuditResourceTypeCode = (typeof AUDIT_RESOURCE_TYPES)[number]['code'];
 
 // ---------------------------------------------------------------------------
 // Actions — 57 codes, relevés sur les sites d'écriture
@@ -220,7 +249,11 @@ export interface AuditActionEntry extends AuditVocabularyEntry {
  */
 export type AuditActionTone = 'success' | 'danger' | 'warning' | 'info' | 'neutral';
 
-export const AUDIT_ACTIONS: readonly AuditActionEntry[] = [
+/**
+ * Même forme que `AUDIT_RESOURCE_TYPES` et pour la même raison (PF-162) :
+ * `as const satisfies` plutôt qu'une annotation qui écrasait le `as const`.
+ */
+export const AUDIT_ACTIONS = [
   { code: 'academic_year.create', label: 'Création d’une année scolaire' },
   { code: 'academic_year.update', label: 'Modification d’une année scolaire', critical: true },
   { code: 'academic_year.delete', label: 'Suppression d’une année scolaire', critical: true },
@@ -302,7 +335,22 @@ export const AUDIT_ACTIONS: readonly AuditActionEntry[] = [
 
   { code: 'student.account_linked', label: 'Rattachement d’un compte élève' },
   { code: 'user.invite', label: 'Invitation d’un utilisateur' },
-] as const;
+] as const satisfies readonly AuditActionEntry[];
+
+/**
+ * L'union des codes d'action **déclarés** (PF-162, `ADR-035` D14).
+ *
+ * Ce que cette union ne couvre pas, et pourquoi ce n'est pas un oubli : les
+ * **familles calculées** (`AUDIT_ACTION_FAMILIES`, ci-dessous) produisent leur
+ * code à l'exécution — `` `remediation.booking_${dto.toStatus}` ``. Un site qui
+ * écrit une famille ne peut pas satisfaire cette union, et le garde de
+ * vocabulaire reste l'instrument qui couvre ce cas ; les deux moitiés sont
+ * complémentaires, aucune ne remplace l'autre.
+ *
+ * Comme pour les types de ressource, les alias hérités en sont exclus : rien de
+ * neuf ne s'écrit dans le vocabulaire français hérité (`ADR-037` D4).
+ */
+export type AuditActionCode = (typeof AUDIT_ACTIONS)[number]['code'];
 
 /**
  * Familles d'actions **calculées** — un préfixe suivi d'une valeur produite à
@@ -375,13 +423,25 @@ export const LEGACY_AUDIT_ALIASES: readonly AuditLegacyAlias[] = [
 // Ensembles dérivés — la source des prédicats KPI
 // ---------------------------------------------------------------------------
 
+/**
+ * Vue élargie sur `AUDIT_ACTIONS`, pour lire les drapeaux *optionnels*.
+ *
+ * `AUDIT_ACTIONS` est déclarée en `as const satisfies` (PF-162) : son type
+ * d'élément est l'**union** des 57 littéraux, et une entrée sans `critical` ni
+ * `export` ne possède pas ces propriétés. Lire un membre facultatif sur une
+ * union exige qu'il soit présent partout — d'où deux TS2339 quand on filtre
+ * directement. On élargit donc ici, au point de consommation, ce qu'on refuse
+ * d'élargir à la déclaration : `AuditActionCode` reste dérivé des littéraux.
+ */
+const AUDIT_ACTION_ENTRIES: readonly AuditActionEntry[] = AUDIT_ACTIONS;
+
 /** Codes canoniques comptés par « Modifications critiques ». */
-export const AUDIT_CRITICAL_ACTIONS: readonly string[] = AUDIT_ACTIONS.filter(
+export const AUDIT_CRITICAL_ACTIONS: readonly string[] = AUDIT_ACTION_ENTRIES.filter(
   (a) => a.critical,
 ).map((a) => a.code);
 
 /** Codes canoniques comptés par « Exports sensibles ». */
-export const AUDIT_EXPORT_ACTIONS: readonly string[] = AUDIT_ACTIONS.filter(
+export const AUDIT_EXPORT_ACTIONS: readonly string[] = AUDIT_ACTION_ENTRIES.filter(
   (a) => a.export,
 ).map((a) => a.code);
 
