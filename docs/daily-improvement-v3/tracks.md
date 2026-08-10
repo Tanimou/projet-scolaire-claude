@@ -15,9 +15,16 @@ own persistent worktree instead, so the single-writer guarantee is preserved **p
 | **b — authz & audit** | `V3-E05` authZ hardening · `V3-E04` audit trail | `apps/api/src/shared/auth/**` · `apps/api/src/modules/identity/**` · `apps/api/src/modules/audit/**` · guards, DTOs and permission code in other modules |
 | **c — surface** | `V3-E06` hygiene · web-side stories of `V3-E07`/`V3-E11` | `apps/web/**` · `packages/ui/**` · `packages/design-tokens/**` |
 
-Each track has a **persistent worktree** at `.claude/worktrees/v3-track-<id>/`, created once and reused every run so
-`node_modules` and the Turbo cache stay warm. **Exactly three** — the count is bounded and never grows, unlike the
-per-session worktrees that accumulated to 23 before.
+Each track has a **persistent worktree** at `../pilotage-worktrees/v3-track-<id>/`, created once and reused every run
+so `node_modules` and the Turbo cache stay warm (one `pnpm install` costs ~7 min, and only on first use). **Exactly
+three** — the count is bounded and never grows, unlike the per-session worktrees that accumulated to 23 before.
+
+> **Why not `.claude/worktrees/`?** Because jest cannot find a single test there. Its `<rootDir>` substitution escapes
+> a leading-dot path segment — the glob becomes `…pilotage-scolaire-claude\.claude/worktrees/…` — and micromatch reads
+> `\.` as an escaped literal dot rather than a separator, so the pattern points at a directory that does not exist.
+> Measured: **0 of 71** spec files matched under `.claude/worktrees/`, **72 of 72** in a plain path. Every run in a
+> dot-path worktree would have reported "no tests found" forever, and the gate would have been red for a reason that
+> has nothing to do with the code.
 
 ## Shared paths — claim before touching
 
