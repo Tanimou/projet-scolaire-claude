@@ -1822,6 +1822,73 @@ describe('V-11 / AC-1, AC-6, AC-7 — one window helper, one timezone source, no
     expect(analytics).toMatch(/tenant\.findUnique\(\{[\s\S]{0,120}select: \{ timezone: true \}/);
   });
 
+  /**
+   * S-E04-11 / PF-149 (write half) — **the guard is PLACED where a future writer
+   * cannot miss it, because there is nothing to guard today.**
+   *
+   * Re-measured on this branch: `Tenant.timezone` is `String @default("Europe/
+   * Paris")` (`schema.prisma:263`, docblock « Jamais accepté du client ») and no
+   * writer for the column exists anywhere under `apps/api/src` or
+   * `apps/worker/src`. The two `prisma.tenant` writers that do exist
+   * (`register.controller.ts`, `user-sync.service.ts`) are `upsert`s that never
+   * set it, and are out of scope for this slice. Inventing an admin settings
+   * endpoint so that something could be validated would be a new API surface
+   * without a spec.
+   *
+   * So the invariant is stated in the DEFICIENCY-FREE form — *every writer
+   * validates* — which is vacuously true at zero writers and load-bearing at
+   * one. It deliberately does NOT assert « there are no writers »: that pins a
+   * deficiency instead of an invariant, and turns the day someone legitimately
+   * adds a settings screen into a red test they must delete. (`52fdec4` had to
+   * undo exactly that mistake.)
+   *
+   * Adjacent and explicitly NOT fixed here: `School.timezone` IS writable and
+   * unvalidated (`schools.controller.ts:129`, `:167` — `@IsOptional()
+   * @IsString()`). It is a different column, it does not feed the audit window
+   * (`audit_log` carries `tenant_id` and no `school_id`), and
+   * `schools.controller.ts` just took S-E04-10. Recorded as a new finding.
+   */
+  it('PF-149 write half — every writer of Tenant.timezone validates it (0 today, enforced at 1)', () => {
+    const roots = [
+      join(REPO_ROOT, 'apps', 'api', 'src'),
+      join(REPO_ROOT, 'apps', 'worker', 'src'),
+    ];
+    const files = roots.flatMap((root) =>
+      walk(
+        root,
+        (name) =>
+          name.endsWith('.ts') && !name.endsWith('.spec.ts') && !name.endsWith('.d.ts'),
+      ),
+    );
+    // The scan reached a real population — otherwise « no offenders » would be
+    // « nothing was read », which is the DNC-08 shape of a vacuous pass.
+    expect(files.length).toBeGreaterThan(50);
+
+    const offenders: string[] = [];
+    let writersSeen = 0;
+    for (const file of files) {
+      const source = stripCommentsPreservingLines(readFileSync(file, 'utf8'));
+      const writes = /\.tenant\.(create|createMany|update|updateMany|upsert)\s*\(/g;
+      for (const hit of source.matchAll(writes)) {
+        // Only a write that actually carries the column is a writer of it.
+        const payload = source.slice(hit.index ?? 0, (hit.index ?? 0) + 600);
+        if (!/\btimezone\b/.test(payload)) continue;
+        writersSeen++;
+        if (!/\b(isKnownTimezone|assertKnownTimezone)\s*\(/.test(source)) {
+          offenders.push(
+            `${repoRel(file)} — prisma.tenant.${hit[1]} writes \`timezone\` with no ` +
+              `isKnownTimezone/assertKnownTimezone check. Two consequences: the audit read ` +
+              `path answers 503 for this tenant (analytics.service.ts auditList), and every ` +
+              `audit_csv export for it dies terminally (audit-csv.generator.ts).`,
+          );
+        }
+      }
+    }
+    // `writersSeen` is ECHOED, never pinned: the count is allowed to grow, the
+    // offender list is not.
+    expect({ writersSeen, offenders }).toEqual({ writersSeen, offenders: [] });
+  });
+
   it('AC-6 — the migration is a reviewed FILE, expand-only, and `db push` appears nowhere', () => {
     const dir = join(REPO_ROOT, 'apps', 'api', 'prisma', 'migrations');
     const entries = readdirSync(dir, { withFileTypes: true })

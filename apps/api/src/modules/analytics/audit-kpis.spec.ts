@@ -1,3 +1,4 @@
+import { HttpException } from '@nestjs/common';
 import {
   AUDIT_PORTAL_NONE,
   UnknownTimezoneError,
@@ -606,11 +607,116 @@ describe('AC-7 — the resolved timezone is the tenant’s, and the client canno
     );
   });
 
-  it('a garbage Tenant.timezone THROWS UnknownTimezoneError — never a silent fallback', async () => {
+  /**
+   * S-E04-11 / PF-149 — **REWRITTEN, not softened.**
+   *
+   * `rejects.toBeInstanceOf(UnknownTimezoneError)` was correct and became false
+   * the moment the error acquired a deliberate answer. The claim it defended —
+   * *it throws, it never silently falls back to the server zone* — is still
+   * asserted below, and now with more: a defined status, a stable code, the
+   * offending zone in the body, and no numbers computed in an unstated zone.
+   *
+   * The error under assertion is produced by the REAL `assertKnownTimezone`
+   * reached through the service; it is never constructed here. A hand-built
+   * error would prove nothing about module identity, which is the exact way a
+   * bare `instanceof` guard passes its test and stays dead in production.
+   */
+  it('an unusable Tenant.timezone is REFUSED with a named 503 — never a silent fallback', async () => {
     const h = makeHarness({ timezone: 'Europe/Paris-ish' });
-    await expect(
-      h.service.auditList({ tenantId: TENANT, to: '2026-08-08', take: 5, skip: 0 }),
-    ).rejects.toBeInstanceOf(UnknownTimezoneError);
+    const err = await h.service
+      .auditList({ tenantId: TENANT, to: '2026-08-08', take: 5, skip: 0 })
+      .then(
+        () => {
+          throw new Error('auditList resolved — an unusable tenant zone must be refused.');
+        },
+        (e: unknown) => e as HttpException,
+      );
+
+    // Not the raw contracts error: it was answered, not leaked as a generic 500
+    // whose body names nothing.
+    expect(err).toBeInstanceOf(HttpException);
+    expect(err).not.toBeInstanceOf(UnknownTimezoneError);
+    // 503, not 4xx: `from`/`to` are already validated in the controller and
+    // there is deliberately no `timezone` query parameter, so nothing the caller
+    // sent is wrong. The server's own `Tenant.timezone` is unusable until an
+    // operator edits it.
+    expect(err.getStatus()).toBe(503);
+
+    const body = err.getResponse() as Record<string, unknown>;
+    // A stable discriminator, so the page can eventually tell « analytics is
+    // down » from « this tenant's timezone is misconfigured » without parsing a
+    // French sentence.
+    expect(body.code).toBe('TENANT_TIMEZONE_UNUSABLE');
+    expect(body.timezone).toBe('Europe/Paris-ish');
+    expect(String(body.message)).toContain('Europe/Paris-ish');
+    // French UI copy — this text is what an admin reads, not a class name.
+    expect(String(body.message)).not.toContain('UnknownTimezoneError');
+
+    // The rejected zone is in the BODY and NOWHERE ELSE. `/admin/audit` feeds
+    // `filters.timezone` straight into `new Intl.DateTimeFormat({ timeZone })`
+    // during a server render, so echoing it back would re-create the 500 one
+    // layer up — on the very route that was 500-ing for every admin three
+    // commits ago (PF-14).
+    expect(body).not.toHaveProperty('filters');
+
+    // Fail-closed: not one number was computed in an unstated zone.
+    expect(h.findManyWheres).toHaveLength(0);
+    expect(h.countWheres).toHaveLength(0);
+  });
+
+  it('the guard spans the WINDOW RESOLUTION, not just the assertKnownTimezone call', async () => {
+    // The `DEFAULT_AUDIT_TIMEZONE` branch never reaches `assertKnownTimezone`,
+    // so under a small-ICU runtime the throw arrives later, from
+    // `resolveAuditWindow` (`window.ts:323` → `zonedDayStartUtc` →
+    // `partsInZone`) — and it arrives for EVERY tenant at once, which is the
+    // only variant of PF-149 that can fire today. A `try` around the assert
+    // alone would miss exactly that one.
+    //
+    // Reaching that branch on a full-ICU host (`process.versions.icu` = 76.1)
+    // requires stubbing `Intl`: the formatter is ACCEPTED (so the assert passes
+    // and caches) and then fails to produce a field. The zone below is used in
+    // this test ONLY — `window.ts:86` caches formatters per zone for the life of
+    // the module, so sharing one would make these tests order-dependent.
+    const DOWNSTREAM_ZONE = 'Indian/Kerguelen';
+    const realDateTimeFormat = Intl.DateTimeFormat;
+    (Intl as { DateTimeFormat: unknown }).DateTimeFormat = function stubbed(
+      locale: string,
+      options: Intl.DateTimeFormatOptions,
+    ) {
+      const real = new realDateTimeFormat(locale, { ...options, timeZone: 'UTC' });
+      return {
+        resolvedOptions: () => ({ ...real.resolvedOptions(), timeZone: options.timeZone }),
+        formatToParts: (d: Date) => real.formatToParts(d).filter((p) => p.type !== 'day'),
+        format: (d: Date) => real.format(d),
+      };
+    };
+    try {
+      const h = makeHarness({ timezone: DOWNSTREAM_ZONE });
+      const err = await h.service
+        .auditList({ tenantId: TENANT, from: '2026-08-01', to: '2026-08-08', take: 5, skip: 0 })
+        .then(
+          () => {
+            throw new Error('auditList resolved — a downstream zone failure must be refused.');
+          },
+          (e: unknown) => e as HttpException,
+        );
+      expect(err).toBeInstanceOf(HttpException);
+      expect(err.getStatus()).toBe(503);
+      expect((err.getResponse() as Record<string, unknown>).timezone).toBe(DOWNSTREAM_ZONE);
+      expect(h.findManyWheres).toHaveLength(0);
+    } finally {
+      (Intl as { DateTimeFormat: unknown }).DateTimeFormat = realDateTimeFormat;
+    }
+  });
+
+  it('anything that is NOT an unusable zone keeps its own meaning', async () => {
+    // `zonedDayStartUtc` also throws `RangeError` (`window.ts:245`). Swallowing
+    // it into the same 503 would be a new silent-fallback class — the defect
+    // wearing the fix's clothes. Proven on the real helper rather than through
+    // the service, because `resolveAuditWindow` normalises malformed days to
+    // `null` upstream, which is itself the behaviour the echo test pins below.
+    expect(() => zonedDayStartUtc('2026-02-30', ZONE)).toThrow(RangeError);
+    expect(() => zonedDayStartUtc('2026-08-08', ZONE)).not.toThrow();
   });
 
   it('an ABSENT zone (no row, empty column) uses the column default and says which it used', async () => {

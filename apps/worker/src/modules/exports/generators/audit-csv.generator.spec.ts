@@ -5,7 +5,7 @@ import {
   resolveAuditWindow,
 } from '@pilotage/contracts';
 
-import { generateAuditCsv, weakerVocabulary } from './audit-csv.generator';
+import { csvEscape, generateAuditCsv, weakerVocabulary } from './audit-csv.generator';
 
 /**
  * S-E04-4 — the WORKER half of G-TRUTH, and the only behavioural proof that the
@@ -110,8 +110,72 @@ async function csvLines(rows?: Row[]): Promise<{ text: string; lines: string[] }
   return { text, lines: text.split('\n') };
 }
 
+/**
+ * S-E04-11 / PF-140 (i) — **the ten columns that may never move.**
+ *
+ * A downstream parser keys on position. `action_label` / `resource_type_label` /
+ * `vocabulary` were once inserted MID-header and pushed `resource_id` and
+ * `ip_address` from 5-6 to 8-9 with no acceptance criterion asking; the exact-
+ * string header pin that already existed in this file did NOT stop it, because
+ * the author edited the code and that pin in the same commit. A pin an author
+ * edits in lockstep is not a ratchet.
+ *
+ * So the guard is expressed TWICE, with two different failure messages: this
+ * prefix (positions are the contract) and the full header (the column set).
+ * « You moved a column » and « you added a column » must not look like one
+ * failure.
+ */
+const FROZEN_PREFIX_V1 = [
+  'created_at',
+  'actor_id',
+  'portal',
+  'action',
+  'action_label',
+  'resource_type',
+  'resource_type_label',
+  'vocabulary',
+  'resource_id',
+  'ip_address',
+] as const;
+
+/** Appended by S-E04-11 — a new column goes at the END, never in the middle. */
+const APPENDED_V2 = ['action_vocabulary', 'resource_type_vocabulary'] as const;
+
+/** The header cells, BOM stripped. */
+function headerCells(line: string): string[] {
+  return line.replace(/^\uFEFF/, '').split(',');
+}
+
 describe('generateAuditCsv — the DPO export reads the one declaration', () => {
-  it('the header is the ten columns, in order, with the labels APPENDED beside the raw values', async () => {
+  it('the FROZEN PREFIX keeps its positions — indices 0..9 may never move', async () => {
+    const { lines } = await csvLines();
+    const header = headerCells(lines[0]!);
+    // PF-140(i): moving any of these is a breaking change for every downstream
+    // parser, and it must fail HERE rather than be discovered by a regulator.
+    expect(header.slice(0, FROZEN_PREFIX_V1.length)).toEqual([...FROZEN_PREFIX_V1]);
+    // The two columns that actually moved last time, pinned BY INDEX with the
+    // reason attached — a test that merely mirrors the code is not a ratchet.
+    expect(header.indexOf('resource_id')).toBe(8);
+    expect(header.indexOf('ip_address')).toBe(9);
+  });
+
+  it('the column set is the frozen prefix PLUS the appended pair — nothing else', async () => {
+    const { lines } = await csvLines();
+    expect(headerCells(lines[0]!)).toEqual([...FROZEN_PREFIX_V1, ...APPENDED_V2]);
+  });
+
+  it('every data row is exactly as wide as the header — the drift with no symptom', async () => {
+    // The row builder is a SECOND list. PF-140(i) was a header and a row edited
+    // together; a row that drifts from its header shifts every value silently.
+    const { lines } = await csvLines();
+    const width = headerCells(lines[0]!).length;
+    expect(width).toBe(FROZEN_PREFIX_V1.length + APPENDED_V2.length);
+    for (let i = 1; i < lines.length; i++) {
+      expect({ row: i, cells: lines[i]!.split(',').length }).toEqual({ row: i, cells: width });
+    }
+  });
+
+  it('the header is the twelve columns, in order, with the labels APPENDED beside the raw values', async () => {
     const { lines } = await csvLines();
     expect(lines[0]!.replace(/^\uFEFF/, '')).toBe(
       [
@@ -125,6 +189,10 @@ describe('generateAuditCsv — the DPO export reads the one declaration', () => 
         'vocabulary',
         'resource_id',
         'ip_address',
+        // S-E04-11 / PF-140 (ii) — the two axes the collapsed `vocabulary`
+        // column summarises. APPENDED: indices 0..9 above are untouched.
+        'action_vocabulary',
+        'resource_type_vocabulary',
       ].join(','),
     );
   });
@@ -223,6 +291,184 @@ describe('generateAuditCsv — the DPO export reads the one declaration', () => 
 });
 
 /* ================================================================== *
+ * S-E04-11 / PF-140 (ii) — the two axes stop being collapsed into one
+ * ================================================================== */
+
+describe('generateAuditCsv — the export is no less truthful than the screen', () => {
+  it('G-TRUTH — the appended columns ARE the contracts resolvers, row for row', async () => {
+    const { lines } = await csvLines();
+    for (let i = 0; i < ROWS.length; i++) {
+      const row = ROWS[i]!;
+      const cells = lines[i + 1]!.split(',');
+      expect(cells[10]).toBe(classifyAuditAction(row.action).vocabulary);
+      expect(cells[11]).toBe(classifyAuditResourceType(row.resourceType).vocabulary);
+    }
+  });
+
+  it('G-TRUTH — the kept `vocabulary` column is DERIVABLE from the two, never a third axis', async () => {
+    // AC-2's justification made behavioural: column 7 is exactly
+    // `weakerVocabulary(col 10, col 11)`, so the summary and its parts cannot
+    // disagree — which is what makes the redundancy honest, and what will let a
+    // later, announced format change retire column 7 safely.
+    const { lines } = await csvLines();
+    for (let i = 1; i < lines.length; i++) {
+      const cells = lines[i]!.split(',');
+      expect({ row: i, collapsed: cells[7] }).toEqual({
+        row: i,
+        collapsed: weakerVocabulary(
+          cells[10] as 'canonical' | 'legacy' | 'unknown',
+          cells[11] as 'canonical' | 'legacy' | 'unknown',
+        ),
+      });
+    }
+  });
+
+  it('WHICH axis was unclassified is now readable — the defect PF-140 (ii) named', async () => {
+    // A row whose axes DISAGREE. The collapsed column says `unknown` and cannot
+    // say which half; the appended pair says the action was understood and the
+    // resource type was not. Its own fixture, so the shared ROWS above — which
+    // every index-based assertion in this file depends on — is not disturbed.
+    const { lines } = await csvLines([
+      {
+        createdAt: new Date('2026-03-01T00:00:00.000Z'),
+        actorId: 'u-9',
+        portal: 'admin',
+        action: 'role.delete',
+        resourceType: 'zz_unknown_type',
+        resourceId: null,
+        ipAddress: null,
+      },
+    ]);
+    const cells = lines[1]!.split(',');
+    expect(cells[7]).toBe('unknown');
+    expect(cells[10]).toBe('canonical');
+    expect(cells[11]).toBe('unknown');
+  });
+});
+
+/* ================================================================== *
+ * S-E04-11 / PF-140 (iii) — the file is opened as a SPREADSHEET
+ * ================================================================== */
+
+describe('csvEscape — formula injection is neutralised, ordinary values are not touched', () => {
+  it('a malicious cell is emitted INERT, and its payload survives in full', async () => {
+    const payload = "=cmd|' /C calc'!A0";
+    const { lines } = await csvLines([
+      {
+        createdAt: new Date('2026-02-01T00:00:00.000Z'),
+        actorId: 'u-4',
+        portal: 'admin',
+        action: payload,
+        resourceType: 'role',
+        resourceId: null,
+        ipAddress: null,
+      },
+    ]);
+    const cell = lines[1]!.split(',')[3]!;
+    // Force-quoted AND prefixed: quoting alone does not neutralise, Excel
+    // evaluates `"=1+1"` on import.
+    expect(cell.startsWith('"\'=')).toBe(true);
+    // NOTHING was dropped from a regulator's file — the payload is recoverable
+    // by stripping the surrounding quotes and exactly ONE leading apostrophe.
+    expect(cell.slice(1, -1).replace(/^'/, '')).toBe(payload);
+    // …and the cell no longer begins with a character a spreadsheet evaluates.
+    expect(cell.slice(1, 2)).toBe("'");
+  });
+
+  it.each([
+    ['=', '=1+1'],
+    ['+', '+1+1'],
+    ['-', '-1+1'],
+    ['@', '@SUM(1+1)'],
+    ['tab', '\tSUM(1)'],
+    ['carriage return', '\rrow-splitter'],
+  ])('a leading %s is neutralised and force-quoted', (_name, value) => {
+    const escaped = csvEscape(value);
+    expect(escaped.startsWith('"\'')).toBe(true);
+    expect(escaped.endsWith('"')).toBe(true);
+    expect(escaped.slice(1, -1)).toBe(`'${value}`);
+  });
+
+  it('the neutralisation is applied AT MOST ONCE — the prefix is not itself a trigger', () => {
+    // P1-6: a leading TAB is the other standard mitigation and is itself in the
+    // trigger set, so prefixing one produces a cell the escaper must consider
+    // dangerous again. `'` is not a trigger, so one pass suffices and this
+    // function never recurses.
+    const once = csvEscape('=1+1');
+    expect(once).toBe('"\'=1+1"');
+    expect(once).not.toContain("''");
+    // Re-escaping is NOT idempotent and never was — `csvEscape('a,b')` is
+    // `"a,b"` and re-escaping that legitimately doubles the quotes (HEAD behaved
+    // the same). Round-tripping is the parser's job; what must hold is that the
+    // NEUTRALISER is not re-applied.
+    expect(csvEscape(once)).not.toContain("''");
+    expect(csvEscape("'=1+1")).toBe("'=1+1");
+  });
+
+  it('a bare \\r cannot split a record, and the terminator stays LF', async () => {
+    const { text, lines } = await csvLines([
+      {
+        createdAt: new Date('2026-02-02T00:00:00.000Z'),
+        actorId: 'u-5',
+        portal: 'admin',
+        action: 'part-one\rpart-two',
+        resourceType: 'role',
+        resourceId: null,
+        ipAddress: null,
+      },
+    ]);
+    // Header + ONE data row. A bare CR in an unquoted cell would have made two.
+    expect(lines).toHaveLength(2);
+    expect(lines[1]!).toContain('"part-one\rpart-two"');
+    // P1-7: the record separator is NOT promoted to CRLF while fixing `\r`.
+    // RFC 4180 would say CRLF; changing it would move every byte offset in the
+    // file, which is the silent byte change this slice exists to stop.
+    expect(text).not.toContain('\r\n');
+  });
+
+  it('ordinary accented French values are BYTE-IDENTICAL — asserted on the real fixture', async () => {
+    const { lines } = await csvLines();
+    // The legacy French row, written out in full. None of its cells begins with
+    // a trigger character, so none is quoted and none is prefixed.
+    expect(lines[2]!).toBe(
+      [
+        '2026-01-01T09:00:00.000Z',
+        'u-2',
+        'admin',
+        'Suppression',
+        'Suppression',
+        'Résultats',
+        'Résultats',
+        'legacy',
+        '', // resource_id
+        '', // ip_address
+        'legacy',
+        'legacy',
+      ].join(','),
+    );
+    // …and NO cell anywhere in the file was quoted or prefixed: not one fixture
+    // value begins with a trigger character, so the escaper is a no-op on all of
+    // them. (Checked per cell rather than on `text`: a French label may legally
+    // contain an apostrophe INSIDE it — « Suppression d'un rôle » — and only a
+    // LEADING one would be the neutraliser.)
+    for (const line of lines) {
+      for (const cell of line.split(',')) {
+        expect({ cell, touched: cell.startsWith('"') || cell.startsWith("'") }).toEqual({
+          cell,
+          touched: false,
+        });
+      }
+    }
+    // The canonical row's French label came through untouched as well.
+    expect(lines[1]!.split(',')[4]).toBe(classifyAuditAction('role.delete').label);
+    // An empty cell stays empty, an IPv4 and an ISO timestamp stay raw.
+    expect(lines[1]!.split(',')[9]).toBe('10.0.0.1');
+    expect(lines[1]!.split(',')[0]).toBe('2026-01-02T10:00:00.000Z');
+    expect(lines[3]!.split(',')[9]).toBe('');
+  });
+});
+
+/* ================================================================== *
  * S-E04-5 — the CSV and the screen answer the SAME filter
  * ================================================================== */
 
@@ -296,12 +542,103 @@ describe('generateAuditCsv — the day boundary is the tenant’s, and it is sha
     );
   });
 
-  it('an unusable tenant zone FAILS the export — it never silently reverts to UTC', async () => {
-    const { args } = makeArgs(ROWS, {
+  /**
+   * S-E04-11 / PF-149 — **REWRITTEN, not softened.**
+   *
+   * This assertion (`rejects.toBeInstanceOf(UnknownTimezoneError)`) was correct
+   * and became false the moment the error acquired a deliberate answer: the raw
+   * contracts error is now MAPPED, at the seam, to a terminal job failure whose
+   * message a DPO can act on. The claim it defended — *the export fails closed,
+   * it never reverts to UTC* — is still asserted below, and now with more, not
+   * less: nothing is queried, and the offending zone is named.
+   */
+  it('an unusable tenant zone FAILS the export — terminally, and by name', async () => {
+    const { args, findMany } = makeArgs(ROWS, {
       parameters: { to: '2026-08-08' },
       timezone: 'Mars/Olympus_Mons',
     });
-    await expect(generateAuditCsv(args)).rejects.toBeInstanceOf(UnknownTimezoneError);
+    const err = await generateAuditCsv(args).then(
+      () => {
+        throw new Error('generateAuditCsv resolved — an unusable zone must fail the export.');
+      },
+      (e: unknown) => e as Error,
+    );
+
+    // BullMQ grades this terminal on attempt 1 of 3 (`queue-metrics.ts:504-506`)
+    // — a bad `Tenant.timezone` is configuration, and three identical retries
+    // help nobody. Asserted by NAME because that is exactly how BullMQ and
+    // `classifyFailure` recognise it, across module copies.
+    expect(err.name).toBe('UnrecoverableError');
+    // The raw contracts error no longer escapes: it was answered, not leaked.
+    expect(err).not.toBeInstanceOf(UnknownTimezoneError);
+
+    // The message reaches a human verbatim — `exports.processor.ts:112-124` logs
+    // it and persists `errorMessage: msg.slice(0, 500)`, which `/admin/exports`
+    // renders in a `truncate`d span whose only full disclosure is a `title`
+    // tooltip (unreachable by keyboard, unreachable on touch). So the FIRST
+    // sentence has to be self-sufficient: French, naming the zone, then the fix
+    // and the tenant.
+    expect(err.message).toContain('Mars/Olympus_Mons');
+    expect(err.message).toContain(TENANT);
+    const firstSentence = err.message.slice(0, err.message.indexOf('.') + 1);
+    expect(firstSentence).toContain('Mars/Olympus_Mons');
+    expect(firstSentence.length).toBeLessThanOrEqual(110);
+    expect(err.message).not.toContain('UnknownTimezoneError');
+    expect(err.message.length).toBeLessThanOrEqual(500);
+
+    // AC-8 — it FAILED CLOSED. No rows were read, so no file with wrong day
+    // boundaries can exist: the alternative (a silent fallback to the server
+    // zone) is the defect S-E04-5 removed and this slice must not reintroduce.
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('the guard spans the WINDOW RESOLUTION, not just the assert line', async () => {
+    // `assertKnownTimezone(declaredZone)` is skipped entirely on the
+    // `DEFAULT_AUDIT_TIMEZONE` branch, and `resolveAuditWindow` asserts again
+    // downstream (`window.ts:323` → `zonedDayStartUtc` → `partsInZone`). A `try`
+    // around the assert alone would guard the branch that cannot fire today and
+    // miss the one that fires for every tenant at once.
+    //
+    // Reaching that downstream branch on a full-ICU host (`process.versions.icu`
+    // = 76.1) requires stubbing `Intl`: the formatter is ACCEPTED (so the assert
+    // passes, and caches) and then fails to produce a field. The zone below is
+    // used in this test ONLY — `window.ts:86` caches formatters per zone for the
+    // life of the module, so sharing a zone would make these tests order-
+    // dependent.
+    const DOWNSTREAM_ZONE = 'Indian/Kerguelen';
+    const realDateTimeFormat = Intl.DateTimeFormat;
+    (Intl as { DateTimeFormat: unknown }).DateTimeFormat = function stubbed(
+      locale: string,
+      options: Intl.DateTimeFormatOptions,
+    ) {
+      const real = new realDateTimeFormat(locale, { ...options, timeZone: 'UTC' });
+      return {
+        resolvedOptions: () => ({ ...real.resolvedOptions(), timeZone: options.timeZone }),
+        // Everything except the day — `partsInZone` raises `UnknownTimezoneError`
+        // for the missing field, from INSIDE the window resolution.
+        formatToParts: (d: Date) => real.formatToParts(d).filter((p) => p.type !== 'day'),
+        format: (d: Date) => real.format(d),
+      };
+    };
+    try {
+      const { args, findMany } = makeArgs(ROWS, {
+        // Both bounds supplied, so the throw comes from `resolveAuditWindow`
+        // rather than from the `zonedYmd` default — the span under test.
+        parameters: { from: '2026-08-01', to: '2026-08-08' },
+        timezone: DOWNSTREAM_ZONE,
+      });
+      const err = await generateAuditCsv(args).then(
+        () => {
+          throw new Error('generateAuditCsv resolved — a downstream failure must fail closed.');
+        },
+        (e: unknown) => e as Error,
+      );
+      expect(err.name).toBe('UnrecoverableError');
+      expect(err.message).toContain(DOWNSTREAM_ZONE);
+      expect(findMany).not.toHaveBeenCalled();
+    } finally {
+      (Intl as { DateTimeFormat: unknown }).DateTimeFormat = realDateTimeFormat;
+    }
   });
 
   it('a missing tenant row falls back to the column default, and still bounds by day', async () => {

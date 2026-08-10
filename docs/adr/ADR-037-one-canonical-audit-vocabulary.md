@@ -7,6 +7,10 @@
 - **Supersedes nothing.** Extends ADR-002 (tenant scoping), ADR-003 (four portals), ADR-036 (audit
   provenance). Transcribes the ruling already recorded in
   `docs/spec/features/v3-e04/data-model.md` §2.3–§2.4 (D-12…D-17); it invents nothing beyond it.
+- **Amended by `S-E04-11`** (2026-08-10) — **D6** (the `audit_csv` column list is append-only, indices 0..9
+  frozen) and **D7** (the CSV formula-injection neutraliser), which together **scope D4's « verbatim »**.
+  See the amendment at the end of this file. `S-E04-11` is this file's first amender and sets the
+  reservation the original header omitted: **a later amender reserves D8 onward.**
 
 ---
 
@@ -207,3 +211,119 @@ and a label nobody writes is also a red test.
 extractor, deliberately not fixed). The parent transparency panel. A login writer. A `portal: 'student'`
 writer. DOM-level proof that the marker renders — that is Playwright's, and this slice's web evidence is
 behavioural at the label-resolution layer and textual at the component layer, stated as such.
+
+---
+
+## S-E04-11 amendment — the regulator's file has a shape contract, and one stated exception to « verbatim »
+
+> **Amendment, not a new file.** `tasks.md` cross-slice ruling #9 (`:509`) allocates exactly three ADRs to
+> this epic — `ADR-036` (provenance), `ADR-037` (vocabulary), `ADR-035` (in-transaction) — and `S-E04-11` is
+> not a fourth. Creating an `ADR-038` here would itself be the ADR-drift finding this epic exists to remove.
+> Two decisions land below, numbered **D6–D7**. `ADR-037` carries no forward reservation, so `S-E04-11` is
+> its first amender and sets one: **a later amender of this file reserves D8 onward.**
+>
+> **Why these two need a home outside the generator.** Both were shipped as comments inside
+> `apps/worker/src/modules/exports/generators/audit-csv.generator.ts`, and both are cross-cutting: D6 binds
+> anyone who ever adds a column to the DPO export, and D7 **qualifies D4 above**, which is the decision an
+> API, web or import author reads when they ask what the audit surfaces do with a value they do not
+> recognise. A rule that lives only in the file it governs is invisible to exactly the population that has
+> to obey it, and D4 currently reads as an unconditional promise the shipped generator no longer keeps.
+
+### D6 — The `audit_csv` column list is APPEND-ONLY; indices 0..9 are frozen
+
+The header of the file a DPO hands to a regulator is:
+
+```
+0 created_at · 1 actor_id · 2 portal · 3 action · 4 action_label · 5 resource_type ·
+6 resource_type_label · 7 vocabulary · 8 resource_id · 9 ip_address       ← FROZEN (v1)
+10 action_vocabulary · 11 resource_type_vocabulary                        ← APPENDED (v2, S-E04-11)
+```
+
+**The decision.** Positions 0..9 are the contract. A new column is **appended at the end**. Removing or
+reordering a column is a **versioned, announced format change** with its own consumer census — not a commit.
+
+**Why this is a decision and not housekeeping.** `S-E04-4` — this ADR's own slice — inserted `action_label`,
+`resource_type_label` and `vocabulary` *mid*-header and pushed `resource_id` and `ip_address` from indices
+5-6 to 8-9. No acceptance criterion asked for the move, no consumer was surveyed, and an index-keyed
+downstream parser breaks **in silence**: it does not error, it reports the wrong column's value. The
+exact-string header pin that already existed did not stop it, because the author edited the code and the pin
+in the same commit. That is registered as **PF-140 (i)**, and D6 is the rule whose absence made it possible.
+
+**How it is enforced — twice, with two different failure messages**
+(`audit-csv.generator.spec.ts:113-176`): `FROZEN_PREFIX_V1` pins positions 0..9 *and* `resource_id`/
+`ip_address` by index with the reason attached (`:150-160`); a separate assertion pins the full column set
+(`:162-165`); a third pins that every data row is exactly as wide as its header (`:167-176`), because the row
+builder is a **second** list and PF-140 (i) was a header and a row edited together. « You moved a column »
+and « you added a column » must not look like one failure.
+
+**One consequence accepted rather than smuggled.** Column 7 `vocabulary` is `weakerVocabulary(action,
+resource_type)` and is therefore fully derivable from the two appended per-axis columns. It is **kept**:
+removing it would move `resource_id`/`ip_address` a second time — committing PF-140 (i) inside the fix for
+PF-140 (i). Its retirement is a follow-up that needs the versioned, announced change D6 describes.
+
+### D7 — A cell that a spreadsheet would execute is force-quoted and prefixed with exactly one apostrophe
+
+**The decision.** In the audit CSV export, a cell whose **first character** is `=`, `+`, `-`, `@`, a tab or a
+carriage return is emitted **force-quoted AND prefixed with a single `'`** (the OWASP CSV-injection form).
+`\r` additionally joins the quote-trigger set so a bare carriage return can never split a record.
+
+**Recovery rule, stated so a downstream parser is not left guessing:** strip the surrounding quotes, then
+strip **exactly one** leading apostrophe. Nothing else was changed, and nothing was removed.
+
+**Why the export and not the writer.** The generator returns a UTF-8 BOM (`audit-csv.generator.ts:213-218`,
+kept deliberately so French Excel does not render « Évaluation » as « Ã‰valuation »), which is precisely what
+makes the artefact *the document French Excel opens as a spreadsheet*. The stored row is data; the exported
+file is a program the moment a cell begins with `=`. Neutralising on write would mutate an append-only trail
+— forbidden by D4 — so the transform belongs at the export boundary and nowhere else.
+
+**Why an apostrophe and not a leading tab**, the other standard mitigation: a tab is itself in the trigger
+set, so prefixing one produces a cell the escaper must consider dangerous again. `'` is not a trigger, so
+one pass suffices and the function never recurses — pinned at `spec.ts:392-406`. (Full `csvEscape`
+idempotence is not a property any RFC-4180 escaper has: `csvEscape('a,b')` is `"a,b"` and re-escaping that
+legitimately doubles the quotes. Round-tripping is the parser's job; what must hold is that the
+**neutraliser** is not re-applied.)
+
+**Uniform across every column, never a per-column allowlist.** An allowlist is what drifts the day
+`audit_log.user_agent` — a raw client header, `schema.prisma:1245`, one column away from this export — joins
+the file. `csvEscape` is not duplicated anywhere: it is exported from the audit generator and the four other
+export generators emit XLSX or PDF, so there is no second escaper to drift. A future CSV generator reuses
+this one rather than copying it.
+
+**The record separator stays `\n` and the delimiter stays `,`.** Promoting to CRLF « because RFC 4180 says
+so » would move every byte offset in the file — the silent byte change this slice exists to stop
+(`spec.ts:423-426`).
+
+### D4 is SCOPED, not overturned — « verbatim » now means « verbatim modulo the D7 neutraliser »
+
+D4 above says an unknown code is *« value **verbatim** + « Code non répertorié » »*, and the generator's own
+docblock says *« the record is reproduced, never interpreted »*. Both remain true, with **one stated
+exception**, and it is stated because a silent one would be the defect this epic exists to close:
+
+| Cell | What the export emits |
+|---|---|
+| does **not** begin with `=` `+` `-` `@` TAB CR | **byte-identical to before D7** — `Évaluation`, `Résultats`, `role.delete`, `10.0.0.1`, an ISO timestamp, an empty cell (asserted cell-by-cell on the real fixture, `spec.ts:429-468`) |
+| begins with one of them | force-quoted, one leading `'`, **payload intact and recoverable** (`spec.ts:354-390`) |
+
+**Nothing is ever dropped, bucketed or relabelled** — DNC-08 holds unchanged: the transform is *additive and
+reversible*, which is the property that lets it coexist with an append-only trail. « Verbatim » in D4 is a
+promise about *content*, not about the quoting layer; D7 is the only thing between the stored bytes and the
+file, and it is now written down in the document D4 lives in.
+
+### What this amendment deliberately does NOT change
+
+- **No `packages/contracts` change, no vocabulary change.** `classifyAuditAction` /
+  `classifyAuditResourceType` / the three-state `vocabulary` resolution of D4 are untouched; the two appended
+  columns are the **same** resolvers' per-axis output, read where `weakerVocabulary` used to collapse them,
+  with no local copy (D1's single-declaration property is preserved, and the vocabulary gate's
+  `'action', 'action_label',` adjacency requirement survives because the new columns are appended).
+- **No schema, no migration, no SQL** — D3's consequence still holds for this slice.
+- **The BOM stays.** It is context for D7, not a defect (removing it would not make the file safe; it would
+  make it unreadable in the tool a DPO actually opens).
+- **No ADR is claimed for the two error mappings that ship in the same diff.** `UnknownTimezoneError` →
+  `InternalServerErrorException({ code: 'TENANT_TIMEZONE_UNUSABLE' })` on the API read path and →
+  `UnrecoverableError` in the worker generator use a **Nest built-in** and a **BullMQ built-in**
+  respectively. No exception filter is added (`apps/api/src` contains zero `*.filter.ts` and this slice does
+  not add the first for two call sites), no new transport, no new cross-cutting pattern — so the ADR rule is
+  checked and returns *no new decision*, which is recorded here rather than left for a reviewer to re-derive.
+  The fail-closed posture itself is `S-E04-5`'s and is **not** weakened: no fallback to the server zone
+  exists on either path.
