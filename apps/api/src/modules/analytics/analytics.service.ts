@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import {
   AUDIT_CRITICAL_ACTIONS,
   AUDIT_EXPORT_ACTIONS,
@@ -7,6 +7,7 @@ import {
   DEFAULT_AUDIT_TIMEZONE,
   LEGACY_AUDIT_CRITICAL_ALIASES,
   LEGACY_AUDIT_EXPORT_ALIASES,
+  UnknownTimezoneError,
   assertKnownTimezone,
   auditWindowCreatedAtFilter,
   isAuditPortalNone,
@@ -644,6 +645,38 @@ export interface AnnualSubjectDelta {
   /** Variation `to - from` (signée, en points /20). */
   delta: number;
 }
+
+/**
+ * S-E04-11 / PF-149 — `instanceof` **plus** the name, and the disjunction is
+ * load-bearing rather than defensive noise.
+ *
+ * `packages/contracts` ships CJS and `dist/` is git-ignored, so `apps/api` and
+ * `apps/worker` each resolve their own built copy while a spec may reach `src`.
+ * Two distinct class objects make a bare `instanceof` false at runtime — the
+ * handled branch becomes dead code and the unhandled 500 ships anyway, while a
+ * test that constructs the error itself still passes. `window.ts:55` already
+ * calls `Object.setPrototypeOf` for the ES5-downlevel half of this problem; the
+ * name check covers the module-identity half. Everything else is re-thrown
+ * untouched — `zonedDayStartUtc` also throws `RangeError` (`window.ts:245`), and
+ * swallowing that would be a new silent-fallback class.
+ */
+function isUnknownTimezoneError(err: unknown): err is UnknownTimezoneError {
+  return (
+    err instanceof UnknownTimezoneError ||
+    (typeof err === 'object' &&
+      err !== null &&
+      (err as { name?: unknown }).name === 'UnknownTimezoneError' &&
+      typeof (err as { timezone?: unknown }).timezone === 'string')
+  );
+}
+
+/**
+ * The stable discriminator carried in the 503 body below. `/admin/audit`'s
+ * `safe()` currently collapses every `ApiError` into one amber strip; this code
+ * is what lets it eventually tell « analytics is down » from « this tenant's
+ * timezone is misconfigured » without parsing a French sentence (UX-FU-1).
+ */
+export const TENANT_TIMEZONE_UNUSABLE = 'TENANT_TIMEZONE_UNUSABLE';
 
 /**
  * AnalyticsService — aggregates KPIs for dashboards.
@@ -3416,19 +3449,55 @@ export class AnalyticsService {
     // --- The tenant's own timezone. Server-resolved, echoed, never accepted. ---
     // `findUnique` on the primary key: `tenant.id` IS the tenant discriminator,
     // so G-TENANT is satisfied by identity here (no redundant `tenant_id`).
-    const tenantRow = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { timezone: true },
-    });
-    const declaredZone = (tenantRow?.timezone ?? '').trim();
-    // An ABSENT value (no row yet, empty column) falls back to the same default
-    // the column carries. A PRESENT but unresolvable value throws
-    // `UnknownTimezoneError` — a silent fallback to the server's zone is exactly
-    // the defect this slice removes, and it would make `filters.timezone` a lie.
-    const timezone =
-      declaredZone === '' ? DEFAULT_AUDIT_TIMEZONE : assertKnownTimezone(declaredZone);
-    const auditWindow = resolveAuditWindow(from ?? null, to ?? null, timezone);
-    const createdAt = auditWindowCreatedAtFilter(auditWindow);
+    //
+    // **S-E04-11 / PF-149 — the guard spans the whole resolution.** Wrapping only
+    // `assertKnownTimezone` would guard the case that cannot fire today (a
+    // garbage stored zone; nothing writes the column) and miss the one that can:
+    // the `DEFAULT_AUDIT_TIMEZONE` branch never reaches that assert, so under a
+    // small-ICU runtime the throw arrives later, from `resolveAuditWindow`
+    // (`window.ts:323`) — for every tenant at once.
+    let auditWindow: ReturnType<typeof resolveAuditWindow>;
+    let createdAt: ReturnType<typeof auditWindowCreatedAtFilter>;
+    try {
+      const tenantRow = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { timezone: true },
+      });
+      const declaredZone = (tenantRow?.timezone ?? '').trim();
+      // An ABSENT value (no row yet, empty column) falls back to the same default
+      // the column carries. A PRESENT but unresolvable value throws
+      // `UnknownTimezoneError` — a silent fallback to the server's zone is exactly
+      // the defect this slice removes, and it would make `filters.timezone` a lie.
+      const timezone =
+        declaredZone === '' ? DEFAULT_AUDIT_TIMEZONE : assertKnownTimezone(declaredZone);
+      auditWindow = resolveAuditWindow(from ?? null, to ?? null, timezone);
+      createdAt = auditWindowCreatedAtFilter(auditWindow);
+    } catch (err) {
+      // Anything that is not an unusable zone keeps its own meaning.
+      if (!isUnknownTimezoneError(err)) throw err;
+      // **503, not 500 and not 4xx.** The caller supplied nothing wrong —
+      // `from`/`to` are validated in the controller and there is deliberately no
+      // `timezone` query parameter — so a 4xx would blame an admin for a Tenant
+      // row they cannot influence. A bare 500 is what shipped before, with the
+      // zone named nowhere. 503 is the honest reading: detected, refused,
+      // unusable until an operator edits `Tenant.timezone`.
+      //
+      // The zone is named in the BODY only. It must never reach
+      // `filters.timezone`: `/admin/audit` feeds that echo straight into
+      // `new Intl.DateTimeFormat({ timeZone })` during a server render, so
+      // echoing the rejected value would re-create the 500 one layer up. A throw
+      // has no `filters` at all, which is the point.
+      this.logger.error(
+        `auditList(tenant=${tenantId}): Tenant.timezone unusable — ${err.message}`,
+      );
+      throw new ServiceUnavailableException({
+        code: TENANT_TIMEZONE_UNUSABLE,
+        timezone: err.timezone,
+        message:
+          `Le fuseau horaire de l'établissement, « ${err.timezone} », n'est pas utilisable. ` +
+          `Corrigez-le avant de consulter le journal d'audit.`,
+      });
+    }
 
     // `AUDIT_PORTAL_NONE` is decoded HERE, server-side, into `portal: null`
     // (PF-123 read half). The sentinel never reaches Prisma as a literal, and no
