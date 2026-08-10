@@ -270,11 +270,35 @@ export class EnrollmentsController {
   ) {
     const me = await this.users.ensureUser(jwt);
     const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
-    const enrollment = await this.prisma.enrollment.findUnique({ where: { id } });
+    const enrollment = await this.prisma.enrollment.findUnique({
+      where: { id },
+      // S-E04-10 (PF-158) — MÊME `include` que l'écriture ci-dessous. Le retour
+      // anticipé du non-événement doit reproduire la forme de réponse expédiée au
+      // byte près : sans `classSection`, la correction deviendrait un 200 au
+      // mauvais corps, exactement ce que le docblock de `transfer` interdit déjà
+      // dans ce fichier, et qu'aucune assertion sur les lignes d'audit ne verrait.
+      include: { classSection: { select: { name: true } } },
+    });
     if (!enrollment || enrollment.tenantId !== me.tenantId) throw new NotFoundException();
 
     const isEnding = body.status !== 'active' && body.status !== 'pending';
     const becameActive = enrollment.status !== 'active' && body.status === 'active';
+
+    // S-E04-10 (PF-158 / AC-8) — non-événement détecté APRÈS la garde de tenant et
+    // AVANT l'ouverture de la transaction (voir `schools.controller.ts` pour le
+    // pourquoi des deux moitiés : oracle inter-tenant d'un côté, forme d'appel
+    // `writeAudit` inconditionnelle de l'autre — ADR-035 D1).
+    //
+    // LA SECONDE CLAUSE EST PORTEUSE, et un simple `body.status === status` serait
+    // une PERTE DE DONNÉES : `:284` ne pose `endedAt`/`endReason` que lorsque
+    // `isEnding && !enrollment.endedAt`. Une inscription créée directement dans un
+    // statut terminal a donc `endedAt === null`, et un `PATCH { status: <même>,
+    // reason }` horodate réellement la fin POUR LA PREMIÈRE FOIS — une vraie
+    // transition, qui doit garder sa ligne. Le non-événement est le statut
+    // identique ET la fin déjà horodatée.
+    if (body.status === enrollment.status && !(isEnding && !enrollment.endedAt)) {
+      return enrollment;
+    }
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.enrollment.update({
@@ -454,10 +478,29 @@ export class EnrollmentsController {
       });
       return { ok: true, deleted: true };
     }
+    // S-E04-10 (PF-158 / AC-8) — non-événement, APRÈS la garde de tenant, AVANT la
+    // transaction. Ce qui est gardé ici est l'ÉCRASEMENT DE L'HORODATAGE, pas le
+    // changement de statut : une inscription déjà `dropped` ET déjà horodatée ne
+    // change rien. Une inscription `dropped` dont `endedAt` est encore nul est en
+    // revanche une vraie première annulation et garde sa ligne.
+    if (enrollment.status === 'dropped' && enrollment.endedAt !== null) {
+      return enrollment;
+    }
     return this.prisma.$transaction(async (tx) => {
       const dropped = await tx.enrollment.update({
         where: { id },
-        data: { status: 'dropped', endedAt: new Date(), endReason: 'Annulation administrative' },
+        data: {
+          status: 'dropped',
+          // S-E04-10 (PF-157, cinquième site) — même forme conditionnelle que
+          // `update()` à `:284`. L'écriture inconditionnelle poussait `endedAt` sur
+          // l'horloge de l'annulation ADMINISTRATIVE alors que l'inscription avait
+          // déjà une fin — celle d'un `transferred_out` ou d'un `completed` — et
+          // effaçait donc la date à laquelle la scolarité s'est réellement
+          // terminée. Un `DELETE` sur une inscription non terminale reste une vraie
+          // transition et garde sa ligne ; c'est la date d'origine qui est
+          // préservée, pas la ligne d'audit qui est supprimée.
+          ...(enrollment.endedAt ? {} : { endedAt: new Date(), endReason: 'Annulation administrative' }),
+        },
       });
       await writeAudit(tx, {
         tenantId: me.tenantId,
@@ -466,8 +509,19 @@ export class EnrollmentsController {
         resourceType: 'enrollment',
         resourceId: id,
         provenance,
-        before: { status: enrollment.status, hardDeleted: false },
-        after: { status: dropped.status, endReason: dropped.endReason ?? null },
+        // `endedAt` des deux côtés pour que la PRÉSERVATION soit lisible dans la
+        // trace : sans lui, la ligne n'enregistrait que `status` + `hardDeleted` et
+        // un écrasement d'horodatage y était invisible.
+        before: {
+          status: enrollment.status,
+          endedAt: enrollment.endedAt?.toISOString() ?? null,
+          hardDeleted: false,
+        },
+        after: {
+          status: dropped.status,
+          endedAt: dropped.endedAt?.toISOString() ?? null,
+          endReason: dropped.endReason ?? null,
+        },
       });
       return dropped;
     });

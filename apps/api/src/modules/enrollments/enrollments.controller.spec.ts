@@ -143,10 +143,21 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
   return {
     controller,
     prisma,
+    // S-E04-10 — exposed so the `endedAt` PRESERVATION can be asserted on the
+    // arguments actually handed to Prisma. The stage builder rebuilds its row from
+    // `args.data` alone, so an assertion on the returned row could not tell « the
+    // column was left alone » from « the mock did not model it ».
+    tx,
     notifications,
     entities: () => committed.filter((c) => c.kind === 'enrollment').map((c) => c.row),
     auditRows: () => committed.filter((c) => c.kind === 'audit').map((c) => c.row),
   };
+}
+
+/** The `data` object a staged `tx.enrollment.update` call actually received. */
+function updateData(db: ReturnType<typeof makeDb>, index = 0): Record<string, unknown> {
+  const call = db.tx.enrollment.update.mock.calls[index]! as unknown as [{ data: Record<string, unknown> }];
+  return call[0].data;
 }
 
 /* ================================================================== *
@@ -403,6 +414,153 @@ describe('T-6 — the guardian fan-out is still best-effort, and still after the
 
     expect(db.entities()).toHaveLength(1);
     expect(db.auditRows()).toHaveLength(1);
+  });
+});
+
+/* ================================================================== *
+ * T-7 (S-E04-10 / PF-158) — a non-event writes no row, on both paths
+ * ================================================================== */
+
+describe('T-7 / PF-158 / AC-7 — enrollment non-events open no transaction', () => {
+  // Both halves are asserted everywhere below: « no row » alone would also pass if
+  // the row were merely skipped inside an OPEN transaction, which is the shape
+  // ADR-035 D1 forbids and which `S-E04-7`'s ratchet walks for.
+  it('PATCH { status: "dropped" } on an already-ended enrollment writes nothing', async () => {
+    const db = makeDb();
+    db.prisma.enrollment.findUnique.mockResolvedValue(
+      enrollment({ status: 'dropped', endedAt: new Date('2026-03-01T00:00:00.000Z') }),
+    );
+
+    await db.controller.update(ENROLLMENT_ID, { status: 'dropped' } as never, jwt(['school_admin']), REQ);
+
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('…but the SAME status on an enrollment whose endedAt is still null IS a transition', async () => {
+    // The clause a naive `body.status === enrollment.status` would break, and it
+    // breaks it by LOSING DATA: `:284` stamps `endedAt`/`endReason` only when
+    // `isEnding && !endedAt`, so an enrollment created directly in a terminal
+    // status has its end recorded for the FIRST time by exactly this call.
+    const db = makeDb();
+    db.prisma.enrollment.findUnique.mockResolvedValue(enrollment({ status: 'dropped', endedAt: null }));
+
+    await db.controller.update(
+      ENROLLMENT_ID,
+      { status: 'dropped', reason: 'Départ famille' } as never,
+      jwt(['school_admin']),
+      REQ,
+    );
+
+    expect(db.auditRows()).toHaveLength(1);
+    expect(updateData(db).endedAt).toBeInstanceOf(Date);
+  });
+
+  it('the no-op 200 still carries `classSection` — the response shape did not drift', async () => {
+    // `update()` returns a row built with `include: { classSection: { select: { name } } }`.
+    // An early return of a pre-read WITHOUT that include would silently drop the
+    // field: a 200 with the wrong body, which no audit assertion would catch.
+    const db = makeDb();
+    db.prisma.enrollment.findUnique.mockResolvedValue(
+      enrollment({ status: 'dropped', endedAt: new Date('2026-03-01T00:00:00.000Z') }),
+    );
+
+    const body = (await db.controller.update(
+      ENROLLMENT_ID,
+      { status: 'dropped' } as never,
+      jwt(['school_admin']),
+      REQ,
+    )) as { classSection: { name: string } };
+
+    expect(body.classSection.name).toBe('6e A');
+  });
+
+  it('a real transition (active → dropped) still writes EXACTLY one row', async () => {
+    const db = makeDb();
+    await db.controller.update(ENROLLMENT_ID, { status: 'dropped' } as never, jwt(['school_admin']), REQ);
+    expect(db.auditRows()).toHaveLength(1);
+  });
+
+  it('DELETE on an already-dropped enrollment writes nothing and keeps the ORIGINAL endedAt', async () => {
+    const original = new Date('2026-03-01T00:00:00.000Z');
+    const db = makeDb();
+    db.prisma.enrollment.findUnique.mockResolvedValue(enrollment({ status: 'dropped', endedAt: original }));
+
+    const body = (await db.controller.remove(ENROLLMENT_ID, jwt(['school_admin']), REQ)) as {
+      endedAt: Date;
+    };
+
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+    expect(body.endedAt).toBe(original);
+  });
+
+  it('DELETE on a TRANSFERRED_OUT enrollment writes one row and does NOT overwrite its endedAt', async () => {
+    // PF-157's defect shape in a fifth place. The status change IS a transition and
+    // keeps its row; what must not move is the date the schooling actually ended.
+    const original = new Date('2026-03-01T00:00:00.000Z');
+    const db = makeDb();
+    db.prisma.enrollment.findUnique.mockResolvedValue(
+      enrollment({ status: 'transferred_out', endedAt: original, endReason: 'Transféré vers 6e B' }),
+    );
+
+    await db.controller.remove(ENROLLMENT_ID, jwt(['school_admin']), REQ);
+
+    expect(db.auditRows()).toHaveLength(1);
+    const data = updateData(db);
+    expect(data).toMatchObject({ status: 'dropped' });
+    expect(data).not.toHaveProperty('endedAt');
+    expect(data).not.toHaveProperty('endReason');
+    // The preservation is legible in the trail, not only in the row.
+    expect(db.auditRows()[0]!.before).toMatchObject({ endedAt: original.toISOString() });
+  });
+
+  it('DELETE on an ACTIVE enrollment still stamps endedAt for the first time', async () => {
+    const db = makeDb();
+
+    await db.controller.remove(ENROLLMENT_ID, jwt(['school_admin']), REQ);
+
+    expect(db.auditRows()).toHaveLength(1);
+    expect(updateData(db).endedAt).toBeInstanceOf(Date);
+    expect(updateData(db).endReason).toBe('Annulation administrative');
+  });
+});
+
+/* ================================================================== *
+ * T-8 (G-TENANT) — a no-op body does not become a cross-tenant oracle
+ * ================================================================== */
+
+describe('T-8 / G-TENANT — a foreign-tenant id that is ALSO a no-op is still refused', () => {
+  // This pins the guard ORDER. A no-op short-circuit placed before the tenant
+  // refusal would return 200 with a foreign tenant's enrollment body — a read
+  // oracle created by a correctness fix.
+  const foreignEnded = () =>
+    enrollment({
+      tenantId: OTHER_TENANT,
+      status: 'dropped',
+      endedAt: new Date('2026-03-01T00:00:00.000Z'),
+    });
+
+  it('update refuses it before the transaction opens', async () => {
+    const db = makeDb();
+    db.prisma.enrollment.findUnique.mockResolvedValue(foreignEnded());
+
+    await expect(
+      db.controller.update(ENROLLMENT_ID, { status: 'dropped' } as never, jwt(['school_admin']), REQ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('remove refuses it before the transaction opens', async () => {
+    const db = makeDb();
+    db.prisma.enrollment.findUnique.mockResolvedValue(foreignEnded());
+
+    await expect(db.controller.remove(ENROLLMENT_ID, jwt(['school_admin']), REQ)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
   });
 });
 

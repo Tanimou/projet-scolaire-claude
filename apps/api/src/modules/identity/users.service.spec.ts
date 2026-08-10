@@ -63,6 +63,24 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
         staged.push({ kind: 'userRole', row });
         return row;
       }),
+      /**
+       * S-E04-10 — `revokeRole` writes through `updateMany` now, so the fault
+       * injection and the staging BOTH have to live here. If this mock merely
+       * returned `{ count: 1 }`, R-4 direction (i) would become a rollback test
+       * that exercises no failing write — green forever, proving nothing. That is
+       * the "guard that is green because it cannot fire" shape this epic is named
+       * after, so `faults.entity` is honoured here exactly as in `create`/`update`.
+       */
+      updateMany: jest.fn(async ({ where, data }: { where: { id: string }; data: Row }) => {
+        if (faults.entity) throw faults.entity;
+        staged.push({ kind: 'userRole', row: { id: where.id, ...data } });
+        return { count: 1 };
+      }),
+      /** The in-transaction re-read `updateMany` forces — it returns a count, not a row. */
+      findUniqueOrThrow: jest.fn(async ({ where }: { where: { id: string } }) => {
+        const last = [...staged].reverse().find((s) => s.kind === 'userRole');
+        return last ? last.row : { id: where.id, revokedAt: null };
+      }),
     },
     auditLog: {
       create: jest.fn(async ({ data }: { data: Row }) => {
@@ -78,7 +96,13 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
     role: {
       findUnique: jest.fn().mockResolvedValue({ id: ROLE_ID, slug: 'surveillant', name: 'Surveillant' }),
     },
-    userRole: { findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn() },
+    userRole: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn(),
+      // Present so that a re-read accidentally placed on the NON-transactional
+      // client would be observable rather than silently `undefined`.
+      findUniqueOrThrow: jest.fn(),
+    },
     $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => {
       staged = [];
       try {
@@ -276,12 +300,19 @@ describe('R-4 / AC-1 / AC-2 / AC-14 — role.revoke', () => {
     expect(db.auditRows()[0]!.before).toMatchObject({ roleSlug: 'surveillant', roleId: ROLE_ID });
   });
 
-  it('direction (i) — the userRole update fails: no revocation AND no audit row', async () => {
+  it('direction (i) — the conditional userRole updateMany fails: no revocation AND no audit row', async () => {
+    // S-E04-10 — the fault MOVED from `tx.userRole.update` to `tx.userRole.updateMany`,
+    // deliberately and not cosmetically: `revokeRole` no longer calls `update`, so a
+    // fault left there would be injected into a method the code under test never
+    // invokes — a rollback assertion exercising no failing write. The extra
+    // `toHaveBeenCalled` is the falsification: a mock that silently no-opped would
+    // otherwise satisfy every other line of this test.
     const boom = new Error('row is locked');
     const db = makeDb({ entity: boom });
     revocable(db);
 
     await expect(db.service.revokeRole(USER_ROLE_ID, TENANT, PROVENANCE, ACTOR)).rejects.toThrow(boom);
+    expect(db.tx.userRole.updateMany).toHaveBeenCalled();
     expect(db.entities()).toEqual([]);
     expect(db.auditRows()).toEqual([]);
   });
@@ -321,4 +352,93 @@ describe('R-4 / AC-1 / AC-2 / AC-14 — role.revoke', () => {
     expect(result).not.toHaveProperty('userProfile');
     expect(result).not.toHaveProperty('role');
   });
+
+  it('the re-read carries NO include, so the happy path cannot re-leak the joins either', async () => {
+    const db = makeDb();
+    revocable(db);
+    const result = await db.service.revokeRole(USER_ROLE_ID, TENANT, PROVENANCE, ACTOR);
+
+    expect(db.tx.userRole.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: USER_ROLE_ID } });
+    expect(result).not.toHaveProperty('userProfile');
+    expect(result).not.toHaveProperty('role');
+  });
+});
+
+/* ================================================================== *
+ * R-5 (S-E04-10 / PF-157) — the TOCTOU, closed inside the transaction
+ * ================================================================== */
+
+describe('R-5 / PF-157 — the revocation is decided in the transaction, not before it', () => {
+  it('AC-12 — the conditional predicate is `revokedAt: null`, evaluated by the database', async () => {
+    const db = makeDb();
+    revocable(db);
+
+    await db.service.revokeRole(USER_ROLE_ID, TENANT, PROVENANCE, ACTOR);
+
+    const args = db.tx.userRole.updateMany.mock.calls[0]![0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(args.where).toMatchObject({ id: USER_ROLE_ID, revokedAt: null });
+    // The tenant predicate grants nobody anything (the ForbiddenException above
+    // already refused every differing case); it makes the scoping structural.
+    expect(args.where.userProfile).toEqual({ tenantId: TENANT });
+  });
+
+  it('AC-21 — a LOST race writes ZERO rows and returns the winner’s state, not the retry’s clock', async () => {
+    // The scenario the pre-transaction guard could never see: the pre-read observes
+    // `revokedAt: null` (so the fast path lets it through), and by the time the
+    // UPDATE reaches the row the other caller has already committed. PostgreSQL
+    // re-evaluates `revoked_at IS NULL` against the new row version and reports
+    // `count = 0`. On main @64f64dd this path wrote a SECOND `role.revoke` and
+    // stamped the loser's clock over the winner's.
+    const winnersClock = new Date('2026-02-03T00:00:00.000Z');
+    const db = makeDb();
+    revocable(db); // revokedAt: null — the fast path passes
+    db.tx.userRole.updateMany.mockResolvedValue({ count: 0 });
+    db.tx.userRole.findUniqueOrThrow.mockResolvedValue({
+      id: USER_ROLE_ID,
+      userProfileId: USER_ID,
+      roleId: ROLE_ID,
+      revokedAt: winnersClock,
+    });
+
+    const result = (await db.service.revokeRole(USER_ROLE_ID, TENANT, PROVENANCE, ACTOR)) as {
+      revokedAt: Date;
+    };
+
+    expect(db.auditRows()).toEqual([]);
+    expect(result.revokedAt).toBe(winnersClock);
+  });
+
+  it('AC-12 — the WINNER still writes exactly one role.revoke', async () => {
+    const db = makeDb();
+    revocable(db);
+    db.tx.userRole.updateMany.mockResolvedValue({ count: 1 });
+
+    await db.service.revokeRole(USER_ROLE_ID, TENANT, PROVENANCE, ACTOR);
+
+    expect(db.auditRows()).toHaveLength(1);
+    expect(db.auditRows()[0]).toMatchObject({ action: 'role.revoke' });
+  });
+
+  it('ONE clock — the row’s `after.revokedAt` is the value written to the column', async () => {
+    // Two `new Date()` calls would make the trail disagree with the database by
+    // milliseconds, i.e. name a transition at a time it did not happen.
+    const db = makeDb();
+    revocable(db);
+
+    await db.service.revokeRole(USER_ROLE_ID, TENANT, PROVENANCE, ACTOR);
+
+    const written = (db.entities()[0] as { revokedAt: Date }).revokedAt;
+    expect((db.auditRows()[0]!.after as { revokedAt: string }).revokedAt).toBe(written.toISOString());
+  });
+
+  // NOT PROVEN HERE, AND SAID SO RATHER THAN IMPLIED: `makeDb` is single-threaded,
+  // so no test in this file can interleave two `DELETE`s. The two cases above prove
+  // the BRANCH (`count = 0` ⇒ no row; `count = 1` ⇒ one row) and the predicate
+  // SHAPE. The race itself is decided by PostgreSQL's READ COMMITTED re-check, and
+  // the deferred partial unique index `(user_profile_id, role_id) WHERE
+  // revoked_at IS NULL` — which would prove it at the database, and which also
+  // covers the concurrent-`assignRole` race this slice does NOT close — is
+  // registered, not written (AC-13).
 });

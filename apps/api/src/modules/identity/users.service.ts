@@ -126,12 +126,31 @@ export class UsersService {
 
   /**
    * S-E04-6 — revoke, and its audit row, in ONE transaction.
+   * S-E04-10 (PF-157) — and the revocation is now decided INSIDE that transaction.
    *
-   * The unconditional `update` this replaces overwrote `revokedAt` on an ALREADY
-   * revoked assignment, so a second call moved the original revocation timestamp
-   * forward and — once audited — would have emitted a second `role.revoke` for a
-   * revocation that had already happened. Guarded on `revokedAt: null`, in the
-   * same shape as `assignRole`'s idempotent return.
+   * THE TOCTOU THIS CLOSES. `S-E04-6` added a `revokedAt !== null` guard to stop a
+   * second call from moving the original revocation timestamp forward and emitting
+   * a second `critical` `role.revoke` for one revocation. The guard reads BEFORE
+   * `$transaction` opens, so two concurrent `DELETE /users/roles/:id` calls both
+   * passed it, both updated, and both wrote a row — with `revokedAt` holding the
+   * RETRY's clock. The guard closed the sequential case and left the concurrent one
+   * open, which is the defect it was added to close.
+   *
+   * WHERE THE CORRECTNESS NOW COMES FROM. `tx.userRole.updateMany` with
+   * `revokedAt: null` in its `where`, evaluated by PostgreSQL under the row lock.
+   * At READ COMMITTED, two concurrent `UPDATE … WHERE id = ? AND revoked_at IS
+   * NULL`: T1 takes the lock and commits; T2 blocks, re-evaluates its predicate
+   * against the NEW row version, finds `revoked_at` non-null and reports
+   * `count = 0`. The loser writes no row and returns the winner's state.
+   *
+   * NO DATABASE BACKSTOP IS ADDED, AND THAT IS A DECISION (AC-13).
+   * `@@unique([userProfileId, roleId, schoolId])` cannot deduplicate anything here:
+   * `schoolId` is written `null` (`assignRole` above) and PostgreSQL treats NULLs
+   * as distinct in a unique index. The right long-term fix is a PARTIAL unique index
+   * `(user_profile_id, role_id) WHERE revoked_at IS NULL` — it is a schema change,
+   * it is DEFERRED, and it protects a DIFFERENT race: two concurrent `assignRole`
+   * calls creating two active rows and two `role.grant` rows, which `create` cannot
+   * make conditional. That residual stays open; nothing below narrows it.
    */
   async revokeRole(userRoleId: string, tenantId: string, provenance: AuditProvenance, actorId: string) {
     const ur = await this.prisma.userRole.findUnique({
@@ -142,14 +161,44 @@ export class UsersService {
     if (ur.userProfile.tenantId !== tenantId) throw new ForbiddenException();
 
     const { userProfile: _userProfile, role, ...current } = ur;
-    // Idempotent: already revoked, nothing changes, no row (see assignRole).
+    // FAST PATH, and nothing more (AC-14). It spares an obviously-already-revoked
+    // assignment the cost of opening a transaction, in the same shape as
+    // `assignRole`'s idempotent return. It is explicitly NOT the mechanism that
+    // makes this correct — it reads before the transaction, so two concurrent
+    // callers both pass it. The conditional `updateMany` below is the mechanism.
     if (current.revokedAt !== null) return current;
 
+    // ONE clock for the revocation: the same value is written to the column and
+    // recorded in `after`. Two `new Date()` calls would make the audit row disagree
+    // with the database by milliseconds — a trail naming a transition at a time it
+    // did not happen.
+    const revokedAt = new Date();
+
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.userRole.update({
-        where: { id: userRoleId },
-        data: { revokedAt: new Date() },
+      const revoked = await tx.userRole.updateMany({
+        // `revokedAt: null` is the whole fix. `userProfile: { tenantId }` adds no
+        // authorisation — the `ForbiddenException` above already refused every case
+        // in which it could differ — it makes the scoping STRUCTURAL, so a future
+        // refactor that moves the guard fails closed instead of open (ADR-015).
+        where: { id: userRoleId, revokedAt: null, userProfile: { tenantId } },
+        data: { revokedAt },
       });
+      // `updateMany` returns a COUNT, not the row, so the re-read is mandatory —
+      // for the response body and for `after`. No `include`: the shipped response
+      // carries neither `userProfile` nor `role`, and copying the join from the
+      // pre-read above would change the response shape.
+      const after = await tx.userRole.findUniqueOrThrow({ where: { id: userRoleId } });
+      // Lost the race: the revocation already happened and the winner already wrote
+      // its row. Returning here commits nothing (this transaction wrote nothing), so
+      // the loser gets the winner's state rather than a 500.
+      //
+      // This is an EARLY RETURN placed above `writeAudit`, never an `if` wrapping
+      // it. `writeAudit` must stay one unconditional statement with an inline object
+      // literal (ADR-035 D1): the vocabulary gate resolves action/resourceType from
+      // the call-site AST, and `S-E04-7`'s `audit-write-check.js` ratchet walks these
+      // sites the same way.
+      if (revoked.count === 0) return after;
+
       await writeAudit(tx, {
         tenantId,
         actorId,
@@ -164,9 +213,9 @@ export class UsersService {
           roleName: role.name,
           grantedAt: current.grantedAt.toISOString(),
         },
-        after: { revokedAt: updated.revokedAt?.toISOString() ?? null },
+        after: { revokedAt: after.revokedAt?.toISOString() ?? null },
       });
-      return updated;
+      return after;
     });
   }
 }

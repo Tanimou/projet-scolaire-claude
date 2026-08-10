@@ -186,8 +186,39 @@ Needs confirmation because it is a policy choice about family agency, not a tech
 
 ---
 
+## D-11 — Reopening a closed school · `open` · raised by `S-E04-10` (`PF-155`) · **blocks no story today**
+
+**Question.** Should a closed establishment be reopenable — and if so, through what endpoint, under what audit action
+code, and by whom?
+
+**Why it is here now.** `S-E04-10` removed `status` from `UpdateSchoolDto`, because `PATCH /schools/:id
+{ status: 'closed' }` was a **second closure door**: it bypassed `DELETE`'s students / academic-years refusal and filed
+the closure under `school.update` instead of `school.close`, so an auditor filtering « Fermeture d'un établissement »
+saw none of those closures. Closing now has exactly one door.
+
+**The same removal deleted the only reopen path**, and that path was never designed: there is no `school.reopen` action
+code in `packages/contracts/src/audit/vocabulary.ts`, no endpoint, no UI control and no test. It existed solely as the
+DTO hole that let closures be misfiled. Inventing vocabulary to preserve it was explicitly out of scope for that slice
+(adding audit codes is `S-E04-4`'s seam, and the slice touches `packages/contracts` not at all).
+
+**Why it is not a defect, and not urgent.** `school.close` is a **soft** close — `status: 'closed'`, the row and all its
+data survive — so nothing is destroyed and no accounting assertion is made. Reopening is a *recovery* need, not a
+routine operation.
+
+**Why it still needs an answer.** An establishment closed by mistake has no in-product recovery. The only remaining
+route is a direct database write, which leaves **no audit row at all** — the exact silence this epic exists to remove.
+
+**Options.** (a) `POST /schools/:id/reopen`, a new `school.reopen` `critical` action code, `super_admin` only.
+(b) The same, plus a stated business precondition (e.g. no successor establishment). (c) Accept that closure is
+terminal in-product and document the DBA procedure — in which case that procedure must still produce an audit row.
+
+**Decision:** — · **Decided by:** — · **Date:** —
+
+---
+
 ## Resolution log
 
 | id | Status | Decision | Decided by | Date | Consequence |
 |---|---|---|---|---|---|
 | D-01 … D-10 | `open` | — | — | — | — |
+| D-11 | `open` | — | — | — | Raised 2026-08-09 by `S-E04-10` (`PF-155`). Blocks no story; a school closed by mistake has no in-product recovery until it is answered |

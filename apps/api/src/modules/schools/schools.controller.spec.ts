@@ -1,10 +1,16 @@
-import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  InternalServerErrorException,
+  NotFoundException,
+  ValidationPipe,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
 import type { PrismaService } from '../../shared/prisma/prisma.service';
 
-import { SchoolsController } from './schools.controller';
+import { SchoolsController, UpdateSchoolDto } from './schools.controller';
 
 /**
  * S-E04-6 — the SCHOOL family (`school.create` / `school.update` /
@@ -43,9 +49,23 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
   const committed: Staged[] = [];
   let staged: Staged[] = [];
 
+  // The single school read every path goes through — the controller's `findUnique`
+  // AND the stage builder below, so an update returns a row consistent with the one
+  // the handler read.
+  const findSchool = jest.fn().mockResolvedValue(null);
+
   const stageSchool = async ({ where, data }: { where?: { id: string }; data: Row }) => {
     if (faults.entity) throw faults.entity;
-    const row = { id: where?.id ?? SCHOOL_ID, address: null, ...data };
+    // S-E04-10 — an `update` returns the FULL row, not just the changed columns.
+    // The previous shape (`{ id, address: null, ...data }`) left every untouched
+    // field `undefined`, so an assertion on `after.status` or on a preserved
+    // `after.address` would have been measuring the mock rather than the code.
+    const base = where?.id ? ((await findSchool({ where })) as Row | null) : null;
+    const row: Row = { address: null, ...(base ?? {}), id: where?.id ?? SCHOOL_ID, ...data };
+    // `Prisma.DbNull` is an INPUT sentinel; what Prisma reads back for an erased
+    // Json column is a plain `null`. Modelling that is what makes the erase case's
+    // `after.address === null` an honest assertion rather than a mock artefact.
+    if (row.address === Prisma.DbNull) row.address = null;
     staged.push({ kind: 'school', row });
     return row;
   };
@@ -62,7 +82,7 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
   };
 
   const prisma = {
-    school: { findUnique: jest.fn().mockResolvedValue(null), findMany: jest.fn() },
+    school: { findUnique: findSchool, findMany: jest.fn() },
     userProfile: { update: jest.fn() },
     $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => {
       staged = [];
@@ -262,6 +282,229 @@ describe('S-4 / AC-15 — switchActive is NOT a member of the school family', ()
     expect(out).toEqual({ ok: true, activeSchoolId: SCHOOL_ID });
     expect(db.prisma.userProfile.update).toHaveBeenCalledTimes(1);
     expect(db.auditRows()).toEqual([]);
+  });
+});
+
+/* ================================================================== *
+ * S-5 (S-E04-10 / PF-155 / AC-3) — `status` is REFUSED, at the pipe
+ * ================================================================== */
+
+describe('S-5 / PF-155 — closure has ONE door, and PATCH is not it', () => {
+  // WHY THIS TEST IS AT THE PIPE AND NOT AT THE CONTROLLER. Every other test in
+  // this file calls `db.controller.update(id, {…} as never, …)` DIRECTLY: no
+  // `ValidationPipe` runs in that path, so a `PATCH {status:'closed'}` driven
+  // through the harness would flow into `tx.school.update` via `...rest` and the
+  // school WOULD close — an assertion that is green while the guard it claims to
+  // prove cannot fire. The guard is the DTO's shape read by the global pipe, so
+  // the DTO is what gets driven.
+  //
+  // Options recopied verbatim from `apps/api/src/main.ts:140-146`.
+  const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true });
+  const meta = { type: 'body' as const, metatype: UpdateSchoolDto };
+
+  it('PATCH { status: "closed" } is a 400 — never a silently stripped field', async () => {
+    // `forbidNonWhitelisted` is what turns « unknown property » into a refusal
+    // instead of a deletion. Without it the removal would be a SILENT behaviour
+    // change: the caller believes the school closed, and nothing says otherwise.
+    await expect(pipe.transform({ status: 'closed' }, meta)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('PATCH { status: "active" } is a 400 too — the accidental reopen path is gone', async () => {
+    // AC-5: this removes a capability. It was never designed — no audit code, no
+    // endpoint, no UI, no test — and it is registered as an open capability gap
+    // rather than replaced by an invented `school.reopen`.
+    await expect(pipe.transform({ status: 'active' }, meta)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('positive control — a legitimate { name } body still transforms cleanly', async () => {
+    // Without this, the two refusals above would also pass against a DTO that
+    // rejected everything.
+    await expect(pipe.transform({ name: 'Lycée Voltaire' }, meta)).resolves.toMatchObject({
+      name: 'Lycée Voltaire',
+    });
+  });
+
+  it('positive control — an address-only body still transforms cleanly', async () => {
+    await expect(pipe.transform({ address: { country: 'FR', city: 'Paris' } }, meta)).resolves.toBeDefined();
+  });
+});
+
+/* ================================================================== *
+ * S-6 (S-E04-10 / PF-158) — a non-event writes no row at all
+ * ================================================================== */
+
+describe('S-6 / PF-158 / AC-7 — a double-click cannot inflate « Modifications critiques »', () => {
+  // `expect(auditRows()).toEqual([])` alone would ALSO pass if the row were merely
+  // skipped inside an open transaction, which is the shape ADR-035 D1 forbids. So
+  // every case here asserts BOTH: no row, and no transaction.
+  it('PATCH {} opens no transaction and writes no row', async () => {
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(existingSchool());
+
+    await db.controller.update(SCHOOL_ID, {} as never, jwt(['school_admin']), REQ);
+
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('PATCH { name: <the current name> } — a retry, not a transition', async () => {
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(existingSchool());
+
+    await db.controller.update(SCHOOL_ID, { name: 'Collège Voltaire' } as never, jwt(['school_admin']), REQ);
+
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('PATCH { address: <the current address> } — same object, no event', async () => {
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(
+      existingSchool(TENANT, { address: { country: 'FR', city: 'Paris' } }),
+    );
+
+    await db.controller.update(
+      SCHOOL_ID,
+      { address: { city: 'Paris', country: 'FR' } } as never,
+      jwt(['school_admin']),
+      REQ,
+    );
+
+    // Key ORDER differs between the two sides — the DTO follows the payload, the
+    // parsed value follows the schema declaration. Comparing through `parseAddress`
+    // on both sides is what makes that irrelevant.
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('PATCH { address: null } on a school that already has none — erasing nothing', async () => {
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(existingSchool());
+
+    await db.controller.update(SCHOOL_ID, { address: null } as never, jwt(['school_admin']), REQ);
+
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('PATCH { address: null } on a school whose STORED address is invalid IS a transition', async () => {
+    // The trap the guard must not fall into: `parseAddress` returns `null` for an
+    // absent address AND for an invalid one, so a `parseAddress`-only comparison
+    // would call this erasure a non-event and silently drop a real mutation. The
+    // predicate therefore tests the COLUMN, not the parse result.
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(
+      existingSchool(TENANT, { address: { country: 'FRA' } }),
+    );
+
+    await db.controller.update(SCHOOL_ID, { address: null } as never, jwt(['school_admin']), REQ);
+
+    expect(db.auditRows()).toHaveLength(1);
+  });
+
+  it('a real change still writes EXACTLY one row', async () => {
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(existingSchool());
+
+    await db.controller.update(SCHOOL_ID, { name: 'Lycée Voltaire' } as never, jwt(['school_admin']), REQ);
+
+    expect(db.auditRows()).toHaveLength(1);
+  });
+
+  it('the no-op response is the NORMALISED entity, not the raw Prisma row', async () => {
+    // A bare `return school;` would hand back `address` as raw Prisma JSON — a 200
+    // with the wrong body, which no assertion about audit rows would ever catch.
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(
+      existingSchool(TENANT, { address: { country: 'FR', city: 'Paris' } }),
+    );
+
+    const body = (await db.controller.update(SCHOOL_ID, {} as never, jwt(['school_admin']), REQ)) as {
+      address: unknown;
+      name: string;
+    };
+
+    expect(body.name).toBe('Collège Voltaire');
+    expect(body.address).toEqual({ country: 'FR', city: 'Paris' });
+  });
+
+  // G-TENANT ordering is already pinned by `S-3`, which drives `update` with `{}` —
+  // a no-op body — against a foreign-tenant school and requires a `NotFoundException`
+  // with no transaction. That test is the tripwire for the guard ORDER: a no-op check
+  // placed before the tenant refusal turns an empty PATCH into a 200 carrying a
+  // foreign school's body. It stays green, unmodified.
+});
+
+/* ================================================================== *
+ * S-7 (S-E04-10 / PF-159 / AC-9) — the row records `address`
+ * ================================================================== */
+
+describe('S-7 / PF-159 — an address change is legible in the trail', () => {
+  it('an address-only PATCH writes a row whose before/after DIFFER', async () => {
+    // Fails on main @64f64dd: the key is absent from both sides, so a `critical`
+    // row was written with a rendered diff identical in every recorded field.
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(
+      existingSchool(TENANT, { address: { country: 'FR', city: 'Paris' } }),
+    );
+
+    await db.controller.update(
+      SCHOOL_ID,
+      { address: { country: 'FR', city: 'Lyon' } } as never,
+      jwt(['school_admin']),
+      REQ,
+    );
+
+    const row = db.auditRows()[0]!;
+    expect((row.before as { address: unknown }).address).toEqual({ country: 'FR', city: 'Paris' });
+    expect((row.after as { address: unknown }).address).toEqual({ country: 'FR', city: 'Lyon' });
+  });
+
+  it('an ERASING PATCH records the previous address on `before` and null on `after`', async () => {
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(
+      existingSchool(TENANT, { address: { country: 'FR', city: 'Paris' } }),
+    );
+
+    await db.controller.update(SCHOOL_ID, { address: null } as never, jwt(['school_admin']), REQ);
+
+    const row = db.auditRows()[0]!;
+    expect((row.before as { address: unknown }).address).toEqual({ country: 'FR', city: 'Paris' });
+    expect((row.after as { address: unknown }).address).toBeNull();
+  });
+
+  it('an INVALID stored address is recorded raw, never as a fabricated erasure', async () => {
+    // `parseAddress` returns null for « absent » and for « invalid » alike. Applied
+    // bare to `before`, a legacy row with a 3-letter country would make the trail
+    // assert that an address was CREATED where one already existed — a falsehood
+    // manufactured by the fix, on the one field this row is the sole record of.
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(
+      existingSchool(TENANT, { address: { country: 'FRA' } }),
+    );
+
+    await db.controller.update(SCHOOL_ID, { name: 'Lycée Voltaire' } as never, jwt(['school_admin']), REQ);
+
+    const row = db.auditRows()[0]!;
+    expect((row.before as { address: unknown }).address).toEqual({ country: 'FRA' });
+    // …and `after` records it identically, so the untouched address does not read
+    // as an erasure either.
+    expect((row.after as { address: unknown }).address).toEqual({ country: 'FRA' });
+  });
+
+  it('AC-10 — `status` is still recorded, as deliberate context', async () => {
+    const db = makeDb();
+    db.prisma.school.findUnique.mockResolvedValue(existingSchool());
+
+    await db.controller.update(SCHOOL_ID, { name: 'Lycée Voltaire' } as never, jwt(['school_admin']), REQ);
+
+    const row = db.auditRows()[0]!;
+    expect(row.before).toMatchObject({ status: 'active' });
+    expect(row.after).toMatchObject({ status: 'active' });
   });
 });
 
