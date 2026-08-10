@@ -552,9 +552,21 @@ describe('AC-7 / AC-8 — rule E: the finding id is RESOLVED, not shape-matched'
     expect(ids.has('PF-31')).toBe(true);
     expect(ids.has('PF-121')).toBe(true);
     expect(ids.has('PF-99999')).toBe(false);
-    // Recorded, because it is the reason this baseline cites only PF-31/PF-121:
-    // the ids the epic's OPEN.md uses do not exist in the register yet.
-    expect(ids.has('PF-162')).toBe(false);
+    // S-E04-10 / TOOL-01 (run 36) — THIS ASSERTION WAS INVERTED, DELIBERATELY.
+    //
+    // It read `.toBe(false)`, annotated « the ids the epic's OPEN.md uses do not
+    // exist in the register yet ». The word carrying it was *yet*: it pinned a
+    // REGISTER DEFICIENCY, not an invariant — and that deficiency was the reason
+    // `audit-write-baseline.json` could cite only `PF-31`/`PF-121`, since rule E
+    // would have refused every other owner id.
+    //
+    // TOOL-01 appended the 28 cited-but-undeclared ids, so the deficiency is gone
+    // and the assertion recording it went red — in the correct direction. Left at
+    // `false` it would forbid the register from ever being completed: a check
+    // defending the very gap it documents (`R-30`). Flipped, it now proves what the
+    // next story actually depends on — the epic's own ids RESOLVE, so a baseline
+    // row owned by `PF-163` will bind instead of being refused.
+    expect(ids.has('PF-162')).toBe(true);
   });
 });
 
