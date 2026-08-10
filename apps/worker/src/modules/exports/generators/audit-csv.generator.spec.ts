@@ -1,7 +1,10 @@
 import {
+  CSV_INJECTION_TRIGGERS,
+  CSV_NEUTRALISER,
   UnknownTimezoneError,
   classifyAuditAction,
   classifyAuditResourceType,
+  neutraliseCsvCell,
   resolveAuditWindow,
 } from '@pilotage/contracts';
 
@@ -465,6 +468,205 @@ describe('csvEscape — formula injection is neutralised, ordinary values are no
     expect(lines[1]!.split(',')[9]).toBe('10.0.0.1');
     expect(lines[1]!.split(',')[0]).toBe('2026-01-02T10:00:00.000Z');
     expect(lines[3]!.split(',')[9]).toBe('');
+  });
+});
+
+/* ================================================================== *
+ * S-E05-1 / PF-168 / ADR-037 D8 — the neutraliser has ONE home
+ * ================================================================== */
+
+describe('neutraliseCsvCell — the shared predicate, driven directly', () => {
+  it('the neutraliser is NOT itself a trigger — this is what makes one pass enough', () => {
+    // The whole reason the prefix is `'` and not a leading tab. A tab IS in the
+    // set below, so prefixing one would produce a cell the escaper must consider
+    // dangerous again and the transform would recurse.
+    expect(CSV_INJECTION_TRIGGERS).not.toContain(CSV_NEUTRALISER);
+    expect(CSV_NEUTRALISER).toBe("'");
+    // U+0027, plain ASCII — NOT the typographic U+2019 the French headings use.
+    expect(CSV_NEUTRALISER.charCodeAt(0)).toBe(0x27);
+    expect(CSV_INJECTION_TRIGGERS.slice()).toEqual(['=', '+', '-', '@', '\t', '\r']);
+  });
+
+  it('the function is UNARY — every call site hands it to `.map`, which passes (v, i, arr)', () => {
+    // P1-3: a second parameter (a separator, say) would silently receive the
+    // column index at `header.map(csvEscape)`. Pinned on both the shared
+    // predicate and the worker escaper built on it.
+    expect(neutraliseCsvCell.length).toBe(1);
+    expect(csvEscape.length).toBe(1);
+    expect(['a', '=b', 'c'].map(csvEscape)).toEqual([
+      csvEscape('a'),
+      csvEscape('=b'),
+      csvEscape('c'),
+    ]);
+  });
+
+  it.each(CSV_INJECTION_TRIGGERS.map((t) => [JSON.stringify(t), t]))(
+    'a leading %s is flagged and prefixed, and the payload survives in full',
+    (_name, trigger) => {
+      const original = `${trigger}SUM(1+1)`;
+      const { text, neutralised } = neutraliseCsvCell(original);
+      expect(neutralised).toBe(true);
+      expect(text).toBe(`'${original}`);
+      // Reversible: strip exactly ONE leading apostrophe from a cell this
+      // function neutralised, and the original is back, byte for byte.
+      expect(text.replace(/^'/, '')).toBe(original);
+    },
+  );
+
+  it('the transform is applied AT MOST ONCE, and is not injective on `\'`-leading input', () => {
+    const once = neutraliseCsvCell('=1+1');
+    expect(once).toEqual({ text: "'=1+1", neutralised: true });
+    // Idempotent on its own output — no `''`.
+    expect(neutraliseCsvCell(once.text)).toEqual({ text: "'=1+1", neutralised: false });
+    // P2-8, stated rather than discovered: a cell that ALREADY starts with an
+    // apostrophe is not a trigger, so it passes through untouched and the
+    // documented inverse ("strip one leading `'`") applies only to cells this
+    // function prefixed. Applying it blindly to the line below would resurrect
+    // `=1+1`. `csvEscape("'=1+1") === "'=1+1"` (asserted above) pins the same
+    // thing at the escaper level; changing it is a format change, not a patch.
+    expect(neutraliseCsvCell("'=1+1").neutralised).toBe(false);
+  });
+
+  it.each([
+    ['the empty cell', ''],
+    ['accented French', 'Évaluation trimestrielle'],
+    ['a canonical action code', 'role.delete'],
+    ['an IPv4', '10.0.0.1'],
+    ['an ISO timestamp', '2026-01-02T10:00:00.000Z'],
+    ['a trigger that is NOT first', 'a=b'],
+    ['a spaced equals', '2 = deux'],
+    ['the em dash placeholder U+2014', '—'],
+    ['an en dash U+2013', '–'],
+    ['the mid-dot separator', '· Sévérité'],
+    ['the typographic apostrophe U+2019', '’alerte'],
+    ['a French label containing an apostrophe', "Suppression d'un rôle"],
+  ])('%s is BYTE-IDENTICAL and not flagged', (_name, value) => {
+    expect(neutraliseCsvCell(value)).toEqual({ text: value, neutralised: false });
+  });
+
+  it.each([
+    ['an international phone number', '+33 6 12 34 56 78'],
+    ['the app’s own placeholder number', '+225 07 00 00 00 00'],
+    ['a negative number', '-1.4'],
+    ['an externalRef starting with a hyphen', '-A17'],
+  ])('%s IS neutralised — deliberately, and this is the accepted cost', (_name, value) => {
+    // ADR-037 D7's uniform-never-allowlist rule, with its price written down
+    // instead of discovered in review. A phone exports as `'+33 …` and a signed
+    // number becomes TEXT in Excel (left-aligned, not summable). An allowlist
+    // per column is what drifts the day a raw client header joins the export, so
+    // the uniform rule wins — and the consequence is that callers must NOT start
+    // routing numeric cells through an escaper as an "improvement".
+    const { text, neutralised } = neutraliseCsvCell(value);
+    expect(neutralised).toBe(true);
+    expect(text).toBe(`'${value}`);
+    expect(text.replace(/^'/, '')).toBe(value);
+  });
+});
+
+describe('the DIALECT is per-surface — the shared predicate is not a shared escaper', () => {
+  /**
+   * The web escaper (`apps/web/src/lib/csv.ts`) is NOT executed here and this
+   * file makes no claim that it is: `apps/web` has no unit runner (Playwright
+   * only — PF-129/PF-133) and cannot be imported from the worker's jest project.
+   * What these cases pin is the CONTRACT the web escaper is built from — the
+   * shared predicate composed with the web's own quote-trigger set — so that a
+   * change to the shared half that would break the semicolon dialect turns this
+   * ratcheted spec red. The web WIRING is evidenced separately, by
+   * `scripts/csv-escape-check.js` rule C (an executed import+call check over the
+   * real file) and by the deletions in the diff.
+   */
+  const escapeWebDialect = (v: string): string => {
+    const { text, neutralised } = neutraliseCsvCell(v);
+    // The web separator is `;`, so `;` is in ITS quote-trigger set and not in
+    // the worker's. This is the one line that differs between the two surfaces.
+    if (neutralised || /[",;\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+    return text;
+  };
+
+  it('a `;` quotes on the web and does NOT quote in the worker — pinned against each other', () => {
+    expect(escapeWebDialect('a;b')).toBe('"a;b"');
+    expect(csvEscape('a;b')).toBe('a;b');
+    // P1-4, the reason the union set is forbidden: `audit_log.user_agent` is one
+    // column away from being exported and every such row would change bytes in
+    // the regulator's file if the worker adopted the web's trigger set.
+    expect(csvEscape('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    );
+  });
+
+  it('the web trigger set is a strict SUPERSET of the worker’s — `,` quotes on BOTH surfaces', () => {
+    // Corrected during the land pass (R-30 — the ASSERTION was wrong, not the
+    // code). This case first read « a `,` quotes in the worker and does NOT
+    // quote on the web » and asserted `escapeWebDialect('a,b') === 'a,b'`. That
+    // reads `/[",;\n\r]/` as though the leading `",` were one token; it is a
+    // class of FIVE characters and the comma is one of them. The web has always
+    // quoted on a comma — at HEAD too — so the claim was false and this suite
+    // was red. `apps/web/src/lib/csv.ts` was NOT touched to satisfy it.
+    //
+    // The two dialects are not symmetric opposites: the web set is the worker's
+    // set PLUS `;`. That single difference is the whole of the PF-169 split, and
+    // the direction matters. Adopting the web set in the worker would force-quote
+    // every `;`-bearing `user_agent` in the regulator's file — which is why
+    // ADR-037 D8 forbids the union — while adopting the worker set on the web
+    // would UNQUOTE `Martin; Dupont` and break the record.
+    expect(csvEscape('a,b')).toBe('"a,b"');
+    expect(escapeWebDialect('a,b')).toBe('"a,b"');
+    // The asymmetry stated as the property, not as a pair of examples.
+    expect(csvEscape('a;b')).toBe('a;b');
+    expect(escapeWebDialect('a;b')).toBe('"a;b"');
+  });
+
+  it('a triggering cell gets BOTH treatments on both surfaces', () => {
+    expect(escapeWebDialect('=a;b')).toBe('"\'=a;b"');
+    expect(csvEscape('=a,b')).toBe('"\'=a,b"');
+    // The case a user will report by name (P2-7).
+    expect(escapeWebDialect('+33 6 12 34 56 78')).toBe('"\'+33 6 12 34 56 78"');
+  });
+
+  it('AlertsExportButton’s old private copy was one property short — it prefixed but left the cell BARE', () => {
+    // PF-168 called that copy "ALREADY CORRECT". It prefixed, then tested the
+    // ORIGINAL against its quote regex, so `=1+1` shipped as bare `'=1+1`.
+    // Adopting the shared escaper changes that file's output bytes too, and this
+    // is the assertion that says which way.
+    expect(escapeWebDialect('=1+1')).toBe('"\'=1+1"');
+    expect(escapeWebDialect('=1+1')).not.toBe("'=1+1");
+  });
+
+  it('DELTA 3 — the two parent exports gain comma-quoting, and every grade row changes bytes', () => {
+    // Added by the land pass. The `escapeCell` copies deleted from
+    // parent/grades and parent/attendance quoted on `/[";\r\n]/` — NO comma.
+    // The shared escaper quotes on `/[",;\n\r]/`. So a French decimal, which is
+    // exactly what `GradeExportRow.scoreOn20` ("15,0") and `coefficient` ("1,5")
+    // are, now ships quoted. Harmless under the `;` delimiter, but it is a byte
+    // change on EVERY row of the parent grades export and the story documented
+    // only two deltas. Pinned here so the third is on the record rather than
+    // discovered by a parent whose file looks different.
+    expect(escapeWebDialect('15,0')).toBe('"15,0"');
+    expect(escapeWebDialect('1,5')).toBe('"1,5"');
+    // Same class for a comma-bearing free-text `Justification` / `Commentaire`.
+    expect(escapeWebDialect('Absent, justifié par la famille')).toBe(
+      '"Absent, justifié par la famille"',
+    );
+  });
+
+  it('non-triggering French text is byte-identical on BOTH dialects', () => {
+    for (const v of ['Évaluation trimestrielle', 'Prénom', 'Réussite (%)', '—', '']) {
+      expect(escapeWebDialect(v)).toBe(v);
+      expect(csvEscape(v)).toBe(v);
+    }
+    // `Martin; Dupont` quotes on the web (its separator) but is otherwise intact.
+    expect(escapeWebDialect('Martin; Dupont')).toBe('"Martin; Dupont"');
+    expect(escapeWebDialect('Il a dit "oui"')).toBe('"Il a dit ""oui"""');
+  });
+
+  it('nullish and numeric-ish inputs behave as at HEAD', () => {
+    // P2-10: the `s.length > 0` guard survived the lift — `''` stays `''` and
+    // does NOT become a bare apostrophe.
+    expect(csvEscape('')).toBe('');
+    expect(csvEscape(null)).toBe('');
+    expect(csvEscape(undefined)).toBe('');
+    expect(csvEscape(0)).toBe('0');
+    expect(neutraliseCsvCell('')).toEqual({ text: '', neutralised: false });
   });
 });
 

@@ -208,6 +208,15 @@ export function mapOneRosterBundle(bundle: OneRosterBundle): MappedBundle {
  * `ImportBatch.rawCsv` carries a faithful, re-parseable body (the existing
  * storage shape — `rawCsv` already holds the uploaded CSV for a human import,
  * so a OneRoster batch reuses it 1:1; the rollback/preview surfaces read it).
+ *
+ * **S-E05-1 / ADR-037 D8 — this is TRANSPORT CSV and must NOT be neutralised.**
+ * Stated as a rule rather than left to omission, because the next agent will
+ * otherwise "fix" it: `neutraliseCsvCell` from `@pilotage/contracts` belongs on
+ * PRESENTATION CSV — a file a human opens in a spreadsheet. The body produced
+ * here is never opened; it is stored as `ImportBatch.rawCsv` and **re-parsed** by
+ * the rollback and preview surfaces. Prefixing an apostrophe would write it into
+ * stored source data and corrupt the import. `scripts/csv-escape-check.js`
+ * excludes this site by name for the same reason.
  */
 export function rowsToCsv(headers: string[], rows: Record<string, string>[]): string {
   const escape = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);

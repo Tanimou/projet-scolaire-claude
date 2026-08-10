@@ -2,14 +2,36 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-07)** `in-progress` — **`S-E05-12` is the first slice of this epic to land**, and it is the only one
-with a written story. `S-E05-1` … `S-E05-11` exist as **rows in
+**Status (2026-08-10)** `in-progress` — **two slices have landed**: `S-E05-12` (2026-08-07) and **`S-E05-1` — one CSV
+neutraliser, lifted into `@pilotage/contracts`** (2026-08-10, closes `PF-168`). `S-E05-2` … `S-E05-11` and `S-E05-13`
+still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
-`docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story at all, so none of them is implementable
-without an authoring run first.
-**Next slice → not in this epic.** See "Next run" below: the two candidates are a **`sprint-02` authoring run** (which
-would enumerate `S-E05-1` … `S-E05-11`) and a **`V3-E04` `epic-spec` run**, and the second is the one the roadmap's own
-sequencing rule prefers.
+`docs/daily-improvement-v3/stories/sprint-01.md` enumerates no story for them, so none is implementable without an
+authoring run first.
+
+> **⚠️ `S-E05-1` was a COLLIDING id, and the collision was resolved in favour of the operator override.** This epic's
+> matrix already carried an unenumerated `S-E05-1` — *"Global custom roles are cross-tenant (`PF-08`) + `VAL-07`"*. The
+> `2026-08-10` operator override named `S-E05-1` as **the CSV neutraliser slice**, and per the routine's own rule the
+> override wins outright. Nothing was overwritten: the `PF-08` row had never been enumerated or implemented. It is
+> **renumbered `S-E05-13`** below and in `traceability-matrix.md` — `S-E05-12` was the highest id in use, so `13` is the
+> next genuinely free one. Recorded rather than silently absorbed, because two ids meaning two things is exactly how a
+> later run implements the wrong slice.
+
+**Next slice → `PF-173` — make the CSV escaper unbypassable, not merely unique.** `S-E05-1` shipped a **count-based**
+ratchet: all five of its rules are conditioned on an escaper *existing*, so a surface that hand-joins user data (or
+calls `csvRow`, a bare `cells.join(CSV_SEPARATOR)`) declares nothing and passes while shipping the exact defect
+`PF-168` names — and one such site is live today at
+`apps/web/src/app/teacher/reports/_components/ExportReportButton.tsx:68`. Two epics ago this codebase solved the
+identical shape with a **branded type** (`ADR-035`, `write-audit.ts`, `64f64dd` — *« a brand that makes it a type error
+to leave it »*); `csvEscape`/`csvFixed1` returning a branded `CsvCell` accepted only by `csvRow`/`buildCsv` does the
+same here, across seven call sites and no runtime change. Bundle with it the `node:vm` spec that **executes**
+`apps/web/src/lib/csv.ts` — nothing does today.
+
+**`PF-169` remains the epic's most-owed item**, ranked behind `PF-173` only because it is larger. `S-E05-1`
+deliberately did **not** take it (see the slice row below): the `;`+CRLF vs `,`+LF contradiction needs a **versioned,
+announced** format change with the consumer census `ADR-037` D6 defines, not a drive-by inside a security fix. It is
+named in a code comment in `apps/web/src/lib/csv.ts`, in `packages/contracts/src/security/csv-injection.ts` and in
+`ADR-037` D8 so it cannot be inherited silently.
 
 > **Why there is no `spec.md` here.** Same posture as
 > [`docs/spec/features/v3-e02/PROGRESS.md`](../v3-e02/PROGRESS.md) and
@@ -32,7 +54,8 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | Story | Title | State | Run | Evidence |
 |---|---|---|---|---|
 | **S-E05-12** | The post-authentication redirect target becomes same-origin-only, on all four portal login forms | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E05-12.md`](./stories/S-E05-12.md) · **`PF-102` closed**, `PF-103`'s `PORTAL_LANDING`-declared-twice note retired, no new finding raised · evidence below |
-| S-E05-1 | Global custom roles are cross-tenant (`PF-08`) + `VAL-07` | ⬜ unenumerated | — | matrix row only — no story in `sprint-01` |
+| **S-E05-1** | One CSV neutraliser, lifted into `@pilotage/contracts`, so the web exports stop shipping executable free text | ⚠️ done — **needs human review** (`[security]` tag) | 2026-08-10 | spec: [`stories/S-E05-1.md`](./stories/S-E05-1.md) · **`PF-168` closed**; **`PF-169` deliberately NOT taken** and left open with its reason recorded in code and in `ADR-037` D8 · decision: **`ADR-037` D8** · ratchet: `scripts/csv-escape-check.js` (`ci-gate.sh` stage 0d-bis + `ci.yml` lint job), driven by `apps/api/src/shared/quality/csv-escape-gate.spec.ts` · **count correction on the record:** `PF-168` said 2 `csvEscape` copies; the measured number was **3**, and **5** counting the two `escapeCell` copies its grep could not see · **raises `PF-173`** (the ratchet enforces uniqueness, not coverage) · **three** behaviour deltas, the third found at land |
+| S-E05-13 | Global custom roles are cross-tenant (`PF-08`) + `VAL-07` | ⬜ unenumerated | — | matrix row only — no story in `sprint-01`. **Renumbered from `S-E05-1`** on 2026-08-10 (id collision, see the header note); never enumerated or implemented under either id |
 | S-E05-2 | Privilege minting (`PF-09`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-3 | Coefficient-matrix foreign-tenant write (`PF-10`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
@@ -43,6 +66,114 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
 | S-E05-10 | Unused `hasPermission`, `users.suspend` unimplemented (`PF-52`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-11 | Non-atomic invite/permission rewrite, catalogue drift (`PF-53`) | ⬜ unenumerated | — | matrix row only |
+
+---
+
+## S-E05-1 — evidence (2026-08-10)
+
+### What the slice changed
+
+**One new module, five deleted escapers, one new ratchet, one ADR amendment.**
+
+- **`packages/contracts/src/security/csv-injection.ts` (NEW).** `CSV_INJECTION_TRIGGERS`, `CSV_NEUTRALISER` and
+  `neutraliseCsvCell(value) → { text, neutralised }`, declared **once** and re-exported through `security/index.ts` →
+  `src/index.ts`. Pure and import-free — no `zod`, no `node:*` — because it runs in a browser bundle, in a Node worker
+  and inside a `require()`-based gate script. **No class and no `instanceof`**: contracts resolves `types → src`,
+  `default → dist` (CJS, `ADR-037` D5, `dist/` git-ignored), so a spec and a runtime hold two different module objects;
+  a plain function returning an object literal cannot disagree with itself across that seam. The address is **not
+  novel** — `security/csp.ts` is already a pure security function at it, shared between the edge middleware and a gate.
+- **Five escapers deleted, two remain.** `apps/web/src/lib/csv.ts#csvEscape` (web dialect: quote set keeps `;`, join
+  `;` + CRLF + BOM) and `apps/worker/.../audit-csv.generator.ts#csvEscape` (worker dialect: quote set `[",\n\r]`,
+  join `,` + LF, both frozen by `ADR-037` D4/D6). The three private copies in `AlertsExportButton.tsx`,
+  `parent/grades/GradesExport.tsx` and `parent/attendance/AttendanceExport.tsx` are gone.
+- **`scripts/csv-escape-check.js` (NEW) + both harnesses.** `ci-gate.sh` **stage 0d-bis** (between the audit-write
+  stage and schema drift, **outside every `--quick` guard**) and its own step in `ci.yml`'s lint job — `ci.yml`
+  re-lists stages individually and never calls `ci-gate.sh`, which was verified rather than assumed.
+- **`docs/adr/ADR-037` D8**, taken under the forward reservation `S-E04-11` left (« a later amender reserves D8
+  onward »), with the header-table pointer, D9+ re-reserved, and D7's false sentence **struck through in place**.
+
+### The measurement that mattered: `PF-168`'s own count was wrong, and the gate is built around why
+
+`PF-168` recorded *« the sprint reported 3× `csvEscape`; the real count is 2 »*. Measured at `8e52da0`: **3**
+`csvEscape` declarations and **5** distinct CSV escapers, because two were named `escapeCell`. The finding grepped for
+the **name**. That blind spot is the design input for the ratchet, not a footnote:
+
+- rule A matches by **shape** (a body that tests a `"`-bearing character class **and** performs the RFC-4180
+  `.replace(/"/g, '""')`) as well as by name;
+- the walk root includes **`.tsx`** — three of the five copies lived in components, and a `.ts`-only walk would have
+  certified a surface it could not see;
+- rule B catches the trigger set assembled anywhere else, i.e. a copy that simply avoided the name;
+- rule D makes a **stale exclusion** a failure, so the two `apps/api` transport-CSV comments stay true or CI goes red;
+- rule E: no env var, no `--update`. On a two-row ceiling an « update the ceiling » flag *is* the off switch.
+
+The gate is AST-parsed rather than grepped for a concrete reason: four files quote the trigger array **in prose**, so a
+regex gate would false-red and the pressure would be to weaken rule B.
+
+### What executed
+
+| Check | Result |
+|---|---|
+| `pnpm typecheck` (Murat, **once**, main checkout) | **exit 0**, 13/13 Turbo tasks, 2m04s. `@pilotage/api` a genuine **cache miss**, so the new spec really compiled. `csv-injection.ts` resolves through the CJS build for both the worker and the `'use client'` web bundles |
+| `node scripts/csv-escape-check.js` | **PASS, exit 0** — 4 escapers over 6 roots: 2 sanctioned (`apps/web/src/lib/csv.ts:58`, `audit-csv.generator.ts:287`), both **importing and calling** `neutraliseCsvCell`; 2 named `apps/api` exclusions; 0 unaccounted. Grep-verified independently; watched **red both ways** with a real `.tsx` probe |
+| `npx jest src/shared/quality/csv-escape-gate.spec.ts` (api) | **54/54 PASS**, 42 s. Rules A–E each driven red **independently**, DNC-08 driven 8 ways against a real scratch tree, DNC-10 asserted in the negative |
+| `npx jest audit-csv.generator.spec.ts` (worker) | **RED at gate time — 1 failed / 72 passed**, and the failing assertion was the **claim**, not the code. Corrected at land; see the delta section below |
+| `git diff --check` | **exit 0**. The three CRLF lines are `core.autocrlf` advisories, not errors |
+| `ADR-037` `### D8` | present |
+
+### Three behaviour deltas — all intended, all stated here rather than discovered
+
+1. **A guardian phone `+33 6 12 34 56 78`** exports as `"'+33 6 12 34 56 78"`. Accepted, not accidental: uniform beats
+   an allowlist (`ADR-037` D7). `-` is a trigger and a leading `+` is one too.
+2. **`admin/alerts`' `=1+1`** was emitted **bare** as `'=1+1` — the old private copy prefixed the cell and then tested
+   the **original** against its quote regex. It now emits `"'=1+1"`. `PF-168` called that copy « already correct »;
+   that holds for the neutralisation and **not** for the force-quoting.
+3. **The two parent exports gain comma-quoting — found at LAND, not at implementation.** The deleted `escapeCell`
+   quoted on `/[";\r\n]/`, with **no comma**; the shared `csvEscape` quotes on `/[",;\n\r]/`. `Note /20`
+   (`scoreOn20`, a French decimal `"15,0"`) and `Coefficient` therefore now ship `"15,0"` / `"1,5"`, so **every row of
+   the parent grades export changes bytes**, and any comma-bearing `Justification` / `Commentaire` on attendance does
+   the same. It parses identically under `;`. **The implementation shipped a comment asserting the opposite** — « they
+   stay byte-identical » — in `GradesExport.tsx` and a matching false « the quote set is the one this file already
+   used » in `AttendanceExport.tsx`. Both comments are corrected in this diff and the delta is pinned by a named test
+   case. Recorded this way because a false sentence inside a security module is what the next editor trusts instead of
+   re-measuring.
+
+### `main` was red at the gate, and the assertion was what was wrong (`R-30`)
+
+`audit-csv.generator.spec.ts` asserted `escapeWebDialect('a,b') === 'a,b'` under the name *« a `,` quotes in the worker
+and does NOT quote on the web »*. `/[",;\n\r]/` is a class of **five** characters — the leading `",` was read as one
+token — and the web has quoted on a comma at `HEAD` too. **`apps/web/src/lib/csv.ts` was not touched to satisfy it.**
+The correction is not cosmetic: the two dialects are **not symmetric opposites**, the web set is a strict **superset**
+of the worker's differing only in `;`, and that is exactly why `ADR-037` D8 forbids the union in the worker direction
+while forbidding the reverse for a different reason (`Martin; Dupont` would unquote and break the record). The test
+name, the assertion and the surrounding comment now say *superset*.
+
+### Gates — every row answered, none blank
+
+| Gate | Triggers? | Why |
+|---|---|---|
+| **G-TRUTH** | **YES — primary** | The single-home property is held by an executed ratchet with no baseline and no `--update`, watched red both ways. **What it does NOT hold is recorded as `PF-173`**, not implied away |
+| **G-DNC** | **YES (always)** | DNC-10 asserted in the negative (no env var, no `--update`, only `--help`); DNC-08 vacuity and staleness driven 8 ways; DNC-06 sweep on `S-E04-11.md`, `v3-e04/PROGRESS.md` and D7's own false sentence |
+| **G-TENANT** | **NO** | Verified, not assumed: zero Prisma queries, zero `where`, zero `tenantId`, zero `StudentAccessService` path. The diff renders rows the caller was already authorised to see |
+| **G-AUTHZ** | **NO** | No guard, no permission, no role, no DTO |
+| **G-AUDIT** | **NO** | No privileged mutation and no `AuditLog` write. The worker's audit **export** is touched, and its bytes are proven unchanged (`csvEscape('Mozilla/5.0 (… NT 10.0; Win64; x64)')` is asserted to stay bare) |
+| **G-MIGRATION** | **NO** | `schema.prisma` untouched |
+| **G-PORTAL** | **NO** | Three portals' export surfaces are touched, but by one shared escaper with no portal-conditional branch |
+
+### Not claimed by `S-E05-1`
+
+| What is NOT claimed | Detail | Owner |
+|---|---|---|
+| **The ratchet closes *duplication*, and is blind to *omission*** | All five rules are conditioned on an escaper **existing**. A surface that hand-joins user data — or calls `csvRow`, a bare `cells.join(CSV_SEPARATOR)` typed `Array<string \| number>` — declares no escaper, assembles no trigger set and **passes every rule while shipping the exact defect `PF-168` names**. The live instance is `teacher/reports/_components/ExportReportButton.tsx:68`, `` lines.push(`Année;${academicYear?.name ?? ''}`) ``: tenant-authored text, no escape, no quoting, and Excel evaluates a formula in **any** column. Pre-existing; the slice's own header claimed the surface was covered, and that claim is **narrowed at land** in `apps/web/src/lib/csv.ts` and in the gate's sanctioned-entry reason. **The repo already owns the stronger mechanism**: `ADR-035` / `write-audit.ts` (`64f64dd`, *« a brand that makes it a type error to leave it »*) solved this shape with a branded type. `csvEscape`/`csvFixed1` returning a branded `CsvCell` that `csvRow`/`buildCsv` alone accept would convert « we count escapers » into « you cannot emit an unescaped cell » — and would retire rule C's status as the only executed evidence for the web half | **`PF-173`** |
+| **`PF-169` — the dialect** | Declined on purpose, in three places so it cannot be inherited silently. See the epic header | `PF-169`, this epic |
+| **Nothing executes `apps/web/src/lib/csv.ts`** | `apps/web` has Playwright only (`PF-129`/`PF-133`), and the worker spec's `escapeWebDialect` is a hand-written **mirror** that never imports the real file — a mirror that **drifted from it inside this same commit**, which is the proof it is not evidence. Rule C proves an import and a call exist; it cannot see what is composed, so the mutation this slice exists to close (test the quote regex against the **original** `v` rather than the neutralised `text` — exactly what the `admin/alerts` copy did) would pass every rule, typecheck and test here. The test-architect specified a `node:vm` spec that transpiles and executes the real module from the api jest project (one import, no top-level DOM access, `typescript` already `require`d by the sibling gate spec). **Not written in this slice** | next `V3-E05` slice |
+| **No browser and no spreadsheet** | No export button was clicked and no `.csv` was opened in Excel or LibreOffice. The three byte deltas are proven by assertion over the escaper, not by a rendered file | `VAL-08` |
+| **`ci.yml`'s stage is aspirational until billing clears** | The step is added in step with `ci-gate.sh` per `S-E02-2` AC-4, but with GitHub Actions billing-locked since 2026-07-28 (`PF-113`) the only **executing** enforcement is `ci-gate.sh`. The « blocking » language in both comments is a statement of intent | `PF-113` |
+| **A leading *space* is not a trigger** | `' =1+1'` — Excel with « trim spaces » on import, and Google Sheets on paste, both strip it and evaluate. This is `HEAD` behaviour carried over byte-for-byte, so it is not a regression; the shared module is now the single place where adding it costs one character | next `V3-E05` slice |
+| **An *embedded* tab is neither neutralised nor quoted** | Only the **first** character is inspected, and `[",;\n\r]` has no `\t`, so an embedded tab splits a cell on paste. Pre-existing on both surfaces, unchanged here | next `V3-E05` slice |
+| **`apps/web` now pulls the `@pilotage/contracts` CJS barrel into seven client bundles** for one 6-line function; `__exportStar` defeats tree-shaking. **31 web files already do this**, so it is precedent rather than regression — but D8's « no `./security` subpath » call makes it permanent, and two of the seven are parent-portal routes under the **<2 s** north star. **Cost unmeasured** | next `V3-E05` slice |
+| **`evaluateCsvEscapers` reads a field its own extractor never sets** | `scripts/csv-escape-check.js` — `escaper.fileImportsShared` is attached only in `main()`, so piping the exported extractor straight into the exported reconciler yields a spurious rule-C problem. The spec dodges it with hand-built records. Cosmetic; the exported core's contract should include the field | next `V3-E05` slice |
+| **The barrel chain is checked at two of three links** | The gate verifies `security/index.ts` re-exports `./csv-injection`, never that `src/index.ts` re-exports `./security`. It holds today (`packages/contracts/src/index.ts:7`); a third DNC-08 assertion would close it | next `V3-E05` slice |
+| **`node scripts/test-ratchet.js worker\|api` was not run** | CPU budget. The new spec passes standalone, so no `known-test-failures.json` entry is owed — but the **whole** worker suite was last driven before the land-pass correction to `audit-csv.generator.spec.ts` | run-scope note |
 
 ---
 
@@ -145,7 +276,35 @@ so it becomes false the day a request-supplied `link` appears.
 
 ## Next run
 
-**Not a `V3-E05` slice — nothing in this epic is enumerated.** Two candidates, in order:
+> **⚠️ Rewritten 2026-08-10 by the `S-E05-1` land pass — the section below is the `S-E05-12`-era text, kept struck
+> through rather than deleted.** It opened *« Not a `V3-E05` slice — nothing in this epic is enumerated »* and then
+> listed a `V3-E04` `epic-spec` run as candidate 1. Both are now **stale**: the `V3-E04` kit was written at run 28 and
+> ten of its eleven slices have shipped, and `V3-E05` **has** had a slice enumerated and landed since — this one, by a
+> 2026-08-10 operator override. Named rather than quietly overwritten, because this is exactly the paragraph the next
+> autonomous run reads at Step 1.
+
+**The current recommendation, in order.**
+
+1. **`S-E04-8`** — the hash chain from a declared genesis. It is the register-of-record pick
+   (`docs/daily-improvement-v3/NEXT.md`, `bmad/roadmap.md`) and shipping it moves `V3-E04` to `shipped`. Unchanged by
+   this run: run 39 was an **operator override**, not a re-sequencing.
+2. **A `V3-E05` follow-up that makes the CSV escaper unbypassable — `PF-173`.** Brand `csvEscape`/`csvFixed1` to
+   return a `CsvCell` and let `csvRow`/`buildCsv` accept only `CsvCell[]`, wrapping the one live unescaped site
+   (`teacher/reports/_components/ExportReportButton.tsx:68`) on the way through. Seven call sites, no runtime change,
+   and it converts the count-based ratchet this slice shipped into the type-based one `ADR-035` already established
+   for the audit seam. Bundle with it the `node:vm` spec that **executes** `apps/web/src/lib/csv.ts` — today nothing
+   does, and the mirror in the worker spec drifted from the real file inside a single commit.
+3. **`PF-169`** — the dialect reconciliation. This epic's most-owed item, but it is a **versioned, announced format
+   change** with the consumer census `ADR-037` D6 defines, so it ranks behind the two above rather than being taken as
+   a drive-by.
+
+The `S-E05-12` gate-coverage consolidation (`SINK` vocabulary, inline query read, `packages/ui` walk root) is
+unchanged in priority and now ranks fourth.
+
+<details>
+<summary><em>Struck-through `S-E05-12`-era text, 2026-08-07 — retained for provenance</em></summary>
+
+~~**Not a `V3-E05` slice — nothing in this epic is enumerated.**~~ Two candidates, in order:
 
 1. **`V3-E04` — a `sprint-02` authoring / `epic-spec` run** (audit trail and governance surfaces: `PF-14`, `PF-31`,
    `PF-32`). This is what the V3 roadmap's own sequencing rule prefers (`V3-E04` depends on `V3-E02`, which is
@@ -164,3 +323,5 @@ so it becomes false the day a request-supplied `link` appears.
 
 The third option, a **`V3-E06` follow-up** (resolve a baseline row's finding id against `audit-findings-index.md`
 instead of a regex; clear `PF-103` a/b/c), is unchanged in priority by this slice.
+
+</details>

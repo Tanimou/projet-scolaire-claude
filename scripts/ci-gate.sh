@@ -123,6 +123,39 @@ run_stage "compose invocation (documented command = documented stack)" node scri
 # Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
 run_stage "audit writes (every audit row through the seam, or baselined with an owner)" node scripts/audit-write-check.js
 
+# Stage 0d-bis — CSV escapers (S-E05-1, gates G-TRUTH / G-PORTAL / G-DNC, ADR-037 D8).
+#
+# PF-168 is one security predicate answered differently by different files: at
+# HEAD, "is this cell dangerous?" had FIVE implementations, and the same
+# operator-entered `profession` string escaped three different ways depending on
+# which export button emitted it. S-E05-1 lifted the predicate into
+# packages/contracts/src/security/csv-injection.ts and deleted the copies. This
+# stage is what stops the sixth one — PF-168 was itself raised against a slice
+# that had already "fixed" this once, which is the whole argument for a ratchet
+# rather than another sweep.
+#
+# It fails on: a CSV escaper anywhere under the walk root outside the two
+# sanctioned ones (detected by NAME *or* by SHAPE — an RFC-4180 quote-doubling
+# body — because two of the five deleted copies were called `escapeCell`, so a
+# name-only rule would be blind to exactly the defect being closed); the trigger
+# set re-assembled outside the shared module; or a sanctioned escaper that stops
+# importing and calling neutraliseCsvCell.
+#
+# The walk root includes .tsx, deliberately: three of the five copies lived in
+# components, so a .ts-only walk would certify a surface it could not see —
+# S-E06-5 at a third address. Two apps/api transport-CSV sites (stored and
+# re-parsed, never opened in a spreadsheet) are named exclusions, and a STALE
+# exclusion is itself a failure, so those two source comments stay true.
+#
+# There is no baseline file: after S-E05-1 the correct count is two and two is
+# the ceiling, so a "row to add" would be the off switch. It reads SOURCE only —
+# no build, no database, no generated client, ~1 s — so it runs here, early, and
+# OUTSIDE every --quick guard. Rule C is the ONLY executed evidence that the WEB
+# half of S-E05-1 is wired at all (apps/web has no unit runner, PF-129/PF-133),
+# and a documented flag that skips it is a DNC-10 hole with a house-style alibi.
+# Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
+run_stage "csv escapers (one neutraliser, two escapers)" node scripts/csv-escape-check.js
+
 # Stage 0e — schema drift. Editing apps/api/prisma/schema.prisma WITHOUT writing
 # a migration passed every stage in this file. Stage 1 below runs `prisma
 # generate`, which happily generates a client for a schema no migration produces;

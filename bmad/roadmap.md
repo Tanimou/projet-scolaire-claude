@@ -93,8 +93,37 @@ that `docs/daily-improvement-v3/stories/` held only `sprint-01.md` — which `S-
 rather than quietly overwritten, because a ledger claim that the next autonomous run reads at Step 1 is exactly the
 kind of stale truth that makes it re-implement work that already shipped.)*
 
+**V3 slice ledger — `V3-E05` · AuthN/AuthZ hardening and permission integrity · layer L0 · `in-progress` (2026-08-10) — 2 of 13 slices shipped**
+
+*(This ledger did not exist before 2026-08-10. `V3-E05` had shipped one slice — `S-E05-12`, run 25 — and it was
+recorded only in `docs/spec/features/v3-e05/PROGRESS.md`, so a reader who stopped at this file would have concluded the
+epic had never been entered. Added by the `S-E05-1` land pass rather than left implicit. The denominator is **13**, not
+12: `S-E05-13` is the `PF-08` row **renumbered** off the id `S-E05-1` — see the row below.)*
+
+| Slice | State |
+|---|---|
+| **`S-E05-12`** — the post-authentication redirect target becomes **same-origin-only** on all four portal login forms. One pure, import-free `safeCallbackUrl(raw, fallback)` validated **once at the read**, so both sinks (`router.push` and `signIn(…, { callbackUrl })`) inherit one safe binding; the fifth copy of the portal landing paths deleted onto `PORTAL_LANDING`. The load-bearing result: **the fix the findings index itself recommended was measured and proved exploitable on four inputs** (`/<TAB>//evil` and friends — the WHATWG parser strips C0 bytes *before* parsing, so the check passes on a string that then navigates off-origin), and the index was corrected in the same commit. Closes **`PF-102`**; retires `PF-103(d)`'s instance; queues six gate-coverage residuals | ⚠️ 2026-08-07 — landed needing human review (NOT auto-merged) |
+| **`S-E05-1`** — **one CSV neutraliser, lifted into `@pilotage/contracts`, so the web exports stop shipping executable free text.** `PF-168` reported « 2 » `csvEscape` copies because it grepped the **name**; the measured tree held **3** `csvEscape` **plus 2 `escapeCell`** — five escapers, three of them in `.tsx`. All five are gone: `neutraliseCsvCell` / `CSV_INJECTION_TRIGGERS` / `CSV_NEUTRALISER` are declared **once**, in a pure, import-free `packages/contracts/src/security/csv-injection.ts` (the `security/csp.ts` address precedent — no class, no `instanceof`, because contracts resolves `types → src` and `default → dist`), and exactly two escapers consume it. Two parent-portal surfaces gain neutralisation **for the first time** (`Commentaire` on grades, `Justification`/`Commentaire` on attendance — free text about a named child), and `admin/alerts`' half-fix, which prefixed the cell then tested the **original** against its quote regex and so shipped `'=1+1` bare, is corrected. **The `DIALECT` is deliberately NOT shared and `PF-169` stays open** (`ADR-037` D8 (ii)): folding the two quote sets into one union would force-quote every worker cell containing a `;` — `audit_log.user_agent` is one column away — and silently rewrite the regulator's file whose byte offsets D4/D6 froze. The single-home property is held by **`scripts/csv-escape-check.js`** (AST-parsed, `.tsx` in the walk root, rule A matching by **shape** as well as name, **no baseline and no `--update`**, stale exclusions themselves a failure), wired as `ci-gate.sh` stage 0d-bis and as its own `ci.yml` lint step, and driven by a 54-case spec. Ships **`ADR-037` D8**, which also **strikes through** D7's false « `csvEscape` is not duplicated anywhere » (that survey covered export generators only — `R-30`). **Three behaviour deltas, all intended and all stated**: a guardian phone `+33 …` now exports `"'+33 …"`; `admin/alerts`' `=1+1` becomes `"'=1+1"`; and — found at land, not at implementation — the two parent exports gain **comma-quoting**, so `Note /20` and `Coefficient` ship `"15,0"` / `"1,5"` and **every row of the parent grades export changes bytes**. Closes **`PF-168`**; leaves **`PF-169`** open by decision; raises **`PF-173`** | ⚠️ 2026-08-10 — landed needing human review (NOT auto-merged) |
+| `S-E05-13` … `S-E05-11` (11 rows) | ⬜ **unenumerated** — matrix rows only. `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no story for any of them, so none is implementable without an authoring run first. Per-row detail in [`docs/spec/features/v3-e05/PROGRESS.md`](../docs/spec/features/v3-e05/PROGRESS.md) |
+
+**`S-E05-1` was a COLLIDING id, and the collision was resolved in favour of the operator override.** This epic's matrix
+already carried an unenumerated `S-E05-1` — *« Global custom roles are cross-tenant (`PF-08`) + `VAL-07` »*. The
+2026-08-10 operator override named `S-E05-1` as **the CSV neutraliser slice**, and per the routine's own rule the
+override wins outright. Nothing was overwritten: the `PF-08` row had never been enumerated or implemented. It is
+**renumbered `S-E05-13`** in `docs/spec/features/v3-e05/PROGRESS.md` and in `traceability/OPEN.md:24` (`S-E05-12` was
+the highest id in use, so `13` is the next genuinely free one). Recorded rather than silently absorbed, because two ids
+meaning two things is exactly how a later run implements the wrong slice.
+
+**`V3-E05`'s most-owed item is now `PF-169`**, the dialect half `S-E05-1` deliberately declined: `;`+CRLF on the web vs
+`,`+LF in the worker, both citing French Excel. It needs a **versioned, announced** format change with the consumer
+census `ADR-037` D6 already defines — not a drive-by inside a security fix. Named in `apps/web/src/lib/csv.ts`, in
+`packages/contracts/src/security/csv-injection.ts` and in `ADR-037` D8 so it cannot be inherited silently.
+
 **Next V3 slice → `S-E04-8` — the hash chain from a declared genesis, its verification, and the documented gap. It
 is the LAST slice of the epic: shipping it moves `V3-E04` to `shipped`.**
+*(Unchanged by run 39. That run shipped `S-E05-1` under a **2026-08-10 operator override** naming the epic and the
+slice, so this pointer was not consumed and is not stale — the override took precedence for one run, it did not
+re-sequence the programme. If no override is in force, `S-E04-8` is still the pick.)*
 *(`docs/daily-improvement-v3/NEXT.md` is the register of record. `S-E04-8`'s `blockedBy` — `S-E04-3`, `S-E04-6`,
 `S-E04-7` — has been fully satisfied since 2026-08-09; what held it back was the epic's own ruling that the chain goes
 last, plus `PF-163`. `S-E04-9` shipped 2026-08-10 and discharged the half of `PF-163` that made chaining unsafe.
