@@ -20,6 +20,10 @@
   `S-E04-8`, while the shipped file already contained **D8, D9 and D10**, written by `S-E04-6` — the
   reservation was violated before it was ever read. `S-E04-7` is the first amender and therefore uses
   **D11–D14** and moves the reservation clear of them, so the next amendment cannot land on a collision.
+  **Reservation corrected again by `S-E04-9`.** `D15` was claimed three times — by the reservation above, by
+  `PROGRESS.md:1715` (the carried `revokeRole` record owed to `S-E04-9`), and by this slice. The amender that
+  lands defines the allocation: `S-E04-9` takes **D15–D17**, the carried `revokeRole` / `isSchoolUpdateNoOp`
+  documentation correction takes **D18**, and **`S-E04-8` reserves D19 onward**.
 
 ---
 
@@ -476,3 +480,221 @@ Phase A, which passes the map key. This slice creates the first **two-hop** chai
 out of the written set, after which the gate's reverse-completeness direction demanded their real French
 labels be **deleted**. Exactly the failure D6 exists to pre-empt, arriving through a path separator. The
 resolution now iterates map **entries**, and the ten codes are pinned by name.
+
+---
+
+## S-E04-9 amendment — a rollback that leaves an account behind is not a rollback
+
+> **Amendment, not a new file.** `tasks.md` cross-slice ruling #9 allocates exactly three ADRs to this epic
+> and `S-E04-9` is not one of them; creating an `ADR-038` here would itself be the ADR-drift finding this
+> epic exists to remove. Three decisions land below, numbered **D15–D17**. The subject *is* D2's blast
+> radius: D2 wrote that *"the cost is stated rather than discovered later"*, and this slice is the discovery
+> that at one site the cost was understated.
+>
+> **Numbering, ruled — D15 was claimed three times and no claimant had landed.** The header reserves
+> *"D15 onward"* for `S-E04-8` (chain); `PROGRESS.md`'s *"What is owed"* table (`:1715`) assigns `ADR-035 D15`
+> to `S-E04-9` for the carried `revokeRole` `updateMany` / no-op record; and this slice needs decision
+> numbers of its own. Per the `S-E04-7` precedent (*the amender that lands defines the allocation*):
+> **this slice takes D15–D17**, the carried `revokeRole` / `isSchoolUpdateNoOp` documentation correction
+> takes **D18**, and **`S-E04-8` reserves D19 onward**.
+>
+> **Scope disagreement, recorded rather than silently discharged.** `PROGRESS.md:1715-1720` also loads
+> `S-E04-9` with three `S-E04-10` carry-overs (`enrollment.cancel`'s `before.endReason`,
+> `isSchoolUpdateNoOp` defaulting to `true`, `schools.controller.spec.ts` S-5's hand-copied pipe literal).
+> The operator slice is single-seam and excludes all four. They are **dropped from this slice, not
+> resolved** — they must be re-pointed at a later slice rather than left believed-done.
+
+### The measurement — what S-E04-7 left reachable at this one site
+
+`S-E04-7` wrapped `invite.controller.ts` steps 5-7 (profile · optional custom role · audit row) in one
+`$transaction` and, correctly, kept every Keycloak call outside it. But steps 3-4 had **already** created an
+enabled realm identity and mailed its activation link, and neither is reversible. D2 makes an audit-insert
+failure fatal, so a rollback left an **enabled `school_admin` with no `UserProfile`** — and step 1 then
+refused every retry with *« Un utilisateur existe déjà … Il peut se connecter directement »*, advice that
+**completes** the failure: on first login `UserSyncService.ensureUser` finds no profile, self-provisions one
+under `DEMO_TENANT_SLUG`, and derives permissions from `REALM_ROLE_PERMISSIONS`. The invitee lands in the
+wrong tenant with admin powers. That is the ADR-002 invariant, reached through a DB fault —
+availability-triggered, not attacker-triggered, and registered as **`PF-163` (P1)**.
+
+**D9 is MARKED stale here, not rewritten** (the `S-E04-7` precedent: a decision records what was true when
+it was taken). D9 lists the invite path’s remaining gaps as `PF-153` / `PF-156`; it does not say that D2’s
+fail-closed rule is reachable at a site with a committed, irreversible external side effect. D15 below is
+that correction.
+
+Resolution **(a) COMPENSATE** was taken. Resolution (b) — baselining `invite.controller.ts` back out under
+`best-effort-post-commit` — was refused: it only narrows the trigger from *"profile OR role OR audit write
+fails"* to *"profile OR role fails"*, leaves the escalation path fully reachable, and trades away the
+fail-closed guarantee `S-E04-7` had just established at this site. `scripts/audit-write-baseline.json` and
+its `27 = 10 + 17` arithmetic are untouched.
+
+### D15 — a non-transactional external side effect gets a compensating action, and the compensation never masks the cause
+
+Keycloak has no transaction to join. The boundary is therefore restated: **mutation and audit inside the
+transaction; the compensating delete after the rollback, outside it.** Mechanically:
+
+```ts
+const profile = await this.persistInvitedProfile({ … }).catch(async (cause: unknown): Promise<never> => {
+  if (createdKeycloakUser) await this.compensateOrphanedKeycloakUser(kcUserId, cause);
+  throw cause;
+});
+```
+
+**`.catch()` and a private method, not a `try` — this is load-bearing, not taste.**
+`scripts/audit-write-check.js:265-274` (`insideTryBlock`) walks the **entire** ancestor chain of every
+`writeAudit` node with no function-boundary stop. The obvious shape —
+`try { await this.prisma.$transaction(async (tx) => { … writeAudit(tx, {…}) … }) } catch { … }` — puts the
+call lexically inside a `try`, rule B fires (`:569`), and stage 0d of `ci-gate.sh` plus the lint job both go
+red without one character of `writeAudit` changing. Two independent guards are used rather than one: the
+transaction body lives in its own method (`persistInvitedProfile`, which contains no `try`), **and** the call
+site uses a `.catch()` continuation. Rule B still resolves `tx` correctly, because `transactionBindingOf`
+(`:306-330`) binds on the arrow function whose `parent` is the `…$transaction(…)` `CallExpression`, and
+appending `.catch()` does not change that parent.
+
+**Two outcomes, both loud.**
+
+| Outcome | What the caller gets |
+|---|---|
+| compensation succeeds | `throw cause` — the ORIGINAL error, same class, same message. For the dominant case that is `AUDIT_WRITE_FAILED_MESSAGE` (`write-audit.ts:129`), which is now literally **true**: nothing survives. |
+| compensation fails | `Logger.error` carrying the orphan id and the original cause, then an `InternalServerErrorException({ message, kcUserId }, { cause })`. |
+
+The failure copy names the orphan **inside the message string**, not only in a sibling field.
+`apps/web/src/app/admin/users/invite/actions.ts:26-34` reads **only** `body.message` and discards every other
+key, and `InviteForm.tsx:293-301` renders that one string raw in a `role="alert"` block — so the pre-existing
+`BadRequestException({ message, kcUserId })` at `:126-129` already loses its id in the UI today. The
+structured field is kept for logs and machines; the sentence is what a human reads. It carries no support
+address: `SUPPORT_EMAIL` lives in `apps/web/src/lib/support-contact.ts` precisely because four hard-coded
+copies drifted (PF-17 / PF-54), and a fifth on the API side would be that defect again.
+
+**`deleteUser`, and the one exception in it.** `KeycloakAdminService` gains exactly **one** method —
+`DELETE /admin/realms/{realm}/users/{id}` through the existing private `adminFetch`, `Promise<void>`,
+`InternalServerErrorException(\`Keycloak deleteUser: HTTP ${status}\`)`, no body parsed (204 has none). The
+stated exception is **`404` returns without throwing**: already gone is the desired state, and a
+compensation that manufactures a phantom orphan — sending an operator hunting an id that no longer exists —
+is worse than one that is idempotent. No `disableUser` fallback: `getToken` authenticates as the master-realm
+admin, so `DELETE` is available, and a fallback would add a third failure state and a second untested path.
+
+**Three things recorded rather than left implicit:**
+
+1. **`deleteUser` itself is unit-untested.** No spec in this repository mocks `global.fetch` (grepped: zero
+   hits), and inventing the first fetch-mocking harness on a compensation slice would be a new test
+   convention riding in. The controller spec injects a fake `KeycloakAdminService`, which is the house
+   pattern. The gap is named here rather than papered over.
+2. **The compensation is not bounded by a timeout.** No call in `KeycloakAdminService` sets an
+   `AbortSignal`, so a hung Keycloak stretches the admin's spinner and can, in the worst case, cost them the
+   original error. Retrofitting one call only would be off-convention (AC-3 says follow the file's
+   conventions exactly); it is a follow-up on the **service as a whole**, not a patch here.
+3. **The original error is re-thrown unmapped.** A `P2002` on `user_profile` still surfaces as a raw driver
+   error. Mapping it to a French `ConflictException` would be a strictly better message and would contradict
+   AC-1's *"the original cause remains the reported one"*; the pre-checks in D16 make that race the only way
+   to reach it. Registered, not fixed.
+4. **`register.controller.ts:94-123` is the second instance of the same shape** — an unauthenticated public
+   endpoint that creates a Keycloak identity, sets a caller-chosen **permanent** password, and only then
+   creates the profile, outside any transaction. It is deliberately **not** changed here, and it is one of
+   the reasons D16 refuses to adopt a pre-existing identity at all.
+5. **The SMTP-failure branch is still uncompensated, and therefore still leaves an orphan.** Its message —
+   *« Utilisateur créé dans Keycloak mais l'envoi de l'email a échoué… »* — is accurate, and deleting the
+   account there would make it false, so the branch is unchanged. The consequence, now that D16 withdraws the
+   repair path, is that an SMTP outage still produces a profile-less identity and the retry is still refused.
+   That is a **different trigger** (mail-server availability, not the audit rollback PF-163 named) and closing
+   it means changing user-facing copy under `apps/web`. Carried, not absorbed.
+
+### D16 — the conflict check stays a refusal: "no local profile" is NOT evidence of an orphan
+
+**This decision reverses a draft of this same slice.** That draft turned step 1's dead end into a *repair
+path*: when `findUserByEmail` found an identity and two local reads found no `UserProfile` anywhere, the
+handler adopted the identity — added the realm role, overwrote the password, replaced the required actions,
+mailed the activation link, and bound `authProviderId` to `me.tenantId`. Three independent reviewers raised
+it as a blocker on the same ground, and the ground holds. **The adoption branch is withdrawn; step 1 is
+byte-identical to its pre-slice behaviour.**
+
+**Why the premise was false.** AC-4 asserted that *"a Keycloak account with no local `UserProfile` is a state
+produced by exactly this bug"*. It is a state produced by **normal operation**:
+
+| Fact | Where |
+|---|---|
+| `UserProfile` rows are created **lazily, on first login** — never at provisioning time | `user-sync.service.ts:23-56` |
+| Three enabled realm identities ship with **no** profile: `admin@` / `teacher@` / `parent@pilotage.local` | `infra/keycloak/realm-export.json`; absent from `apps/api/prisma/seed-demo.ts` |
+| **One realm holds every tenant**, so those identities are reachable from any tenant | ADR-004 |
+
+So the probe matched *every never-onboarded account*, not the orphan PF-163 makes. Composed with
+`@RequiresPermission('users.write')` — held by `school_admin` (`permissions.constants.ts:166`) — the draft
+handed any school admin, in **any** tenant, a primitive that: destroyed an existing identity's credential,
+**added** a realm role to it, replaced its required actions, mailed its owner an activation link, and — since
+`authProviderId` is `@unique` **globally** (`schema.prisma:838`) — bound that identity **permanently** to the
+adopter's tenant. Cross-tenant identity capture plus credential denial-of-service, reached through the very
+door this slice opened. `G-TENANT`'s guarantee *"adopting an identity adopts no tenant"* was true of the DB
+row and false of the realm identity.
+
+The draft's own justification only analysed the **attacker-pre-registers** direction (hence the credential
+reset). The inverse — **reset-as-a-weapon against a legitimate identity** — was never analysed. A safety
+argument that enumerates one producer of a state and concludes about all of them is the defect, independent
+of the code.
+
+**Why the marker fix is not taken here either.** The sound version of adoption needs *positive* evidence that
+this flow minted the identity: a Keycloak attribute stamped at `createUser` time (e.g.
+`pilotageInvitePending: [tenantId]`), read back and matched against `me.tenantId`. It cannot be written in
+this slice: the deployment runs **Keycloak 26** (`infra/docker-compose.yml:184`), whose declarative user
+profile **disables unmanaged attributes by default**, and `realm-export.json` declares no `components` — so
+the attribute would be dropped on write and never read back, and adoption would silently never fire. Making
+it work means a realm-configuration change plus an operator re-import, which is a deploy-surface change, not
+a controller change. The local alternative — an invite-intent row keyed on `(tenantId, email)`, written
+before the irreversible Keycloak call and consumed by the repair — is a **schema change**, and `G-MIGRATION`
+does not trigger in this slice. **Re-pointed at a later slice with the right fan-out; not silently dropped.**
+
+**Nothing of PF-163 is lost by the withdrawal.** The escalation path is closed by the *stronger* half of the
+fix: D15's compensation **deletes** the orphan, so the dead end never forms; and when the delete itself fails,
+the admin is handed the id and told to have it cleaned up (AC-2). Repairing an orphan was only ever the
+second-best remedy for a state the compensation now prevents.
+
+**`findUserByEmail` returns `users[0] ?? null`.** Refusing on an arbitrary first match is the pre-existing,
+conservative behaviour and stays. It is *acting* on an arbitrary first match that would have been the new
+exposure — which is now no longer reachable.
+
+### D17 — the refusal is uniform, and it is uniform *structurally*
+
+There is **one** refusal branch and **one** `throw` of **one** `ConflictException`, built by a single
+module-level function. Indistinguishability is therefore a property of the control flow, not of two literals
+kept in sync: a same-tenant profile, a foreign-tenant profile and a never-onboarded realm identity all yield
+the same status and the same string.
+
+**The one-bit existence residual of the draft is GONE, not merely documented.** The draft returned 200 for a
+"repairable" address and 409 for a taken one, which disclosed *"a Keycloak identity exists here and no
+profile claims it"*. With adoption withdrawn, the handler issues **no local read at all** on the refusal path
+— neither the `authProviderId` `findUnique` nor the untenanted `userProfile.count({ where: { email } })` — so
+the only untenanted query the slice would have introduced does not exist. `invite.controller.spec.ts` case
+(vii) pins that: both Prisma mocks must be uncalled.
+
+The tenant field that carries the scoping is **`UserProfile.tenantId`, always `me.tenantId` from
+`UserSyncService.ensureUser(jwt)`** — never a body or path value, never derived from the Keycloak payload
+(D7's rule). A comment at the create says exactly this.
+
+### What this amendment deliberately does NOT change
+
+- **The email-failure branch.** It still keeps the account and still says so. Compensating there would make
+  its own advice false, and its message is accurate: the temporary password is real and the account usable.
+  Decided in a comment at the site, not by silence — and its residual is item 5 of D15.
+- **`writeAudit` at the audit call.** One unconditional statement, inline object literal, transaction client
+  first, no `try` (AC-7). It moved *file-internally* into `persistInvitedProfile`; the shape is what is
+  pinned, and `scripts/audit-write-baseline.json` is unaffected because this file holds no `auditLog.create`
+  site. The action stays **`user.invite`**, the resource type **`user_profile`**, and the `after:` payload
+  keeps **exactly** its four pre-existing keys: the draft's `repairedExistingKeycloakUser` key went out with
+  the branch it described, so no audit-vocabulary surface changes here at all.
+- **Who may invite.** `@RequiresPermission('users.write')` is unchanged, and
+  `provenance-callsites.spec.ts:654` stays green and unedited.
+- **`user-sync.service.ts`.** Its demo-tenant self-provisioning is the *amplifier* of PF-163, not its
+  trigger. Changing it is a first-login authorisation change across four portals and is registered
+  separately.
+- **`PF-156` / `PF-153`.** Untouched and still open (V3-E05).
+- **No schema change.** G-MIGRATION does not trigger. The invite-intent table a sound repair path would need
+  is exactly such a change, which is why D16 **defers the repair path** rather than improvising a marker.
+
+### One finding this slice exposed and did NOT take
+
+`invite.controller.ts` step 6 grants a custom DB role from `tx.role.findFirst({ where: { slug } })`. `Role`
+has **no `tenantId`** (only `schoolId String?`, `@@unique([schoolId, slug])`), so the first matching row
+across all schools and tenants wins — and when nothing matches the block is a **silent no-op** that still
+returns `ok: true` while the audit row records `customRoleSlug: X` as though it had been granted. Tenant-
+keying it needs a join through `School`; recording `customRoleGranted` in `after` would be cheap but is a
+second added key beyond the one this slice is permitted. **Registered as a new finding, deliberately not
+closed here.** `traceability/OPEN.md:55`'s note that `customRoleSlug` is silently lost on the PF-163 path
+stays open with it.

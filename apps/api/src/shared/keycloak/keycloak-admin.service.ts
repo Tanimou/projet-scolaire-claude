@@ -161,6 +161,24 @@ export class KeycloakAdminService {
     return id;
   }
 
+  /**
+   * Delete a user. Used as the COMPENSATING action when a mutation that
+   * followed an irreversible `createUser` rolls back (S-E04-9, `ADR-035` D15):
+   * Keycloak has no transaction to join, so an enabled account with no local
+   * `UserProfile` is the residue, and on first login `UserSyncService` would
+   * self-provision it into the demo tenant with realm-derived permissions.
+   *
+   * **404 is a SUCCESS, not a failure.** Already gone is the desired state, and
+   * a compensation that manufactures a phantom orphan — sending an operator
+   * hunting for an id that no longer exists — is worse than one that is
+   * idempotent. The response is 204 with no body; nothing is parsed.
+   */
+  async deleteUser(userId: string): Promise<void> {
+    const res = await this.adminFetch(`/users/${userId}`, { method: 'DELETE' });
+    if (res.status === 404) return;
+    if (!res.ok) throw new InternalServerErrorException(`Keycloak deleteUser: HTTP ${res.status}`);
+  }
+
   /** Assign realm roles to a user. */
   async assignRealmRoles(userId: string, roleNames: string[]): Promise<void> {
     const rolesRes = await this.adminFetch(`/roles`);

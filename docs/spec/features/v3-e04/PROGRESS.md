@@ -4,7 +4,7 @@
 **Depends on** `V3-E02` (`code-complete` 2026-08-08 — dependency satisfied) · **Blocks** `V3-E03`, `V3-E11`
 **Risks** `R-10` (accepted), `A-01` (permanent) · **Referenced, not fixed:** `PF-96`
 
-**Status (2026-08-09, after `S-E04-10`)** — **`in-progress`. 8 of 10 slices shipped.**
+**Status (2026-08-10, after `S-E04-9`)** — **`in-progress`. 9 of 10 slices shipped.**
 
 The `epic-spec` run wrote `spec.md`, `plan.md`, `data-model.md`, `contracts/openapi.yaml`, `ux.md`, `tasks.md`,
 `quickstart.md` and this file, and touched no code. **`S-E04-1` then shipped** the shared provenance home, the eight
@@ -29,44 +29,34 @@ left `UpdateSchoolDto` so a closure can no longer file itself as `school.update`
 three families that wrote a `critical` row for a non-event (`PF-158`), `address` joined `school.update`'s
 `before`/`after` (`PF-159`), `revokeRole`'s decision moved **inside** its transaction (`PF-157`), and the 26 finding
 ids the ledger cited but the register did not declare were appended (`TOOL-01`) — evidence in § `S-E04-10` below.
-**`S-E04-9` and `S-E04-8` remain open**, and every gate they own is still described by **how it will be evidenced**,
-never as met.
+**`S-E04-9` shipped** the compensating action the epic's fail-closed posture had been missing at its one
+non-transactional site: an aborted invite transaction now **deletes** the Keycloak identity it created, a failed
+compensation names the orphan instead of swallowing it, and the draft's second remedy — *adopting* a profile-less
+realm identity — was **withdrawn at implementation** because its premise matched every never-logged-in account —
+evidence in § `S-E04-9` below. **`S-E04-8` alone remains open**, and every gate it owns is still described by **how it
+will be evidenced**, never as met.
 
-> ### ▶ Next slice → **`S-E04-9`** — the invite path stops trading an account for an audit row (`PF-163`, **P1**)
+> ### ▶ Next slice → **`S-E04-8`** — the hash chain from a declared genesis, its verification, and the documented gap
 >
-> `[api][auth][audit]` · size **S–M** · G-AUDIT, G-AUTHZ, G-TENANT · `G-MIGRATION` expected **not** to trigger ·
-> **blockedBy** `S-E04-7` ✅. **Its one blocking prerequisite is now discharged:** `S-E04-10` appended the 26 missing
-> ids to `audit-findings-index.md`, so a `scripts/audit-write-check.js` baseline row owned by `PF-163` resolves
-> instead of being *correctly* refused.
+> **It is the last slice of the epic: shipping it moves `V3-E04` to `shipped`.**
 >
-> There is no `tasks.md` entry and no story file. **The contract is `PF-163`'s row in `traceability/OPEN.md`**, which
-> states the defect and both acceptable resolutions:
+> **What `S-E04-9` hands it, and what it does NOT.** `PF-163` is the reason this slice was held back — a chain
+> computed over an invite path that could trade an account for an audit row is a verifiable record over a hole.
+> `S-E04-9` closed that trigger: the rollback compensates, and it does so *without* touching the seam, the baseline
+> arithmetic (`38 = 21 + 17`) or `writeAudit`'s call shape, so `S-E04-8` inherits the same ratchet it was promised.
+> **`PF-163` is narrowed, not closed** — its row stays `open` in `traceability/OPEN.md`. Two residuals travel with it:
+> the step-4 **SMTP** branch is uncompensated *by decision* (a mail outage still strands a profile-less identity whose
+> retry step 1 refuses — a different, and more probable, trigger than the audit rollback), and a **human ruling** is
+> owed on whether that is compatible with calling `PF-163` resolved. Neither blocks the chain.
 >
-> - `invite.controller.ts:138` — `S-E04-7` wrapped steps 5–7 in one `$transaction` and correctly kept Keycloak
->   outside it, but steps 3–4 **already** created the Keycloak user and sent the activation mail, and neither is
->   reversible. `ADR-035` D2 makes an audit-insert failure fatal, so a rollback now strands an **enabled Keycloak
->   identity holding `school_admin`/`teacher` with no `UserProfile`** — which `UserSyncService.ensureUser`
->   self-provisions on first login into `DEMO_TENANT_SLUG` with realm-derived permissions. That is the `ADR-002`
->   invariant, broken by an availability fault. Before `S-E04-7` the same fault cost one audit row.
-> - **(a)** compensate — delete or disable the fresh `kcUserId` when the transaction aborts, and/or let step 1 repair
->   a Keycloak account with no local profile; or **(b)** drop `invite` back out of the sweep and baseline it under
->   `best-effort-post-commit`, moving the arithmetic to 9 + 18 = 27 in `audit-write-baseline.json` and the gate spec.
-> - Either way, the missing `invite.controller.spec.ts` — a fake `$transaction` that **stages then commits**, so a
->   callback throw is *observably* not persisted — is what would have caught it.
->
-> **`S-E04-10` leaves `S-E04-9` one piece of unfinished business of its own:** `ADR-035` **D15 is owed** and was not
-> written by that slice (see § `S-E04-10`, « What is owed »). `D10` items 1 and 2 now assert the opposite of the
-> shipped code.
->
-> ### Then → **`S-E04-8`** — the hash chain from a declared genesis, its verification, and the documented gap
+> ### The five things the epic hands `S-E04-8`, none of which it may silently re-decide
 >
 > `[schema][api][web][gate]` · size **M–L** · **`G-MIGRATION` DOES trigger** — the only migration this epic still
 > owes · G-AUDIT, G-AUTHZ, G-TENANT, G-DNC · no new ADR (**`ADR-035` is amended again**) · **blockedBy**
-> `S-E04-3` ✅, `S-E04-6` ✅, **`S-E04-7` ✅ — dependency-wise it is unblocked; it is ordered after `S-E04-9` by the
-> epic's own ruling (do not chain over `PF-163`), not by a dependency. It is the last slice of the epic: shipping it
-> moves `V3-E04` to `shipped`.**
+> `S-E04-3` ✅, `S-E04-6` ✅, `S-E04-7` ✅, **`S-E04-9` ✅ — the ordering constraint (do not chain over `PF-163`) is
+> discharged as of 2026-08-10; it was never a dependency.**
 >
-> Start at `tasks.md` § `S-E04-8`. Five things the epic hands over, none of which it may silently re-decide:
+> Start at `tasks.md` § `S-E04-8`:
 >
 > 1. **The chain has never existed.** `hash` / `prev_hash` are nullable columns written by **no call site anywhere**
 >    — 0 of 54 rows (M-2). An append-only table with no chain is append-only *by convention*, and convention is what
@@ -90,7 +80,7 @@ never as met.
 >
 > Run `quickstart.md` §5 before writing code: the measurement table is meant to be **falsified**, not trusted.
 >
-> **A human owns four things before this runs, and they accumulate.** `S-E04-5`'s four cheap merge conditions:
+> **A human owns five things before this runs, and they accumulate.** `S-E04-5`'s four cheap merge conditions:
 > `PF-144` (two `@pilotage/ui` props with zero call sites, so `AC-9`'s rendering half is unreachable), `PF-145` (a
 > malformed date renders as a service outage), `PF-146` (a malformed export parameter removes the window's lower
 > bound), `PF-149` (full-ICU on `node:22-alpine` is asserted and never measured). **`S-E04-6`'s posture decision**:
@@ -101,7 +91,13 @@ never as met.
 > raises **`PF-163`**: `invite.controller.ts` creates the Keycloak account and sends the activation email *before*
 > the new transaction, with no compensating delete, so a rolled-back audit insert now costs the **account**, not one
 > row. Intentional, documented, un-switchable by design (DNC-10) — and it needs a signature before `S-E04-8` builds
-> a chain on top of it.
+> a chain on top of it. **`S-E04-9`'s two rulings, added 2026-08-10.** The audit-rollback half of `PF-163` is now
+> compensated (the identity is deleted, and a failed delete names the orphan) — but *(a)* the **SMTP** branch is
+> uncompensated by decision, so a mail outage still produces the same profile-less identity by a more probable
+> trigger, and a human must rule whether `PF-163` may be called resolved while it stands; and *(b)* the slice's
+> `KeycloakAdminService.deleteUser` — a new, unconditional, privileged **destructive** call whose most consequential
+> branch is *404-is-success* — ships with **no unit spec of its own** (there is no `keycloak-admin.service.spec.ts`
+> anywhere in the repo). Both are merge conditions recorded in § `S-E04-9`, not blockers on `S-E04-8`.
 
 ---
 
@@ -177,7 +173,7 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 
 ---
 
-## Slice backlog (`tasks.md` is the contract; 8 of 10 have shipped)
+## Slice backlog (`tasks.md` is the contract; 9 of 10 have shipped)
 
 > **The denominator moved from 8 to 10, and that is not scope creep hidden in an arithmetic edit.** `tasks.md`
 > enumerates `S-E04-1`…`S-E04-8` and is the contract for those eight. **Two slices were added after the kit was
@@ -196,10 +192,10 @@ roughly a third. `tasks.md` carries the vocabulary as its **own** slice with its
 | **`S-E04-6`** | Five privileged families write their audit row **in the same transaction** | **`shipped`** 2026-08-09 *(all 5 story AC evidenced; the seam is built but **not yet exclusive** — 27 direct sites remain, owner `S-E04-7`)* | `S-E04-1` ✅, `S-E04-3` ✅ | no | **`ADR-035`** ✅ |
 | **`S-E04-7`** | The remaining call sites move onto the seam, and a blocking gate keeps them there | **`shipped`** 2026-08-09 *(all 12 story AC evidenced; **the seam is exclusive by ratchet, not by absence** — 17 sites remain off it, each baselined with a class, a reason and a resolving finding id, and the count can now only shrink)* | `S-E04-6` ✅ | no | — *(`ADR-035` amended: **D11–D14**)* |
 | **`S-E04-10`** | The audit row describes the transition that actually happened | **`shipped`** 2026-08-09 *(all 23 story AC addressed; **the no-op guards close the sequential retry, not the concurrent one** — only `role.revoke` is race-safe, see § `S-E04-10`)* | `S-E04-6` ✅ *(and mergeable with `S-E04-7` ✅ by AC-8's shape rule)* | **no** — asserted | — *(`ADR-035` **D15 owed**, see § `S-E04-10`)* |
-| `S-E04-9` | The invite path stops trading an account for an audit row (`PF-163`, **P1**) | `todo` ◀ **next** *(unblocked — its `TOOL-01` prerequisite was discharged by `S-E04-10`)* | `S-E04-7` ✅ | no *(expected)* | — |
-| `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` — **last in the epic** *(unblocked; ordered after `S-E04-9` by routine triage, not by dependency)* | `S-E04-3` ✅, `S-E04-6` ✅, `S-E04-7` ✅ | **YES** | `ADR-035` *(amendment)* |
+| **`S-E04-9`** | The invite path stops trading an account for an audit row (`PF-163`, **P1**) | **`shipped`** 2026-08-10 *(AC-1, AC-2, AC-3, AC-6, AC-7 evidenced; **AC-4 and AC-5 ⛔ WITHDRAWN at implementation** — the adoption branch's premise was falsified, see § `S-E04-9`. **`PF-163` narrowed, NOT closed**: the SMTP branch is uncompensated by decision and a human ruling is owed)* | `S-E04-7` ✅ | **no** — asserted, no schema touched | — *(`ADR-035` amended: **D15–D17**; the carried `revokeRole` record re-pointed to **D18**)* |
+| `S-E04-8` | The hash chain from a declared genesis, its verification, and the documented gap | `todo` ◀ **next** — **last in the epic**; shipping it moves `V3-E04` to `shipped` | `S-E04-3` ✅, `S-E04-6` ✅, `S-E04-7` ✅, `S-E04-9` ✅ | **YES** | `ADR-035` *(amendment)* |
 
-**10 slices · 2 `todo` · 0 in progress · 8 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
+**10 slices · 1 `todo` · 0 in progress · 9 shipped.** State vocabulary: `todo` → `in-progress` → `shipped`
 (or `blocked`, with the blocking decision id). A slice moves to `shipped` only when its own acceptance criteria are
 evidenced in its PR — never because the code merged.
 
@@ -1712,13 +1708,21 @@ thing the next pass owes.
 
 | Owed | Why | Owner |
 |---|---|---|
-| **`ADR-035` D15** | D10 item 1 records the `revokeRole` TOCTOU as a *known limit* and names this exact `updateMany` as the in-scope fix — the ADR now states a falsehood. D10 item 2 says the no-op rule is applied to roles and *not* to the other three families, and names `S-E04-7` as the owner of both. **Mark D10 items 1–2 superseded rather than rewriting them** (D10's purpose is to record what was true at `S-E04-6`) and add D15: the in-transaction conditional as the mechanism, the retained pre-transaction read as an explicit fast path, the guard-ordering rule (tenant → no-op → transaction), the four-family extension, and the deferred partial index. D9's *"`UpdateSchoolDto` exposes `status?: SchoolStatus`"* clause is now false too | `S-E04-9` |
+| **`ADR-035` ~~D15~~ → D18** *(re-pointed 2026-08-10 by `S-E04-9`; see the note under this table)* | D10 item 1 records the `revokeRole` TOCTOU as a *known limit* and names this exact `updateMany` as the in-scope fix — the ADR now states a falsehood. D10 item 2 says the no-op rule is applied to roles and *not* to the other three families, and names `S-E04-7` as the owner of both. **Mark D10 items 1–2 superseded rather than rewriting them** (D10's purpose is to record what was true at `S-E04-6`) and add **D18**: the in-transaction conditional as the mechanism, the retained pre-transaction read as an explicit fast path, the guard-ordering rule (tenant → no-op → transaction), the four-family extension, and the deferred partial index. D9's *"`UpdateSchoolDto` exposes `status?: SchoolStatus`"* clause is now false too | **`S-E04-8`** *(re-pointed — `S-E04-9` did not discharge it)* |
 | ~~**`traceability/OPEN.md` ⇄ register disagreement**~~ — **DONE in this land pass** | `PF-155`, `PF-157`, `PF-158`, `PF-159` sat in `OPEN.md` as `open`, owned by **`S-E04-7`** — a story that merged without closing them — while the register rows this slice appended named `S-E04-10` as their closer. `GUARDRAILS` §6 points every agent at `OPEN.md` as the canonical open-findings list, so the next run would have read four closed findings as open. **All four rows moved to `CLOSED-L0.md`** with `S-E04-10` as owner, `closed 2026-08-09 (run 35)` as status, and a closure paragraph naming the mechanism *and* the carried residuals — every other cell preserved verbatim, exactly as `S-E04-7` did for `PF-162`/`PF-122`. 4 lines out, 4 lines in; `PF-156` (adjacent, deliberately out of scope) untouched | — |
 | ~~**`audit-findings-index.md`, the `PF-134` row**~~ — **DONE in this land pass** | It carried three **unescaped `\|`** inside inline code spans, so GFM emitted 10 cells into a 7-column table. Every other row in the same append escapes correctly (`number \| null` at `PF-137`, `active \| closed` at `PF-155`). Escaped | — |
-| **`enrollment.cancel`'s `before.endReason`** | `after.endReason` is recorded and `before.endReason` is not — so a `DELETE` on a `transferred_out` enrollment produces a row where an auditor cannot tell whether the administrative cancellation *set* that reason (it did not) or inherited it from the transfer | `S-E04-9` |
-| **`isSchoolUpdateNoOp` defaults to `true`** | A field added to `UpdateSchoolDto` and not to the comparator is silently swallowed — 200, no row, no mutation. Today the two lists agree; this diff is itself the evidence that the DTO changes. Drive it from a `{ [K in keyof Required<UpdateSchoolDto>]: … }` map so omission is a compile error | `S-E04-9` |
-| **`schools.controller.spec.ts` S-5 pins the pipe by hand-copied literal** | Its own comment concedes it *« devient vert par accident »* if `main.ts` is edited. This slice made the drift consequence worse: `whitelist` without `forbidNonWhitelisted` strips `status`, the body reaches `update()` as `{}`, the **new** no-op guard returns 200, and the school stays open — loud misfiling became silent success. Read `main.ts` in the spec (the house idiom: two gate specs already parse TS source) | `S-E04-9` |
+| **`enrollment.cancel`'s `before.endReason`** | `after.endReason` is recorded and `before.endReason` is not — so a `DELETE` on a `transferred_out` enrollment produces a row where an auditor cannot tell whether the administrative cancellation *set* that reason (it did not) or inherited it from the transfer | **`S-E04-8`** *(re-pointed 2026-08-10 — `S-E04-9` touched no enrollment path)* |
+| **`isSchoolUpdateNoOp` defaults to `true`** | A field added to `UpdateSchoolDto` and not to the comparator is silently swallowed — 200, no row, no mutation. Today the two lists agree; this diff is itself the evidence that the DTO changes. Drive it from a `{ [K in keyof Required<UpdateSchoolDto>]: … }` map so omission is a compile error | **`S-E04-8`** *(re-pointed 2026-08-10 — `S-E04-9` touched no schools path)* |
+| **`schools.controller.spec.ts` S-5 pins the pipe by hand-copied literal** | Its own comment concedes it *« devient vert par accident »* if `main.ts` is edited. This slice made the drift consequence worse: `whitelist` without `forbidNonWhitelisted` strips `status`, the body reaches `update()` as `{}`, the **new** no-op guard returns 200, and the school stays open — loud misfiling became silent success. Read `main.ts` in the spec (the house idiom: two gate specs already parse TS source) | **`S-E04-8`** *(re-pointed 2026-08-10 — `S-E04-9` touched no schools path)* |
 | **`D-11`, the reopen decision** | Recorded in `docs/daily-improvement-v3/open-decisions.md`. A school closed by mistake has no in-product recovery, and the DBA route writes no audit row | human |
+
+> **Why the four `S-E04-9` owners moved, and why `D15` became `D18` (written 2026-08-10, `S-E04-9` land pass).**
+> `S-E04-9` was scoped to the invite path and touched no enrollment, schools or `main.ts` code, so leaving its name on
+> three undischarged rows would have made them read as done once it shipped. It also **took `D15`–`D17`** for the
+> compensation amendment, which is the same id collision this file denounces at `PF-150` — and the rule stated there
+> is verbatim *« renumbering belongs in both registers at once, or not at all »*. The ADR-side re-pointing and this
+> table are therefore edited in one pass. `D18` is unclaimed; the `revokeRole` / `isSchoolUpdateNoOp` record is owed
+> at that number.
 
 ### `G-DNC` — the rules addressed explicitly
 
@@ -1732,3 +1736,133 @@ thing the next pass owes.
 - **`DNC-10`** — no `try`/`catch` was added anywhere near a `writeAudit`; the fail-closed re-throw from `ADR-035` D2
   is untouched. The only `try` in the diffed files is the pre-existing best-effort guardian fan-out at
   `enrollments.controller.ts:71`, outside every transaction.
+
+---
+
+## `S-E04-9` — shipped 2026-08-10 · a rollback that leaves an account behind is not a rollback
+
+`[api][auth][audit][security]` · **P1**, `needsHumanReview` · `G-MIGRATION` **did not trigger** · `ADR-035` amended
+(**D15–D17**) · 5 files, +1316 / −17
+
+### The defect, and why it belonged to this epic
+
+`S-E04-7` put steps 5–7 of `POST /users/invite` — the `UserProfile`, its optional custom role, and the audit row — in
+**one** `$transaction`, and correctly kept every Keycloak call outside it (an HTTP round-trip inside an interactive
+transaction is how a 5 s Prisma timeout becomes an incident). But steps 3–4 have **already** created the realm
+identity and mailed the activation link by then, and neither is reversible. `ADR-035` D2 makes a failed audit insert
+**fatal**, so from `S-E04-7` onward a rolled-back invite cost the **account**, not one row: an enabled identity
+holding `school_admin`/`teacher` with no `UserProfile`, which `UserSyncService.ensureUser` self-provisions into
+`DEMO_TENANT_SLUG` with realm-derived permissions on first login. That is the `ADR-002` invariant, broken by an
+availability fault — `PF-163`, raised independently by all three members of `S-E04-7`'s escalation panel.
+
+The epic's own ruling put the hash chain last *because of this*: a chain computed over a path that can trade an
+account for an audit row is a cryptographically verifiable record over a hole.
+
+### What shipped
+
+- **`KeycloakAdminService.deleteUser`** (`apps/api/src/shared/keycloak/keycloak-admin.service.ts`) — one new method,
+  riding the existing private `adminFetch`, no new convention. **404 is a SUCCESS**: « already gone » is the desired
+  end state, and a compensation that manufactures a phantom orphan — sending an operator hunting an id that no longer
+  exists — is worse than one that is idempotent. Live code, not dead: `adminFetch` returns the raw `Response` and does
+  **not** throw on non-ok.
+- **The compensation** (`invite.controller.ts`) — the transaction moved into a private `persistInvitedProfile`, and
+  the call site carries `.catch(async (cause) => { await this.compensateOrphanedKeycloakUser(kcUserId, cause); throw
+  cause; })`. **Unconditional**, because after the withdrawal below `createUser` is the *only* producer of `kcUserId`
+  — there is no adopted-identity case to exclude, therefore no branch in which the compensation could delete
+  something this request did not create. **Non-masking**: the caller still receives `AUDIT_WRITE_FAILED_MESSAGE`,
+  which is now literally true.
+- **A failed compensation is loud** — `InternalServerErrorException` whose **message** carries the orphan id (the web
+  action reads only `body.message`), `{ cause }` preserved, and a `Logger.error` naming both failures.
+- **`invite.controller.spec.ts`** — the artefact `PF-163`'s row said would have caught it: a fake `$transaction` that
+  **stages then commits**, so a callback throw is *observably* not persisted. 10 cases, (i)–(vii) plus a G-AUTHZ
+  metadata pin.
+
+### The `.catch()` is not a style choice — it is what keeps the `S-E04-7` ratchet green
+
+`scripts/audit-write-check.js` rule B (`insideTryBlock`, `:265-274`) walks **every** AST ancestor of a `writeAudit`
+call and does **not** stop at a function boundary, so a `try` anywhere above it turns the gate red. Extracting the
+transaction into its own method and attaching `.catch()` at the call site is therefore *necessary*, not stylistic —
+and `transactionBindingOf` (`:306-330`) binds on the arrow function whose parent is the `$transaction`
+`CallExpression`, which appending `.catch()` does not change. Verified rather than assumed:
+`node scripts/audit-write-check.js` **PASS** — 38 audit writes, 21 through the seam inside a transaction, 17
+baselined, 0 unaccounted, `audit-write-baseline.json` **untouched** (`invite.controller.ts` holds no
+`auditLog.create`, so the `27 = 10 + 17` arithmetic is genuinely unaffected).
+
+### ⛔ AC-4 and AC-5 were WITHDRAWN at implementation — and the withdrawal is this slice's finding
+
+The story's second remedy let step 1 **adopt** a Keycloak account that has no local `UserProfile`, on the premise
+that such a state *« is produced by exactly this bug »*. Three facts read at `HEAD` falsify it:
+
+1. `UserSyncService.ensureUser` (`shared/auth/user-sync.service.ts:23-56`) creates the profile **lazily, at first
+   login** — every never-logged-in realm identity is profile-less **by design**.
+2. `infra/keycloak/realm-export.json` ships three of them — `admin@` / `teacher@` / `parent@pilotage.local`, enabled,
+   with **zero** `authProviderId` anywhere in `apps/api/prisma/seed-demo.ts`.
+3. `ADR-004` puts every tenant in **one** realm, so they are reachable from any tenant.
+
+Adoption therefore matched *« any never-onboarded account »*, not *« the orphan `PF-163` made »* — and it handed any
+`users.write` holder, in an arbitrary tenant, a password overwrite, a realm-role grant and a **permanent** binding of
+a shared identity to their own tenant (`authProviderId` is globally unique). That is the `ADR-002` breach this slice
+exists to close, reached through a new door.
+
+**The marker that would make adoption sound cannot be written in this fan-out.** All three reviewers proposed
+stamping a Keycloak attribute at `createUser` time and gating adoption on it; `infra/docker-compose.yml:184` pins
+`quay.io/keycloak/keycloak:26.0`, whose declarative user profile disables **unmanaged attributes** by default, and
+the realm export declares no `components` — the attribute would be dropped on write and adoption would silently never
+fire. The local alternative is an invite-intent table, i.e. a migration, and `G-MIGRATION` does not trigger here.
+
+So **step 1 is byte-identical to its pre-slice behaviour**: `if (existing) throw alreadyExists(email)`, with **no
+local read at all**. Removed with the branch: two Prisma probes (including an untenanted
+`userProfile.count({ where: { email } })`), the three privileged Keycloak mutations against a pre-existing identity,
+the `createdKeycloakUser` gate, and the `repairedExistingKeycloakUser` audit key — **the `after:` payload keeps
+exactly its four pre-existing keys, so this slice changes no audit surface.** Cases (vi) and (vii) of the new spec are
+the security regression guard: a profile-less seeded realm account is **not** adoptable, and the refusal issues **no**
+local lookup, so the draft's one-bit existence oracle is removed rather than documented.
+
+Nothing of `PF-163` is lost by the withdrawal. The escalation path is closed by the **stronger** half — the rollback
+*deletes* the orphan; adopting one was only ever the second-best remedy for a state the compensation now prevents.
+
+### `PF-163` is NARROWED, not closed — and a human owns the ruling
+
+The step-4 **SMTP** branch is uncompensated **by decision**. It still produces the same end state — an enabled
+identity, a realm role granted, a real temporary password, no `UserProfile` — and step 1 refuses every retry. It is a
+**different trigger** (mail-server availability, not the audit rollback `PF-163` named) and closing it means changing
+user-facing French under `apps/web` (`ActivationHint.tsx`), which is not a compensation conversation. The now-false
+comment at the site was corrected and the residual recorded as `ADR-035` **D15 item 5** rather than widening the
+slice. `PF-163`'s row therefore stays `open` in `traceability/OPEN.md`, and the ruling a human owns is: *may this
+slice call `PF-163` resolved while the more probable trigger stands, or is the SMTP branch compensated too (and its
+user-facing copy changed with it)?*
+
+### Verification
+
+- `pnpm typecheck` — **13 tasks successful / 13 total**, `@pilotage/api` executed fresh (cache miss
+  `994cc2b2cd9ba11a`), `tsc --noEmit && tsc --noEmit -p prisma/tsconfig.json` clean including the new spec.
+- `invite.controller.spec.ts` **10 / 10** (131 s); `audit-write-gate.spec.ts` **74 / 74** (41 s) — the `S-E04-7`
+  ratchet stays green through the refactor.
+- `node scripts/audit-write-check.js` **PASS** (38 / 21 / 17 / 0). `git diff --check` exit 0.
+
+### Merge conditions and carried findings
+
+1. **The `PF-163` ruling above** — P1, human-owned.
+2. **`deleteUser` has no unit spec.** There is no `keycloak-admin.service.spec.ts` anywhere in the repo; the invite
+   spec fakes the method away, so nothing exercises the real implementation — and its least intuitive branch
+   (*404 is success*) is exactly what a later reader "corrects" into a throw, at which point the compensation starts
+   manufacturing the incident it exists to prevent. A four-case spec was drafted by the test-architect and is the
+   single cheapest thing to add before merge.
+3. **Realm roles are additive.** `assignRealmRoles` (`keycloak-admin.service.ts:183-197`, `POST role-mappings/realm`)
+   adds rather than replaces. Not reachable through adoption any more — that branch is gone — but it remains true of
+   the orphans the SMTP branch leaves behind, and any future re-invite design must replace, not accumulate.
+4. **Rule B cannot see a `.catch` on a `$transaction`.** This diff ships the first (and only) such shape in
+   `apps/api`, and it is faithful today — case (ii) pins the re-throw. But a future edit swapping `throw cause` for a
+   fallback return would swallow an audit failure with the gate still green. Either teach rule B about `.catch`, or
+   promote the spec's re-throw assertion to the ratchet's stand-in and say so in `ADR-035`.
+5. **`tx.role.findFirst({ where: { slug } })` is untenanted** — carried code that *moved* into `persistInvitedProfile`
+   in this diff. `Role` has no `tenantId` and is keyed `@@unique([schoolId, slug])`, so the first match across every
+   school wins, and `UserSyncService.effectivePermissions` unions that role's permissions with no school filter. Same
+   shape as `PF-153`, at a second site, and the `G-TENANT` claim must be read as *narrowed to the queries this slice
+   authored*. Not fixed here — a silent authz change inside an audit slice is what `ADR-015` exists to prevent.
+6. **Commit-ambiguity is indistinguishable from rollback.** The `.catch()` cannot tell "transaction rolled back" from
+   "commit succeeded, client saw a network error"; in the second case the compensation deletes an identity whose
+   `UserProfile` and audit row survive, pointing at a dead `authProviderId`. Inherent to compensation, recorded
+   rather than solved.
+7. **A compensated invite leaves a dead activation link.** On the fresh path the mail has already been sent when the
+   transaction aborts, so the invitee holds a magic link to a deleted identity. Accepted residual.
