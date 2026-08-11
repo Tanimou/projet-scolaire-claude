@@ -83,9 +83,31 @@ saying so must stay.
 | `PF-175` | P2 | Pre-ceiling escalated grants pass it unconditionally; the detection query is recorded, not run. |
 | `PF-176` | P3 | The escalation-attempt `warn` is anonymous — the predicate has no actor context by design. |
 | `PF-177` | P3 | A duplicated permission code answers 400 while naming no code at all (pre-existing). |
+| **`TOOL-04`** | **P1** | **The fast gate's escalated api stage cannot finish.** Read this before your gate run — see below. |
 
 All five are **declared in `audit-findings-index.md` in the same commit that raised them** — `TOOL-01` applied
 prospectively, as run 38 established.
+
+## 🛑 READ BEFORE YOUR GATE RUN — `TOOL-04`
+
+**`S-E05-2` could not be auto-merged, and the reason was the gate, not the diff.** `ci-gate.sh` runs the **whole** api
+suite (2400 s bound) when the diff matches
+`^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)`, and `--skip src/shared/quality/` (1200 s) otherwise.
+**The whole suite does not complete on this machine — it blocks.** Measured four ways: timed out contended, timed out
+uncontended, **still blocked at ~80 min unbounded** with its 7 jest workers holding only 7–40 s of CPU each, and
+`--skip src/shared/quality/` returning **`1008/1019 · no drift`, exit 0** in minutes.
+
+**What this means for you, concretely:**
+
+- **If your diff touches `apps/api/src/shared/quality/**`, your gate will fail on `test:api` no matter how clean your
+  code is.** Budget for it, and do not go hunting in your own diff — `S-E05-2` lost an hour to that.
+- Produce the evidence out of band with `node scripts/test-ratchet.js api --skip src/shared/quality/` and **say in the
+  PR that it is the non-escalated command**, not the stage's own.
+- **Still leave the PR open and flagged.** AUTO-LAND keys on the printed `GATE: PASS` line (`R-23`), not on your
+  judgement about why it failed. `S-E05-2` did this and it is the right precedent.
+- **`PF-90` is live.** Three `test-ratchet.js api` trees were alive at once, two orphaned for 7–8 h; the routine killed
+  **24** orphaned processes. **Enumerate `Win32_Process` before you trust any gate timing**, and kill only trees whose
+  track shows `free` in `routine-lock.sh status`.
 
 ## ⚠️ Facts for your next run
 
