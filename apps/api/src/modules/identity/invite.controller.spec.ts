@@ -88,6 +88,10 @@ function makeDb(
     /** What `findUserByEmail` answers — `null` is the nominal fresh invite. */
     keycloakUser?: { id: string; email: string } | null;
     faults?: { profile?: Error; audit?: Error; deleteUser?: Error };
+    /** S-E05-2 — what `role.findFirst` answers for `customRoleSlug`. */
+    customRole?: { id: string; slug: string; rolePermissions: { permission: { code: string } }[] } | null;
+    /** S-E05-2 — the inviter's effective permission set. */
+    grantorPermissions?: ReadonlySet<string>;
   } = {},
 ) {
   const { keycloakUser = null, faults = {} } = options;
@@ -138,6 +142,14 @@ function makeDb(
       findUnique: jest.fn().mockResolvedValue(null),
       count: jest.fn().mockResolvedValue(0),
     },
+    // S-E05-2 — the custom-role slug is now resolved on the NON-transactional
+    // client, in `invite()` step 1b, BEFORE the irreversible Keycloak steps.
+    // `null` is the nominal answer (no slug, or an unresolvable one).
+    role: {
+      findFirst: jest.fn(async () =>
+        options.customRole === undefined ? null : options.customRole,
+      ),
+    },
     $transaction: jest.fn(async (cb: (t: typeof tx) => Promise<unknown>) => {
       const before = keycloakCalls;
       staged = [];
@@ -178,6 +190,13 @@ function makeDb(
 
   const users = {
     ensureUser: jest.fn().mockResolvedValue({ id: ACTOR, tenantId: TENANT }),
+    // S-E05-2 — read ONLY when a custom role was actually requested. Cases (i)
+    // to (vii) send no `customRoleSlug`, so this must stay uncalled there, and
+    // case (viii) asserts it is called exactly once when one IS sent.
+    effectivePermissions: jest.fn(
+      async (_sub: string, _realmRoles: string[]) =>
+        options.grantorPermissions ?? new Set<string>(),
+    ),
   };
 
   const controller = new InviteController(
@@ -192,6 +211,7 @@ function makeDb(
     keycloak,
     users,
     tx,
+    userRoles: () => committed.filter((c) => c.kind === 'userRole').map((c) => c.row),
     profiles: () => committed.filter((c) => c.kind === 'profile').map((c) => c.row),
     auditRows: () => committed.filter((c) => c.kind === 'audit').map((c) => c.row),
     keycloakCallsInsideTransaction: () => keycloakCallsInsideTransaction,
@@ -424,6 +444,104 @@ describe('(v)(vi)(vii) — an existing Keycloak identity is refused, always, ide
     // branch needs is absent — the only untenanted read this handler ever had.
     expect(db.prisma.userProfile.count).not.toHaveBeenCalled();
     expect(db.prisma.userProfile.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+/* ================================================================== *
+ * (viii) S-E05-2 — the FOURTH grant path is under the ceiling too
+ * ================================================================== */
+
+/**
+ * THE HIGHEST-VALUE TEST IN THIS SLICE, and the one the original AC list did not
+ * have. `customRoleSlug` used to be resolved and granted INSIDE
+ * `persistInvitedProfile`'s transaction with no ceiling at all, on a handler
+ * gated only by `users.write` — WEAKER than `roles.assign`. `body.email` is
+ * attacker-controlled, so a grantor refused at `POST /users/:id/roles` could
+ * invite a second address they own with `customRoleSlug` pointing at a
+ * full-catalogue role, receive the set-password mail, and log in holding
+ * `grades.revise`. Closing PF-09 at the three named sites while leaving this
+ * open would have relocated the escalation, not closed it.
+ *
+ * Pre-fix these assertions are unreachable: `invite()` had no 403 branch and did
+ * not read `role` on the non-transactional client at all.
+ */
+describe('(viii) S-E05-2 / G-AUTHZ — an invite cannot smuggle a role the inviter does not hold', () => {
+  const ESCALATED_ROLE = {
+    id: 'role-full',
+    slug: 'tout-puissant',
+    rolePermissions: [{ permission: { code: 'grades.revise' } }, { permission: { code: 'students.read' } }],
+  };
+
+  it('a customRoleSlug carrying `grades.revise` is REFUSED — and no Keycloak identity is even created', async () => {
+    const db = makeDb({
+      customRole: ESCALATED_ROLE,
+      grantorPermissions: new Set(['users.write', 'students.read']),
+    });
+
+    const err = await failureOf(
+      db.controller.invite({ ...BASE_BODY, customRoleSlug: 'tout-puissant' } as never, jwt(['school_admin'])),
+    );
+
+    const body = (err as { getResponse: () => { message: string; missing: string[] } }).getResponse();
+    expect(body.missing).toEqual(['grades.revise']);
+    expect(typeof body.message).toBe('string');
+    // The refusal is placed BEFORE step 3, so there is no orphaned identity and
+    // nothing to compensate: the cheapest possible refusal.
+    expect(db.keycloak.createUser).not.toHaveBeenCalled();
+    expect(db.keycloak.sendExecuteActionsEmail).not.toHaveBeenCalled();
+    expect(db.keycloak.deleteUser).not.toHaveBeenCalled();
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.profiles()).toHaveLength(0);
+    expect(db.auditRows()).toHaveLength(0);
+  });
+
+  it('a customRoleSlug WITHIN the inviter’s set still commits the profile, the grant and the audit row', async () => {
+    const db = makeDb({
+      customRole: {
+        id: 'role-narrow',
+        slug: 'surveillant',
+        rolePermissions: [{ permission: { code: 'students.read' } }],
+      },
+      grantorPermissions: new Set(['users.write', 'students.read']),
+    });
+
+    await db.controller.invite(
+      { ...BASE_BODY, customRoleSlug: 'surveillant' } as never,
+      jwt(['school_admin']),
+    );
+
+    expect(db.profiles()).toHaveLength(1);
+    expect(db.userRoles()).toHaveLength(1);
+    expect(db.userRoles()[0]).toMatchObject({ roleId: 'role-narrow', grantedBy: ACTOR });
+    expect(db.auditRows()).toHaveLength(1);
+    // The resolution moved OUT of the transaction; the grant stays inside it.
+    expect(db.tx.role.findFirst).not.toHaveBeenCalled();
+    expect(db.prisma.role.findFirst).toHaveBeenCalledTimes(1);
+    expect(db.users.effectivePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('an UNRESOLVABLE slug stays the silent no-op it has always been — no 400, no grant', async () => {
+    // The ceiling changes who may grant what. It does not change what an unknown
+    // slug means, and it never compares against a role that does not exist.
+    const db = makeDb({ customRole: null, grantorPermissions: new Set(['users.write']) });
+
+    const result = await db.controller.invite(
+      { ...BASE_BODY, customRoleSlug: 'inconnu' } as never,
+      jwt(['school_admin']),
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(db.profiles()).toHaveLength(1);
+    expect(db.userRoles()).toHaveLength(0);
+    expect(db.users.effectivePermissions).not.toHaveBeenCalled();
+  });
+
+  it('an invite with NO customRoleSlug reads no role and no permission set at all', async () => {
+    const db = makeDb();
+    await db.controller.invite(BODY, jwt(['school_admin']));
+
+    expect(db.prisma.role.findFirst).not.toHaveBeenCalled();
+    expect(db.users.effectivePermissions).not.toHaveBeenCalled();
   });
 });
 

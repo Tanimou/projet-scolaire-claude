@@ -1052,19 +1052,123 @@ describe('AC-9 — child-claims records the real actor role, and grants nothing 
 });
 
 describe('AC-12 — the gates that must NOT trigger, asserted in the negative', () => {
-  it('G-AUTHZ: roles.controller.ts changes no permission decorator and no role lookup', () => {
+  it('G-AUTHZ: roles.controller.ts changes no permission decorator', () => {
     const roles = readFileSync(
       join(REPO_ROOT, 'apps', 'api', 'src', 'modules', 'identity', 'roles.controller.ts'),
       'utf8',
     );
-    // PF-156 (any roles.assign holder can self-grant) and PF-153 (role lookup
-    // unfiltered by tenant) are REGISTERED and deliberately NOT fixed here.
-    // ADR-015 exists to stop an authorisation change riding in on another slice.
+    // PF-153 (role lookup unfiltered by tenant) is REGISTERED and still
+    // deliberately NOT fixed. ADR-015 exists to stop an authorisation change
+    // riding in on another slice.
     const decorators = roles.match(/@RequiresPermission\('[^']+'\)/g) ?? [];
     expect(new Set(decorators)).toEqual(
       new Set(["@RequiresPermission('roles.read')", "@RequiresPermission('roles.write')"]),
     );
-    expect(roles).not.toContain('effectivePermissions');
+  });
+
+  // AMENDED BY S-E05-2 (2026-08-11), and the amendment is the point rather than
+  // a green-up. This case used to assert `expect(roles).not.toContain(
+  // 'effectivePermissions')` — S-E04-6's way of recording « this audit slice did
+  // NOT change who may grant what, PF-156 stays open ». PF-156 is now CLOSED by
+  // its own slice, in its own ADR (ADR-015 `S-E05-2` amendment), which is
+  // exactly what that assertion asked for. Deleting it silently would have left
+  // the gate asserting a posture the product deliberately reversed — the PF-164
+  // shape. It is replaced by the invariant that actually protects the new rule:
+  // the ceiling is an IN-HANDLER check going through the ONE shared predicate,
+  // never a widened decorator and never a re-implemented comparison.
+  it('G-AUTHZ: the privilege ceiling goes through the shared predicate, at every mint/grant site', () => {
+    const files = [
+      ['identity', 'roles.controller.ts'],
+      ['identity', 'users.service.ts'],
+      ['identity', 'invite.controller.ts'],
+    ] as const;
+
+    for (const [dir, file] of files) {
+      const source = readFileSync(
+        join(REPO_ROOT, 'apps', 'api', 'src', 'modules', dir, file),
+        'utf8',
+      );
+      expect(source).toContain("from '../../shared/auth/privilege-ceiling'");
+      expect(source).toContain('assertWithinCeiling(');
+      // Nobody re-implements the comparison or re-builds the 403 body: a second
+      // literal is how four call sites drift into four different refusals.
+      expect(source).not.toContain('exceedsGrantor(');
+    }
+
+    // And the predicate itself carries no off switch (DNC-10), asserted here too
+    // so the ratchet catches a re-introduced bypass even if its own spec is
+    // deleted.
+    const predicate = readFileSync(
+      join(REPO_ROOT, 'apps', 'api', 'src', 'shared', 'auth', 'privilege-ceiling.ts'),
+      'utf8',
+    );
+    for (const token of ['process' + '.env', 'NODE_' + 'ENV', 'SKIP' + '_', 'ALLOW' + '_']) {
+      expect(predicate).not.toContain(token);
+    }
+  });
+
+  /**
+   * S-E05-2 — THE SURFACE RATCHET, and the reason it is not the test above.
+   *
+   * The case above walks a HARDCODED list of the three files this slice fixed and
+   * asserts each still imports the predicate. That protects the doors we already
+   * closed and nothing else: it can never go red for the one change that actually
+   * reintroduces `PF-09` — a FIFTH grant path, in a file the list does not name.
+   * A ratchet anchored to the files that were fixed is green by construction,
+   * which is the exact shape (« a guard that is green because it cannot fire »)
+   * this epic is named after.
+   *
+   * So this case does not consult a list. It DISCOVERS the grant surface by
+   * walking every production source under the gate's own `WALK_ROOTS`, finds each
+   * file that writes a role grant, and requires that file to import the ceiling.
+   * A future slice that grants a role from a new module turns this red until it
+   * either applies the ceiling or lands in `UNCEILINGED` below with a reason —
+   * which makes the exemption a reviewed decision instead of an omission.
+   *
+   * De-escalation is deliberately NOT on the surface: `userRole.updateMany` in
+   * `revokeRole` removes privilege, and requiring a ceiling to take a permission
+   * away would let an under-privileged admin be trapped with a role they cannot
+   * revoke. Only the three verbs that CREATE privilege are matched.
+   */
+  it('G-AUTHZ: every role-granting write site in the walked tree imports the ceiling', () => {
+    // The verbs that hand out privilege. `userRole.updateMany` (revoke) is
+    // absent on purpose — see the header.
+    const GRANT_WRITES = [
+      /\buserRole\.create\b/, // grant a role to a user
+      /\buserRole\.upsert\b/, // ditto, idempotent form
+      /\brolePermission\.create\b/, // add a permission to a role
+      /\brolePermissions:\s*\{\s*create\b/, // ditto, Prisma nested-write form
+    ];
+
+    /**
+     * Files that write a grant but legitimately carry no ceiling. Empty today,
+     * and that is the point: an entry here is a signed exemption, not a default.
+     */
+    const UNCEILINGED = new Map<string, string>();
+
+    const granting: string[] = [];
+    for (const root of gate.WALK_ROOTS) {
+      const absolute = join(REPO_ROOT, root);
+      if (!existsSync(absolute)) continue;
+      for (const file of gate.walkRoot(absolute)) {
+        const source = readFileSync(file, 'utf8');
+        if (GRANT_WRITES.some((re) => re.test(source))) {
+          granting.push(file.slice(REPO_ROOT.length + 1).split('\\').join('/'));
+        }
+      }
+    }
+
+    // DNC-08 — if the walk finds nothing the suite must FAIL, never pass over an
+    // empty set. A ceiling proven against zero call sites proves nothing.
+    expect(granting.length).toBeGreaterThanOrEqual(3);
+
+    const unprotected = granting.filter((rel) => {
+      if (UNCEILINGED.has(rel)) return false;
+      return !readFileSync(join(REPO_ROOT, rel), 'utf8').includes('assertWithinCeiling(');
+    });
+
+    // Named in the failure message, so a red here says WHICH new door opened.
+    expect(unprotected).toEqual([]);
   });
 
   it('roles.controller.ts writes all three audit rows through the seam, inside a transaction', () => {

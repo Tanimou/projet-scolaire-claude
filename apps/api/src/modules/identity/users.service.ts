@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 
 import { type AuditProvenance } from '../../shared/audit/provenance';
 import { writeAudit } from '../../shared/audit/write-audit';
+import { assertWithinCeiling } from '../../shared/auth/privilege-ceiling';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 export interface UserListItem {
@@ -55,15 +56,37 @@ export class UsersService {
    * are now covered by tests. They run BEFORE the transaction, so a refused
    * request writes no row at all.
    *
-   * TWO POSTURES STATED RATHER THAN QUIETLY CHANGED, both older than this slice:
+   * TWO POSTURES, ONE CLOSED BY THIS SLICE AND ONE DELIBERATELY LEFT OPEN:
    *
-   *  1. **The grantor's own privileges are not checked.** `users.controller.ts`
-   *     gates on `roles.assign`, and nothing verifies the grantor holds what they
-   *     grant — so a `roles.assign` holder can attach a role carrying more
-   *     permissions than their own. This slice does not close it: changing who
-   *     may grant what, silently, inside an audit slice, is exactly what ADR-015
-   *     exists to prevent. What changes is that the escalation is now LEGIBLE —
-   *     the row names the granted role. Recorded in `ADR-035`, owner named there.
+   *  1. **The grantor's own privileges ARE checked now — S-E05-2, `PF-156`.**
+   *     `assertWithinCeiling` compares the granted role's permission codes
+   *     (loaded by the `include` below, never `?? []`) against
+   *     `grantorPermissions`, and refuses with a French 403 naming the exceeding
+   *     codes if the role's set is not a subset of the grantor's. The set is the
+   *     grantor's EFFECTIVE one — realm-role ∪ custom-role — derived in
+   *     `users.controller.ts` from `UserSyncService.effectivePermissions`, the
+   *     same seam `PermissionsGuard:27-28` reads. It is a REQUIRED parameter for
+   *     exactly the reason `provenance` is: an omitted grantor set must be a
+   *     compile error, never a silently empty one, because an empty set would
+   *     deny everything and the tempting « fix » for that is the fail-open this
+   *     gate exists to forbid. `UserSyncService` is NOT injected here and the
+   *     union is NOT reimplemented — one derivation, in the controller.
+   *     The refusal runs BEFORE `$transaction` opens AND before the idempotent
+   *     early return below, so a refused grant writes no `UserRole`, no audit
+   *     row, and is never answered with a 200 « already granted » body — that
+   *     200 would be a probe oracle telling a limited admin which users already
+   *     hold escalated roles. Recorded in ADR-015, `S-E05-2` amendment.
+   *
+   *     NOT DONE, and named rather than implied: `PF-156`'s text also proposes
+   *     « an explicit refusal of `isSystem` roles for non-`super_admin`
+   *     grantors ». That blanket ban is DECLINED. Measured, it would refuse
+   *     `school_admin → school_admin`, which the ceiling permits (zero exceeding
+   *     codes) and which is an ordinary operation — promoting a colleague to an
+   *     admin peer. And it is role-shaped where the live exploit is
+   *     permission-shaped: custom roles are created `isSystem: false`
+   *     (`roles.controller.ts:136`), so « mint a full-catalogue custom role, then
+   *     assign it » walks straight past it. One mechanism, not two conflicting
+   *     ones. See ADR-015 `S-E05-2` D4.
    *
    *  2. **`Role` is not tenant-scoped, and that is by design.** `Role` has no
    *     `tenantId` (`schema.prisma:900`); tenancy runs `schoolId → School.tenantId`
@@ -77,13 +100,30 @@ export class UsersService {
     grantedById: string,
     tenantId: string,
     provenance: AuditProvenance,
+    grantorPermissions: ReadonlySet<string>,
   ) {
     const user = await this.prisma.userProfile.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
     if (user.tenantId !== tenantId) throw new ForbiddenException('Cross-tenant assignment refused');
 
-    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    const role = await this.prisma.role.findUnique({
+      // `where` stays UNFILTERED by tenant — posture 2 above, `PF-153`, out of scope.
+      where: { id: roleId },
+      // S-E05-2 — the ONLY change to this lookup, and the ceiling cannot work
+      // without it. `?? []` on `rolePermissions` is FORBIDDEN: an absent include
+      // would produce an empty set, an empty set exceeds nothing, and the guard
+      // would silently permit everything while staying green. Pinned by a test
+      // asserting this argument object.
+      include: { rolePermissions: { include: { permission: true } } },
+    });
     if (!role) throw new NotFoundException('Role not found');
+
+    // S-E05-2 / AC-4 — the ceiling, before the idempotency return and before the
+    // transaction (see posture 1 above).
+    assertWithinCeiling(
+      grantorPermissions,
+      role.rolePermissions.map((rp) => rp.permission.code),
+    );
 
     // Check if already assigned (and not revoked)
     const existing = await this.prisma.userRole.findFirst({

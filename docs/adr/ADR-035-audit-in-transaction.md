@@ -295,6 +295,17 @@ one D2 exists to forbid. The absence is asserted in the negative by a test, the 
     check on the grantor's `effectivePermissions` plus an explicit refusal of `isSystem` roles for
     non-`super_admin` grantors.
 
+    > **SUPERSEDED BY `S-E05-2` (2026-08-11) — see the `S-E05-2` amendment in
+    > `ADR-015-permissions-rbac-abac.md`.** The bullet above is now false in both halves.
+    > (a) The superset check **shipped**: `shared/auth/privilege-ceiling.ts` refuses, before any
+    > transaction opens, every role creation, permission rewrite, role assignment and invite-time
+    > custom-role grant whose codes are not a subset of the grantor's effective set. `PF-09` and
+    > `PF-156` are **closed**. (b) The `isSystem` half was **deliberately NOT taken** (ADR-015
+    > `S-E05-2` D4): measured, it would refuse `school_admin → school_admin` — which the ceiling
+    > permits and which is an ordinary operation — and it is role-shaped where the live exploit is
+    > permission-shaped (custom roles are created `isSystem: false`, so the ban never touches it).
+    > `PF-153` and the unfiltered `GET /roles` in the bullet above stay **open and unchanged**.
+
 ---
 
 ## D10 — Three behaviour changes this slice makes, recorded here rather than discovered in review
@@ -460,6 +471,8 @@ Two consequences, written down rather than discovered:
   transaction, and changes **not one line** of authorisation. `PF-156` (any `roles.assign` holder can
   self-grant any role) and `PF-153` (role lookup unfiltered by tenant) stay registered and open. ADR-015
   exists to stop an authorisation change riding in on another slice, and this is the slice it was written for.
+  > **`PF-156` SUPERSEDED BY `S-E05-2` (2026-08-11)** — the privilege ceiling shipped as its own slice, in
+  > the ADR-015 amendment, exactly as this paragraph asked. `PF-153` is untouched and stays open.
 - **`PF-149`** — nothing in this diff touches a timezone path. `UnknownTimezoneError` stays uncaught, which is
   the design; it remains pointed at a later slice.
 - **`PF-150`'s id collision** — `traceability/OPEN.md` and `PROGRESS.md` use the id for two different

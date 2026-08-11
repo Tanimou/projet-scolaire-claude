@@ -20,6 +20,7 @@ import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PermissionsGuard } from '../../shared/auth/permissions.guard';
+import { assertWithinCeiling } from '../../shared/auth/privilege-ceiling';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { KeycloakAdminService } from '../../shared/keycloak/keycloak-admin.service';
@@ -157,6 +158,61 @@ export class InviteController {
       throw alreadyExists(email);
     }
 
+    // 1b. S-E05-2 — THE FOURTH GRANT PATH, and the one that would have made the
+    //     other three cosmetic. `body.customRoleSlug` used to be resolved and
+    //     granted INSIDE `persistInvitedProfile`'s transaction with no ceiling
+    //     at all, on a handler gated only by `users.write` — WEAKER than
+    //     `roles.assign`. `body.email` is attacker-controlled, so a grantor
+    //     refused at `POST /users/:id/roles` could simply invite a second
+    //     address they own with `customRoleSlug` pointing at a full-catalogue
+    //     role, receive the set-password mail and log in holding it. Closing
+    //     PF-09 at three sites and leaving this open would have shipped a claim
+    //     the code does not carry.
+    //
+    //     RESOLVED HERE, BEFORE STEP 3, and that placement is deliberate: the
+    //     Keycloak identity is not created yet, so a refusal costs no
+    //     compensation — nothing exists to roll back. The transaction below
+    //     receives an already-resolved id, so `persistInvitedProfile` keeps its
+    //     shape, its `.catch()` compensation at the call site and its untouched
+    //     `writeAudit` (a `try` anywhere among that call's AST ancestors turns
+    //     rule B of `scripts/audit-write-check.js` red).
+    //
+    //     `effectivePermissions` is read ONLY when a custom role is actually
+    //     requested — with no slug there is nothing to compare, and an
+    //     unconditional read would be a query bought for no decision.
+    let customRoleId: string | null = null;
+    if (body.customRoleSlug) {
+      const role = await this.prisma.role.findFirst({
+        where: { slug: body.customRoleSlug },
+        include: { rolePermissions: { include: { permission: true } } },
+      });
+      // An UNRESOLVABLE slug stays the silent no-op it has always been: no role,
+      // no grant, no 400. Only a RESOLVED role whose permissions exceed the
+      // grantor is refused — the ceiling changes who may grant what, never what
+      // an unknown slug means.
+      if (role) {
+        const grantorPermissions = await this.users.effectivePermissions(
+          jwt.sub,
+          jwt.realm_access?.roles ?? [],
+        );
+        assertWithinCeiling(
+          grantorPermissions,
+          role.rolePermissions.map((rp) => rp.permission.code),
+        );
+        customRoleId = role.id;
+      }
+    }
+    //
+    //     NOT CEILING-CHECKED, STATED RATHER THAN IMPLIED: the `realmRole`
+    //     channel. `@IsEnum(['school_admin','teacher','parent'])` lets a
+    //     `school_admin` provision a `teacher` identity, and
+    //     `REALM_ROLE_PERMISSIONS.teacher` carries `grades.revise` — a code the
+    //     inviter does not hold. Applying the ceiling there would refuse « invite
+    //     a teacher », which is the product's primary onboarding flow, so it is
+    //     NOT taken here. It is an explicitly OPEN residual with an owner
+    //     (ADR-015, `S-E05-2` D8), not an oversight: realm-role provisioning is
+    //     a delegation question (§2.4 option 2), not a subset question.
+
     // 2. Required actions — MFA enforced for admin/teacher per ADR-004
     const requiredActions = ['UPDATE_PASSWORD'];
     if (body.realmRole === 'school_admin' || body.realmRole === 'teacher') {
@@ -228,6 +284,7 @@ export class InviteController {
       kcUserId,
       requiredActions,
       provenance,
+      customRoleId,
     }).catch(async (cause: unknown): Promise<never> => {
       // Unconditional: step 3 above is the ONLY producer of `kcUserId`, so every
       // identity reaching this point was created by THIS request. There is no
@@ -267,8 +324,16 @@ export class InviteController {
     kcUserId: string;
     requiredActions: string[];
     provenance: AuditProvenance;
+    /**
+     * S-E05-2 — already RESOLVED and already ceiling-checked by `invite()`.
+     * `null` means « no custom role », whether none was asked for or the slug
+     * did not resolve. The lookup deliberately no longer happens in here: the
+     * refusal must precede the irreversible Keycloak steps, and this method
+     * exists only to hold the transaction.
+     */
+    customRoleId: string | null;
   }) {
-    const { me, body, email, kcUserId, requiredActions, provenance } = input;
+    const { me, body, email, kcUserId, requiredActions, provenance, customRoleId } = input;
 
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.userProfile.create({
@@ -285,16 +350,12 @@ export class InviteController {
         },
       });
 
-      // 6. Optionally assign a custom DB role
-      if (body.customRoleSlug) {
-        const role = await tx.role.findFirst({
-          where: { slug: body.customRoleSlug },
+      // 6. Optionally assign a custom DB role — resolved and ceiling-checked in
+      //    `invite()` step 1b, never here.
+      if (customRoleId) {
+        await tx.userRole.create({
+          data: { userProfileId: created.id, roleId: customRoleId, grantedBy: me.id },
         });
-        if (role) {
-          await tx.userRole.create({
-            data: { userProfileId: created.id, roleId: role.id, grantedBy: me.id },
-          });
-        }
       }
 
       // 7. Audit — same transaction, fail-closed (ADR-035 D2).

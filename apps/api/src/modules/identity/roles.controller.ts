@@ -20,6 +20,7 @@ import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PermissionsGuard } from '../../shared/auth/permissions.guard';
+import { assertWithinCeiling } from '../../shared/auth/privilege-ceiling';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -121,6 +122,29 @@ export class RolesController {
       throw new BadRequestException({ message: 'Permissions inconnues', missing });
     }
 
+    // S-E05-2 (PF-09) — THE PRIVILEGE CEILING. Until this line the only question
+    // asked was « does this code exist in the catalogue », never « does the
+    // caller hold it » — so a `school_admin` could mint a role carrying
+    // `grades.revise` (revise PUBLISHED grades, a permission no admin is meant
+    // to hold), assign it to themselves, and re-authenticate into it.
+    //
+    // ORDERING, DECIDED: strictly AFTER the `Permissions inconnues` 400 above —
+    // an unknown code is an input-validation error and must keep winning, or a
+    // typo would be reported as an authorisation failure. And strictly BEFORE
+    // `$transaction` below, so a refused request writes no Role row, no
+    // role_permission row and no audit row (the house posture the two
+    // cross-tenant refusals in `users.service.ts` already follow).
+    //
+    // The grantor's set comes from the SAME seam `PermissionsGuard:27-28` uses,
+    // derived here in the controller. It is read a second time this request (the
+    // guard already read it); that duplicated read is accepted and NOT cached —
+    // a cache on an authorisation decision is a staleness fail-open.
+    const grantorPermissions = await this.users.effectivePermissions(
+      jwt.sub,
+      jwt.realm_access?.roles ?? [],
+    );
+    assertWithinCeiling(grantorPermissions, body.permissionCodes);
+
     // S-E04-7 — the role and its audit row are now created in ONE transaction.
     // Before this slice they were two separate statements, so a failure between
     // them left a role that exists and is unaudited; `write-audit.ts`'s own header
@@ -171,6 +195,46 @@ export class RolesController {
     // capturing them is PF-123's remaining half and is NOT taken in this slice.
     const provenance = deriveAuditProvenance(jwt);
 
+    // S-E05-2 (PF-09, the worse half) — THE PRIVILEGE CEILING on the REWRITE.
+    // `update()` replaces an existing role's permission set wholesale, and every
+    // current holder of that role gains the new set at their next
+    // `effectivePermissions` read — no second request needed.
+    //
+    // THE CATALOGUE CHECK IS HOISTED OUT OF THE TRANSACTION, and that move is
+    // the point rather than tidying. It used to live INSIDE `$transaction`,
+    // while `create()`'s identical check lives outside it. Leaving it there and
+    // putting the ceiling before the transaction would have made one input — an
+    // unknown permission code — answer 400 from `create()` and 403 from
+    // `update()`: two handlers, two answers, for one typo. Hoisting it restores
+    // one contract (unknown code → 400 → then ceiling → 403 → then the write)
+    // and is safe: `Permission` is a static seeded catalogue and `create()`
+    // already reads it outside its own transaction. The `deleteMany` + `create`
+    // rewrite below stays INSIDE the transaction, and `writeAudit` is untouched.
+    //
+    // AC-3 / FR-4 — DELIBERATE EXEMPTION: when `body.permissionCodes` is absent
+    // (a rename or a description edit) NO ceiling check runs. Requiring a
+    // renamer to hold every permission the role already carries would refuse an
+    // operation that grants nothing at all. Recorded as a decision, not an
+    // oversight — and recorded as currently UNREACHABLE from the shipped UI,
+    // because `RoleBuilderForm.tsx:132-135` always sends `permissionCodes` on
+    // edit. It is correct and it is dormant; both halves are in ADR-015.
+    let perms: { id: string; code: string }[] | null = null;
+    if (body.permissionCodes) {
+      const resolved = await this.prisma.permission.findMany({
+        where: { code: { in: body.permissionCodes } },
+      });
+      if (resolved.length !== body.permissionCodes.length) {
+        const missing = body.permissionCodes.filter((c) => !resolved.find((p) => p.code === c));
+        throw new BadRequestException({ message: 'Permissions inconnues', missing });
+      }
+      perms = resolved;
+      const grantorPermissions = await this.users.effectivePermissions(
+        jwt.sub,
+        jwt.realm_access?.roles ?? [],
+      );
+      assertWithinCeiling(grantorPermissions, body.permissionCodes);
+    }
+
     // S-E04-7 — the audit row moves INSIDE the transaction that already existed
     // here. It used to be written after it committed, so a permission rewrite
     // could succeed while its trace failed, and nothing would say so.
@@ -182,12 +246,7 @@ export class RolesController {
           description: body.description ?? undefined,
         },
       });
-      if (body.permissionCodes) {
-        const perms = await tx.permission.findMany({ where: { code: { in: body.permissionCodes } } });
-        if (perms.length !== body.permissionCodes.length) {
-          const missing = body.permissionCodes.filter((c) => !perms.find((p) => p.code === c));
-          throw new BadRequestException({ message: 'Permissions inconnues', missing });
-        }
+      if (perms) {
         await tx.rolePermission.deleteMany({ where: { roleId: id } });
         for (const p of perms) {
           await tx.rolePermission.create({ data: { roleId: id, permissionId: p.id } });

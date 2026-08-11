@@ -1,6 +1,7 @@
 import { ForbiddenException, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 
 import { deriveAuditProvenance } from '../../shared/audit/provenance';
+import { PERMISSIONS, REALM_ROLE_PERMISSIONS } from '../../shared/auth/permissions.constants';
 import type { PrismaService } from '../../shared/prisma/prisma.service';
 
 import { UsersService } from './users.service';
@@ -41,6 +42,56 @@ const PROVENANCE = deriveAuditProvenance(
   { sub: 'kc-1', realm_access: { roles: ['super_admin'] } } as never,
   { ipAddress: '198.51.100.24', userAgent: 'Mozilla/5.0 (admin)' },
 );
+
+/* ------------------------------------------------------------------ *
+ * S-E05-2 — the grantor sets. `assignRole` gained a REQUIRED 6th
+ * parameter, so every call below passes one.
+ *
+ * The pre-existing R-1 … R-5 cases pass FULL_CATALOGUE, and that
+ * preserves their meaning rather than bending it: their actor is already
+ * declared `super_admin` in `PROVENANCE` above (`:40-43`), and
+ * `REALM_ROLE_PERMISSIONS.super_admin` IS the whole catalogue
+ * (`permissions.constants.ts:143`). They were audit tests before this
+ * slice and they stay audit tests after it — the ceiling is a no-op on
+ * a grantor who holds everything.
+ * ------------------------------------------------------------------ */
+const ALL_CODES: string[] = PERMISSIONS.map((p) => p[0]);
+const FULL_CATALOGUE: ReadonlySet<string> = new Set(ALL_CODES);
+const SCHOOL_ADMIN_SET: ReadonlySet<string> = new Set(REALM_ROLE_PERMISSIONS.school_admin ?? []);
+/** A narrow custom-role grantor holding `roles.assign` and very little else. */
+const NARROW_SET: ReadonlySet<string> = new Set(['roles.assign', 'students.read']);
+
+/**
+ * What `prisma/seed.ts` actually writes into `role_permission` for the seeded
+ * `teacher` row (`seed.ts:115-127`) — NOT `REALM_ROLE_PERMISSIONS.teacher`.
+ * The ceiling compares the DATABASE row, so the fixture must be the DB row.
+ * (The constants list additionally carries `lessons.delete` and
+ * `class_sessions.*`, which the seeded row does not.)
+ */
+const SEEDED_TEACHER_CODES = [
+  'classes.read',
+  'subjects.read',
+  'students.read',
+  'assessments.read',
+  'assessments.write',
+  'grades.read',
+  'grades.write',
+  'grades.publish',
+  'grades.revise',
+  'attendance.read',
+  'attendance.write',
+  'lessons.read',
+  'lessons.write',
+  'discipline.read',
+  'discipline.write',
+  'announcements.read',
+  'announcements.write',
+  'branding.read',
+  'exports.execute.teacher',
+  'remediation.read',
+  'profile.read.self',
+  'profile.write.self',
+];
 
 type Row = Record<string, unknown>;
 type Staged = { kind: 'userRole' | 'audit'; row: Row };
@@ -94,7 +145,17 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
   const prisma = {
     userProfile: { findUnique: jest.fn() },
     role: {
-      findUnique: jest.fn().mockResolvedValue({ id: ROLE_ID, slug: 'surveillant', name: 'Surveillant' }),
+      // S-E05-2 — `assignRole` now reads `role.rolePermissions[].permission.code`
+      // to decide the ceiling, so the fixture must carry the relation. It
+      // defaults to the EMPTY list — a role granting nothing exceeds nothing —
+      // which is what keeps R-1 … R-5 measuring audit behaviour rather than
+      // authorisation. `carrying()` below overrides it.
+      findUnique: jest.fn().mockResolvedValue({
+        id: ROLE_ID,
+        slug: 'surveillant',
+        name: 'Surveillant',
+        rolePermissions: [],
+      }),
     },
     userRole: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -131,6 +192,32 @@ function grantable(db: ReturnType<typeof makeDb>, tenantId = TENANT) {
   db.prisma.userProfile.findUnique.mockResolvedValue({ id: USER_ID, tenantId });
 }
 
+/**
+ * Returns the rejection rather than asserting on it, so a negative can inspect
+ * the 403 BODY. Asserting only on the exception CLASS would pass on the
+ * pre-existing cross-tenant `ForbiddenException` and prove nothing about the
+ * ceiling (inversion T-1). Same helper shape as `invite.controller.spec.ts:201`.
+ */
+async function failureOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (err) {
+    return err;
+  }
+  throw new Error('expected the grant to be refused, and it resolved');
+}
+
+/** S-E05-2 — give the looked-up role a real permission set (the ceiling's input). */
+function carrying(db: ReturnType<typeof makeDb>, codes: readonly string[], over: Partial<Row> = {}) {
+  db.prisma.role.findUnique.mockResolvedValue({
+    id: ROLE_ID,
+    slug: 'surveillant',
+    name: 'Surveillant',
+    rolePermissions: codes.map((code) => ({ permission: { code } })),
+    ...over,
+  });
+}
+
 function revocable(db: ReturnType<typeof makeDb>, over: Partial<Row> = {}) {
   db.prisma.userRole.findUnique.mockResolvedValue({
     id: USER_ROLE_ID,
@@ -155,7 +242,7 @@ describe('R-1 / AC-3 — role.grant writes one row inside the grant’s transact
     const db = makeDb();
     grantable(db);
 
-    const created = await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE);
+    const created = await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE);
 
     expect(db.entities()).toHaveLength(1);
     expect(db.auditRows()).toHaveLength(1);
@@ -179,7 +266,7 @@ describe('R-1 / AC-3 — role.grant writes one row inside the grant’s transact
   it('resourceId carries no separator, and `after` names both sides of the grant', async () => {
     const db = makeDb();
     grantable(db);
-    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE);
+    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE);
 
     const row = db.auditRows()[0]!;
     expect(String(row.resourceId)).not.toContain(':');
@@ -195,7 +282,7 @@ describe('R-1 / AC-3 — role.grant writes one row inside the grant’s transact
     grantable(db);
     db.prisma.userRole.findFirst.mockResolvedValue({ id: USER_ROLE_ID, revokedAt: null });
 
-    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE);
+    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE);
 
     expect(db.prisma.$transaction).not.toHaveBeenCalled();
     expect(db.auditRows()).toEqual([]);
@@ -212,7 +299,7 @@ describe('R-2 / AC-1 / AC-2 — grant: neither row survives, in EITHER direction
     const db = makeDb({ entity: collision });
     grantable(db);
 
-    await expect(db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE)).rejects.toThrow(
+    await expect(db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE)).rejects.toThrow(
       collision,
     );
     expect(db.entities()).toEqual([]);
@@ -224,7 +311,7 @@ describe('R-2 / AC-1 / AC-2 — grant: neither row survives, in EITHER direction
     grantable(db);
 
     await expect(
-      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE),
+      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE),
     ).rejects.toBeInstanceOf(InternalServerErrorException);
     expect(db.entities()).toEqual([]);
     expect(db.auditRows()).toEqual([]);
@@ -240,7 +327,7 @@ describe('R-3 / G-TENANT — a foreign-tenant identifier is refused and writes n
     const db = makeDb();
     grantable(db, OTHER_TENANT);
 
-    await expect(db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE)).rejects.toBeInstanceOf(
+    await expect(db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE)).rejects.toBeInstanceOf(
       ForbiddenException,
     );
     expect(db.prisma.$transaction).not.toHaveBeenCalled();
@@ -251,7 +338,7 @@ describe('R-3 / G-TENANT — a foreign-tenant identifier is refused and writes n
     const db = makeDb();
     db.prisma.userProfile.findUnique.mockResolvedValue(null);
 
-    await expect(db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE)).rejects.toBeInstanceOf(
+    await expect(db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE)).rejects.toBeInstanceOf(
       NotFoundException,
     );
     expect(db.auditRows()).toEqual([]);
@@ -271,7 +358,7 @@ describe('R-3 / G-TENANT — a foreign-tenant identifier is refused and writes n
   it('the row records the CALLER’s tenant, never the target’s', async () => {
     const db = makeDb();
     grantable(db);
-    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE);
+    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE);
     expect(db.auditRows()[0]!.tenantId).toBe(TENANT);
   });
 });
@@ -441,4 +528,189 @@ describe('R-5 / PF-157 — the revocation is decided in the transaction, not bef
   // revoked_at IS NULL` — which would prove it at the database, and which also
   // covers the concurrent-`assignRole` race this slice does NOT close — is
   // registered, not written (AC-13).
+});
+
+/* ================================================================== *
+ * R-6 (S-E05-2 / PF-156) — THE PRIVILEGE CEILING on the grant path
+ * ================================================================== */
+
+/**
+ * T-19 … T-26. Every negative asserts on the 403 BODY, never merely on the
+ * class: `assignRole` already threw `ForbiddenException` for a cross-tenant
+ * userId at `:83` before this slice, so `rejects.toBeInstanceOf(ForbiddenException)`
+ * alone would pass without the ceiling existing (inversion T-1).
+ *
+ * « Nothing was written » is asserted on `entities()` / `auditRows()` — the
+ * COMMITTED store — not on a call count, for the reason this file's header
+ * already gives.
+ *
+ * Fails-before, derivable by reading: the pre-slice `assignRole` took five
+ * parameters and its `role.findUnique` carried no `include`, so T-25's argument
+ * assertion is structurally unreachable and T-19 … T-21 exercise a 403 branch
+ * that did not exist.
+ */
+describe('R-6 / AC-4 / G-AUTHZ — a grant that exceeds the grantor is refused before anything is written', () => {
+  it('T-19 — a school_admin assigning a FULL-CATALOGUE role is refused (PF-09 step 2)', async () => {
+    // The live two-request self-escalation: mint a role carrying every code
+    // (refused at the mint site now too), then assign it to yourself. This is
+    // the second door, closed independently.
+    const db = makeDb();
+    grantable(db);
+    carrying(db, ALL_CODES);
+
+    const err = await failureOf(
+      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, SCHOOL_ADMIN_SET),
+    );
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    const body = (err as ForbiddenException).getResponse() as { missing: string[]; message: string };
+    expect(body.missing).toContain('grades.revise');
+    expect(typeof body.message).toBe('string');
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+    expect(db.entities()).toEqual([]);
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('T-20 — a school_admin can no longer assign the SEEDED teacher row, and these are the exact 5 codes', async () => {
+    // THE PRODUCT CONSEQUENCE, PINNED BY TEST rather than discovered in
+    // production. Measured against `seed.ts`'s ROLE_PERMISSIONS (what actually
+    // lands in `role_permission`) versus `REALM_ROLE_PERMISSIONS.school_admin`.
+    // « onboard a teacher » is an everyday admin operation and it now answers
+    // 403. That is correct under the ceiling — a school_admin genuinely does not
+    // hold `grades.revise` — and it is recorded in ADR-015 D5, NOT papered over
+    // by weakening the check.
+    const db = makeDb();
+    grantable(db);
+    carrying(db, SEEDED_TEACHER_CODES, { slug: 'teacher', name: 'Professeur' });
+
+    const err = await failureOf(
+      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, SCHOOL_ADMIN_SET),
+    );
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect((err as ForbiddenException).getResponse()).toMatchObject({
+      missing: [
+        'grades.write',
+        'grades.revise',
+        'attendance.write',
+        'lessons.write',
+        'exports.execute.teacher',
+      ],
+    });
+    expect(db.entities()).toEqual([]);
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('T-21 — a NARROW custom-role grantor is refused anything outside its own set', async () => {
+    const db = makeDb();
+    grantable(db);
+    carrying(db, ['students.read', 'students.write']);
+
+    const err = await failureOf(
+      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, NARROW_SET),
+    );
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect((err as ForbiddenException).getResponse()).toMatchObject({ missing: ['students.write'] });
+    expect(db.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('T-21b — an EMPTY grantor set denies, it does not wave the grant through', async () => {
+    // The fail-open this gate exists to forbid, asserted at the CALL SITE and
+    // not only on the predicate: `user-sync.service.ts:67` resolves an
+    // unrecognised realm role to `[]`, so this caller is reachable.
+    const db = makeDb();
+    grantable(db);
+    carrying(db, ['students.read']);
+
+    const err = await failureOf(
+      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, new Set<string>()),
+    );
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect(db.auditRows()).toEqual([]);
+  });
+
+  it('T-22 / AC-6 — a full-catalogue grantor assigning a full-catalogue role COMMITS', async () => {
+    // `super_admin` is unaffected structurally: its realm role carries every
+    // code, so the ceiling is arithmetically a no-op. Built from `PERMISSIONS`,
+    // not from a seeded `super_admin` Role row — there is none.
+    const db = makeDb();
+    grantable(db);
+    carrying(db, ALL_CODES);
+
+    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, FULL_CATALOGUE);
+
+    expect(db.entities()).toHaveLength(1);
+    expect(db.auditRows()).toHaveLength(1);
+    expect(db.auditRows()[0]).toMatchObject({ action: 'role.grant', resourceType: 'user_role' });
+  });
+
+  it('T-23 — the honest NON-super_admin positive control: a role inside the school_admin set commits', async () => {
+    // Proof that the fix is not a blanket deny. A custom role narrower than the
+    // grantor is exactly what `roles.assign` is still for.
+    const db = makeDb();
+    grantable(db);
+    carrying(db, ['students.read', 'attendance.read']);
+
+    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, SCHOOL_ADMIN_SET);
+
+    expect(db.entities()).toHaveLength(1);
+    expect(db.auditRows()).toHaveLength(1);
+  });
+
+  it('T-24 — a refused grant on an ALREADY-EXISTING assignment is still 403, never a 200 body', async () => {
+    // Ordering, decided: the ceiling runs BEFORE the idempotent early return.
+    // An « already granted » 200 for an over-privileged role is a probe oracle —
+    // it tells a limited admin which users already hold escalated roles.
+    const db = makeDb();
+    grantable(db);
+    carrying(db, ALL_CODES);
+    db.prisma.userRole.findFirst.mockResolvedValue({ id: USER_ROLE_ID, revokedAt: null });
+
+    const err = await failureOf(
+      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, SCHOOL_ADMIN_SET),
+    );
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect(db.prisma.userRole.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('T-25 — the `include` is PINNED: dropping it would silently disable the ceiling', async () => {
+    // Without the include, `rolePermissions` is absent, the compared set is
+    // empty, an empty set exceeds nothing, and every grant is permitted while
+    // every test above stays green. That is the « guard that cannot fire » shape
+    // this epic is named after, so the read shape itself is the assertion.
+    const db = makeDb();
+    grantable(db);
+    carrying(db, ['students.read']);
+
+    await db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, SCHOOL_ADMIN_SET);
+
+    expect(db.prisma.role.findUnique).toHaveBeenCalledWith({
+      // G-TENANT / PF-153 — `where` stays UNFILTERED by tenant, deliberately.
+      // `Role` is a global catalogue; filtering it here would be a visibility
+      // change dressed as a fix, and it is blocked on ADR-013.
+      where: { id: ROLE_ID },
+      include: { rolePermissions: { include: { permission: true } } },
+    });
+  });
+
+  it('T-26 / G-TENANT — a cross-tenant userId still loses to the ceiling’s own refusal ordering', async () => {
+    // The two pre-existing cross-tenant refusals are kept VERBATIM and still run
+    // FIRST: a foreign user is refused before the role is even looked up, so the
+    // ceiling never gets to answer and no existence bit about the role leaks.
+    const db = makeDb();
+    grantable(db, OTHER_TENANT);
+    carrying(db, ALL_CODES);
+
+    const err = await failureOf(
+      db.service.assignRole(USER_ID, ROLE_ID, ACTOR, TENANT, PROVENANCE, SCHOOL_ADMIN_SET),
+    );
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect((err as ForbiddenException).message).toBe('Cross-tenant assignment refused');
+    expect(db.prisma.role.findUnique).not.toHaveBeenCalled();
+    expect(db.auditRows()).toEqual([]);
+  });
 });

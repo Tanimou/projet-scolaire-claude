@@ -2,14 +2,21 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-07)** `in-progress` — **`S-E05-12` is the first slice of this epic to land**, and it is the only one
-with a written story. `S-E05-1` … `S-E05-11` exist as **rows in
+**Status (2026-08-11)** `in-progress` — **two slices landed**: `S-E05-12` (2026-08-07) and **`S-E05-2` (this run)**.
+`S-E05-2` was authored and implemented in the same run: its story
+[`stories/S-E05-2.md`](./stories/S-E05-2.md) **is** the authoring pass this file used to say was missing. The remaining
+nine (`S-E05-1`, `S-E05-3` … `S-E05-11`) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
-`docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story at all, so none of them is implementable
-without an authoring run first.
-**Next slice → not in this epic.** See "Next run" below: the two candidates are a **`sprint-02` authoring run** (which
-would enumerate `S-E05-1` … `S-E05-11`) and a **`V3-E04` `epic-spec` run**, and the second is the one the roadmap's own
-sequencing rule prefers.
+`docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
+without an authoring pass of its own.
+**Next slice → `S-E05-2b` — the `realmRole` invite channel, the fifth grant path this slice deliberately left open.**
+See "Next run" below.
+
+*(Corrected 2026-08-11, `S-E05-2` land pass. Lines 5-12 used to read "`S-E05-12` … is the only one with a written
+story" and "**Next slice → not in this epic** … nothing in this epic is enumerated". Both were falsified by the diff
+that carries this edit — `S-E05-2.md` §0.4 names the contradiction and overrides it rather than obeying it. Named here
+rather than silently overwritten: a status line the next autonomous run reads at Step 1 is exactly the kind of stale
+truth that makes it skip work that is ready.)*
 
 > **Why there is no `spec.md` here.** Same posture as
 > [`docs/spec/features/v3-e02/PROGRESS.md`](../v3-e02/PROGRESS.md) and
@@ -33,7 +40,7 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 |---|---|---|---|---|
 | **S-E05-12** | The post-authentication redirect target becomes same-origin-only, on all four portal login forms | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E05-12.md`](./stories/S-E05-12.md) · **`PF-102` closed**, `PF-103`'s `PORTAL_LANDING`-declared-twice note retired, no new finding raised · evidence below |
 | S-E05-1 | Global custom roles are cross-tenant (`PF-08`) + `VAL-07` | ⬜ unenumerated | — | matrix row only — no story in `sprint-01` |
-| S-E05-2 | Privilege minting (`PF-09`) | ⬜ unenumerated | — | matrix row only |
+| **S-E05-2** | **The privilege ceiling: no grantor may mint, rewrite or assign a permission they do not themselves hold** (`PF-09`, `PF-156`) | ⚠️ done — **needs human review** | 2026-08-11 | spec: [`stories/S-E05-2.md`](./stories/S-E05-2.md) · **`PF-09` narrowed to 4 of 5 grant channels, NOT closed** (the `realmRole` invite channel stays open — see evidence below) · `PF-156` closed with its `isSystem` remedy **declined and argued** · `ADR-015` gains its first `D<n>` amendment; `ADR-035`'s "we do not change who may grant what" posture marked SUPERSEDED · raises the `S-E05-2b` residual set · evidence below |
 | S-E05-3 | Coefficient-matrix foreign-tenant write (`PF-10`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-5 | Attendance reads without ABAC (`PF-07`) | ⬜ unenumerated | — | matrix row only |
@@ -43,6 +50,158 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
 | S-E05-10 | Unused `hasPermission`, `users.suspend` unimplemented (`PF-52`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-11 | Non-atomic invite/permission rewrite, catalogue drift (`PF-53`) | ⬜ unenumerated | — | matrix row only |
+
+---
+
+## S-E05-2 — evidence (2026-08-11)
+
+### What the slice changed
+
+**One new predicate, four grant paths, zero new endpoints.** `apps/api/src/shared/auth/privilege-ceiling.ts` (NEW,
+180 L) holds a pure `exceedsGrantor(grantorSet, requested): string[]` and its throwing wrapper
+`assertWithinCeiling`. No `@Injectable`, no Nest module, no Prisma import, no barrel, no env read, arity pinned at 2 —
+the same seam shape as `shared/audit/provenance.ts` (`ADR-035` D4). The grantor's set is derived **at the controller**
+from `UserSyncService.effectivePermissions(jwt.sub, jwt.realm_access?.roles ?? [])` — the identical seam
+`PermissionsGuard:27-28` reads — and never re-unioned inside a service.
+
+| Grant path | Where the ceiling runs |
+|---|---|
+| `roles.controller.create()` | after the `Permissions inconnues` 400, **before** `$transaction` |
+| `roles.controller.update()` | after the `isSystem` refusal, **before** `$transaction`; the catalogue check is **hoisted out of the transaction** so one unknown code answers **400 from both handlers** instead of 400/403 |
+| `users.service.assignRole()` | before the idempotent early-return **and** before `$transaction`; `grantorPermissions` is a **required** 6th parameter, so an omission is a compile error and never a silently empty (then "conveniently" defaulted) set |
+| `invite.controller` `customRoleSlug` | resolved in `invite()` step 1b, **before** the Keycloak identity exists, so a refusal needs no compensation |
+
+Every refusal precedes its transaction, so it writes no entity row and no audit row; `writeAudit` is untouched and
+rule B of `scripts/audit-write-check.js` stays green. The 403 body is byte-shape-identical to the one
+`permissions.guard.ts:31-35` already emits (`{ message, required, missing }`), and `message` stays a plain string
+because `RoleBuilderForm.tsx:236` renders it directly as a React child.
+
+Fail-closed was inspected, not assumed: `undefined`/empty grantor denies **everything**; an unknown code is denied
+because the predicate never consults the catalogue; a non-array `requested` returns an opaque sentinel. The single
+permit-on-empty (`requested === []`) is stated and pinned by test. There is **no `super_admin` role-name special
+case** — `super_admin` is spared *structurally*, by `REALM_ROLE_PERMISSIONS.super_admin` already being the whole
+catalogue. An `if (roles.includes('super_admin')) return []` would be a bypass wearing a role name.
+
+### What executed
+
+| Check | Result |
+|---|---|
+| `pnpm typecheck` (Murat, **once**) | **13 successful / 13 total**, exit 0. `@pilotage/api` was a **cache miss that executed** — the new files were really compiled |
+| `git diff --check` and `git diff --check HEAD` | **exit 0**, clean, both |
+| `tsc --noEmit` on `apps/api` directly (panel, bypassing turbo) | **green**. Run because `pnpm typecheck` first reported `FULL TURBO` replaying logs from sibling worktrees; `privilege-ceiling.ts` was untracked, so the input hash had never seen it. **Anyone re-running this gate must bypass the cache** |
+| The five affected specs (panel) | **154 pass / 1 fail** — the failure is `audit-write-gate.spec.ts:995`, **inherited red on `main`** from the `ci-gate.sh` perf rewrite (`c141997`/`2bd1a25`), not this diff. Neither `ci-gate.sh` nor `ci.yml` is touched here |
+| Mutation kill test (panel) | `exceedsGrantor` → `return []` killed **exactly 10 negatives, one per call site**, invite path included, positives green. This is what makes the coverage real rather than presence-shaped |
+| Ratchet proven able to fail (panel) | a throwaway `__ratchet-probe.ts` with an unceilinged `userRole.create` turned the new **G-AUTHZ** gate red **and named the file**; probe deleted, tree verified clean |
+
+**One gate row is NOT green and is not claimed as such.** `roles.controller.spec.ts` failed `apps/api#typecheck` on a
+`noUncheckedIndexedAccess` widening at `:407` and was corrected (a literal-keyed `Record<'create'|'update', object>`
+replacing an index-signature cast). The typecheck was re-run and is green. **No jest run has been observed on the
+corrected file** — the earlier "4 suites / 79 tests" line predates that block, and `ts-jest` runs with diagnostics on,
+so it could not have passed as written. `npx jest src/modules/identity/roles.controller.spec.ts` is a manual check in
+the PR body, and it is the one piece of this slice's evidence that is asserted rather than executed.
+
+### The load-bearing correction: the gate that could never have caught the next PF-09
+
+`audit-write-gate.spec.ts` previously ratcheted `expect(roles).not.toContain('effectivePermissions')` — a deliberate
+"this slice changed no authorisation" invariant from `S-E04-9`. The product has now reversed that posture, so the
+ratchet was **amended, not deleted**, and the reversal is recorded in place in `ADR-035` rather than rewritten away.
+
+The replacement's first draft still enumerated the three fixed files **by hand**, which is green by construction: it
+protects the doors already closed and can never redden for the change that reintroduces the defect — a **fifth grant
+path in a file the list does not name**. It now *discovers* its surface by walking the gate's own `WALK_ROOTS` for the
+privilege-**creating** verbs (`userRole.create|upsert`, `rolePermission.create`, and the nested
+`rolePermissions: { create` form) and requires each match to import the ceiling. Revoke (`updateMany`) is excluded
+deliberately — a ceiling on *removing* privilege would trap an admin with a role they cannot revoke. It fails when the
+walk finds fewer than 3 sites (DNC-08: never pass over an empty set), and the `UNCEILINGED` allowlist is empty, so an
+exemption becomes a signed decision.
+
+### `PF-09` is NARROWED, not closed — and that is the merge condition
+
+Three independent reviewers reached the same finding, so it is recorded as the epic's status, not as a note:
+`POST /users/invite` is gated only on `users.write` (weaker than `roles.assign`), `body.realmRole` accepts `teacher`
+via `@IsEnum`, `REALM_ROLE_PERMISSIONS.teacher` carries `grades.revise` / `grades.write` / `attendance.write` /
+`lessons.write` — none of which `school_admin` holds — and `body.email` is attacker-controlled. So the exact
+escalation this slice closes on `customRoleSlug` survives verbatim on `realmRole`, one email of friction later.
+
+That is left open **by decision**, and the decision is defensible: applying a subset ceiling there would refuse
+"invite a teacher", the product's primary onboarding flow, and realm-role provisioning is a **delegation** question
+(a grantor may provision at or below their own level), not a subset question. It is recorded in `ADR-015` D8.1 and in
+the code at `invite.controller.ts:206-214`.
+
+What is **not** defensible is the label. `ADR-035`'s superseding note and the `ADR-015` amendment front-matter both
+book `PF-09` as *fermé*, unqualified. **The traceability matrix must record `PF-09` as narrowed (4 of 5 channels) with
+the realm-role residual allocated a real finding id**, or a future auditor reading only `ADR-035` inherits a false
+all-clear on a P0 `BROKEN_SECURITY` row. That correction is a land-pass task and is called out in the PR body.
+
+### The product regression this slice ships, and the FE half it cannot fix
+
+Measured against `seed.ts`'s `ROLE_PERMISSIONS` (the rows the ceiling actually reads), a `school_admin` can no longer
+assign the seeded **`teacher`** (5 exceeding codes), **`parent`** (3) or **`student`** (5) roles. `school_admin` →
+`school_admin` (0 exceeding) still works. This is structural, not a bug: the role-narrowed permission families
+(`*.read.self`, `*.parent`, `*.teacher`) exist precisely so no admin holds them, so a subset test will always refuse
+cross-audience grants.
+
+The backend fails **closed**, which is right. The front end swallows it, which is not:
+`apps/web/src/app/admin/users/actions.ts:7-10` has no `catch` and returns `void`, and
+`apps/web/src/app/admin/users/UsersTable.tsx:30-39` is `try … finally` with no `catch` — so the new 403 lands as an
+unhandled rejection: spinner stops, menu closes, no message, `router.refresh()` never runs. `UsersTable.tsx:115` also
+still offers all four seeded roles from an unfiltered `GET /roles`, three of which now always fail. Contrast
+`admin/roles/actions.ts:24-31,44-50`, which *does* catch `ApiError` and surface `body.message`, so the identical 403
+on role create/update is shown correctly.
+
+`apps/web` is outside this track's owned paths, so this is raised as a **blocking FE-track finding**, not absorbed:
+align `assignRoleAction` with `admin/roles/actions.ts`, render `missing`, and filter the dropdown against the
+caller's effective set. Recorded in `ADR-015` D8.7.
+
+### Gates — every row answered, none blank
+
+| Gate | Triggers? | Why |
+|---|---|---|
+| **G-AUTHZ** | **YES — primary** | Four grant paths, one predicate; the mutation kill (10/10 negatives, one per site) is what proves the negatives measure *this* guard and not an older `isSystem`/cross-tenant one; the new directory-walking ratchet was driven red by a probe |
+| **G-DNC** | **YES (always)** | DNC-10 intact — no env read, no options bag, no bypass flag, `assertWithinCeiling.length === 2` asserted. DNC-08 — the ratchet refuses to pass over an empty walk (floor of 3 sites) |
+| **G-AUDIT** | **YES** | Every refusal precedes its `$transaction`, so no partial write and no orphan audit row; `writeAudit` untouched, `audit-write-check.js` rule B green. **Residual**: a refusal writes no audit row and only an actor-less `logger.warn` (D8.3) |
+| **G-TENANT** | **YES — verified, not assumed** | Net-restrictive everywhere; no new cross-tenant read. `PF-153` (the role lookup unfiltered by tenant) is untouched and explicitly still open, marked in-place at `users.service.ts` |
+| **G-MIGRATION** | **NO** | `schema.prisma` untouched, no migration, no new dependency |
+| **G-TRUTH** | **NO** | No KPI, read projection or dashboard figure |
+| **G-PORTAL** | **NO** | Backend-only; the FE consequence is raised as a finding, not implemented here |
+
+### Not claimed by `S-E05-2` — queued with an owner, not silenced
+
+| What is NOT claimed | Detail | Owner |
+|---|---|---|
+| **`PF-09` is closed** | The `realmRole` invite channel is unceilinged and reproduces the escalation. `ADR-015` D8.1 states it honestly; `ADR-035`'s note and the amendment front-matter do not. Matrix must say **narrowed** | `S-E05-2b` |
+| **Grants that escalated BEFORE this slice are evicted** | The ceiling compares against `effectivePermissions`, which unions custom-role permissions — so an actor already holding a `PF-09`-minted role passes it *unconditionally* and can keep minting. Detection query, not a migration: non-system roles carrying any code outside `REALM_ROLE_PERMISSIONS.school_admin`. **Run it before calling `PF-09` anything at the deployment level** | `S-E05-2b` (D8.2) |
+| **A refused escalation is attributable** | No audit row (correct — nothing happened, and a `writeAudit` outside a transaction breaks `ADR-035` D1), and the compensating `logger.warn` lives *inside* the predicate, so it carries no `jwt.sub`, no tenant, no IP — even though `deriveAuditProvenance` has already produced them at all four call sites. The fix needs **no** signature change: catch at the call site, log there, rethrow. Worse under D5 — ordinary refused `teacher` assignments will dominate the same warn stream, so it is not alertable as written | `S-E05-2b` (D8.3) |
+| **The ceiling constrains narrowing, revoking or deleting** | It is one-directional by design: any subset passes, so a `roles.write` holder can strip or wipe a role that carries codes above their own ceiling — and then cannot restore it (403). `revokeRole` and `remove()` gained no ceiling. Accepted as *désescalade* in D3; the **irreversibility** is not recorded there and should be | `V3-E05` follow-up |
+| **`update()` checks the ceiling on a rename** | When `body.permissionCodes` is absent no check runs — correct (a rename grants nothing) and currently unreachable from the shipped UI (`RoleBuilderForm.tsx:132-135` always sends the field). Dormant and documented | scope note |
+| **The invite hoist preserves every prior behaviour** | D7 says the unresolvable-slug no-op is "préservé verbatim". True for a slug that never resolved; **not** for one that resolves and is then deleted before the transaction — that used to be a silent no-op and is now an FK violation → rollback → Keycloak compensation → 500. Window is tiny (`remove()` refuses to delete an assigned role) and the direction is fail-closed, but D7's list is missing it | `V3-E05` follow-up |
+| **A duplicated permission code reaches the ceiling** | Both handlers compare `resolved.length !== body.permissionCodes.length`, so `['x','x']` answers **400 `Permissions inconnues` with `missing: []`** — naming no code at all. Pre-existing in `create()`, copied verbatim into the new `update()` block. Consequence: `exceedsGrantor`'s de-duplication is unreachable from any HTTP call site and is only unit-asserted | `V3-E05` follow-up |
+| **The story spec matches the code** | `S-E05-2.md` §2.3/§5 T-18/§9 still say "do not move" the `update()` catalogue check and pin an unknown code to **403**; the code hoists it and answers **400**. The divergence is right and better argued than the spec — but the two artefacts disagree, which is the `PF-164` shape this slice's own gate amendment exists to prevent. Reconcile the story, do not re-litigate the code | land pass / `S-E05-2b` |
+| **`PF-153`** | Role lookup unfiltered by tenant — untouched, still open, marked in place | `V3-E05` |
+| **A browser rendered anything** | No Playwright, no driven navigation, and `apps/web` is not edited. The D5 regression is proven by permission arithmetic and by reading the FE call sites, not by clicking | `VAL-08` |
+
+---
+
+## Next run
+
+**`S-E05-2b` — close the fifth grant channel and make the refusal attributable.** It is the direct residual of this
+slice and the only item on the list that is a live escalation path rather than a documentation or ergonomics debt.
+Three things, one PR:
+
+1. **The `realmRole` invite channel.** Not a subset ceiling (that refuses "invite a teacher") but a **grantor-relative
+   ladder**: a grantor may provision a realm role at or below their own. Permits `school_admin → teacher|parent`,
+   refuses `teacher → school_admin`. That is the §2.4 option-2 delegation decision and it needs its own `ADR-015`
+   decision entry, so it is a slice and not a patch.
+2. **Attribution.** Move the `logger.warn` from inside the predicate to the four call sites, where `jwt.sub`,
+   `me.tenantId` and the provenance hints are already in hand. Predicate stays at arity 2.
+3. **The label.** Record `PF-09` as narrowed in the matrix, allocate the realm-role residual a finding id, and correct
+   the unqualified "closed" in `ADR-035`.
+
+**Second candidate — the FE companion to D5**, on the `apps/web` track: catch `ApiError` in `assignRoleAction`, render
+`missing`, filter the role dropdown against the caller's effective set. It ships no new capability, but until it lands
+an admin's "assign teacher" click does nothing at all with no explanation.
+
+**Third — the `S-E05-12` gate-coverage consolidation** (six residuals, entirely test-side) is unchanged in priority.
 
 ---
 
@@ -143,7 +302,13 @@ so it becomes false the day a request-supplied `link` appears.
 
 ---
 
-## Next run
+## ~~Next run~~ — as written by the `S-E05-12` land pass (2026-08-07), **SUPERSEDED**
+
+> **Superseded 2026-08-11 by the `S-E05-2` land pass.** The live pointer is the "Next run" section above. Both of this
+> section's candidates are spent: `V3-E04`'s `epic-spec` run landed (run 28) and the epic is `in-progress` with 10 of
+> 11 slices shipped, and its opening premise — *"nothing in this epic is enumerated"* — was falsified by `S-E05-2`,
+> which authored and shipped its own story in one run. Kept struck rather than deleted, because a reader who stops at
+> the prose would re-write a shipped spec-kit. Original text follows.
 
 **Not a `V3-E05` slice — nothing in this epic is enumerated.** Two candidates, in order:
 
