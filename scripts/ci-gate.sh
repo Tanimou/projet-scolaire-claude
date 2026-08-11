@@ -175,8 +175,8 @@ if changed_match "$CODE_RE"; then
 
   run_stage 900 "typecheck" pnpm typecheck
   run_stage 600 "lint" pnpm lint
-  run_stage 900 "test:api (ratchet)" node scripts/test-ratchet.js api
-  run_stage 900 "test:worker (ratchet)" node scripts/test-ratchet.js worker
+  run_stage 2400 "test:api (ratchet)" node scripts/test-ratchet.js api
+  run_stage 1200 "test:worker (ratchet)" node scripts/test-ratchet.js worker
 else
   skip_stage "code stages" "no code change"
 fi
