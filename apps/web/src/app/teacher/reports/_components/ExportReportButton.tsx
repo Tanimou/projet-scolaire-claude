@@ -65,7 +65,16 @@ export function ExportReportButton({
     try {
       const lines: string[] = [];
       lines.push('Rapport enseignant — Pilotage Scolaire');
-      lines.push(`Année;${academicYear?.name ?? ''}`);
+      // PF-173 (a) — the live half, closed at land of S-E05-1. This line is
+      // hand-joined rather than built from `csvRow`, so it declared no escaper
+      // and passed every rule of `scripts/csv-escape-check.js` while shipping
+      // exactly the defect PF-168 names: `academicYear.name` is tenant-authored
+      // free text reaching a `.csv` a teacher opens in Excel, which evaluates a
+      // formula in ANY column, not only the first. The structural half of
+      // PF-173 — a branded `CsvCell` that makes an unescaped cell a type error
+      // across all seven call sites (the ADR-035 `write-audit.ts` pattern) —
+      // stays OPEN and wants its own slice; this is the stated minimum.
+      lines.push(`Année;${csvEscape(academicYear?.name ?? '')}`);
       lines.push(`Généré le;${new Date().toLocaleString('fr-FR')}`);
       lines.push('');
       lines.push('INDICATEURS GLOBAUX');

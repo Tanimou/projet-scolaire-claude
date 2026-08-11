@@ -12,16 +12,12 @@ import {
   type AlertRule,
 } from './types';
 
-function csvEscape(v: string | number | boolean | null | undefined): string {
-  if (v === null || v === undefined) return '';
-  let s = String(v);
-  // Neutralise CSV formula injection: a cell starting with = + - @ (or a
-  // leading tab/CR before one) can be executed as a formula when the file is
-  // opened in Excel/LibreOffice. Prefix with a quote so it stays literal text.
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  if (/[",;\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
+// The escaper is the shared one (S-E05-1 / PF-168). The private copy that used
+// to live here prefixed a triggering cell but then tested the ORIGINAL against
+// the quote regex, so `=1+1` was emitted bare as `'=1+1`; the shared escaper
+// force-quotes it. That is an intended byte change on this surface. The dialect
+// (`;`, BOM, CRLF) below is unchanged.
+import { csvEscape } from '@/lib/csv';
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
