@@ -43,8 +43,34 @@ const BASELINE_PATH = join(REPO_ROOT, 'scripts', 'known-test-failures.json');
 const app = process.argv[2];
 const update = process.argv.includes('--update');
 
-if (!app) {
-  console.error('usage: node scripts/test-ratchet.js <app> [--update]');
+// --skip <pattern>: do not run specs whose path matches, AND drop the matching
+// baseline entries from the drift comparison.
+//
+// The second half is the part that matters. `fixed` is computed as "known
+// failures that did not fail this run", so skipping a spec would make every
+// baselined failure inside it look newly fixed, and the ratchet would fail the
+// gate with "baseline entries now PASS". A test that did not run is not
+// evidence in either direction, and this keeps it out of both sets.
+//
+// Used by ci-gate.sh for `src/shared/quality/`: 20 of the api app's 71 specs are
+// meta-tests asserting on scripts/, ci-gate.sh and ci.yml, and they are by far
+// the slowest (180s, 122s, 93s…). A diff touching none of those files cannot
+// change their outcome. When the diff DOES touch gate machinery they all run —
+// the only case in which they can tell you anything.
+const skipIdx = process.argv.indexOf('--skip');
+const skip = skipIdx !== -1 ? process.argv[skipIdx + 1] : null;
+
+if (!app || (skipIdx !== -1 && !skip)) {
+  console.error('usage: node scripts/test-ratchet.js <app> [--update] [--skip <path-pattern>]');
+  process.exit(2);
+}
+
+// --update rewrites the baseline from the run's failures. Combined with --skip
+// it would rewrite it from a PARTIAL run and silently delete every baselined
+// failure under the skipped path — losing the findings they carry.
+if (update && skip) {
+  console.error('test-ratchet: --update and --skip are mutually exclusive.');
+  console.error('  A baseline must be rebuilt from a complete run, or it drops what it did not see.');
   process.exit(2);
 }
 
@@ -74,11 +100,14 @@ function runJest() {
     process.exit(2);
   }
 
-  const res = spawnSync(
-    process.execPath,
-    [jestBin, '--ci', '--silent', '--json', `--outputFile=${outFile}`],
-    { cwd: appDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
-  );
+  const jestArgs = [jestBin, '--ci', '--silent', '--json', `--outputFile=${outFile}`];
+  if (skip) jestArgs.push(`--testPathIgnorePatterns=${skip}`, '--testPathIgnorePatterns=/node_modules/');
+
+  const res = spawnSync(process.execPath, jestArgs, {
+    cwd: appDir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 
   if (!existsSync(outFile)) {
     console.error(`test-ratchet: jest produced no report for ${app}. It probably failed to start.`);
@@ -133,7 +162,19 @@ if (update) {
   process.exit(0);
 }
 
-const known = new Set(Object.keys((baseline.apps[app] && baseline.apps[app].failures) || {}));
+const allKnown = Object.keys((baseline.apps[app] && baseline.apps[app].failures) || {});
+// Baseline entries under a skipped path did not run, so they can be neither a
+// regression nor a fix. Excluding them is what makes --skip safe.
+const knownSkipped = skip ? allKnown.filter((k) => k.includes(skip)) : [];
+const known = new Set(skip ? allKnown.filter((k) => !k.includes(skip)) : allKnown);
+
+if (skip) {
+  // Never silent: a run that covered less must say so, and say how much less.
+  console.log(
+    `test-ratchet[${app}]: SKIPPED specs matching "${skip}" ` +
+      `(${knownSkipped.length} baseline entr(ies) held out of the drift comparison).`
+  );
+}
 
 const regressions = [...failing].filter((k) => !known.has(k)).sort();
 const fixed = [...known].filter((k) => !failing.has(k)).sort();
