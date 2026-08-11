@@ -278,8 +278,11 @@ describe('production artefact gate (S-E06-1 / PF-17, PF-54)', () => {
       // only, so it needs no install, no Prisma client and no build. Running it
       // early means it fails on the diff rather than ten minutes later — and it
       // runs under `--quick` too, which the post-build stages do not.
+      // `run_stage` now carries a timeout argument, and the build moved to the
+      // --full tier. Both leave this ordering requirement intact: the scan is
+      // source-only, so it must still come before anything that needs a build.
       const scanAt = gate.indexOf('scripts/production-artefact-check.js');
-      const buildAt = gate.indexOf('run_stage "build"');
+      const buildAt = gate.search(/run_stage\s+\d+\s+"build"/);
       expect(scanAt).toBeGreaterThan(-1);
       expect(buildAt).toBeGreaterThan(-1);
       expect(scanAt).toBeLessThan(buildAt);

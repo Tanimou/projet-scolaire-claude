@@ -25,10 +25,10 @@
 # Nothing was deleted — `--full` is the old gate, stage for stage.
 #
 # .github/workflows/ci.yml still lists its own jobs, and has started none since
-# the billing lock. The old rule was "keep the two lists identical" (S-E02-2
-# AC-4); with two tiers here that rule no longer expresses anything useful. When
-# Actions returns, ci.yml should call THIS script — `ci-gate.sh` on pull_request,
-# `--full` on main — so there is one list of stages instead of two that drift.
+# the billing lock. Kept in step with it — the two must not drift (S-E02-2 AC-4).
+# When Actions returns, ci.yml should call THIS script — `ci-gate.sh` on
+# pull_request, `--full` on main — so there is one list of stages rather than two
+# lists that can disagree.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -175,7 +175,23 @@ if changed_match "$CODE_RE"; then
 
   run_stage 900 "typecheck" pnpm typecheck
   run_stage 600 "lint" pnpm lint
-  run_stage 2400 "test:api (ratchet)" node scripts/test-ratchet.js api
+  # 20 of the api app's 71 specs live in src/shared/quality/ and assert on the
+  # gate machinery itself — scripts/*.js, this file, ci.yml, infra/. They are
+  # also the slowest by a wide margin (180s, 122s, 93s…), and they were the
+  # difference between a 7-minute gate and a 48-minute one.
+  #
+  # A diff that touches none of those files cannot change their verdict, so it
+  # does not run them. A diff that DOES touch gate machinery runs every one —
+  # which is the only case where they can tell you anything. The ratchet holds
+  # their baseline entries out of the drift comparison and says so out loud, so
+  # a skipped test is never mistaken for a passing one.
+  GATE_MACHINERY='^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)'
+  if changed_match "$GATE_MACHINERY"; then
+    run_stage 2400 "test:api (ratchet)" node scripts/test-ratchet.js api
+  else
+    run_stage 1200 "test:api (ratchet, product specs)" \
+      node scripts/test-ratchet.js api --skip src/shared/quality/
+  fi
   run_stage 1200 "test:worker (ratchet)" node scripts/test-ratchet.js worker
 else
   skip_stage "code stages" "no code change"
