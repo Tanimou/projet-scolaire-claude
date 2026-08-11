@@ -2,36 +2,21 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-10)** `in-progress` — **two slices have landed**: `S-E05-12` (2026-08-07) and **`S-E05-1` — one CSV
-neutraliser, lifted into `@pilotage/contracts`** (2026-08-10, closes `PF-168`). `S-E05-2` … `S-E05-11` and `S-E05-13`
-still exist as **rows in
+**Status (2026-08-11)** `in-progress` — **two slices landed**: `S-E05-12` (2026-08-07) and **`S-E05-2` (this run)**.
+`S-E05-2` was authored and implemented in the same run: its story
+[`stories/S-E05-2.md`](./stories/S-E05-2.md) **is** the authoring pass this file used to say was missing. The remaining
+nine (`S-E05-1`, `S-E05-3` … `S-E05-11`) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
-`docs/daily-improvement-v3/stories/sprint-01.md` enumerates no story for them, so none is implementable without an
-authoring run first.
+`docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
+without an authoring pass of its own.
+**Next slice → `S-E05-2b` — the `realmRole` invite channel, the fifth grant path this slice deliberately left open.**
+See "Next run" below.
 
-> **⚠️ `S-E05-1` was a COLLIDING id, and the collision was resolved in favour of the operator override.** This epic's
-> matrix already carried an unenumerated `S-E05-1` — *"Global custom roles are cross-tenant (`PF-08`) + `VAL-07`"*. The
-> `2026-08-10` operator override named `S-E05-1` as **the CSV neutraliser slice**, and per the routine's own rule the
-> override wins outright. Nothing was overwritten: the `PF-08` row had never been enumerated or implemented. It is
-> **renumbered `S-E05-13`** below and in `traceability-matrix.md` — `S-E05-12` was the highest id in use, so `13` is the
-> next genuinely free one. Recorded rather than silently absorbed, because two ids meaning two things is exactly how a
-> later run implements the wrong slice.
-
-**Next slice → `PF-173` — make the CSV escaper unbypassable, not merely unique.** `S-E05-1` shipped a **count-based**
-ratchet: all five of its rules are conditioned on an escaper *existing*, so a surface that hand-joins user data (or
-calls `csvRow`, a bare `cells.join(CSV_SEPARATOR)`) declares nothing and passes while shipping the exact defect
-`PF-168` names — and one such site is live today at
-`apps/web/src/app/teacher/reports/_components/ExportReportButton.tsx:68`. Two epics ago this codebase solved the
-identical shape with a **branded type** (`ADR-035`, `write-audit.ts`, `64f64dd` — *« a brand that makes it a type error
-to leave it »*); `csvEscape`/`csvFixed1` returning a branded `CsvCell` accepted only by `csvRow`/`buildCsv` does the
-same here, across seven call sites and no runtime change. Bundle with it the `node:vm` spec that **executes**
-`apps/web/src/lib/csv.ts` — nothing does today.
-
-**`PF-169` remains the epic's most-owed item**, ranked behind `PF-173` only because it is larger. `S-E05-1`
-deliberately did **not** take it (see the slice row below): the `;`+CRLF vs `,`+LF contradiction needs a **versioned,
-announced** format change with the consumer census `ADR-037` D6 defines, not a drive-by inside a security fix. It is
-named in a code comment in `apps/web/src/lib/csv.ts`, in `packages/contracts/src/security/csv-injection.ts` and in
-`ADR-037` D8 so it cannot be inherited silently.
+*(Corrected 2026-08-11, `S-E05-2` land pass. Lines 5-12 used to read "`S-E05-12` … is the only one with a written
+story" and "**Next slice → not in this epic** … nothing in this epic is enumerated". Both were falsified by the diff
+that carries this edit — `S-E05-2.md` §0.4 names the contradiction and overrides it rather than obeying it. Named here
+rather than silently overwritten: a status line the next autonomous run reads at Step 1 is exactly the kind of stale
+truth that makes it skip work that is ready.)*
 
 > **Why there is no `spec.md` here.** Same posture as
 > [`docs/spec/features/v3-e02/PROGRESS.md`](../v3-e02/PROGRESS.md) and
@@ -54,9 +39,8 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | Story | Title | State | Run | Evidence |
 |---|---|---|---|---|
 | **S-E05-12** | The post-authentication redirect target becomes same-origin-only, on all four portal login forms | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E05-12.md`](./stories/S-E05-12.md) · **`PF-102` closed**, `PF-103`'s `PORTAL_LANDING`-declared-twice note retired, no new finding raised · evidence below |
-| **S-E05-1** | One CSV neutraliser, lifted into `@pilotage/contracts`, so the web exports stop shipping executable free text | ⚠️ done — **needs human review** (`[security]` tag) | 2026-08-10 | spec: [`stories/S-E05-1.md`](./stories/S-E05-1.md) · **`PF-168` closed**; **`PF-169` deliberately NOT taken** and left open with its reason recorded in code and in `ADR-037` D8 · decision: **`ADR-037` D8** · ratchet: `scripts/csv-escape-check.js` (`ci-gate.sh` stage 0d-bis + `ci.yml` lint job), driven by `apps/api/src/shared/quality/csv-escape-gate.spec.ts` · **count correction on the record:** `PF-168` said 2 `csvEscape` copies; the measured number was **3**, and **5** counting the two `escapeCell` copies its grep could not see · **raises `PF-173`** (the ratchet enforces uniqueness, not coverage) · **three** behaviour deltas, the third found at land |
-| S-E05-13 | Global custom roles are cross-tenant (`PF-08`) + `VAL-07` | ⬜ unenumerated | — | matrix row only — no story in `sprint-01`. **Renumbered from `S-E05-1`** on 2026-08-10 (id collision, see the header note); never enumerated or implemented under either id |
-| S-E05-2 | Privilege minting (`PF-09`) | ⬜ unenumerated | — | matrix row only |
+| S-E05-1 | Global custom roles are cross-tenant (`PF-08`) + `VAL-07` | ⬜ unenumerated | — | matrix row only — no story in `sprint-01` |
+| **S-E05-2** | **The privilege ceiling: no grantor may mint, rewrite or assign a permission they do not themselves hold** (`PF-09`, `PF-156`) | ⚠️ done — **needs human review** | 2026-08-11 | spec: [`stories/S-E05-2.md`](./stories/S-E05-2.md) · **`PF-09` narrowed to 4 of 5 grant channels, NOT closed** (the `realmRole` invite channel stays open — see evidence below) · `PF-156` closed with its `isSystem` remedy **declined and argued** · `ADR-015` gains its first `D<n>` amendment; `ADR-035`'s "we do not change who may grant what" posture marked SUPERSEDED · raises the `S-E05-2b` residual set · evidence below |
 | S-E05-3 | Coefficient-matrix foreign-tenant write (`PF-10`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-5 | Attendance reads without ABAC (`PF-07`) | ⬜ unenumerated | — | matrix row only |
@@ -69,111 +53,155 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 
 ---
 
-## S-E05-1 — evidence (2026-08-10)
+## S-E05-2 — evidence (2026-08-11)
 
 ### What the slice changed
 
-**One new module, five deleted escapers, one new ratchet, one ADR amendment.**
+**One new predicate, four grant paths, zero new endpoints.** `apps/api/src/shared/auth/privilege-ceiling.ts` (NEW,
+180 L) holds a pure `exceedsGrantor(grantorSet, requested): string[]` and its throwing wrapper
+`assertWithinCeiling`. No `@Injectable`, no Nest module, no Prisma import, no barrel, no env read, arity pinned at 2 —
+the same seam shape as `shared/audit/provenance.ts` (`ADR-035` D4). The grantor's set is derived **at the controller**
+from `UserSyncService.effectivePermissions(jwt.sub, jwt.realm_access?.roles ?? [])` — the identical seam
+`PermissionsGuard:27-28` reads — and never re-unioned inside a service.
 
-- **`packages/contracts/src/security/csv-injection.ts` (NEW).** `CSV_INJECTION_TRIGGERS`, `CSV_NEUTRALISER` and
-  `neutraliseCsvCell(value) → { text, neutralised }`, declared **once** and re-exported through `security/index.ts` →
-  `src/index.ts`. Pure and import-free — no `zod`, no `node:*` — because it runs in a browser bundle, in a Node worker
-  and inside a `require()`-based gate script. **No class and no `instanceof`**: contracts resolves `types → src`,
-  `default → dist` (CJS, `ADR-037` D5, `dist/` git-ignored), so a spec and a runtime hold two different module objects;
-  a plain function returning an object literal cannot disagree with itself across that seam. The address is **not
-  novel** — `security/csp.ts` is already a pure security function at it, shared between the edge middleware and a gate.
-- **Five escapers deleted, two remain.** `apps/web/src/lib/csv.ts#csvEscape` (web dialect: quote set keeps `;`, join
-  `;` + CRLF + BOM) and `apps/worker/.../audit-csv.generator.ts#csvEscape` (worker dialect: quote set `[",\n\r]`,
-  join `,` + LF, both frozen by `ADR-037` D4/D6). The three private copies in `AlertsExportButton.tsx`,
-  `parent/grades/GradesExport.tsx` and `parent/attendance/AttendanceExport.tsx` are gone.
-- **`scripts/csv-escape-check.js` (NEW) + both harnesses.** `ci-gate.sh` **stage 0d-bis** (between the audit-write
-  stage and schema drift, **outside every `--quick` guard**) and its own step in `ci.yml`'s lint job — `ci.yml`
-  re-lists stages individually and never calls `ci-gate.sh`, which was verified rather than assumed.
-- **`docs/adr/ADR-037` D8**, taken under the forward reservation `S-E04-11` left (« a later amender reserves D8
-  onward »), with the header-table pointer, D9+ re-reserved, and D7's false sentence **struck through in place**.
+| Grant path | Where the ceiling runs |
+|---|---|
+| `roles.controller.create()` | after the `Permissions inconnues` 400, **before** `$transaction` |
+| `roles.controller.update()` | after the `isSystem` refusal, **before** `$transaction`; the catalogue check is **hoisted out of the transaction** so one unknown code answers **400 from both handlers** instead of 400/403 |
+| `users.service.assignRole()` | before the idempotent early-return **and** before `$transaction`; `grantorPermissions` is a **required** 6th parameter, so an omission is a compile error and never a silently empty (then "conveniently" defaulted) set |
+| `invite.controller` `customRoleSlug` | resolved in `invite()` step 1b, **before** the Keycloak identity exists, so a refusal needs no compensation |
 
-### The measurement that mattered: `PF-168`'s own count was wrong, and the gate is built around why
+Every refusal precedes its transaction, so it writes no entity row and no audit row; `writeAudit` is untouched and
+rule B of `scripts/audit-write-check.js` stays green. The 403 body is byte-shape-identical to the one
+`permissions.guard.ts:31-35` already emits (`{ message, required, missing }`), and `message` stays a plain string
+because `RoleBuilderForm.tsx:236` renders it directly as a React child.
 
-`PF-168` recorded *« the sprint reported 3× `csvEscape`; the real count is 2 »*. Measured at `8e52da0`: **3**
-`csvEscape` declarations and **5** distinct CSV escapers, because two were named `escapeCell`. The finding grepped for
-the **name**. That blind spot is the design input for the ratchet, not a footnote:
-
-- rule A matches by **shape** (a body that tests a `"`-bearing character class **and** performs the RFC-4180
-  `.replace(/"/g, '""')`) as well as by name;
-- the walk root includes **`.tsx`** — three of the five copies lived in components, and a `.ts`-only walk would have
-  certified a surface it could not see;
-- rule B catches the trigger set assembled anywhere else, i.e. a copy that simply avoided the name;
-- rule D makes a **stale exclusion** a failure, so the two `apps/api` transport-CSV comments stay true or CI goes red;
-- rule E: no env var, no `--update`. On a two-row ceiling an « update the ceiling » flag *is* the off switch.
-
-The gate is AST-parsed rather than grepped for a concrete reason: four files quote the trigger array **in prose**, so a
-regex gate would false-red and the pressure would be to weaken rule B.
+Fail-closed was inspected, not assumed: `undefined`/empty grantor denies **everything**; an unknown code is denied
+because the predicate never consults the catalogue; a non-array `requested` returns an opaque sentinel. The single
+permit-on-empty (`requested === []`) is stated and pinned by test. There is **no `super_admin` role-name special
+case** — `super_admin` is spared *structurally*, by `REALM_ROLE_PERMISSIONS.super_admin` already being the whole
+catalogue. An `if (roles.includes('super_admin')) return []` would be a bypass wearing a role name.
 
 ### What executed
 
 | Check | Result |
 |---|---|
-| `pnpm typecheck` (Murat, **once**, main checkout) | **exit 0**, 13/13 Turbo tasks, 2m04s. `@pilotage/api` a genuine **cache miss**, so the new spec really compiled. `csv-injection.ts` resolves through the CJS build for both the worker and the `'use client'` web bundles |
-| `node scripts/csv-escape-check.js` | **PASS, exit 0** — 4 escapers over 6 roots: 2 sanctioned (`apps/web/src/lib/csv.ts:58`, `audit-csv.generator.ts:287`), both **importing and calling** `neutraliseCsvCell`; 2 named `apps/api` exclusions; 0 unaccounted. Grep-verified independently; watched **red both ways** with a real `.tsx` probe |
-| `npx jest src/shared/quality/csv-escape-gate.spec.ts` (api) | **54/54 PASS**, 42 s. Rules A–E each driven red **independently**, DNC-08 driven 8 ways against a real scratch tree, DNC-10 asserted in the negative |
-| `npx jest audit-csv.generator.spec.ts` (worker) | **RED at gate time — 1 failed / 72 passed**, and the failing assertion was the **claim**, not the code. Corrected at land; see the delta section below |
-| `git diff --check` | **exit 0**. The three CRLF lines are `core.autocrlf` advisories, not errors |
-| `ADR-037` `### D8` | present |
+| `pnpm typecheck` (Murat, **once**) | **13 successful / 13 total**, exit 0. `@pilotage/api` was a **cache miss that executed** — the new files were really compiled |
+| `git diff --check` and `git diff --check HEAD` | **exit 0**, clean, both |
+| `tsc --noEmit` on `apps/api` directly (panel, bypassing turbo) | **green**. Run because `pnpm typecheck` first reported `FULL TURBO` replaying logs from sibling worktrees; `privilege-ceiling.ts` was untracked, so the input hash had never seen it. **Anyone re-running this gate must bypass the cache** |
+| The five affected specs (panel) | **154 pass / 1 fail** — the failure is `audit-write-gate.spec.ts:995`, **inherited red on `main`** from the `ci-gate.sh` perf rewrite (`c141997`/`2bd1a25`), not this diff. Neither `ci-gate.sh` nor `ci.yml` is touched here |
+| Mutation kill test (panel) | `exceedsGrantor` → `return []` killed **exactly 10 negatives, one per call site**, invite path included, positives green. This is what makes the coverage real rather than presence-shaped |
+| Ratchet proven able to fail (panel) | a throwaway `__ratchet-probe.ts` with an unceilinged `userRole.create` turned the new **G-AUTHZ** gate red **and named the file**; probe deleted, tree verified clean |
 
-### Three behaviour deltas — all intended, all stated here rather than discovered
+**One gate row is NOT green and is not claimed as such.** `roles.controller.spec.ts` failed `apps/api#typecheck` on a
+`noUncheckedIndexedAccess` widening at `:407` and was corrected (a literal-keyed `Record<'create'|'update', object>`
+replacing an index-signature cast). The typecheck was re-run and is green. **No jest run has been observed on the
+corrected file** — the earlier "4 suites / 79 tests" line predates that block, and `ts-jest` runs with diagnostics on,
+so it could not have passed as written. `npx jest src/modules/identity/roles.controller.spec.ts` is a manual check in
+the PR body, and it is the one piece of this slice's evidence that is asserted rather than executed.
 
-1. **A guardian phone `+33 6 12 34 56 78`** exports as `"'+33 6 12 34 56 78"`. Accepted, not accidental: uniform beats
-   an allowlist (`ADR-037` D7). `-` is a trigger and a leading `+` is one too.
-2. **`admin/alerts`' `=1+1`** was emitted **bare** as `'=1+1` — the old private copy prefixed the cell and then tested
-   the **original** against its quote regex. It now emits `"'=1+1"`. `PF-168` called that copy « already correct »;
-   that holds for the neutralisation and **not** for the force-quoting.
-3. **The two parent exports gain comma-quoting — found at LAND, not at implementation.** The deleted `escapeCell`
-   quoted on `/[";\r\n]/`, with **no comma**; the shared `csvEscape` quotes on `/[",;\n\r]/`. `Note /20`
-   (`scoreOn20`, a French decimal `"15,0"`) and `Coefficient` therefore now ship `"15,0"` / `"1,5"`, so **every row of
-   the parent grades export changes bytes**, and any comma-bearing `Justification` / `Commentaire` on attendance does
-   the same. It parses identically under `;`. **The implementation shipped a comment asserting the opposite** — « they
-   stay byte-identical » — in `GradesExport.tsx` and a matching false « the quote set is the one this file already
-   used » in `AttendanceExport.tsx`. Both comments are corrected in this diff and the delta is pinned by a named test
-   case. Recorded this way because a false sentence inside a security module is what the next editor trusts instead of
-   re-measuring.
+### The load-bearing correction: the gate that could never have caught the next PF-09
 
-### `main` was red at the gate, and the assertion was what was wrong (`R-30`)
+`audit-write-gate.spec.ts` previously ratcheted `expect(roles).not.toContain('effectivePermissions')` — a deliberate
+"this slice changed no authorisation" invariant from `S-E04-9`. The product has now reversed that posture, so the
+ratchet was **amended, not deleted**, and the reversal is recorded in place in `ADR-035` rather than rewritten away.
 
-`audit-csv.generator.spec.ts` asserted `escapeWebDialect('a,b') === 'a,b'` under the name *« a `,` quotes in the worker
-and does NOT quote on the web »*. `/[",;\n\r]/` is a class of **five** characters — the leading `",` was read as one
-token — and the web has quoted on a comma at `HEAD` too. **`apps/web/src/lib/csv.ts` was not touched to satisfy it.**
-The correction is not cosmetic: the two dialects are **not symmetric opposites**, the web set is a strict **superset**
-of the worker's differing only in `;`, and that is exactly why `ADR-037` D8 forbids the union in the worker direction
-while forbidding the reverse for a different reason (`Martin; Dupont` would unquote and break the record). The test
-name, the assertion and the surrounding comment now say *superset*.
+The replacement's first draft still enumerated the three fixed files **by hand**, which is green by construction: it
+protects the doors already closed and can never redden for the change that reintroduces the defect — a **fifth grant
+path in a file the list does not name**. It now *discovers* its surface by walking the gate's own `WALK_ROOTS` for the
+privilege-**creating** verbs (`userRole.create|upsert`, `rolePermission.create`, and the nested
+`rolePermissions: { create` form) and requires each match to import the ceiling. Revoke (`updateMany`) is excluded
+deliberately — a ceiling on *removing* privilege would trap an admin with a role they cannot revoke. It fails when the
+walk finds fewer than 3 sites (DNC-08: never pass over an empty set), and the `UNCEILINGED` allowlist is empty, so an
+exemption becomes a signed decision.
+
+### `PF-09` is NARROWED, not closed — and that is the merge condition
+
+Three independent reviewers reached the same finding, so it is recorded as the epic's status, not as a note:
+`POST /users/invite` is gated only on `users.write` (weaker than `roles.assign`), `body.realmRole` accepts `teacher`
+via `@IsEnum`, `REALM_ROLE_PERMISSIONS.teacher` carries `grades.revise` / `grades.write` / `attendance.write` /
+`lessons.write` — none of which `school_admin` holds — and `body.email` is attacker-controlled. So the exact
+escalation this slice closes on `customRoleSlug` survives verbatim on `realmRole`, one email of friction later.
+
+That is left open **by decision**, and the decision is defensible: applying a subset ceiling there would refuse
+"invite a teacher", the product's primary onboarding flow, and realm-role provisioning is a **delegation** question
+(a grantor may provision at or below their own level), not a subset question. It is recorded in `ADR-015` D8.1 and in
+the code at `invite.controller.ts:206-214`.
+
+What is **not** defensible is the label. `ADR-035`'s superseding note and the `ADR-015` amendment front-matter both
+book `PF-09` as *fermé*, unqualified. **The traceability matrix must record `PF-09` as narrowed (4 of 5 channels) with
+the realm-role residual allocated a real finding id**, or a future auditor reading only `ADR-035` inherits a false
+all-clear on a P0 `BROKEN_SECURITY` row. That correction is a land-pass task and is called out in the PR body.
+
+### The product regression this slice ships, and the FE half it cannot fix
+
+Measured against `seed.ts`'s `ROLE_PERMISSIONS` (the rows the ceiling actually reads), a `school_admin` can no longer
+assign the seeded **`teacher`** (5 exceeding codes), **`parent`** (3) or **`student`** (5) roles. `school_admin` →
+`school_admin` (0 exceeding) still works. This is structural, not a bug: the role-narrowed permission families
+(`*.read.self`, `*.parent`, `*.teacher`) exist precisely so no admin holds them, so a subset test will always refuse
+cross-audience grants.
+
+The backend fails **closed**, which is right. The front end swallows it, which is not:
+`apps/web/src/app/admin/users/actions.ts:7-10` has no `catch` and returns `void`, and
+`apps/web/src/app/admin/users/UsersTable.tsx:30-39` is `try … finally` with no `catch` — so the new 403 lands as an
+unhandled rejection: spinner stops, menu closes, no message, `router.refresh()` never runs. `UsersTable.tsx:115` also
+still offers all four seeded roles from an unfiltered `GET /roles`, three of which now always fail. Contrast
+`admin/roles/actions.ts:24-31,44-50`, which *does* catch `ApiError` and surface `body.message`, so the identical 403
+on role create/update is shown correctly.
+
+`apps/web` is outside this track's owned paths, so this is raised as a **blocking FE-track finding**, not absorbed:
+align `assignRoleAction` with `admin/roles/actions.ts`, render `missing`, and filter the dropdown against the
+caller's effective set. Recorded in `ADR-015` D8.7.
 
 ### Gates — every row answered, none blank
 
 | Gate | Triggers? | Why |
 |---|---|---|
-| **G-TRUTH** | **YES — primary** | The single-home property is held by an executed ratchet with no baseline and no `--update`, watched red both ways. **What it does NOT hold is recorded as `PF-173`**, not implied away |
-| **G-DNC** | **YES (always)** | DNC-10 asserted in the negative (no env var, no `--update`, only `--help`); DNC-08 vacuity and staleness driven 8 ways; DNC-06 sweep on `S-E04-11.md`, `v3-e04/PROGRESS.md` and D7's own false sentence |
-| **G-TENANT** | **NO** | Verified, not assumed: zero Prisma queries, zero `where`, zero `tenantId`, zero `StudentAccessService` path. The diff renders rows the caller was already authorised to see |
-| **G-AUTHZ** | **NO** | No guard, no permission, no role, no DTO |
-| **G-AUDIT** | **NO** | No privileged mutation and no `AuditLog` write. The worker's audit **export** is touched, and its bytes are proven unchanged (`csvEscape('Mozilla/5.0 (… NT 10.0; Win64; x64)')` is asserted to stay bare) |
-| **G-MIGRATION** | **NO** | `schema.prisma` untouched |
-| **G-PORTAL** | **NO** | Three portals' export surfaces are touched, but by one shared escaper with no portal-conditional branch |
+| **G-AUTHZ** | **YES — primary** | Four grant paths, one predicate; the mutation kill (10/10 negatives, one per site) is what proves the negatives measure *this* guard and not an older `isSystem`/cross-tenant one; the new directory-walking ratchet was driven red by a probe |
+| **G-DNC** | **YES (always)** | DNC-10 intact — no env read, no options bag, no bypass flag, `assertWithinCeiling.length === 2` asserted. DNC-08 — the ratchet refuses to pass over an empty walk (floor of 3 sites) |
+| **G-AUDIT** | **YES** | Every refusal precedes its `$transaction`, so no partial write and no orphan audit row; `writeAudit` untouched, `audit-write-check.js` rule B green. **Residual**: a refusal writes no audit row and only an actor-less `logger.warn` (D8.3) |
+| **G-TENANT** | **YES — verified, not assumed** | Net-restrictive everywhere; no new cross-tenant read. `PF-153` (the role lookup unfiltered by tenant) is untouched and explicitly still open, marked in-place at `users.service.ts` |
+| **G-MIGRATION** | **NO** | `schema.prisma` untouched, no migration, no new dependency |
+| **G-TRUTH** | **NO** | No KPI, read projection or dashboard figure |
+| **G-PORTAL** | **NO** | Backend-only; the FE consequence is raised as a finding, not implemented here |
 
-### Not claimed by `S-E05-1`
+### Not claimed by `S-E05-2` — queued with an owner, not silenced
 
 | What is NOT claimed | Detail | Owner |
 |---|---|---|
-| **The ratchet closes *duplication*, and is blind to *omission*** | All five rules are conditioned on an escaper **existing**. A surface that hand-joins user data — or calls `csvRow`, a bare `cells.join(CSV_SEPARATOR)` typed `Array<string \| number>` — declares no escaper, assembles no trigger set and **passes every rule while shipping the exact defect `PF-168` names**. The live instance is `teacher/reports/_components/ExportReportButton.tsx:68`, `` lines.push(`Année;${academicYear?.name ?? ''}`) ``: tenant-authored text, no escape, no quoting, and Excel evaluates a formula in **any** column. Pre-existing; the slice's own header claimed the surface was covered, and that claim is **narrowed at land** in `apps/web/src/lib/csv.ts` and in the gate's sanctioned-entry reason. **The repo already owns the stronger mechanism**: `ADR-035` / `write-audit.ts` (`64f64dd`, *« a brand that makes it a type error to leave it »*) solved this shape with a branded type. `csvEscape`/`csvFixed1` returning a branded `CsvCell` that `csvRow`/`buildCsv` alone accept would convert « we count escapers » into « you cannot emit an unescaped cell » — and would retire rule C's status as the only executed evidence for the web half | **`PF-173`** |
-| **`PF-169` — the dialect** | Declined on purpose, in three places so it cannot be inherited silently. See the epic header | `PF-169`, this epic |
-| **Nothing executes `apps/web/src/lib/csv.ts`** | `apps/web` has Playwright only (`PF-129`/`PF-133`), and the worker spec's `escapeWebDialect` is a hand-written **mirror** that never imports the real file — a mirror that **drifted from it inside this same commit**, which is the proof it is not evidence. Rule C proves an import and a call exist; it cannot see what is composed, so the mutation this slice exists to close (test the quote regex against the **original** `v` rather than the neutralised `text` — exactly what the `admin/alerts` copy did) would pass every rule, typecheck and test here. The test-architect specified a `node:vm` spec that transpiles and executes the real module from the api jest project (one import, no top-level DOM access, `typescript` already `require`d by the sibling gate spec). **Not written in this slice** | next `V3-E05` slice |
-| **No browser and no spreadsheet** | No export button was clicked and no `.csv` was opened in Excel or LibreOffice. The three byte deltas are proven by assertion over the escaper, not by a rendered file | `VAL-08` |
-| **`ci.yml`'s stage is aspirational until billing clears** | The step is added in step with `ci-gate.sh` per `S-E02-2` AC-4, but with GitHub Actions billing-locked since 2026-07-28 (`PF-113`) the only **executing** enforcement is `ci-gate.sh`. The « blocking » language in both comments is a statement of intent | `PF-113` |
-| **A leading *space* is not a trigger** | `' =1+1'` — Excel with « trim spaces » on import, and Google Sheets on paste, both strip it and evaluate. This is `HEAD` behaviour carried over byte-for-byte, so it is not a regression; the shared module is now the single place where adding it costs one character | next `V3-E05` slice |
-| **An *embedded* tab is neither neutralised nor quoted** | Only the **first** character is inspected, and `[",;\n\r]` has no `\t`, so an embedded tab splits a cell on paste. Pre-existing on both surfaces, unchanged here | next `V3-E05` slice |
-| **`apps/web` now pulls the `@pilotage/contracts` CJS barrel into seven client bundles** for one 6-line function; `__exportStar` defeats tree-shaking. **31 web files already do this**, so it is precedent rather than regression — but D8's « no `./security` subpath » call makes it permanent, and two of the seven are parent-portal routes under the **<2 s** north star. **Cost unmeasured** | next `V3-E05` slice |
-| **`evaluateCsvEscapers` reads a field its own extractor never sets** | `scripts/csv-escape-check.js` — `escaper.fileImportsShared` is attached only in `main()`, so piping the exported extractor straight into the exported reconciler yields a spurious rule-C problem. The spec dodges it with hand-built records. Cosmetic; the exported core's contract should include the field | next `V3-E05` slice |
-| **The barrel chain is checked at two of three links** | The gate verifies `security/index.ts` re-exports `./csv-injection`, never that `src/index.ts` re-exports `./security`. It holds today (`packages/contracts/src/index.ts:7`); a third DNC-08 assertion would close it | next `V3-E05` slice |
-| **`node scripts/test-ratchet.js worker\|api` was not run** | CPU budget. The new spec passes standalone, so no `known-test-failures.json` entry is owed — but the **whole** worker suite was last driven before the land-pass correction to `audit-csv.generator.spec.ts` | run-scope note |
+| **`PF-09` is closed** | The `realmRole` invite channel is unceilinged and reproduces the escalation. `ADR-015` D8.1 states it honestly; `ADR-035`'s note and the amendment front-matter do not. Matrix must say **narrowed** | `S-E05-2b` |
+| **Grants that escalated BEFORE this slice are evicted** | The ceiling compares against `effectivePermissions`, which unions custom-role permissions — so an actor already holding a `PF-09`-minted role passes it *unconditionally* and can keep minting. Detection query, not a migration: non-system roles carrying any code outside `REALM_ROLE_PERMISSIONS.school_admin`. **Run it before calling `PF-09` anything at the deployment level** | `S-E05-2b` (D8.2) |
+| **A refused escalation is attributable** | No audit row (correct — nothing happened, and a `writeAudit` outside a transaction breaks `ADR-035` D1), and the compensating `logger.warn` lives *inside* the predicate, so it carries no `jwt.sub`, no tenant, no IP — even though `deriveAuditProvenance` has already produced them at all four call sites. The fix needs **no** signature change: catch at the call site, log there, rethrow. Worse under D5 — ordinary refused `teacher` assignments will dominate the same warn stream, so it is not alertable as written | `S-E05-2b` (D8.3) |
+| **The ceiling constrains narrowing, revoking or deleting** | It is one-directional by design: any subset passes, so a `roles.write` holder can strip or wipe a role that carries codes above their own ceiling — and then cannot restore it (403). `revokeRole` and `remove()` gained no ceiling. Accepted as *désescalade* in D3; the **irreversibility** is not recorded there and should be | `V3-E05` follow-up |
+| **`update()` checks the ceiling on a rename** | When `body.permissionCodes` is absent no check runs — correct (a rename grants nothing) and currently unreachable from the shipped UI (`RoleBuilderForm.tsx:132-135` always sends the field). Dormant and documented | scope note |
+| **The invite hoist preserves every prior behaviour** | D7 says the unresolvable-slug no-op is "préservé verbatim". True for a slug that never resolved; **not** for one that resolves and is then deleted before the transaction — that used to be a silent no-op and is now an FK violation → rollback → Keycloak compensation → 500. Window is tiny (`remove()` refuses to delete an assigned role) and the direction is fail-closed, but D7's list is missing it | `V3-E05` follow-up |
+| **A duplicated permission code reaches the ceiling** | Both handlers compare `resolved.length !== body.permissionCodes.length`, so `['x','x']` answers **400 `Permissions inconnues` with `missing: []`** — naming no code at all. Pre-existing in `create()`, copied verbatim into the new `update()` block. Consequence: `exceedsGrantor`'s de-duplication is unreachable from any HTTP call site and is only unit-asserted | `V3-E05` follow-up |
+| **The story spec matches the code** | `S-E05-2.md` §2.3/§5 T-18/§9 still say "do not move" the `update()` catalogue check and pin an unknown code to **403**; the code hoists it and answers **400**. The divergence is right and better argued than the spec — but the two artefacts disagree, which is the `PF-164` shape this slice's own gate amendment exists to prevent. Reconcile the story, do not re-litigate the code | land pass / `S-E05-2b` |
+| **`PF-153`** | Role lookup unfiltered by tenant — untouched, still open, marked in place | `V3-E05` |
+| **A browser rendered anything** | No Playwright, no driven navigation, and `apps/web` is not edited. The D5 regression is proven by permission arithmetic and by reading the FE call sites, not by clicking | `VAL-08` |
+
+---
+
+## Next run
+
+**`S-E05-2b` — close the fifth grant channel and make the refusal attributable.** It is the direct residual of this
+slice and the only item on the list that is a live escalation path rather than a documentation or ergonomics debt.
+Three things, one PR:
+
+1. **The `realmRole` invite channel.** Not a subset ceiling (that refuses "invite a teacher") but a **grantor-relative
+   ladder**: a grantor may provision a realm role at or below their own. Permits `school_admin → teacher|parent`,
+   refuses `teacher → school_admin`. That is the §2.4 option-2 delegation decision and it needs its own `ADR-015`
+   decision entry, so it is a slice and not a patch.
+2. **Attribution.** Move the `logger.warn` from inside the predicate to the four call sites, where `jwt.sub`,
+   `me.tenantId` and the provenance hints are already in hand. Predicate stays at arity 2.
+3. **The label.** Record `PF-09` as narrowed in the matrix, allocate the realm-role residual a finding id, and correct
+   the unqualified "closed" in `ADR-035`.
+
+**Second candidate — the FE companion to D5**, on the `apps/web` track: catch `ApiError` in `assignRoleAction`, render
+`missing`, filter the role dropdown against the caller's effective set. It ships no new capability, but until it lands
+an admin's "assign teacher" click does nothing at all with no explanation.
+
+**Third — the `S-E05-12` gate-coverage consolidation** (six residuals, entirely test-side) is unchanged in priority.
 
 ---
 
@@ -274,7 +302,13 @@ so it becomes false the day a request-supplied `link` appears.
 
 ---
 
-## Next run
+## ~~Next run~~ — as written by the `S-E05-12` land pass (2026-08-07), **SUPERSEDED**
+
+> **Superseded 2026-08-11 by the `S-E05-2` land pass.** The live pointer is the "Next run" section above. Both of this
+> section's candidates are spent: `V3-E04`'s `epic-spec` run landed (run 28) and the epic is `in-progress` with 10 of
+> 11 slices shipped, and its opening premise — *"nothing in this epic is enumerated"* — was falsified by `S-E05-2`,
+> which authored and shipped its own story in one run. Kept struck rather than deleted, because a reader who stops at
+> the prose would re-write a shipped spec-kit. Original text follows.
 
 > **⚠️ Rewritten 2026-08-10 by the `S-E05-1` land pass — the section below is the `S-E05-12`-era text, kept struck
 > through rather than deleted.** It opened *« Not a `V3-E05` slice — nothing in this epic is enumerated »* and then

@@ -216,9 +216,53 @@ terminal in-product and document the DBA procedure — in which case that proced
 
 ---
 
+## D-12 — How does an administrator legitimately onboard a teacher? · `open` · raised by `S-E05-2` (`PF-173`) · **blocks `S-E05-2b`, and `PF-09`'s residual cannot close without it**
+
+**Question.** Now that no grantor may hand out a permission they do not themselves hold, by what mechanism does a
+`school_admin` provision a teacher, a parent or a student?
+
+**Why it is here now.** `S-E05-2` closed `PF-156` (P1 vertical privilege escalation) with a grantor-relative ceiling.
+That ceiling is correct and it is deliberately strict, and the strictness has a measured consequence:
+
+| Seeded role | Codes | Exceeds `school_admin` (75 codes) by |
+|---|---|---|
+| `super_admin` | 89 | 14 — **the point of the finding** |
+| `teacher` | 34 | 6 — `grades.write`, `grades.revise`, `attendance.write`, `lessons.write`, `lessons.delete`, `exports.execute.teacher` |
+| `parent` | 20 | 3 — `guardianships.claim`, `exports.execute.parent`, `remediation.book` |
+| `student` | 7 | 5 — the five `*.read.self` |
+
+`seed.ts:216-220` materialises those into real `rolePermission` rows, so a `school_admin` can now assign **none** of the
+four other seeded system roles through `POST /users/:id/roles`.
+
+**Why the ceiling was not weakened to preserve the old behaviour.** Because the old behaviour *is* the P0. The same
+absence of a check that let an admin hand out `teacher` let them hand *themselves* a role carrying `grades.revise` and
+then re-authenticate into it. A subset-with-exemptions rule, or an `isSystem` special case, would reopen exactly the
+door the slice closed. Fail-closed first is the correct order; the delegation model is the follow-up, not a patch.
+
+**Why an answer is needed rather than an implementation.** Every option below grants somebody the ability to confer
+privileges they do not hold — which is the property the ceiling exists to forbid — so the question is *which bounded
+exception is intended*, and that is a product decision, not an engineering one.
+
+**Options.** (a) An explicit **assignable-roles** grant: a role declares which roles its holders may confer,
+independent of the permissions it carries. (b) A **grantor-relative realm-role ladder**: you may provision at or below
+your own level — permits `school_admin → teacher|parent|student`, refuses `teacher → school_admin`. This also closes
+`PF-09`'s residual, since the unceilinged fifth channel (`POST /users/invite`'s `realmRole`) is a realm-role grant.
+(c) Widen `REALM_ROLE_PERMISSIONS.school_admin` to a superset of the three — rejected on sight by the routine, because
+it hands every admin `grades.revise` in order to let them *name* a teacher, which is the escalation with extra steps.
+
+**Consequence while it is open.** Admin onboarding of teachers/parents/students is blocked through
+`POST /users/:id/roles`. `POST /users/invite`'s `realmRole` channel still works — that is `PF-09`'s open residual, i.e.
+the workaround and the vulnerability are the same door. Compounding it, `/admin/users` renders the refusal as **silence**
+(`PF-174`), so the blocked path currently reports nothing at all.
+
+**Decision:** — · **Decided by:** — · **Date:** —
+
+---
+
 ## Resolution log
 
 | id | Status | Decision | Decided by | Date | Consequence |
 |---|---|---|---|---|---|
 | D-01 … D-10 | `open` | — | — | — | — |
 | D-11 | `open` | — | — | — | Raised 2026-08-09 by `S-E04-10` (`PF-155`). Blocks no story; a school closed by mistake has no in-product recovery until it is answered |
+| D-12 | `open` | — | — | — | Raised 2026-08-11 by `S-E05-2` (`PF-173`). Blocks `S-E05-2b`; `PF-09`'s residual cannot close without it. Admin onboarding of teacher/parent/student via `POST /users/:id/roles` is refused until answered |

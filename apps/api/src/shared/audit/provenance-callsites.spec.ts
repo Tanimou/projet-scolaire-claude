@@ -95,8 +95,29 @@ function jwt(roles: string[]): KeycloakJwtPayload {
   return { sub: 'kc-sub-1', realm_access: { roles } } as unknown as KeycloakJwtPayload;
 }
 
+/**
+ * S-E05-2 — the double now answers `effectivePermissions` as well as `ensureUser`,
+ * because the privilege ceiling reads the grantor's effective set through this same
+ * seam (`roles.controller` create/update, `users.service.assignRole`,
+ * `invite.controller`'s custom-role grant). Without it every one of those handlers
+ * throws `TypeError: this.users.effectivePermissions is not a function` — which is
+ * exactly how this suite caught the wiring.
+ *
+ * IT RETURNS THE WHOLE CATALOGUE, DELIBERATELY, AND THAT DOES NOT WEAKEN THE CEILING.
+ * This file asserts *provenance derivation* — that the actor role and portal reaching
+ * `auditLog.create` are derived from the JWT — and it drives the handlers with realm
+ * roles (`teacher`, `parent`, an unknown `offline_access`) that could never reach them
+ * in production, because `PermissionsGuard` refuses them on `roles.write` long before
+ * the ceiling is consulted. Deriving the set from those roles here would turn a
+ * provenance suite into a ceiling suite by accident and assert nothing about either.
+ * The ceiling's own evidence lives in `shared/auth/privilege-ceiling.spec.ts` and the
+ * three identity specs, where neutering the predicate turns 20 tests red.
+ */
 function usersMock() {
-  return { ensureUser: jest.fn().mockResolvedValue({ id: ACTOR_ID, tenantId: TENANT }) };
+  return {
+    ensureUser: jest.fn().mockResolvedValue({ id: ACTOR_ID, tenantId: TENANT }),
+    effectivePermissions: jest.fn(async () => permissionsFromRealmRoles(['super_admin'])),
+  };
 }
 
 /* ================================================================== *

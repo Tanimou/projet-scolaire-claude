@@ -46,6 +46,13 @@ export class UsersController {
    * one derivation (`deriveAuditProvenance`). Neither is reinvented, and the
    * ordering is the `S-E06-6` rule: sanitisation happens outside the transaction
    * so a rejected `inet` cast can never roll back the grant it traces.
+   *
+   * S-E05-2 — the grantor's EFFECTIVE permission set is derived HERE too, by the
+   * same rule and from the same seam `PermissionsGuard:27-28` uses, and passed
+   * into the service as a required parameter. `UserSyncService` is deliberately
+   * NOT injected into `UsersService` and the realm ∪ custom union is NOT
+   * reimplemented: one derivation, one place, the `ADR-035` D4 pattern this
+   * handler already follows for `provenance`.
    */
   @Post(':id/roles')
   @RequiresPermission('roles.assign')
@@ -57,7 +64,18 @@ export class UsersController {
   ) {
     const me = await this.userSync.ensureUser(jwt);
     const provenance = deriveAuditProvenance(jwt, extractAuditClientHints(req));
-    return this.users.assignRole(userId, body.roleId, me.id, me.tenantId, provenance);
+    const grantorPermissions = await this.userSync.effectivePermissions(
+      jwt.sub,
+      jwt.realm_access?.roles ?? [],
+    );
+    return this.users.assignRole(
+      userId,
+      body.roleId,
+      me.id,
+      me.tenantId,
+      provenance,
+      grantorPermissions,
+    );
   }
 
   @Delete('roles/:userRoleId')
