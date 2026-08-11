@@ -19,7 +19,7 @@
 
 **Why this and not the obvious one.** The obvious next story is `S-E05-2b` — close `PF-09`'s residual with the
 delegation ladder. **It is blocked on `D-12`** (raised by this run, `open-decisions.md`), and Step 1 forbids selecting a
-story with an unresolved `requiresDecision`. Do not take it until a human answers `D-12`. `PF-173` and `PF-174` are
+story with an unresolved `requiresDecision`. Do not take it until a human answers `D-12`. `PF-178` and `PF-174` are
 likewise decision- or seam-blocked (`PF-174` is `apps/web` — **track c's**, not yours).
 
 **What `PF-166` is.** `apps/api/src/modules/identity/register.controller.ts:65-126` — `POST /auth/register-parent` is
@@ -78,12 +78,14 @@ saying so must stay.
 
 | Id | Pri | What |
 |---|---|---|
-| **`PF-173`** | **P1** | The ceiling refuses `school_admin` the `teacher`/`parent`/`student` roles too. Needs **`D-12`**. |
+| **`PF-178`** | **P1** | The ceiling refuses `school_admin` the `teacher`/`parent`/`student` roles too. Needs **`D-12`**. |
 | **`PF-174`** | **P1** | `/admin/users` swallows the new 403 in silence. **Track c's seam** — not yours. |
 | `PF-175` | P2 | Pre-ceiling escalated grants pass it unconditionally; the detection query is recorded, not run. |
 | `PF-176` | P3 | The escalation-attempt `warn` is anonymous — the predicate has no actor context by design. |
 | `PF-177` | P3 | A duplicated permission code answers 400 while naming no code at all (pre-existing). |
 | **`TOOL-04`** | **P1** | **The fast gate's escalated api stage cannot finish.** Read this before your gate run — see below. |
+| **`TOOL-06`** | **P1** | **The new CSV escaper gate has never run.** Its only `run_stage` call omits the timeout and exits 125. Six sibling calls are broken too, but have working duplicates lower down. |
+| **`TOOL-05`** | **P2** | **Finding-id allocation is a race.** Track c and track b both allocated `PF-173` on 2026-08-11; mine renumbered to **`PF-178`**. **Re-check the register for your id AFTER your final fetch, not when you first raise it.** |
 
 All five are **declared in `audit-findings-index.md` in the same commit that raised them** — `TOOL-01` applied
 prospectively, as run 38 established.

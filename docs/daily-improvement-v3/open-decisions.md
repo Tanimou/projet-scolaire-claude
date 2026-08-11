@@ -216,7 +216,7 @@ terminal in-product and document the DBA procedure — in which case that proced
 
 ---
 
-## D-12 — How does an administrator legitimately onboard a teacher? · `open` · raised by `S-E05-2` (`PF-173`) · **blocks `S-E05-2b`, and `PF-09`'s residual cannot close without it**
+## D-12 — How does an administrator legitimately onboard a teacher? · `open` · raised by `S-E05-2` (`PF-178`) · **blocks `S-E05-2b`, and `PF-09`'s residual cannot close without it**
 
 **Question.** Now that no grantor may hand out a permission they do not themselves hold, by what mechanism does a
 `school_admin` provision a teacher, a parent or a student?
@@ -265,4 +265,4 @@ the workaround and the vulnerability are the same door. Compounding it, `/admin/
 |---|---|---|---|---|---|
 | D-01 … D-10 | `open` | — | — | — | — |
 | D-11 | `open` | — | — | — | Raised 2026-08-09 by `S-E04-10` (`PF-155`). Blocks no story; a school closed by mistake has no in-product recovery until it is answered |
-| D-12 | `open` | — | — | — | Raised 2026-08-11 by `S-E05-2` (`PF-173`). Blocks `S-E05-2b`; `PF-09`'s residual cannot close without it. Admin onboarding of teacher/parent/student via `POST /users/:id/roles` is refused until answered |
+| D-12 | `open` | — | — | — | Raised 2026-08-11 by `S-E05-2` (`PF-178`). Blocks `S-E05-2b`; `PF-09`'s residual cannot close without it. Admin onboarding of teacher/parent/student via `POST /users/:id/roles` is refused until answered |
