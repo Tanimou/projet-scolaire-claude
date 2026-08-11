@@ -1,11 +1,22 @@
 # ADR-002: Multi-tenancy via shared DB + tenant_id + Row-Level Security
 
-**Status:** Accepted
+**Status:** Accepted — **superseded in part by [ADR-032](./ADR-032-tenant-enforcement.md) (mécanisme)**, et sa moitié RLS n'est **PAS implémentée** (`PF-02`)
 **Date:** 2026-05-15
 
 ## Context
 
 La plateforme est multi-tenant dès le départ (plusieurs écoles, potentiellement plusieurs tenants commerciaux). Le cahier §11 insiste sur la protection des données enfants et l'isolation stricte. Risque majeur: cross-tenant data leak.
+
+> **Note d'état (2026-08-11, `S-E01-2` / `PF-02`).** Ce qui suit décrit la CIBLE, pas l'état de la base.
+> Mesuré sur le dépôt à cette date : **zéro** `ENABLE ROW LEVEL SECURITY` et **zéro** `CREATE POLICY`,
+> `0_baseline` compris — la moitié RLS de cette décision (Action Item #2) n'est pas implémentée ; et
+> `withTenant` a **zéro appelant**, donc la moitié applicative non plus. Par ailleurs le mécanisme nommé au
+> point 4 ci-dessous — `SET LOCAL app.current_tenant_id = <id>` — est **remplacé** par
+> [`ADR-032`](./ADR-032-tenant-enforcement.md) : `SET` n'accepte aucun paramètre, donc cette forme ne peut
+> qu'interpoler la valeur dans le texte SQL, ce qui était exactement la moitié (b) de `PF-02`. La forme
+> retenue est `set_config('app.current_tenant_id', $1, true)`, avec refus en amont d'un id non-UUID et
+> relecture de la valeur posée. Le reste de cette ADR (base partagée, `tenant_id` partout, RLS comme couche
+> d'application, découpage de rôles `app_user` / `app_migrator` / `auditor`) reste la cible et reste à faire.
 
 ## Decision
 
