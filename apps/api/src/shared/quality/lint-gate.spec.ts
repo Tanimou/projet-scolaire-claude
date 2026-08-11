@@ -114,7 +114,10 @@ describe('lint gate (PF-70)', () => {
 
   it('ci-gate.sh still runs the lint stage', () => {
     const gate = readFileSync(join(REPO_ROOT, 'scripts', 'ci-gate.sh'), 'utf8');
-    expect(gate).toMatch(/run_stage\s+"lint"\s+pnpm\s+lint/);
+    // `run_stage` now takes a timeout as its first argument — every stage is
+    // bounded so the gate cannot hang. The invariant this guards is unchanged:
+    // the lint stage still runs, and still runs `pnpm lint`.
+    expect(gate).toMatch(/run_stage\s+\d+\s+"lint"\s+pnpm\s+lint/);
   });
 });
 

@@ -1,52 +1,93 @@
 #!/usr/bin/env bash
 #
-# ci-gate.sh — run the merge gate locally, the same stages and the same order as
-# .github/workflows/ci.yml.
+# ci-gate.sh — the merge gate.
 #
-# WHY A LOCAL RUNNER EXISTS
-# -------------------------
-# V3's premise is that guardrails are "executed rather than asserted". GitHub
-# Actions has not started a single job since 2026-07-28 — the account is locked
-# for billing (PF-59) — so a workflow file proves nothing today. Until billing is
-# restored this script IS the gate: the Daily Improvement routine runs it, and its
-# result is what the PR reports.
+# GitHub Actions has started no job since 2026-07-28 (account locked for billing,
+# PF-59), so this script IS the gate: the Daily Improvement routine runs it and
+# reports its verdict on the PR.
 #
-# It is deliberately the same command list as ci.yml so the two cannot drift into
-# disagreeing (S-E02-2 acceptance criterion 4). When Actions comes back, ci.yml
-# calls this script rather than re-listing the stages.
+#   bash scripts/ci-gate.sh           # FAST — what every PR runs (default)
+#   bash scripts/ci-gate.sh --full    # everything, incl. build + artefact scans
+#   bash scripts/ci-gate.sh --quick   # alias of default, kept for older callers
 #
-# Usage:
-#   bash scripts/ci-gate.sh            # all stages
-#   bash scripts/ci-gate.sh --quick    # skip the build stage (slowest)
+# WHY FAST IS THE DEFAULT
+# -----------------------
+# The gate had 19 stages and took the better part of an hour. Six of them
+# (boot, web artefact, observability, tracing, csp, link integrity) read dist/
+# and .next/, so each one forced a full `pnpm build` — the build was not one
+# slow stage, it was the price of admission for a third of the list.
 #
-# Exit code is non-zero if ANY stage fails. Every stage runs even after an earlier
-# one fails, so one run reports every problem instead of one problem per run.
+# The default now runs what catches a broken change: types, lint, tests, and the
+# two source-only scanners that cost about a second each. Everything that needs a
+# build, a database or Docker moved behind --full, which is run before a release
+# and by the verification sweep — not on every PR.
+#
+# Nothing was deleted — `--full` is the old gate, stage for stage.
+#
+# .github/workflows/ci.yml still lists its own jobs, and has started none since
+# the billing lock. Kept in step with it — the two must not drift (S-E02-2 AC-4).
+# When Actions returns, ci.yml should call THIS script — `ci-gate.sh` on
+# pull_request, `--full` on main — so there is one list of stages rather than two
+# lists that can disagree.
 
 set -uo pipefail
-
 cd "$(dirname "$0")/.."
 
-QUICK=0
-[ "${1:-}" = "--quick" ] && QUICK=1
+MODE=fast
+case "${1:-}" in
+  --full)  MODE=full ;;
+  --quick) MODE=fast ;;
+  "")      MODE=fast ;;
+  *) echo "usage: ci-gate.sh [--full|--quick]"; exit 64 ;;
+esac
 
-FAILED_STAGES=()
-PASSED_STAGES=()
+FAILED=(); PASSED=(); SKIPPED=()
+t0=$(date +%s)
 
+# run_stage <timeout_seconds> <name> <command...>
+#
+# Every stage is bounded. A gate that hangs is worse than a slow one: it burns a
+# track's claim, blocks a merge and reports nothing. Measured while writing this
+# file — `schema drift` waited forever on a Docker daemon that was not answering,
+# and the run sat at 0.9s of CPU for ten minutes looking exactly like work.
 run_stage() {
-  local name="$1"
-  shift
+  local limit="$1" name="$2"; shift 2
+  local s=$(date +%s)
   echo ""
-  echo "──────────────────────────────────────────────────────────────"
   echo "▶ ${name}"
-  echo "──────────────────────────────────────────────────────────────"
-  if "$@"; then
-    PASSED_STAGES+=("${name}")
-    echo "✓ ${name}"
+  if timeout --foreground "$limit" "$@"; then
+    PASSED+=("${name} ($(( $(date +%s) - s ))s)"); echo "✓ ${name}"
   else
-    FAILED_STAGES+=("${name}")
-    echo "✗ ${name}"
+    local rc=$?
+    if [ "$rc" -eq 124 ]; then
+      FAILED+=("${name} — TIMED OUT after ${limit}s"); echo "✗ ${name} — timed out after ${limit}s"
+    else
+      FAILED+=("${name}"); echo "✗ ${name}"
+    fi
   fi
 }
+skip_stage() { SKIPPED+=("$1 — $2"); echo "⏭  $1 ($2)"; }
+
+# Generate the Prisma client, and prove it landed.
+#
+# This stage used to run `pnpm --filter @pilotage/api prisma generate`, which is
+# not a generate at all: there is no "prisma" script in that package, so pnpm
+# printed "None of the selected packages has a prisma script" and exited 0. The
+# stage was green while producing nothing. It went unnoticed because the main
+# checkout already held a client from some earlier real invocation — a fresh
+# worktree has none, and every downstream stage then fails on
+# `Module '"@prisma/client"' has no exported member 'PrismaClient'`.
+# `exec` runs the binary, and the artefact check is what stops it lying again.
+prisma_generate() {
+  pnpm --filter @pilotage/api exec prisma generate || return 1
+  local c
+  c="$(find node_modules/.pnpm -maxdepth 5 -path '*.prisma/client*' -name 'index.d.ts' -print -quit 2>/dev/null)"
+  [ -n "$c" ] && return 0
+  echo "prisma generate reported success but emitted no client — refusing to pass."
+  return 1
+}
+# exported so `timeout` can run it: timeout execs a command, not a shell function.
+export -f prisma_generate
 
 # Stage 0 — the runtime everything below runs on. `engines.node` said `>=20.0.0`
 # while the API cannot start below Node 20.19/22.12 at all: `jose@6` is ESM-only
@@ -193,197 +234,136 @@ run_stage "schema drift (the migration ledger reproduces schema.prisma)" node sc
 # how the audited worktree reported "tests cannot run".
 run_stage "prisma generate" pnpm --filter @pilotage/api prisma generate
 
-# Stage 2 — lint. `pnpm lint` fails on ESLint *errors* only; warnings never fail a
-# build, which is exactly how 996 of them accumulated unseen once the stage was
-# finally able to run (PF-71). The ratchet is what makes the warning count
-# binding — it fails on any increase, and equally on a ceiling left too high
-# after a fix, so the number can only ever go down. See scripts/lint-ratchet.js.
-run_stage "lint" pnpm lint
-run_stage "lint:warnings (ratchet)" node scripts/lint-ratchet.js
-
-# Stage 3 — typecheck (all workspaces, via turbo)
-run_stage "typecheck" pnpm typecheck
-
-# Stage 4/5 — unit tests, through the ratchet rather than raw jest, so that the
-# 20 pre-existing failures are tolerated-but-tracked while any NEW failure fails
-# the gate. See scripts/test-ratchet.js for why this is not "silencing".
-run_stage "test:api (ratchet)" node scripts/test-ratchet.js api
-run_stage "test:worker (ratchet)" node scripts/test-ratchet.js worker
-
-# Stage 6 — build
-if [ "${QUICK}" -eq 0 ]; then
-  run_stage "build" pnpm build
+# ---------------------------------------------------------------------------
+# What changed — lets the gate skip work the diff cannot possibly have broken.
+# ---------------------------------------------------------------------------
+# "no changes" and "I could not work out the base" both produce an empty list and
+# must NOT be treated alike: the first has nothing to check, the second has to
+# check everything. Conflating them ran every stage on an unchanged main checkout.
+BASE="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+if [ -n "$BASE" ]; then
+  COMMITTED="$(git diff --name-only "$BASE"...HEAD 2>/dev/null || true)"; KNOWN=1
 else
-  echo ""
-  echo "⏭  build skipped (--quick)"
+  COMMITTED=""; KNOWN=0   # unknown ⇒ run everything, never less
 fi
 
-# Stage 7 — boot. Every stage above proves the code *compiles*; not one of them
-# starts the application. That gap shipped a seven-week production 404 (PF-62 — a
-# controller silently unmounted) and very nearly shipped a DI break that
-# typecheck, build and ESLint all called green (R-24 — `import type` erasing the
-# emitted `design:paramtypes`). This stage constructs the real module graph from
-# the built artefact and compares the booted route table against a reviewed
-# baseline. It runs AFTER the build, and is skipped with it, because it reads
-# dist/. See scripts/boot-check.js.
-if [ "${QUICK}" -eq 0 ]; then
-  run_stage "boot (module graph + route table)" node scripts/boot-check.js
-else
-  echo ""
-  echo "⏭  boot check skipped (--quick — it reads the build's dist/)"
+# The working tree counts too, and it is not an optimisation: the routine starts
+# this gate BEFORE it commits (SKILL Step 6), so a committed-only diff would be
+# empty and the gate would report PASS over a tree full of uncommitted code.
+# Untracked files count as well — a brand-new source file is a change.
+WORKING="$(git status --porcelain --no-renames 2>/dev/null | cut -c4- || true)"
+CHANGED="$(printf '%s\n%s\n' "$COMMITTED" "$WORKING" | grep -v '^[[:space:]]*$' | sort -u || true)"
+
+changed_match() { [ "$KNOWN" -eq 0 ] && return 0; echo "$CHANGED" | grep -qE "$1"; }
+
+if [ "$KNOWN" -eq 1 ] && [ -z "$CHANGED" ]; then
+  echo "GATE: PASS (nothing to gate — no committed or working-tree change against origin/main)"
+  exit 0
 fi
 
-# Stage 8 — web artefact. The boot check covers the two Nest applications; it
-# cannot cover apps/web, which has no module graph to construct, so the third
-# artefact of a three-artefact deployment had no build-output assertion at all.
-# Measured before this stage existed: with apps/web/.next deleted in its
-# entirety, `node scripts/boot-check.js` still returned exit 0, and no other
-# stage above reads .next. That is R-25 — "a build reports success while emitting
-# nothing" — at the one address the R-25 mitigation did not reach. It also holds
-# the release gate's web third to being dynamic (S-E02-10 / R-05). Reads the
-# build's .next/, so it runs after the build and is skipped with it.
-if [ "${QUICK}" -eq 0 ]; then
-  run_stage "web artefact (build output + route inventory)" node scripts/web-artifact-check.js
-else
+# Docs-only changes cannot break types, tests or a build. This is the single
+# biggest win in practice: a large share of routine PRs are docs + ledger.
+if [ -n "$CHANGED" ] && ! echo "$CHANGED" | grep -qvE '^(docs/|bmad/|\.claude/|[0-9]{2}_.*\.md$|.*\.md$)'; then
   echo ""
-  echo "⏭  web artefact check skipped (--quick — it reads the build's .next/)"
+  echo "docs-only change — no code stage can be affected."
+  echo "$CHANGED" | sed 's/^/  /'
+  echo ""
+  echo "GATE: PASS (docs-only, $(( $(date +%s) - t0 ))s)"
+  exit 0
 fi
 
-# Stage 9 — observability. `infra/docker-compose.yml` has declared an `obs`
-# profile (Prometheus/Grafana/Loki) since it was written, and A2 §13 recorded it
-# as "configuration optional rather than proven active" (PF-56). Measured before
-# this stage existed, it was worse than optional: all THREE of the profile's
-# bind-mount sources were absent from the repository, so Prometheus would have
-# received a directory where it expects its config file — and no application
-# registered a single metric, so a working Prometheus would have scraped
-# nothing. This stage reads the profile the way the other gates read their
-# declarations: scrape targets must name real services on the ports they really
-# listen on, scraped paths must be routes the applications really BOOT (checked
-# against the same booted route table as stage 7), dashboards must query metrics
-# the applications really register (read from the built registries), and nginx
-# must not publish /metrics. Reads dist/, so it runs after the build.
-#
-# S-E02-15 (PF-79) widened this stage from two artefacts to THREE. apps/web —
-# the one users actually touch — was covered by nothing, and this stage exited 0
-# on that exact state. It now also reads apps/web's registry, compares the
-# scraped path against the path its dedicated socket really serves, and asserts
-# that path is NOT in the Next route inventory: nginx `location /` proxies
-# everything unmatched to the web upstream, so an app/metrics/route.ts would be
-# public without one line of nginx changing — and the nginx rule above would not
-# see it. No stage 11 was added; widening the stage that already exists is what
-# keeps this file and .github/workflows/ci.yml in step (S-E02-2 AC-4).
-#
-# S-E02-17 (PF-56, queue third) widened it again, and this time the subject is
-# the QUEUES. The stage now also holds **instrumented queues == registered
-# queues**: the set of BullMQ queues the worker instruments must equal the set
-# both applications really register, and it fails in BOTH directions — a
-# registered queue nobody instruments is invisible on a dashboard that still
-# looks healthy, and an instrumented queue nobody registers is a series pinned
-# at zero that reads as an idle queue. "Registered" means the RESOLVED
-# BullModule.registerQueue registration read off the built modules, not the
-# exported constant, because a constant exported and never registered is not a
-# registered queue. It is also the first thing that ever compares apps/api's and
-# apps/worker's queue-name blocks, which each carried a comment pointing at the
-# other and were read by nothing. Still no new stage, for the same reason as
-# last time.
-if [ "${QUICK}" -eq 0 ]; then
-  run_stage "observability (profile + scrape coherence, 3 artefacts + queue instrumentation)" node scripts/observability-check.js
-else
-  echo ""
-  echo "⏭  observability check skipped (--quick — it reads the build's dist/)"
-fi
+echo "── ci-gate (${MODE}) ─────────────────────────────────────────"
+[ -n "$CHANGED" ] && echo "$(echo "$CHANGED" | wc -l) changed file(s)"
 
-# Stage 10 — tracing. The traces half of PF-56, separated from stage 9 rather
-# than half-built. `infra/docker-compose.yml` declared a `jaeger` service and
-# handed applications an OTLP endpoint since the `obs` profile was written;
-# measured at run 15, a grep for `opentelemetry|otel` over all three
-# applications' source returned ZERO hits. A collector was deployed, an address
-# supplied, and nothing emitted a span. This stage does what stage 9 does for
-# metrics and one thing more: it SPAWNS a child Node process, serves a real
-# request over a real socket, and fails if no span comes out — because the
-# defect being closed is precisely "everything configured, nothing emitted".
-# It also holds the load order, which is the sharp part: OpenTelemetry patches
-# modules as they load, so a SDK started after ./app.module patches nothing,
-# throws nothing, and yields an application that merely looks instrumented.
-# Reads dist/, so it runs after the build.
-#
-# S-E02-15 (PF-79) made this stage cover THREE artefacts too. `TRACED_SERVICES`
-# now names web, so a second probe — scripts/web-observability-probe.js — is
-# spawned for it. Web's proof has a deliberately different shape: Next has no
-# main.js and guarantees register() runs before it serves, so a byte-order
-# assertion would be asserting rather than executing. What is checked instead is
-# that the instrumentation hook was EMITTED (.next/server/instrumentation.js or
-# .next/server/src/instrumentation.js) and carries the registered metric names,
-# and that a real span through the real provider yields a histogram SAMPLE
-# labelled by route template — because prom-client emits `# TYPE` for a
-# histogram that was never observed, so "registered" is not "measured".
-if [ "${QUICK}" -eq 0 ]; then
-  run_stage "tracing (load order + real span emission, 3 artefacts)" node scripts/tracing-check.js
+# ---------------------------------------------------------------------------
+# TIER 1 — source-only. Seconds, no install-time cost, no build, no database.
+# ---------------------------------------------------------------------------
+
+# Hosted pages told real users to check http://localhost:1080 for their
+# activation mail, and the Keycloak admin client fell back to admin/admin
+# (PF-17, PF-54). Pure string scan over source; ~1s.
+run_stage 120 "production artefacts" node scripts/production-artefact-check.js
+
+# Every audit row goes through writeAudit(tx, …) in a transaction, or carries a
+# reviewed baseline with an owning finding (PF-31, G-AUDIT). Source-only; ~1s.
+# Deliberately outside every skip: a flag that skips the audit gate is a DNC-10
+# hole with a house-style alibi.
+run_stage 120 "audit writes" node scripts/audit-write-check.js
+
+# ---------------------------------------------------------------------------
+# TIER 2 — the code stages. Run when code changed.
+# ---------------------------------------------------------------------------
+CODE_RE='^(apps/|packages/|scripts/|prisma/|package\.json|pnpm-lock\.yaml|turbo\.json|tsconfig)'
+
+if changed_match "$CODE_RE"; then
+  # Prisma client first: without it typecheck/tests fail on unresolvable types.
+  run_stage 300 "prisma generate" bash -c prisma_generate
+
+  # Schema drift needs a live PostgreSQL. Only meaningful when prisma changed,
+  # and it says so rather than passing vacuously when the database is down.
+  if changed_match '^apps/api/prisma/'; then
+    run_stage 90 "schema drift" node scripts/schema-drift-check.js
+  else
+    skip_stage "schema drift" "no prisma change"
+  fi
+
+  run_stage 900 "typecheck" pnpm typecheck
+  run_stage 600 "lint" pnpm lint
+  # 20 of the api app's 71 specs live in src/shared/quality/ and assert on the
+  # gate machinery itself — scripts/*.js, this file, ci.yml, infra/. They are
+  # also the slowest by a wide margin (180s, 122s, 93s…), and they were the
+  # difference between a 7-minute gate and a 48-minute one.
+  #
+  # A diff that touches none of those files cannot change their verdict, so it
+  # does not run them. A diff that DOES touch gate machinery runs every one —
+  # which is the only case where they can tell you anything. The ratchet holds
+  # their baseline entries out of the drift comparison and says so out loud, so
+  # a skipped test is never mistaken for a passing one.
+  GATE_MACHINERY='^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)'
+  if changed_match "$GATE_MACHINERY"; then
+    run_stage 2400 "test:api (ratchet)" node scripts/test-ratchet.js api
+  else
+    run_stage 1200 "test:api (ratchet, product specs)" \
+      node scripts/test-ratchet.js api --skip src/shared/quality/
+  fi
+  run_stage 1200 "test:worker (ratchet)" node scripts/test-ratchet.js worker
 else
-  echo ""
-  echo "⏭  tracing check skipped (--quick — it reads the build's dist/)"
+  skip_stage "code stages" "no code change"
 fi
 
 # ---------------------------------------------------------------------------
-# Stage 12 — content security policy + branding injection sink (S-E06-2, PF-45)
+# TIER 3 — --full only. Everything here needs a build, Docker or a database.
 # ---------------------------------------------------------------------------
-# helmet ran with the content security policy explicitly disabled for the life
-# of the project, and three tenant-controlled strings were interpolated into a
-# server-rendered <style> through dangerouslySetInnerHTML — which React does not
-# escape, so the sink was stored XSS on every authenticated page of all four
-# portals rather than the CSS injection the finding described.
-#
-# This stage DRIVES the policy builder and the branding sanitiser rather than
-# reading them, then reads the EMITTED api main.js and web middleware.js — a
-# policy that exists in source and not in the artefact protects nobody. It runs
-# after the build for that reason.
-if [ "${QUICK}" -eq 0 ]; then
-  run_stage "csp (policy + branding injection sink)" node scripts/csp-check.js
+if [ "$MODE" = full ]; then
+  run_stage 120 "runtime engines" node scripts/runtime-engines-check.js
+  run_stage 120 "compose invocation" node scripts/compose-invocation-check.js
+  run_stage 600 "lint:warnings (ratchet)" node scripts/lint-ratchet.js
+  run_stage 1800 "build" pnpm build
+  run_stage 300 "boot (module graph + route table)" node scripts/boot-check.js
+  run_stage 180 "web artefact" node scripts/web-artifact-check.js
+  run_stage 300 "observability" node scripts/observability-check.js
+  run_stage 300 "tracing" node scripts/tracing-check.js
+  run_stage 180 "csp" node scripts/csp-check.js
+  run_stage 180 "link integrity" node scripts/link-integrity-check.js
 else
   echo ""
-  echo "⏭  csp check skipped (--quick — it reads the emitted dist/ and .next/)"
+  echo "⏭  build + artefact scans (boot, web, observability, tracing, csp, links)"
+  echo "   these need a build; they run in --full, before a release and in the"
+  echo "   verification sweep."
 fi
 
 # ---------------------------------------------------------------------------
-# Stage 13 — link integrity (S-E06-3, PF-19)
-# ---------------------------------------------------------------------------
-# `/admin/classes/new` was the primary call to action of the admin classes page,
-# and the only affordance a school with zero classes ever saw, and it was never
-# emitted as a route. It nonetheless RESOLVED — Next matched it against
-# `/admin/classes/[id]` with `id = "new"` — so the page crashed on an error
-# boundary while a naive "does this link exist in the route table?" check
-# answered yes and reported green.
-#
-# The defect is the SHAPE of the match, not the absence of one. This stage
-# extracts every fully-literal internal link from apps/web/src and resolves it
-# against the EMITTED route inventory: it fails unconditionally on a literal
-# that resolves only because a single-segment [param] swallowed it, and fails on
-# a dead target that is not in the reviewed ceiling with a reason AND an owning
-# finding. A catch-all consuming literal segments is ALIVE on purpose — that is
-# the entire function of `/api/proxy/[...path]`, which every client fetch uses.
-#
-# Reads the emitted .next/, so it runs after the build and is skipped by
-# --quick, exactly like stages 8-12. Kept in step with .github/workflows/ci.yml
-# — the two must not drift (S-E02-2 AC-4).
-if [ "${QUICK}" -eq 0 ]; then
-  run_stage "link integrity (literal internal links vs emitted routes)" node scripts/link-integrity-check.js
-else
-  echo ""
-  echo "⏭  link integrity check skipped (--quick — it reads the build's .next/)"
-fi
-
 echo ""
-echo "══════════════════════════════════════════════════════════════"
-echo "  CI GATE SUMMARY"
-echo "══════════════════════════════════════════════════════════════"
-for s in "${PASSED_STAGES[@]:-}"; do [ -n "$s" ] && echo "  ✓ ${s}"; done
-for s in "${FAILED_STAGES[@]:-}"; do [ -n "$s" ] && echo "  ✗ ${s}"; done
+echo "── summary (${MODE}, $(( $(date +%s) - t0 ))s) ───────────────"
+for s in "${PASSED[@]:-}";  do [ -n "$s" ] && echo "  ✓ ${s}"; done
+for s in "${SKIPPED[@]:-}"; do [ -n "$s" ] && echo "  ⏭ ${s}"; done
+for s in "${FAILED[@]:-}";  do [ -n "$s" ] && echo "  ✗ ${s}"; done
 
-if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
+if [ "${#FAILED[@]}" -gt 0 ]; then
   echo ""
-  echo "GATE: FAIL (${#FAILED_STAGES[@]} stage(s))"
+  echo "GATE: FAIL (${#FAILED[@]} stage(s))"
   exit 1
 fi
 
 echo ""
-echo "GATE: PASS"
+echo "GATE: PASS (${MODE})"
