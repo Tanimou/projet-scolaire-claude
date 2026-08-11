@@ -92,6 +92,25 @@ jobs:
       # Kept in step with scripts/ci-gate.sh stage 0d (S-E02-2 AC-4) — the two
       # must not drift.
       - run: node scripts/audit-write-check.js
+      # CSV escapers (S-E05-1 / PF-168, ADR-037 D8). One security predicate had
+      # FIVE implementations at HEAD, so the same operator-entered string escaped
+      # three different ways depending on which export button emitted it. The
+      # neutraliser now lives once in packages/contracts/src/security/csv-injection.ts
+      # and this stage is the ratchet that keeps it there: it fails on a CSV
+      # escaper outside the two sanctioned ones (matched by NAME *or* by the
+      # RFC-4180 quote-doubling SHAPE, because two of the five deleted copies were
+      # called `escapeCell`), on the trigger set re-assembled anywhere else, and
+      # on a sanctioned escaper that stops importing and calling neutraliseCsvCell.
+      # The walk root includes .tsx — three of the copies lived in components, and
+      # a .ts-only walk would certify a surface it could not see (S-E06-5).
+      # Source-only: no build, no database, no generated Prisma client, so it
+      # belongs HERE and not in the build job (PF-126). Blocking: the job fails on
+      # its exit code, and no failure-tolerating key is attached to this step —
+      # rule C is the ONLY executed evidence that the WEB half of S-E05-1 is
+      # wired, since apps/web has no unit runner (PF-129/PF-133).
+      # Kept in step with scripts/ci-gate.sh stage 0d-bis (S-E02-2 AC-4) — the two
+      # must not drift.
+      - run: node scripts/csv-escape-check.js
       # `lint` dependsOn `^build` in turbo.json, and the API build needs the
       # generated Prisma client — without this the lint job dies on unresolvable
       # `@prisma/client` types rather than on a lint rule.

@@ -1926,10 +1926,17 @@ amendment records the deviation without ruling on it. **Whichever status wins, o
 4. `UnrecoverableError` (`bullmq`) is imported **into a generator** — the only queue import in any generator, while
    `generators/types.ts` is transport-free and `exports.processor.ts` owns BullMQ. Mapping in the processor's existing
    `catch` would keep generators pure and cover the other four generators for free. Follow-up.
-5. `ADR-037` D7 claims `csvEscape` is not duplicated. Two more byte-identical `/[",\n\r]/` escapers exist —
+5. ~~`ADR-037` D7 claims `csvEscape` is not duplicated. Two more byte-identical `/[",\n\r]/` escapers exist —
    `imports.service.ts:57` (developer-authored content, low risk) and `oneroster.adapter.ts:213` `rowsToCsv`
    (**externally sourced** rows into `ImportBatch.rawCsv`). Neither belongs in this slice; D7's drift argument should
-   name them.
+   name them.~~ — **DISCHARGED by `S-E05-1` (2026-08-10).** `ADR-037` **D8 (iv)** names both sites explicitly, and
+   `scripts/csv-escape-check.js` carries them as the two **named exclusions** — with a rule that fails on a *stale*
+   exclusion, so the naming cannot rot. The ruling D8 draws is the one this note was reaching for: the neutraliser
+   belongs on **presentation** CSV (a file a human opens in a spreadsheet) and must **not** be applied to **transport**
+   CSV that is stored and re-parsed, where an apostrophe would corrupt `ImportBatch.rawCsv`. So the two sites stay
+   un-neutralised **on purpose** rather than by omission. This note also undercounted: the real number of distinct CSV
+   escapers at `8e52da0` was **five**, not four — two of them were called `escapeCell` on the parent portal, which is
+   why the gate matches on shape as well as on name.
 6. `TENANT_TIMEZONE_UNUSABLE` is `export`ed from `apps/api` for a documented consumer (`apps/web`) that **cannot
    import from `apps/api`**. Either make it module-private or move it to `packages/contracts`. Follow-up.
 7. The `audit_csv` export is capped at `take: 50_000` with **no truncation signal** — pre-existing, but now sitting

@@ -5,6 +5,7 @@ import {
   auditWindowCreatedAtFilter,
   classifyAuditAction,
   classifyAuditResourceType,
+  neutraliseCsvCell,
   resolveAuditWindow,
   zonedYmd,
   type AuditVocabularyKind,
@@ -49,6 +50,13 @@ const UTF8_BOM = '\uFEFF';
  *     leading `'`); nothing is ever dropped from a regulator's file, and a value
  *     that does not begin with a trigger character is emitted exactly as before
  *     — every accented French label included.
+ *
+ *     **S-E05-1 / PF-168 / ADR-037 D8 — same rule, one home.** The trigger set
+ *     and the neutralising character are no longer declared here: they live in
+ *     `@pilotage/contracts` (`security/csv-injection.ts`), which the web exports
+ *     now read too, so the same cell escapes identically on every surface that
+ *     exports it. The DIALECT (`,` here, `;` on the web) stays per-surface on
+ *     purpose — see `csvEscape` below.
  *  2. **What cannot be classified stays visible** (DNC-08). An unrecognised code
  *     is exported with `*_label` equal to the code itself and `vocabulary` =
  *     `unknown`. It is never dropped from the file, never bucketed into a
@@ -237,55 +245,50 @@ export function weakerVocabulary(
 }
 
 /**
- * The characters that make a cell a **formula** rather than a record when the
- * file is opened as a spreadsheet — Excel, LibreOffice and Google Sheets all
- * evaluate a cell starting with one of these. `\t` and `\r` are here for a
- * second reason as well: pasted into a sheet they split the cell, and a bare
- * `\r` in an unquoted cell terminates the *record*.
- */
-const CSV_INJECTION_TRIGGERS = ['=', '+', '-', '@', '\t', '\r'];
-
-/** The neutralising prefix. See `csvEscape` for why this character and not a tab. */
-const CSV_NEUTRALISER = "'";
-
-/**
  * **S-E04-11 / PF-140 (iii) / ADR-037 D7 — the chosen defensive form, stated
- * rather than assumed.**
+ * rather than assumed. S-E05-1 / PF-168 / ADR-037 D8 — its predicate now lives
+ * in `@pilotage/contracts` (`security/csv-injection.ts`) and this file no longer
+ * owns a copy.**
  *
- * Quoting alone does not neutralise: Excel evaluates `"=1+1"` on CSV import. So
- * a triggering cell is **force-quoted AND prefixed with a single apostrophe**
- * (the OWASP form). Three properties make this the right trade in a file handed
- * to a regulator:
+ * The local `CSV_INJECTION_TRIGGERS` and `CSV_NEUTRALISER` that stood here are
+ * **deleted**, not moved-and-duplicated: `neutraliseCsvCell` is imported at the
+ * top of this file and the shared module's doc comment carries the full
+ * rationale (why an apostrophe and not a tab — a tab is itself a trigger, so the
+ * transform would recurse; why nothing is ever dropped; why the neutralisation
+ * is applied at most once). Read it there. Behaviour here is **byte-identical to
+ * HEAD** — the spec block in `audit-csv.generator.spec.ts` passes unchanged.
  *
- *  - **Nothing is dropped.** The payload survives in full; a plain parser reads
- *    `'=cmd|…` and recovers the original by stripping exactly ONE leading `'`.
- *    Silent removal would be a worse defect than the injection.
- *  - **Uniform across every column, never a per-column allowlist.** An allowlist
- *    is precisely what drifts the day `audit_log.user_agent` — a raw client
- *    header — joins the export.
- *  - **Non-triggering cells are byte-identical to before.** `Évaluation`,
- *    `Résultats`, `role.delete`, `10.0.0.1`, an ISO timestamp and an empty cell
- *    all pass through untouched, because none of them starts with a trigger.
- *
- * Why an apostrophe and not a leading tab (the other standard mitigation): a tab
- * is itself in the trigger set, so prefixing one produces a cell the escaper
- * must consider dangerous again. `'` is not a trigger, so **one pass suffices
- * and this function never recurses** — the neutralisation step is idempotent on
- * its own output. (Full `csvEscape` idempotence is not a property any RFC-4180
- * escaper has, at HEAD or here: `csvEscape('a,b')` is `"a,b"` and re-escaping
- * that legitimately doubles the quotes. Round-tripping is the parser's job.)
+ * What stays local, and must stay local, is the **DIALECT**. Quoting alone does
+ * not neutralise (Excel evaluates `"=1+1"` on CSV import), so a triggering cell
+ * is force-quoted AND prefixed — but the quote TRIGGER SET below is this file's
+ * own: `/[",\n\r]/`, because this file's delimiter is `,`. The web exports quote
+ * on `/[",;\n\r]/` because theirs is `;`. Folding the two into one union regex
+ * would force-quote every worker cell containing a `;` — and `audit_log.user_agent`,
+ * a raw client header one column away from being exported, reads
+ * `Mozilla/5.0 (Windows NT 10.0; Win64; x64)`. Nearly every row in a regulator's
+ * file would change bytes. That is the silent byte change this work exists to
+ * stop, and it is why the shared module exports a predicate, not an escaper.
  *
  * The record separator stays `\n` and the delimiter stays `,` — changing either
- * would rewrite every byte offset in the file, which is the silent byte change
- * this slice exists to stop.
+ * would rewrite every byte offset in the file. (`PF-169` — the web says `;`, this
+ * says `,`, both cite French Excel and both cannot be right — stays OPEN, and is
+ * a versioned, announced format change rather than a drive-by.)
+ *
+ * Full `csvEscape` idempotence is not a property any RFC-4180 escaper has, at
+ * HEAD or here: `csvEscape('a,b')` is `"a,b"` and re-escaping that legitimately
+ * doubles the quotes. Round-tripping is the parser's job; what must hold is that
+ * the NEUTRALISER is not re-applied, and that is the shared module's invariant.
+ *
+ * Kept `unknown`-typed and **unary**: `header.map(csvEscape)` above hands this
+ * function straight to `Array.prototype.map`, which supplies `(value, index,
+ * array)`. A second parameter — a separator, say — would silently receive the
+ * column index.
  */
 export function csvEscape(v: unknown): string {
   if (v == null) return '';
-  const s = String(v);
-  const dangerous = s.length > 0 && CSV_INJECTION_TRIGGERS.indexOf(s.charAt(0)) !== -1;
-  const body = dangerous ? CSV_NEUTRALISER + s : s;
-  if (dangerous || /[",\n\r]/.test(body)) return `"${body.replace(/"/g, '""')}"`;
-  return body;
+  const { text, neutralised } = neutraliseCsvCell(String(v));
+  if (neutralised || /[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
 }
 
 /**

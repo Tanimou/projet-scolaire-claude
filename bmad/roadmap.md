@@ -112,6 +112,9 @@ which is the §2.4 option-2 delegation decision and needs its own `ADR-015` entr
 
 **Next V3 slice → `S-E04-8` — the hash chain from a declared genesis, its verification, and the documented gap. It
 is the LAST slice of the epic: shipping it moves `V3-E04` to `shipped`.**
+*(Unchanged by run 39. That run shipped `S-E05-1` under a **2026-08-10 operator override** naming the epic and the
+slice, so this pointer was not consumed and is not stale — the override took precedence for one run, it did not
+re-sequence the programme. If no override is in force, `S-E04-8` is still the pick.)*
 *(`docs/daily-improvement-v3/NEXT.md` is the register of record. `S-E04-8`'s `blockedBy` — `S-E04-3`, `S-E04-6`,
 `S-E04-7` — has been fully satisfied since 2026-08-09; what held it back was the epic's own ruling that the chain goes
 last, plus `PF-163`. `S-E04-9` shipped 2026-08-10 and discharged the half of `PF-163` that made chaining unsafe.

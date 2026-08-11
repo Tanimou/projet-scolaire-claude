@@ -4,6 +4,23 @@ import { Button } from '@pilotage/ui';
 import { Download } from 'lucide-react';
 import { useState } from 'react';
 
+// S-E05-1 / PF-168: this file used to declare its own `escapeCell` — a copy the
+// PF-168 grep for `csvEscape` could not see. The `Commentaire` column below is
+// teacher-authored free text opened in Excel, so the neutralisation is not
+// optional here. Separator, BOM and record terminator are unchanged (`;`, BOM,
+// CRLF).
+//
+// THE QUOTE SET IS NOT THE ONE THIS FILE USED — this is DELTA 3, corrected in
+// the land pass because the first version of this comment asserted the opposite.
+// The deleted `escapeCell` quoted on `/[";\r\n]/`, with NO comma; the shared
+// `csvEscape` quotes on `/[",;\n\r]/`, comma included. `Note /20` (`scoreOn20`,
+// a French decimal such as "15,0") and `Coefficient` therefore now export as
+// `"15,0"` / `"1,5"` — EVERY row of this export changes bytes. It parses
+// identically under the `;` delimiter and Excel still reads the column, but it
+// is a visible change to a file parents have already downloaded, so it is stated
+// in the PR and pinned by test (`audit-csv.generator.spec.ts`, « DELTA 3 »)
+// rather than left to be found later.
+import { csvEscape } from '@/lib/csv';
 
 export interface GradeExportRow {
   /** ISO date of the assessment (scheduled or, failing that, published). */
@@ -48,20 +65,12 @@ function formatFrDate(iso: string): string {
   });
 }
 
-/** Escape a cell for a `;`-delimited CSV (French Excel convention). */
-function escapeCell(value: string): string {
-  if (/[";\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
 function buildCsv(rows: GradeExportRow[]): string {
-  const headerLine = COLUMNS.map((c) => escapeCell(c.header)).join(';');
+  const headerLine = COLUMNS.map((c) => csvEscape(c.header)).join(';');
   const bodyLines = rows.map((row) =>
     COLUMNS.map((c) => {
       const raw = c.key === 'date' ? formatFrDate(row.date) : row[c.key];
-      return escapeCell(raw ?? '');
+      return csvEscape(raw ?? '');
     }).join(';'),
   );
   // CRLF + UTF-8 BOM so Excel opens accented French text correctly.

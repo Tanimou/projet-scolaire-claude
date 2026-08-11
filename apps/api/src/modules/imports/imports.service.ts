@@ -53,6 +53,17 @@ export class ImportsService {
     }));
   }
 
+  /**
+   * The downloadable import template.
+   *
+   * **S-E05-1 / ADR-037 D8 — deliberately NOT neutralised, and stated so the
+   * next agent does not "fix" it.** Every cell here is a dev-authored constant
+   * from `handler.template` (headers + a sample row); none of it is user or
+   * tenant data, so there is no injection surface. It is also a TEMPLATE the
+   * admin fills in and re-uploads, and `neutraliseCsvCell` would write an
+   * apostrophe into a value that comes straight back through the import parser.
+   * `scripts/csv-escape-check.js` excludes this site by name.
+   */
   template(type: ImportType): string {
     const handler = this.requireHandler(type);
     const escape = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);

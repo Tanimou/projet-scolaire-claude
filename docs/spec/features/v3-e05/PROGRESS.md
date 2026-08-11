@@ -310,7 +310,35 @@ so it becomes false the day a request-supplied `link` appears.
 > which authored and shipped its own story in one run. Kept struck rather than deleted, because a reader who stops at
 > the prose would re-write a shipped spec-kit. Original text follows.
 
-**Not a `V3-E05` slice — nothing in this epic is enumerated.** Two candidates, in order:
+> **⚠️ Rewritten 2026-08-10 by the `S-E05-1` land pass — the section below is the `S-E05-12`-era text, kept struck
+> through rather than deleted.** It opened *« Not a `V3-E05` slice — nothing in this epic is enumerated »* and then
+> listed a `V3-E04` `epic-spec` run as candidate 1. Both are now **stale**: the `V3-E04` kit was written at run 28 and
+> ten of its eleven slices have shipped, and `V3-E05` **has** had a slice enumerated and landed since — this one, by a
+> 2026-08-10 operator override. Named rather than quietly overwritten, because this is exactly the paragraph the next
+> autonomous run reads at Step 1.
+
+**The current recommendation, in order.**
+
+1. **`S-E04-8`** — the hash chain from a declared genesis. It is the register-of-record pick
+   (`docs/daily-improvement-v3/NEXT.md`, `bmad/roadmap.md`) and shipping it moves `V3-E04` to `shipped`. Unchanged by
+   this run: run 39 was an **operator override**, not a re-sequencing.
+2. **A `V3-E05` follow-up that makes the CSV escaper unbypassable — `PF-173`.** Brand `csvEscape`/`csvFixed1` to
+   return a `CsvCell` and let `csvRow`/`buildCsv` accept only `CsvCell[]`, wrapping the one live unescaped site
+   (`teacher/reports/_components/ExportReportButton.tsx:68`) on the way through. Seven call sites, no runtime change,
+   and it converts the count-based ratchet this slice shipped into the type-based one `ADR-035` already established
+   for the audit seam. Bundle with it the `node:vm` spec that **executes** `apps/web/src/lib/csv.ts` — today nothing
+   does, and the mirror in the worker spec drifted from the real file inside a single commit.
+3. **`PF-169`** — the dialect reconciliation. This epic's most-owed item, but it is a **versioned, announced format
+   change** with the consumer census `ADR-037` D6 defines, so it ranks behind the two above rather than being taken as
+   a drive-by.
+
+The `S-E05-12` gate-coverage consolidation (`SINK` vocabulary, inline query read, `packages/ui` walk root) is
+unchanged in priority and now ranks fourth.
+
+<details>
+<summary><em>Struck-through `S-E05-12`-era text, 2026-08-07 — retained for provenance</em></summary>
+
+~~**Not a `V3-E05` slice — nothing in this epic is enumerated.**~~ Two candidates, in order:
 
 1. **`V3-E04` — a `sprint-02` authoring / `epic-spec` run** (audit trail and governance surfaces: `PF-14`, `PF-31`,
    `PF-32`). This is what the V3 roadmap's own sequencing rule prefers (`V3-E04` depends on `V3-E02`, which is
@@ -329,3 +357,5 @@ so it becomes false the day a request-supplied `link` appears.
 
 The third option, a **`V3-E06` follow-up** (resolve a baseline row's finding id against `audit-findings-index.md`
 instead of a regex; clear `PF-103` a/b/c), is unchanged in priority by this slice.
+
+</details>

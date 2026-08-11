@@ -4,6 +4,21 @@ import { Button } from '@pilotage/ui';
 import { Download } from 'lucide-react';
 import { useState } from 'react';
 
+// S-E05-1 / PF-168: this file used to declare its own `escapeCell` — a copy the
+// PF-168 grep for `csvEscape` could not see. `Justification` and `Commentaire`
+// below are staff-authored free text opened in Excel, so the neutralisation is
+// not optional here. Separator, BOM and record terminator are unchanged (`;`,
+// BOM, CRLF).
+//
+// THE QUOTE SET IS NOT THE ONE THIS FILE USED — this is DELTA 3, corrected in
+// the land pass because the first version of this comment asserted the opposite.
+// The deleted `escapeCell` quoted on `/[";\r\n]/`, with NO comma; the shared
+// `csvEscape` quotes on `/[",;\n\r]/`. Any `Justification` or `Commentaire`
+// containing a comma — « Absent, justifié par la famille » — therefore ships
+// quoted where it used to ship bare. It parses identically under `;`, but it is
+// a byte change on a file a parent may already hold, so it is stated in the PR
+// and pinned by test (`audit-csv.generator.spec.ts`, « DELTA 3 »).
+import { csvEscape } from '@/lib/csv';
 
 export interface AttendanceExportRow {
   /** ISO date of the class session. */
@@ -41,20 +56,12 @@ function formatFrDate(iso: string): string {
   });
 }
 
-/** Escape a cell for a `;`-delimited CSV (French Excel convention). */
-function escapeCell(value: string): string {
-  if (/[";\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
 function buildCsv(rows: AttendanceExportRow[]): string {
-  const headerLine = COLUMNS.map((c) => escapeCell(c.header)).join(';');
+  const headerLine = COLUMNS.map((c) => csvEscape(c.header)).join(';');
   const bodyLines = rows.map((row) =>
     COLUMNS.map((c) => {
       const raw = c.key === 'date' ? formatFrDate(row.date) : row[c.key];
-      return escapeCell(raw ?? '');
+      return csvEscape(raw ?? '');
     }).join(';'),
   );
   // CRLF + UTF-8 BOM so Excel opens accented French text correctly.
