@@ -2,7 +2,7 @@
 
 **Layer** L0 · **Closes** PF-03, PF-55, PF-56, VAL-01, VAL-03, VAL-10 (+ PF-58, PF-59, PF-60, PF-61 discovered in flight)
 **Spec** the story contracts in `docs/daily-improvement-v3/stories/sprint-01.md` are the spec-kit for this epic.
-**Status (2026-08-08, after `S-E02-19`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
+**Status (2026-08-12, after `TOOL-10`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
 `S-E02-18` and `S-E02-19` are all ✅ done. `S-E02-18` closed the seven findings `S-E02-17` queued (`PF-104`…`PF-110`,
 plus the `PF-112` register renumber): the gate that slice made blocking **can now fail**, its wiring is **executed** by
 a test rather than asserted, and the dashboard stops under-reporting a stalled worker. `S-E02-19` then closed the
@@ -18,6 +18,10 @@ invariant — the migration ledger reproduces `schema.prisma` — and the ledger
 was stale (see the re-scoping note in the slice table). **`S-E02-1`'s residual is the only open row**, and it is
 genuinely hosted: it needs hosted credentials and an operator. Recording this epic as `shipped` would claim that
 operator half was delivered, which is the exact overstatement this epic exists to end.
+**The epic also carries a gate-hardening track** — `TOOL-06`/`TOOL-07`/`TOOL-08` (run 43) and now **`TOOL-10`** (run 44,
+the drift check's TCP preflight and the ratchet's honest kill message). Those slices repair the machinery this epic
+built rather than extending it, so they move the epic's *reliability*, never its status: `code-complete` is unchanged
+and `PF-111` / `PF-113` are still its two residuals.
 
 > ### ⚠️ The paragraph this replaced was wrong on one point, and it is worth saying which
 >
@@ -57,6 +61,8 @@ operator half was delivered, which is the exact overstatement this epic exists t
 | **S-E02-18** | The queue gate can fail, its wiring is executed, and the dashboard stops under-reporting | ✅ done | 2026-08-08 | **53/53** worker observability (`queue-depth.collector.spec.ts` **new, 427 lines** + `queue-metrics.spec.ts`) + **71/71** api-side observability guard (`observability-gate.spec.ts`, +277 lines). `pnpm typecheck` **13/13, exit 0** — `@pilotage/api` and `@pilotage/worker` both **cache misses that executed** (the prior run's api verdict did not exist: turbo cancelled it); `git diff --check` exit 0. **`PF-106` closed by execution, not assertion**: C7/C9 call the three new `@OnWorkerEvent('stalled')` handlers **off the real processor prototypes** with a cuid jobId *and* a `{data:{tenantId}}` receiver, then assert the rendered exposition contains neither, with an anti-vacuity `sample(...) === 2` so it cannot pass on an implementation that recorded nothing; C11 reads `ObservabilityModule`'s **resolved** Nest `imports` metadata. **`PF-105` closed**: rule 6's `rendered` is now `pilotage_queue_depth` ∩ `pilotage_queue_jobs_total` (neither zero-seeded), driven from the collector's **own** resolved `self:paramtypes` — the independence is what turns `A ≡ A` into a comparison. **⚠️ `scripts/observability-check.js` exits 1 on this checkout** — `apps/worker/dist` still holds `S-E02-17`'s bytes (0 occurrences of `pilotage_queue_stalled_total`), so the gate's own green lines are evidence about the **previous** slice. **The PF-105 fix has never been executed against its own source.** Rebuild + re-run is the merge precondition; see the section below |
 | **S-E02-15** | `apps/web` becomes the third observed artefact: metrics on its own socket, spans through the one redacting exporter | ✅ done | 2026-08-04 | **41/41** new web-observability guard + 40/40 tracing guard + 42/42 observability guard (**218/218** across 8 suites in `src/shared/quality`, was 124 — the sprint predicted 213; 218 is what the routine actually executed, and the difference is the runtime-guard-form test added when the build failed). Whole gate: **`GATE: PASS`, 12/12, exit 0**, after a first run of **`GATE: FAIL (3 stages)`** — build, web artefact, and `test:api (ratchet)`; see "What running it found" below. The gap measured first — `grep -rniE 'prom-client\|opentelemetry\|/metrics' apps/web/src` returned **0 hits** while `observability-check.js` exited **0** on that exact state; the probe yields **1 span** and a histogram **sample** labelled `route="/parent/students/[id]/grades"`, with the cuid and `tenantId` absent from both the exported payload and the exposition; 11 negative directions driven through the two pure evaluators; the anti-drift guard exercised in the negative (**4 failures** with both stages replaced by `true`, clean on restore) |
 | **S-E02-19** | The observability gate stops false-redding, and its two new readers get coverage | ✅ done *(with two **open**, fail-**open** residuals — `PF-116`, `PF-117`)* | 2026-08-08 | **145/145** api-side observability guard (`observability-gate.spec.ts`, +493 lines, **33 new cases**) + **36/36** worker `queue-metrics.spec.ts`. `pnpm typecheck` **13/13**, `@pilotage/api` and `@pilotage/worker` **cache misses that executed**; `git diff --check` exit 0. `node scripts/observability-check.js` → **exit 0 / PASS**, *« 9 sum() aggregation(s) … read no gauge-typed metric family »*, 3/3 queues, `dist` present — so the green is **observed on this diff**, not inherited (the `S-E02-18` staleness caveat did not apply). `PF-114` reproduced verbatim on `HEAD` and closed: `sum by (queue) (max by (queue, state) (pilotage_queue_depth))` went PROBLEM → clean while `sum by (queue) (pilotage_queue_depth)` stayed PROBLEM. `PF-115` (a) closed by a 14-entry reason enum naming the file actually read (`queue-depth.collector.js`, not `queue-metrics.js`); (b) by the verified registry restore (`registryResidue`) — driven with the `finally` blanked → **exit 1 `INSTRUMENTATION UNREADABLE (registry-not-restored)`** enumerating all nine residues; (c) by driving the cuid through `observeJobStalled`'s one parameter, shown able to fail by mutating `queueLabel` to a pass-through. **⚠️ The shield introduced two fail-**open** regressions the escalation panel found and this land pass re-measured**: `topk`/`bottomk` and an unterminated quote are both **accepted now and were flagged on `HEAD`** — `PF-116`/`PF-117`, section below. Both latent in `pilotage-slo.json` today; neither is fixed here |
+| **TOOL-06/07/08** | The merge gate stops gating; its meta-tests were reading the dead code | ✅ done | 2026-08-12 (run 43) | PR #223 → `545879f`. `run_stage` refuses a non-numeric timeout (exit 64); `csv escapers` executed for the **first time** since `#215` — 698 files across six roots, four sanctioned escapers. Block at the bottom of this file |
+| **TOOL-10** | The drift check concludes "unreachable" in milliseconds; a killed ratchet stops reporting itself as a startup failure | ✅ done *(gate-hardening track; **two spec files typechecked but UNEXECUTED**)* | 2026-08-12 (run 44) | **Fail-before, measured on this worktree:** one unreachable-address `node scripts/schema-drift-check.js` **did not finish in 30 037 ms** (`SIGTERM`/`ETIMEDOUT`), and the whole `schema-drift-gate.spec.ts` **did not finish in 600 000 ms** when driven on `HEAD` — the story's `>30 037 ms` is confirmed and understated. Route C's `docker port pilotage_postgres 5432/tcp` measured **unbounded** (killed at 8 026 ms by the probe's own `spawnSync` timeout; bash-level `timeout` does **not** kill it — `ps -W` shows orphaned docker processes dated Aug 10). **Pass-after:** `DEAD_URL` → **519 ms**, exit **1**, `SCHEMA DRIFT CHECK: FAIL — tooling_unavailable`, output still naming `prisma db execute` / host `psql` / `docker exec pilotage_postgres`; the default `:5433` → **546 ms**, same verdict, same exit. **The verdict does not move** — that is the contract, and `scripts/ci-gate.sh` is **byte-identical** (`git diff --quiet` YES), so no stage bound went up. Both spec files under `--runInBand`: **17.5 s, 116 passed / 2 failed / 5 skipped**, the two failures **pre-existing** (`AC-5`, `AC-15` at `schema-drift-gate.spec.ts:721`, both asserting on `ci-gate.sh`, which this diff does not open). `pnpm typecheck` **13/13, 51.9 s**, `@pilotage/api` a real cache **miss**; `git diff --check` clean on unstaged, staged and `main...HEAD`. **⚠️ Those jest numbers come from a reviewer's own run, not from the gate**: the gate could not execute either spec (shell Node **v25.7.0** vs the **22.13.1** `.nvmrc` pin), and **no run has ever driven the ladder against a reachable PostgreSQL after the change** — see the `TOOL-10` block at the bottom of this file for why that is the one must-check |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -2030,3 +2036,87 @@ recorded on the `S-E06-6` row of `docs/spec/features/v3-e06/PROGRESS.md`. `V3-E0
 > `TOOL-09` (P3) is recorded, not storified: `runtime engines` is source-only and ~2 s but now runs only under
 > `--full`, and widening the fast tier's contract is a decision for `open-decisions.md`, not a side effect of
 > repairing a timeout.
+
+---
+
+## `TOOL-10` — the gate reached the right verdict and took forever to say so (run 44, 2026-08-12)
+
+`TOOL-06`/`07`/`08` gave the merge gate its eyes back. The first thing it saw with them was that it could not
+finish: `test:api (ratchet)` hit its **2 400 s** bound on PR #223, and inside the killed run
+`schema-drift-gate.spec.ts` reported `exitCode=143` — SIGTERM, still running when the bound expired.
+
+**The defect is not a slow suite.** `node scripts/schema-drift-check.js` against an unreachable address is
+*correct* — `SCHEMA DRIFT CHECK: FAIL — tooling_unavailable`, exit 1, which is the `DNC-08` fail-closed behaviour
+this epic wants. It is only wrong about **how long it takes to find out**: it tries three SQL routes in turn, and
+route C (`docker exec pilotage_postgres psql`, reached through an **unbounded** `docker port`) does not answer on
+this host at all. Measured here before anything was written: the CLI **did not finish in 30 037 ms**, the docker
+metadata call **did not answer in 8 026 ms**, and the spec file — which reaches the ladder ten times — **did not
+finish in 600 000 ms**. Ten unbounded ladders is what overruns a 2 400 s stage.
+
+**Raising the bound was refused, in writing, before it could be tried again.** `2bd1a25` already raised
+`test:api (ratchet)` once on the "the suite got slower" reading. `scripts/ci-gate.sh` is **byte-identical** in this
+diff (`git diff --quiet` YES), and a test asserts it.
+
+### What landed
+
+| Piece | Why it is that and not something cheaper |
+|---|---|
+| `probeAddress(host, port)` — an out-of-process `node -e` TCP probe, run **once** per routes object, lazily and memoised per closure | The ladder's cost is three child processes deep. One bounded socket connect answers the only question the ladder is really asking, in ~230 ms |
+| Three states — `open` / `refused` / `indeterminate` — where the story authored two | **This is a deliberate deviation and it is the most important line of the slice.** A 2-state probe reads a *timeout* as absence, which turns a loaded-but-alive PostgreSQL into a permanently red gate with no route back to green — the story's own #1 pre-mortem. Only `refused` is evidence of absence |
+| The short-circuit fires only on `refused && loopback` | Route C is elided against a **predicate, not luck**: `containerAddressesTheUrl()` admits C only when the container publishes the port **on this host**, so refused-on-loopback genuinely implies C is unusable. A non-loopback URL still descends the ladder, now bounded |
+| `spawnSync`-level `timeoutMs` on both `docker` call sites, with the named-bound sentence `… did not answer within N ms and was killed` | bash-level `timeout` does **not** kill a hung docker CLI on this host (`ps -W` shows orphans dated Aug 10); libuv maps `SIGTERM` to `TerminateProcess`, so the bound has to live in `spawnSync`. The sentence is the register `tracing-check.js` and `boot-check.js` already use |
+| `scripts/test-ratchet.js` splits signal / spawn-error / elapsed-ceiling | A suite killed at 2 400 s was being reported as *"it probably failed to start"*. That is the same misdirection at the meta level: the operator hunts an install problem instead of a bound |
+
+The probe child receives **host and port only**, never a connection string (`ADR-025 D6`), from a constant `-e`
+source with `shell: false` — pinned by a case asserting the literal contains no `://`.
+
+### The verdict does not move — measured
+
+| Address | Before | After |
+|---|---|---|
+| `127.0.0.1:59999` (dead) | did not finish in 30 037 ms | **519 ms**, exit **1**, `tooling_unavailable`, all three routes still named |
+| default `:5433` | — | **546 ms**, exit **1**, same verdict |
+| open listener that is not PostgreSQL | — | 5 308 ms, ladder **descended** (`B. host psql …`, `C. docker exec … was killed`) |
+| `192.0.2.1:5433` (blackhole) | — | 7 334 ms, `indeterminate`, ladder **descended** |
+
+### ⚠️ What this slice does **not** have, stated plainly
+
+1. **The two spec files are typechecked and UNEXECUTED by the gate.** Shell Node is **v25.7.0**; `.nvmrc` pins
+   **22.13.1** and Node ≥ 23 breaks the local run. No jest signal was manufactured under an unpinned runtime. The
+   `17.5 s / 116 passed / 2 failed / 5 skipped` figure comes from a reviewer's own pass, and the elapsed numbers
+   should be re-read once on Node 22.
+2. **The ladder has never been run against a reachable PostgreSQL after the change.** Every CLI-level case drives
+   `DEAD_URL`; the only `open` proof is unit-level, against a bare `net` listener. If the preflight ever answered
+   `refused` on a healthy server the CLI would go red (safe) — but `probeServer` at module scope would turn the
+   whole end-to-end block, **including "the unmodified repository PASSES"**, into `describe.skip`, and jest would
+   report **green**. `test-ratchet.js` compares *failures* against a baseline, not test counts, so it cannot see
+   tests that stopped existing.
+3. **The central claim — `test:api` no longer overruns 2 400 s — is unobserved.** The docker half rests on a source
+   assertion plus a synthetic `spawnSync` proof; no case invokes `docker` for real.
+4. **Two scope deviations.** `PRISMA_CLI_PROBE_TIMEOUT_MS = 60000` bounds the `pnpm exec prisma --version`
+   fallback although §3.4 says to leave `pnpm` unbounded (the call sits on the same critical path, paid by every
+   jest worker at module scope — defensible, but a departure, and the number carries no measurement). And routes A
+   and B (`prisma`, host `psql`) stay **unbounded**, so the `indeterminate` branch — the branch that most resembles
+   a real CI stall — still descends an unbounded ladder.
+5. **`exec()` now throws where its own docstring says it never does.** The new cross-server guard is unreachable
+   today (`deriveMaintenanceUrl`/`buildScratchUrl` replace only the path segment), but `dropScratch` reaches
+   `exec()` from `cleanup()` inside a `finally` — a throw there escapes past `report(state)` and ends the run with
+   no verdict at all, which is `DNC-08` at the address of the `DNC-08` guard. Recorded as a follow-up rather than
+   widened into this diff.
+
+`V3-E02` remains **`code-complete`**. `PF-111` and `PF-113` are still its two residuals and neither moved; this
+slice repaired the machinery, not the epic's open surface.
+
+### The pointer, as of 2026-08-12 (run 44)
+
+**Next slice → `S-E01-2b`** in **`V3-E01`** (tenant-context hardening, the follow-on to `S-E01-2` / `PF-02(b)`,
+landed at `#221`). It is the next selectable story in track a's seam, and the dependency map makes `E01 → E03` a
+hard edge, so it must precede any `V3-E03` pick.
+
+**One precondition a human owns, and it is the same one this slice could not discharge:** `S-E01-2b` writes
+migrations, so `schema drift` will **not** be skipped — it needs a working PostgreSQL on `127.0.0.1:5433`, which
+today **refuses connections** (something unrelated answers on 5432; do not mistake it for the stack). Settling that
+database also discharges must-check #2 above in the same motion: with the container up, `node
+scripts/schema-drift-check.js` must print `▶ server reachable at <host>:<port>` and reach `▶ migrate diff …`, and a
+jest run of `schema-drift-gate.spec.ts` must **not** print the `[schema-drift-gate] no PostgreSQL server answered
+at …` warning. Do that before planning the story, not during it.

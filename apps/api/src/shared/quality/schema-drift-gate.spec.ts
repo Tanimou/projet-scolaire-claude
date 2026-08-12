@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -129,6 +130,18 @@ interface SchemaDriftModule {
   deployMigrations: (input: { migrationsDir: string; scratchUrl: string }) => ChildResult;
   runDiff: (input: { datamodelPath?: string; scratchUrl: string; script?: boolean }) => ChildResult;
   probeServer: (baseUrl?: string) => boolean;
+  probeAddress: (
+    host: string,
+    port: string | number,
+    timeoutMs?: number,
+  ) => {
+    open: boolean;
+    state: 'open' | 'refused' | 'indeterminate';
+    detail: string;
+    addresses: string[];
+    loopback: boolean;
+    elapsedMs: number;
+  };
   openSqlRoutes: (baseUrl?: string) => {
     query: (database: string, sql: string) => string[][];
     exec: (url: string, sql: string) => { ok: boolean; detail: string };
@@ -138,6 +151,9 @@ interface SchemaDriftModule {
   MIGRATIONS_DIR: string;
   SCHEMA_PATH: string;
   MIN_EXPECTED_TABLES: number;
+  TCP_PREFLIGHT_TIMEOUT_MS: number;
+  DOCKER_TIMEOUT_MS: number;
+  DOCKER_EXEC_TIMEOUT_MS: number;
   VERDICT_EXIT_CODES: Record<string, number>;
   VERDICT_PRECEDENCE: string[];
 }
@@ -192,6 +208,36 @@ function executableJs(source: string): string {
 }
 
 const EXECUTABLE_SCRIPT = executableJs(SCRIPT_SOURCE);
+
+/**
+ * Every `run(<anchor>…)` call site, extracted by BALANCING PARENTHESES.
+ *
+ * Not a line-scoped regex: the `docker exec` call spans three lines once its
+ * options object carries a bound, so a per-line matcher would silently find zero
+ * sites and the assertion built on it would pass by matching nothing — the exact
+ * defect TOOL-07 and TOOL-08 were made of. Every caller therefore asserts the
+ * extraction found something BEFORE asserting anything about its contents.
+ */
+function callSites(source: string, anchor: RegExp): string[] {
+  const sites: string[] = [];
+  const scanner = new RegExp(anchor.source, 'g');
+  let match: RegExpExecArray | null = scanner.exec(source);
+  while (match !== null) {
+    const start = source.indexOf('(', match.index);
+    let depth = 0;
+    let i = start;
+    for (; i < source.length; i += 1) {
+      if (source[i] === '(') depth += 1;
+      else if (source[i] === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    sites.push(source.slice(start, i + 1));
+    match = scanner.exec(source);
+  }
+  return sites;
+}
 
 function runInChild(argv: string[], env: NodeJS.ProcessEnv) {
   const result = spawnSync(process.execPath, [SCRIPT_PATH, ...argv], {
@@ -818,6 +864,344 @@ describe('there is no way to turn this gate off, and no way to skip it', () => {
 });
 
 /* ================================================================== *
+ * 5b. The TCP preflight — the ladder concludes in milliseconds (TOOL-10)
+ *
+ * The defect: with no server listening, the route ladder descended into
+ * `docker`, which on this platform does not return. Measured on this worktree
+ * before the fix — one CLI invocation had NOT finished at 30 037 ms and was
+ * killed (status null, signal SIGTERM, error.code ETIMEDOUT), last line printed
+ * `▶ prisma CLI : …`. This file drives that ladder NINE times against DEAD_URL,
+ * which is what overran `ci-gate.sh`'s 2400 s `test:api` stage (run 43: timed
+ * out at 2827 s, jest worker exitCode 143 = SIGTERM).
+ *
+ * The rule the whole design turns on, and the reason these cases are written in
+ * pairs: a wrong `open` costs one bounded ladder descent, a wrong `closed` is a
+ * gate that is red on correct code with no route back to green except deleting
+ * the check. Every choice is biased toward `open`.
+ *
+ * NOTE ON WHAT IS NOT EXECUTED HERE: no case invokes `docker`. That is not
+ * timidity — it is the premise. `docker port pilotage_postgres 5432/tcp` did not
+ * return within 150 s on this machine, `ps -W` lists `docker` processes orphaned
+ * by earlier runs, and starting a container is out of scope for this slice. The
+ * docker half is proven by (a) the bound being present at every call site, found
+ * by paren-balancing, and (b) `spawnSync`'s timeout being demonstrated to kill on
+ * this platform with a cheap node child.
+ * ================================================================== */
+
+describe('the TCP preflight settles the route ladder in milliseconds (TOOL-10)', () => {
+  /** A closed port on the loopback interface. 59999 rather than 5432: the CI DSN
+   * ports are matched by `production-artefact-check.js` rule A6 on string
+   * literals inside `apps/api/src` and would turn stage 0b red. */
+  const CLOSED_PORT = 59999;
+  /** RFC 5737 TEST-NET-1: routable-looking, never routed. Used to force the
+   * timeout path deterministically without depending on DNS behaviour. */
+  const BLACKHOLE_HOST = '192.0.2.1';
+  /** RFC 2606 reserves `.invalid` so it can never be delegated: `dns.lookup`
+   * answers `ENOTFOUND`, which is the OTHER `indeterminate` shape and the one
+   * that costs nothing to produce. Measured on this worktree: 288 ms. */
+  const UNRESOLVABLE_HOST = 'schema-drift-gate.invalid';
+
+  let server: ReturnType<typeof createServer> | null = null;
+  let listeningPort = 0;
+
+  beforeAll(async () => {
+    // Explicit loopback, and port 0 so the OS assigns one: a real listener is the
+    // only way to prove the probe can answer `open`, and a probe that could only
+    // ever answer `closed` would satisfy every other case in this file while
+    // making the gate permanently `tooling_unavailable` on a healthy machine.
+    const listening = createServer();
+    await new Promise<void>((ready) => {
+      listening.listen(0, '127.0.0.1', () => ready());
+    });
+    const address = listening.address();
+    listeningPort = typeof address === 'object' && address !== null ? address.port : 0;
+    server = listening;
+    expect(listeningPort).toBeGreaterThan(0);
+  });
+
+  afterAll(async () => {
+    const listening = server;
+    server = null;
+    if (listening) await new Promise<void>((closed) => listening.close(() => closed()));
+  });
+
+  it('answers BOTH directions, and each answer is bounded (AC-1)', () => {
+    const refusedAt = Date.now();
+    const refused = gate.probeAddress('127.0.0.1', CLOSED_PORT);
+    const refusedElapsed = Date.now() - refusedAt;
+    expect(refused.state).toBe('refused');
+    expect(refused.open).toBe(false);
+    expect(refused.detail).toContain('ECONNREFUSED');
+    expect(refused.loopback).toBe(true);
+
+    // THE POSITIVE CONTROL. Without it every other assertion here is satisfied by
+    // a function that always says "closed".
+    const openAt = Date.now();
+    const open = gate.probeAddress('127.0.0.1', listeningPort);
+    const openElapsed = Date.now() - openAt;
+    expect([open.state, open.open]).toEqual(['open', true]);
+
+    // Measured on this tree: 261-334 ms per call, including node boot. The bound
+    // is deliberately loose — it is here to catch "unbounded", not to police ms.
+    expect(refusedElapsed).toBeLessThan(5000);
+    expect(openElapsed).toBeLessThan(5000);
+  }, 30000);
+
+  it('walks EVERY address a name resolves to, not just the first (AC-P1)', () => {
+    // `dns.lookup('localhost', { all: true })` returns `::1` FIRST on this machine
+    // and on most modern runners, and `.github/workflows/ci.yml` addresses the
+    // NAME `localhost`, not a literal. A single-socket probe would connect to
+    // `::1`, take ECONNREFUSED from an IPv4-only PostgreSQL service, and report a
+    // route that works — `psql -h localhost` walks every address — as absent.
+    // This case fails on the naive implementation and passes on the correct one.
+    const open = gate.probeAddress('localhost', listeningPort);
+    expect([open.state, open.open]).toEqual(['open', true]);
+
+    const refused = gate.probeAddress('localhost', CLOSED_PORT);
+    expect(refused.state).toBe('refused');
+    expect(refused.addresses.length).toBeGreaterThan(0);
+  }, 30000);
+
+  it('only ECONNREFUSED is evidence of absence — everything else is indeterminate (AC-P2)', () => {
+    // A timeout is not "the server is not there": it is "the probe could not
+    // answer". Reading it as absence turns a loaded-but-alive CI PostgreSQL, a
+    // hostile NODE_OPTIONS, or a broken node invocation into a permanent gate
+    // failure. `indeterminate` descends the real ladder instead, which is now
+    // bounded by the second belt.
+    const timedOut = gate.probeAddress(BLACKHOLE_HOST, 5433, 400);
+    expect(timedOut.state).toBe('indeterminate');
+    expect(timedOut.state).not.toBe('refused');
+    // …and it is still not treated as a live server.
+    expect(timedOut.open).toBe(false);
+  }, 30000);
+
+  it('the CLI against a refused address concludes fast, names the ladder, and keeps its verdict (AC-2, AC-3, AC-4, AC-5)', () => {
+    const startedAt = Date.now();
+    const run = runInChild([], { DATABASE_URL: DEAD_URL });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(run.status).not.toBe(0);
+
+    // AC-P5: the elapsed bound ALONE would pass on a machine whose docker CLI is
+    // healthy — i.e. it could not fail on the defect it was written for. So the
+    // preflight must be shown to have run and to have produced this verdict.
+    expect(run.output).toContain(`nothing is accepting TCP at 127.0.0.1:${CLOSED_PORT}`);
+    expect(run.output).toContain('ECONNREFUSED');
+
+    // AC-3 / DNC-08: the run still describes itself, naming all three routes.
+    expect(run.output).toContain('prisma db execute');
+    expect(run.output).toContain('psql');
+    expect(run.output).toContain('pilotage_postgres');
+    expect(run.output).toMatch(/SCHEMA DRIFT CHECK: FAIL/);
+
+    // AC-4, the load-bearing anti-regression: the verdict did NOT move. Dropping
+    // `error.routeFailure` would slide it to `unreachable_server`, which is also
+    // exit 1 and would satisfy every other assertion here while desyncing
+    // docs/runbooks/backup-restore-drill.md §8.
+    expect(run.output).toContain('SCHEMA DRIFT CHECK: FAIL — tooling_unavailable');
+
+    // AC-2 / AC-5: before the preflight this was unbounded — one invocation had
+    // NOT finished at 30 037 ms and had to be killed, its last line still
+    // `▶ prisma CLI : …`. Measured after, on this worktree: 442-598 ms across
+    // three runs. 20 s is a ceiling with room for a loaded runner, not a target.
+    expect(elapsedMs).toBeLessThan(20000);
+  }, 60000);
+
+  it('an INDETERMINATE probe descends the real ladder — only a refusal may stop it (AC-P16)', () => {
+    // THE MUTANT THIS CASE EXISTS FOR, and it is not hypothetical: the review
+    // panel on this slice built it and it left all 123 other cases green.
+    // Replace `pre.state === 'refused'` with `!pre.open` at the two call sites in
+    // `query()`/`exec()` and every other assertion in this file still passes —
+    // while the gate becomes permanently RED on any machine whose probe cannot
+    // answer inside its budget (a loaded runner, a hostile NODE_OPTIONS, a DNS
+    // hiccup), because "the probe could not answer" would be read as "no server
+    // exists". `open` is false for BOTH `refused` and `indeterminate`; only
+    // `refused` is evidence, and nothing above this line can tell the two apart
+    // at a call site. AC-P2 pins the distinction inside `probeAddress`; this pins
+    // that the CALLERS honour it.
+    //
+    // The premise is asserted before the behaviour, so a resolver that hijacks
+    // NXDOMAIN fails this case loudly instead of passing it vacuously.
+    const probe = gate.probeAddress(UNRESOLVABLE_HOST, 5433);
+    expect([probe.state, probe.open]).toEqual(['indeterminate', false]);
+
+    const run = runInChild([], {
+      DATABASE_URL: `postgresql://pilotage:pilotage@${UNRESOLVABLE_HOST}:5433/pilotage?schema=public`,
+    });
+
+    // The short-circuit narration is absent: the ladder was NOT stopped.
+    // MEASURED against the mutant, both directions, rather than assumed —
+    // correct code prints this 0 times, the mutant prints it twice.
+    expect(run.output).not.toContain('settles the ladder');
+    // Route B was really ATTEMPTED, not narrated. The two forms are what tell
+    // them apart: a real attempt reports what the spawn did (`spawnSync psql
+    // ENOENT` on a host with no client, an exit code on one that has it), while
+    // the short-circuit substitutes a sentence explaining why it was skipped.
+    // Asserting the presence of `B. host psql` alone would NOT discriminate —
+    // the mutant prints that prefix too.
+    expect(run.output).toContain('B. host psql —');
+    expect(run.output).not.toContain('B. host psql — it connects to that same address');
+    // It still fails, and still with the same verdict: descending the ladder is
+    // not a way back to green.
+    expect(run.output).toContain('SCHEMA DRIFT CHECK: FAIL — tooling_unavailable');
+    expect(run.status).not.toBe(0);
+  }, 180000);
+
+  it('`unreachable_server` still exists — the two verdicts were not collapsed (AC-P13)', () => {
+    expect(evaluateDrift({ ...healthyRun(), serverReachable: false, toolingAvailable: true }).verdict).toBe(
+      'unreachable_server',
+    );
+    expect(
+      evaluateDrift({ ...healthyRun(), serverReachable: false, toolingAvailable: false }).verdict,
+    ).toBe('tooling_unavailable');
+  });
+
+  it('every `docker` invocation is bounded, and the extractor proves it found them (AC-6)', () => {
+    const sites = callSites(EXECUTABLE_SCRIPT, /run\(\s*'docker'/);
+    // Non-vacuity FIRST. An extractor that matched nothing would make the loop
+    // below pass without reading a single call site.
+    expect(sites.length).toBeGreaterThanOrEqual(2);
+    // …and it found the right two, so an extractor returning garbage cannot pass.
+    expect(sites.filter((site) => site.includes("'port'")).length).toBeGreaterThan(0);
+    expect(sites.filter((site) => site.includes("'exec'")).length).toBeGreaterThan(0);
+    for (const site of sites) {
+      expect([site.slice(0, 40), site.includes('timeoutMs')]).toEqual([site.slice(0, 40), true]);
+    }
+  });
+
+  it('the package-manager fallback is bounded too — it is on the same path (AC-P6)', () => {
+    // `resolvePrismaCli()`'s `pnpm --filter … exec prisma --version` runs whenever
+    // `require.resolve` misses (a non-hoisted or partial install), and
+    // `probeServer` reaches it before any query. Bounding docker and leaving this
+    // one would be bounding half the problem.
+    const sites = callSites(EXECUTABLE_SCRIPT, /run\(\s*'pnpm'/);
+    expect(sites.length).toBeGreaterThan(0);
+    for (const site of sites) expect(site).toContain('timeoutMs');
+  });
+
+  it('an overrun spawn is reported as a NAMED bound, not a raw ETIMEDOUT (AC-7)', () => {
+    // The platform fact the branch rests on, measured here rather than assumed:
+    // `spawnSync`'s own timeout really kills on Windows (libuv maps it to
+    // TerminateProcess) and reports ETIMEDOUT — where bash `timeout` demonstrably
+    // does not kill the docker CLI at all.
+    const killed = spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { timeout: 1500 });
+    expect((killed.error as NodeJS.ErrnoException | undefined)?.code).toBe('ETIMEDOUT');
+    expect(killed.status).toBeNull();
+
+    // …and `run()` turns exactly that into a sentence carrying the number, the
+    // same register `scripts/tracing-check.js` and `scripts/boot-check.js` use.
+    expect(EXECUTABLE_SCRIPT).toContain("result.error.code === 'ETIMEDOUT'");
+    expect(EXECUTABLE_SCRIPT).toContain('did not answer within ');
+    expect(EXECUTABLE_SCRIPT).toContain('and was killed');
+  }, 30000);
+
+  it('probeServer takes the same fast path and its contract is unchanged (AC-8)', () => {
+    // It is paid at MODULE SCOPE by this very file on every jest run of it.
+    const startedAt = Date.now();
+    expect(gate.probeServer(DEAD_URL)).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(5000);
+
+    // The contract itself: true ONLY on a positive `SELECT 1;` row. A bare TCP
+    // listener is therefore NOT enough to make it true, and deliberately so — the
+    // positive control for the probe layer is the `open` case above, not this one.
+    expect(EXECUTABLE_SCRIPT).toMatch(/function probeServer[\s\S]{0,900}rows\.length > 0/);
+    // …and the preflight runs BEFORE the CLI resolution it used to sit behind.
+    const body = /function probeServer\(baseUrl\)[\s\S]*?\n}/.exec(EXECUTABLE_SCRIPT)?.[0] ?? '';
+    expect(body).not.toBe('');
+    expect(body.indexOf('probeAddress')).toBeGreaterThan(-1);
+    expect(body.indexOf('probeAddress')).toBeLessThan(body.indexOf('resolvePrismaCli'));
+  });
+
+  it('a host-side probe does not silently delete route C (AC-P3)', () => {
+    // Routes A and B open a TCP connection to the resolved address, so one probe
+    // settles them exactly. Route C — `docker exec pilotage_postgres psql` —
+    // connects from INSIDE the container and does not traverse that address at
+    // all; what ties it to the probe is `containerAddressesTheUrl()`, which
+    // requires the container to publish the URL's port on this machine. So the
+    // whole ladder stops only when the address is BOTH refused AND loopback;
+    // anything else still tries C, now bounded.
+    const predicate = /function preflightSettlesTheAddress\([\s\S]*?\n}/.exec(EXECUTABLE_SCRIPT)?.[0] ?? '';
+    expect(predicate).not.toBe('');
+    expect(predicate).toContain("state === 'refused'");
+    expect(predicate).toContain('loopback');
+    expect(gate.probeAddress('127.0.0.1', CLOSED_PORT).loopback).toBe(true);
+  }, 30000);
+
+  it('exec() refuses a URL on another server rather than reusing the memoised probe (AC-P7)', () => {
+    // The preflight is memoised for ONE address and `exec` takes a URL. Today
+    // every caller derives it from the same base (only the database segment
+    // moves), but nothing enforced it — and a memoised "refused" applied to a URL
+    // on a different server is a wrong verdict waiting for the next caller.
+    // No child is spawned by this case: the guard fires before any route.
+    const routes = gate.openSqlRoutes(DEAD_URL);
+    expect(() => routes.exec(LOCAL_URL, 'SELECT 1;')).toThrow(/one server/);
+  });
+
+  it('the embedded probe source is executable code, and obeys DNC-10 (AC-P8)', () => {
+    // Read from the RAW source: the literal lives inside EXECUTABLE_SCRIPT, so
+    // asserting "it contains no `//`" against the already-blanked text would be
+    // circular.
+    // Terminated on a line that STARTS with `].join(` — the array's own closing
+    // bracket. Anchoring on `.join(` alone would stop at `errors.join(` inside the
+    // child source and silently truncate what is scanned.
+    const literal = /const TCP_PROBE_SOURCE = \[[\s\S]*?\r?\n\]\.join\(/.exec(SCRIPT_SOURCE)?.[0] ?? '';
+    expect(literal).not.toBe('');
+    expect(literal).toContain('node:net');
+    expect(literal).toContain('dns.lookup');
+
+    // A string literal in executable position IS executable source to every pin in
+    // this file. A `//` inside it would be blanked to end of line by
+    // `executableJs`, silently corrupting what those pins read.
+    expect(literal).not.toContain('//');
+    expect(literal).not.toContain('process.env');
+    // ADR-025 D6: host and port reach the child, never a connection string.
+    expect(literal).not.toContain('://');
+    expect(literal.toLowerCase()).not.toContain('skip');
+    for (const token of ['SKIP_', 'ALLOW_', 'BYPASS', '--force', '--update', '--allow', '--source']) {
+      expect([token, literal.includes(token)]).toEqual([token, false]);
+    }
+  });
+
+  it('no probe child is ever handed a connection string (ADR-025 D6, AC-P9)', () => {
+    const sites = callSites(EXECUTABLE_SCRIPT, /run\(\s*\n?\s*process\.execPath/);
+    expect(sites.length).toBeGreaterThan(0);
+    for (const site of sites) {
+      expect([site.slice(0, 40), site.includes('://')]).toEqual([site.slice(0, 40), false]);
+    }
+    // The signature is (host, port, timeoutMs) — never a URL.
+    expect(EXECUTABLE_SCRIPT).toMatch(/function probeAddress\(host, port, timeoutMs/);
+  });
+
+  it('the budgets are named constants, not magic numbers on the gate path (AC-P15)', () => {
+    expect(gate.TCP_PREFLIGHT_TIMEOUT_MS).toBe(2000);
+    expect(gate.DOCKER_TIMEOUT_MS).toBe(5000);
+    expect(EXECUTABLE_SCRIPT).toContain('TCP_PREFLIGHT_TIMEOUT_MS');
+    expect(EXECUTABLE_SCRIPT).toContain('DOCKER_TIMEOUT_MS');
+
+    // The docker CONTROL plane (`docker port`, a metadata lookup) and the docker
+    // DATA plane (`docker exec … psql`, which carries CREATE/DROP DATABASE) do
+    // not share a bound, and that is deliberate — a review finding on this
+    // slice. Collapsing them back onto one number would kill a legitimate
+    // `CREATE DATABASE` on a cold Docker Desktop and report
+    // `scratch_create_failed` on correct code, and `run()`'s bound does not kill
+    // grandchildren, so the orphaned scratch database would survive it.
+    expect(gate.DOCKER_EXEC_TIMEOUT_MS).toBe(120000);
+    expect(gate.DOCKER_EXEC_TIMEOUT_MS).toBeGreaterThan(gate.DOCKER_TIMEOUT_MS);
+    const execSite = callSites(EXECUTABLE_SCRIPT, /run\(\s*'docker',\s*\[\s*'exec'/);
+    expect(execSite).toHaveLength(1);
+    expect(execSite[0]).toContain('DOCKER_EXEC_TIMEOUT_MS');
+  });
+
+  it('ci-gate.sh was not touched — raising the bound is the wrong fix (AC-12)', () => {
+    // `2bd1a25` already raised the `test:api` bound once, on the misreading this
+    // slice removes. The stage bound is read here, never written.
+    const gateSource = readFileSync(GATE_PATH, 'utf8');
+    expect(gateSource).toContain(SCRIPT_REF);
+    expect(gateSource).toContain('2400');
+  });
+});
+
+/* ================================================================== *
  * 6. One agreement against a real PostgreSQL — guarded, never silent
  *
  * ORDERING NOTE, load-bearing: the full-CLI cases run FIRST, because the CLI
@@ -826,7 +1210,8 @@ describe('there is no way to turn this gate off, and no way to skip it', () => {
  * only after the CLI has finished.
  * ================================================================== */
 
-const reachable = gate.probeServer(process.env.DATABASE_URL || LOCAL_URL);
+const PROBE_URL = process.env.DATABASE_URL || LOCAL_URL;
+const reachable = gate.probeServer(PROBE_URL);
 const describeWithDb = reachable ? describe : describe.skip;
 
 if (!reachable) {
@@ -834,8 +1219,24 @@ if (!reachable) {
   // `apps/api/eslint.config.js` sets `no-console: 'off'`, so the directive would
   // itself be an unused-directive warning that the lint ratchet catches — which
   // is how it caught `link-integrity-gate.spec.ts`.
+  //
+  // It names WHY, not just that (TOOL-10 / AC-P4): a false negative here does not
+  // merely fail a stage — it turns the whole end-to-end block, including "the
+  // unmodified repository PASSES", into `describe.skip` and reports green. That
+  // is DNC-08 committed at the address of the DNC-08 guard, so the reason has to
+  // be readable without re-running anything.
+  let why = 'the probe could not describe itself';
+  try {
+    const target = new URL(PROBE_URL);
+    const probe = gate.probeAddress(target.hostname, target.port || '5432');
+    why =
+      `${target.hostname}:${target.port || '5432'} — ${probe.state}: ${probe.detail} ` +
+      `(after ${probe.elapsedMs} ms)`;
+  } catch {
+    why = 'DATABASE_URL is not a usable connection string';
+  }
   console.warn(
-    `[schema-drift-gate] no PostgreSQL server answered at ${process.env.DATABASE_URL ? 'DATABASE_URL' : '127.0.0.1:5433'} — ` +
+    `[schema-drift-gate] no PostgreSQL server answered at ${why} — ` +
       `the end-to-end cases are skipped. Every classifier, verdict, safety, wiring and DNC case in ` +
       `this file is deterministic and ran. The gate itself is stage 0d of ci-gate.sh, which DOES ` +
       `require a database and fails rather than skipping (ADR-027).`,

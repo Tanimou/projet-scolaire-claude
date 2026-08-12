@@ -80,6 +80,21 @@ if (!existsSync(appDir)) {
   process.exit(2);
 }
 
+/**
+ * Above this, "it probably failed to start" is not a claim this script is
+ * entitled to make (TOOL-10).
+ *
+ * A jest that cannot start fails in seconds — a missing module, a broken config,
+ * a transform error. A jest that ran for minutes and produced no report was
+ * TERMINATED. On Windows an external kill (the CI job's own limit, a `timeout`
+ * wrapper, the OOM killer) frequently surfaces as a plain non-zero exit code with
+ * `signal === null`, so a branch written on `res.signal` alone would fall through
+ * to the startup-fault sentence and re-commit the misdirection this bound exists
+ * to remove. 30 s is far above any observed startup failure and far below the
+ * 2400 s stage bound.
+ */
+const STARTUP_FAULT_CEILING_MS = 30000;
+
 /** Run jest and return its structured result, independent of the process exit code. */
 function runJest() {
   const scratch = mkdtempSync(join(tmpdir(), 'ratchet-'));
@@ -103,14 +118,55 @@ function runJest() {
   const jestArgs = [jestBin, '--ci', '--silent', '--json', `--outputFile=${outFile}`];
   if (skip) jestArgs.push(`--testPathIgnorePatterns=${skip}`, '--testPathIgnorePatterns=/node_modules/');
 
+  const startedAt = Date.now();
   const res = spawnSync(process.execPath, jestArgs, {
     cwd: appDir,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const elapsedMs = Date.now() - startedAt;
 
   if (!existsSync(outFile)) {
-    console.error(`test-ratchet: jest produced no report for ${app}. It probably failed to start.`);
+    // "It probably failed to start." was printed here unconditionally, and on
+    // 2026-08-12 it was printed about a jest that had been KILLED at the stage
+    // bound (worker exitCode 143 = SIGTERM). That sentence sent the next
+    // investigator to look for a startup fault that did not exist, and the
+    // "fix" it produced was raising the bound (2bd1a25). So the branch now reads
+    // what actually happened and says which it was.
+    //
+    // The raw triple is printed in EVERY branch: a claim about why a child
+    // vanished must show the evidence it was made from.
+    const seen = `status=${res.status} signal=${res.signal || 'none'} spawnError=${
+      res.error ? res.error.code || res.error.message : 'none'
+    }`;
+    if (res.error) {
+      // Checked FIRST, and deliberately: spawnSync's own `timeout` sets
+      // `error.code === 'ETIMEDOUT'` AND `signal === 'SIGTERM'` AND
+      // `status === null` all at once (measured), so the signal branch below
+      // would otherwise swallow it. This branch therefore carries the same
+      // "did NOT fail to start" clause.
+      console.error(
+        `test-ratchet: jest produced no report for ${app} after ${elapsedMs} ms — the child process ` +
+          `itself faulted: ${res.error.code || res.error.message} (${seen}). It did NOT fail to start ` +
+          `for lack of an install; node could not run it to completion.`,
+      );
+    } else if (res.signal || res.status === null) {
+      console.error(
+        `test-ratchet: jest produced no report for ${app} after ${elapsedMs} ms — it was TERMINATED by ` +
+          `${res.signal || 'an external kill'} (${seen}). It did NOT fail to start: it was running when ` +
+          `something stopped it, so look for the bound that expired (a CI job limit, a stage timeout, the ` +
+          `OOM killer), not for a broken install.`,
+      );
+    } else if (elapsedMs >= STARTUP_FAULT_CEILING_MS) {
+      console.error(
+        `test-ratchet: jest produced no report for ${app} after ${elapsedMs} ms and exited ${res.status} ` +
+          `(${seen}). That is far longer than any startup fault takes, so it ran and was then stopped — it ` +
+          `did NOT fail to start. Look for the bound that expired.`,
+      );
+    } else {
+      console.error(`test-ratchet: jest produced no report for ${app}. It probably failed to start.`);
+      console.error(`  (${seen}, after ${elapsedMs} ms)`);
+    }
     console.error(res.stderr || res.stdout || '(no output)');
     rmSync(scratch, { recursive: true, force: true });
     process.exit(2);

@@ -90,6 +90,31 @@
  *  10. the scratch database was dropped       → its own verdict, never swallowed,
  *      and it never downgrades a drift verdict.
  *
+ * HOW LONG IT TAKES TO SAY "UNREACHABLE" (TOOL-10)
+ * ------------------------------------------------
+ * Checks 1 and 2 above FAIL rather than skip, and that is right. What was wrong
+ * was how long they took to find out: with no server listening, the route ladder
+ * descended into `docker`, which on this platform does not return — measured, a
+ * single invocation was still running at >4 minutes, and `ps -W` lists orphaned
+ * `docker` processes from earlier runs that bash `timeout` failed to kill. The
+ * guard spec drives that ladder nine times, which is what overran `ci-gate.sh`'s
+ * 2400 s `test:api` stage.
+ *
+ * So there are two belts, and neither changes a verdict:
+ *
+ *   • a bounded TCP PREFLIGHT (`probeAddress`) settles "is anything listening at
+ *     this address" in ~260 ms, out of process. Only `ECONNREFUSED` from every
+ *     resolved address short-circuits the ladder; a timeout or a resolution
+ *     failure descends it, because a probe that cannot answer is not evidence a
+ *     server is absent. The short-circuit throws the SAME `routeFailure` error,
+ *     so the verdict stays `tooling_unavailable`, exit 1, byte for byte.
+ *   • every `docker` and package-manager spawn carries a `spawnSync`-level
+ *     `timeout`, which really kills on Windows where bash `timeout` does not, and
+ *     a kill is surfaced as a NAMED bound ("did not answer within N ms and was
+ *     killed") rather than a raw `ETIMEDOUT`.
+ *
+ * Raising the gate's stage timeout is NOT the fix and was tried once (2bd1a25).
+ *
  * THE ONE DANGEROUS PART — read before editing
  * --------------------------------------------
  * This script CREATES and DROPS a database on a real server. Every destructive
@@ -182,6 +207,67 @@ const SCRATCH_NAME_PATTERN = /^schema_drift_\d+$/;
  * handful of tables means the deploy did not happen, not that the schema is small.
  */
 const MIN_EXPECTED_TABLES = 50;
+
+/**
+ * The TCP preflight's budget, and why 2000 is generous rather than arbitrary.
+ *
+ * MEASURED on this tree while writing TOOL-10: a full out-of-process probe of a
+ * closed loopback port — spawn `node`, resolve the host, connect, report — costs
+ * **261-334 ms wall clock including node boot**. 2000 ms is therefore ~6× the
+ * observed round trip, which leaves room for a loaded CI runner without ever
+ * being the thing an operator waits on.
+ *
+ * It is a budget, never a verdict: a probe that times out is INDETERMINATE, not
+ * "closed" (see `probeAddress`). Reading a timeout as absence is how a loaded but
+ * healthy PostgreSQL would turn this gate permanently red on correct code.
+ */
+const TCP_PREFLIGHT_TIMEOUT_MS = 2000;
+
+/** Slack over the in-child budget so the hard `spawnSync` bound is the SECOND
+ * belt, not the first: the child should answer on its own and report an errno,
+ * and only a child that cannot answer at all is killed from outside. */
+const TCP_PREFLIGHT_SPAWN_SLACK_MS = 3000;
+
+/**
+ * The bound on the docker CONTROL plane — `docker port`, which asks the daemon
+ * for a port mapping and computes nothing. Measured on this machine
+ * (2026-08-12): under `spawnSync` `timeout: 5000` it returned at **5024 ms**
+ * with `status null`, `signal SIGTERM`, `error.code ETIMEDOUT` — the docker CLI
+ * here does not answer in 5 s, and the bound is real. Unbounded, the same call
+ * did not return within 150 s. Re-measured end to end after the change: a run
+ * whose preflight is `indeterminate` descends the ladder and concludes in
+ * **5841 ms**, its output naming `docker did not answer within 5000 ms and was
+ * killed` — a bound an operator can read, where bash `timeout` left orphans.
+ */
+const DOCKER_TIMEOUT_MS = 5000;
+
+/**
+ * The bound on the docker DATA plane — `docker exec … psql`, which is route C.
+ * It is deliberately NOT `DOCKER_TIMEOUT_MS`, and the asymmetry was a review
+ * finding on this slice rather than a guess: route C is the route that works on
+ * the local Windows stack (there is no host `psql` here), and what travels over
+ * it is `CREATE DATABASE … TEMPLATE template0` and `DROP DATABASE … WITH
+ * (FORCE)`, not a metadata lookup. A cold `docker exec` on Docker Desktop
+ * routinely spends 1–3 s before `psql` even starts, and `run()`'s bound does not
+ * kill grandchildren — so a control-plane bound applied here would kill a
+ * legitimate `CREATE` partway and report `scratch_create_failed` on correct
+ * code, possibly leaving an orphan `schema_drift_*` database behind. Two minutes
+ * is far above any healthy round trip and still a bound: the unbounded case is
+ * what this slice exists to remove.
+ *
+ * It is reached only when the preflight did NOT refuse the address — i.e. when
+ * something is listening — so it cannot lengthen the unreachable path the gate
+ * pays on every PR.
+ */
+const DOCKER_EXEC_TIMEOUT_MS = 120000;
+
+/**
+ * The bound on the Prisma CLI fallback probe. It is the file's other spawn that
+ * can reach a package manager, and it sits on the same critical path
+ * (`probeServer` → `resolvePrismaCli`), so bounding docker and leaving this one
+ * would be bounding half of the problem.
+ */
+const PRISMA_CLI_PROBE_TIMEOUT_MS = 60000;
 
 /* ================================================================== *
  * The pure verdict layer — no IO, no clock, no environment.
@@ -584,6 +670,24 @@ function evaluateDrift(input) {
  * escape, never as a literal control character. */
 const FIELD_SEP = String.fromCharCode(31);
 
+/**
+ * `options.timeoutMs` reaches `spawnSync`'s own `timeout`, and that distinction is
+ * the whole point (TOOL-10): bash's `timeout` demonstrably does NOT kill a hung
+ * `docker` on Windows — `ps -W` on this machine still lists `docker` processes
+ * dated Aug 10, orphaned by earlier runs that thought they had bounded it —
+ * while `spawnSync`'s bound does, because libuv maps the kill to
+ * `TerminateProcess`. Measured here: `spawnSync(node, ['-e','setTimeout(…,60000)'],
+ * { timeout: 1500 })` returned at 1524 ms with `status null`, `signal SIGTERM`,
+ * `error.code ETIMEDOUT`.
+ *
+ * That `ETIMEDOUT` is surfaced as a NAMED bound rather than a raw errno, the same
+ * register `scripts/tracing-check.js:579-590` and `scripts/boot-check.js:228-234`
+ * already use: an operator must read a number they can act on, not a mystery.
+ *
+ * MEASURED LIMITATION, stated rather than implied: the bound guarantees the CALL
+ * returns. It does not guarantee the CLI's own grandchildren die — the orphans
+ * above outlived their parents. Cleaning those up is a separate finding.
+ */
 function run(command, argv, options = {}) {
   const result = spawnSync(command, argv, {
     encoding: 'utf8',
@@ -591,12 +695,22 @@ function run(command, argv, options = {}) {
     cwd: options.cwd || REPO_ROOT,
     maxBuffer: 64 * 1024 * 1024,
     shell: false,
+    timeout: options.timeoutMs,
     env: options.env ? { ...process.env, ...options.env } : process.env,
   });
+  const timedOut = Boolean(result.error && result.error.code === 'ETIMEDOUT');
+  const stderr = timedOut
+    ? `${command} did not answer within ${options.timeoutMs} ms and was killed`
+    : result.error
+      ? String(result.error.message)
+      : result.stderr
+        ? String(result.stderr)
+        : '';
   return {
     status: result.error ? -1 : result.status,
     stdout: result.stdout ? String(result.stdout) : '',
-    stderr: result.error ? String(result.error.message) : result.stderr ? String(result.stderr) : '',
+    stderr,
+    timedOut,
   };
 }
 
@@ -609,6 +723,173 @@ function parseUrl(url) {
     user: decodeURIComponent(parsed.username || 'postgres'),
     password: decodeURIComponent(parsed.password || ''),
     database: decodeURIComponent((parsed.pathname || '/').slice(1)) || 'postgres',
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * The TCP preflight (TOOL-10)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The probe body, run in a CHILD via `node -e`, and the three reasons it is
+ * spelled exactly this way.
+ *
+ * 1. **A child, not an in-process socket.** The whole call chain below is
+ *    synchronous `spawnSync`; `net.Socket` is not. A child is the only way to ask
+ *    a socket question from a synchronous ladder.
+ * 2. **`-e` rather than re-entering `__filename` with a flag** (the spelling
+ *    `scripts/boot-check.js:224` uses). That would put a second flag in front of
+ *    `parseArgs`, whose surface `schema-drift-gate.spec.ts` pins to exactly
+ *    `['--help','-h']` — a DNC-10 violation to buy a convenience.
+ * 3. **Inline rather than a `scripts/tcp-probe.js`** (the spelling
+ *    `scripts/tracing-check.js:577` uses). That adds a file to a SHARED path for
+ *    one function.
+ *
+ * `process.argv[1..]` carries the arguments under `-e` (verified:
+ * `node -e "console.log(process.argv[1])" foo` prints `foo`). Only `host`, `port`
+ * and the budget are passed — NEVER a connection string, because argv is
+ * published by the host process table (ADR-025 D6, the same exposure `--from-url`
+ * was rejected for).
+ *
+ * It resolves the host with `dns.lookup(host, { all: true })` and races EVERY
+ * resolved address, which is not defensive padding: `dns.lookup('localhost')`
+ * returns `::1` first on this machine and on most CI runners, `ci.yml:156`
+ * addresses the NAME `localhost`, and a PostgreSQL service published on IPv4 only
+ * refuses on `::1` while `psql -h localhost` — which walks every address —
+ * connects fine. A single-socket probe would report a working route as absent.
+ *
+ * Three states, never two. Only `ECONNREFUSED` from EVERY resolved address is
+ * evidence the server is absent; a timeout, `ENOTFOUND`, `EHOSTUNREACH`, a child
+ * that cannot start or output that will not parse are `indeterminate`, and
+ * `indeterminate` descends the real ladder. The asymmetry is the design: a wrong
+ * `open` costs one bounded ladder descent, a wrong `refused` is a gate that is red
+ * on correct code with no route back to green.
+ *
+ * Read as EXECUTABLE SOURCE by the guard spec, because a string literal is code:
+ * it therefore contains no `process.env` read, no `//` (which the spec's comment
+ * blanker would eat to end of line, silently corrupting what the other assertions
+ * read), and none of the tokens DNC-10 forbids.
+ */
+const TCP_PROBE_SOURCE = [
+  "const net = require('node:net');",
+  "const dns = require('node:dns');",
+  'const host = process.argv[1];',
+  'const port = Number(process.argv[2]);',
+  'const budget = Number(process.argv[3]);',
+  'const sockets = [];',
+  'let settled = false;',
+  'const finish = (state, detail, addresses) => {',
+  '  if (settled) return;',
+  '  settled = true;',
+  '  for (const socket of sockets) socket.destroy();',
+  '  process.stdout.write(JSON.stringify({ state: state, detail: detail, addresses: addresses }));',
+  '};',
+  'dns.lookup(host, { all: true }, (lookupError, resolved) => {',
+  "  if (lookupError) return finish('indeterminate', String(lookupError.code || lookupError.message), []);",
+  '  const list = (resolved || []).map((entry) => entry.address);',
+  "  if (list.length === 0) return finish('indeterminate', 'the host resolved to no address', []);",
+  '  const errors = [];',
+  '  let pending = list.length;',
+  '  for (const address of list) {',
+  '    const socket = net.connect({ host: address, port: port });',
+  '    sockets.push(socket);',
+  '    socket.setTimeout(budget);',
+  "    socket.once('connect', () => finish('open', 'connected to ' + address, list));",
+  "    socket.once('timeout', () => socket.destroy(new Error('timed out after ' + budget + ' ms')));",
+  "    socket.once('error', (error) => {",
+  "      errors.push(address + ' ' + String(error.code || error.message));",
+  '      pending -= 1;',
+  '      if (pending > 0) return;',
+  "      const allRefused = errors.every((entry) => entry.indexOf('ECONNREFUSED') !== -1);",
+  "      finish(allRefused ? 'refused' : 'indeterminate', errors.join('; '), list);",
+  '    });',
+  '  }',
+  '});',
+].join('\n');
+
+/** A resolved address that can only be this machine. Used to decide whether the
+ * container route (which connects from INSIDE the container, not through the host
+ * address) is settled by a host-side probe. */
+function isLoopbackAddress(address) {
+  const value = String(address);
+  return value === '::1' || value === '0:0:0:0:0:0:0:1' || /^127\./.test(value);
+}
+
+/**
+ * The one predicate that may stop the WHOLE ladder, routes A, B and C together.
+ *
+ * Both conditions, and neither is decoration: `refused` (never a timeout, never a
+ * resolution failure — those are not evidence of absence) AND every resolved
+ * address is on this machine (or route C, which connects from inside the
+ * container, is not covered by a host-side probe at all).
+ */
+function preflightSettlesTheAddress(preflight) {
+  return Boolean(preflight) && preflight.state === 'refused' && preflight.loopback === true;
+}
+
+/**
+ * Is anything accepting TCP at `host:port`?
+ *
+ * Returns `{ open, state, detail, addresses, loopback, elapsedMs }`.
+ * `state` is `'open' | 'refused' | 'indeterminate'` and it is the field callers
+ * must branch on: `open` is false for BOTH `refused` and `indeterminate`, because
+ * a probe that could not answer is never treated as a live server — but only
+ * `refused` is evidence strong enough to stop a ladder.
+ *
+ * The `spawnSync` carries its own hard bound on top of the in-child budget, so
+ * even the preflight is bounded.
+ */
+function probeAddress(host, port, timeoutMs = TCP_PREFLIGHT_TIMEOUT_MS) {
+  const requested = Number(timeoutMs);
+  const budget = Number.isFinite(requested) && requested > 0 ? requested : TCP_PREFLIGHT_TIMEOUT_MS;
+  const startedAt = Date.now();
+  const child = run(
+    process.execPath,
+    ['-e', TCP_PROBE_SOURCE, String(host), String(port), String(budget)],
+    { timeoutMs: budget + TCP_PREFLIGHT_SPAWN_SLACK_MS },
+  );
+  const elapsedMs = Date.now() - startedAt;
+
+  let answer = null;
+  try {
+    answer = JSON.parse(child.stdout.trim());
+  } catch {
+    answer = null;
+  }
+
+  if (!answer || typeof answer.state !== 'string') {
+    // A child that could not answer says nothing about the server. Indeterminate,
+    // so the caller descends the real ladder rather than concluding absence.
+    return {
+      open: false,
+      state: 'indeterminate',
+      detail: child.stderr.trim() || `the probe produced no verdict (exit ${child.status})`,
+      addresses: [],
+      loopback: false,
+      elapsedMs,
+    };
+  }
+
+  const addresses = Array.isArray(answer.addresses) ? answer.addresses : [];
+  const loopback = addresses.length > 0 && addresses.every(isLoopbackAddress);
+  if (answer.state === 'open') {
+    return {
+      open: true,
+      state: 'open',
+      detail: String(answer.detail || 'connected'),
+      addresses,
+      loopback,
+      elapsedMs,
+    };
+  }
+  const state = answer.state === 'refused' ? 'refused' : 'indeterminate';
+  return {
+    open: false,
+    state,
+    detail: String(answer.detail || state),
+    addresses,
+    loopback,
+    elapsedMs,
   };
 }
 
@@ -627,7 +908,9 @@ function resolvePrismaCli() {
   } catch (error) {
     tried.push(`require.resolve('prisma/build/index.js', { paths: ['apps/api'] }) — ${error.message}`);
   }
-  const probe = run('pnpm', ['--filter', '@pilotage/api', 'exec', 'prisma', '--version']);
+  const probe = run('pnpm', ['--filter', '@pilotage/api', 'exec', 'prisma', '--version'], {
+    timeoutMs: PRISMA_CLI_PROBE_TIMEOUT_MS,
+  });
   if (probe.status === 0) {
     return {
       command: 'pnpm',
@@ -695,10 +978,79 @@ function makeSqlRoutes(cli, source) {
     database,
   ];
 
+  /* ---------------------------------------------------------------- *
+   * The TCP preflight, and why one probe of one address settles a ladder of
+   * three routes (TOOL-10).
+   *
+   * ROUTES A AND B: settled exactly. Both open a TCP connection to
+   * `source.host:source.port` — A through `prisma db execute` with
+   * `DATABASE_URL` in the child environment, B through `psql -h -p`. Every URL
+   * this script ever opens is that same address: `buildScratchUrl()` and
+   * `deriveMaintenanceUrl()` replace ONLY the database path segment (the former
+   * is pinned to that by `schema-drift-gate.spec.ts`'s "replaces ONLY the
+   * database segment" case), so host, port, user, password and query string are
+   * invariant across the maintenance URL, the scratch URL and the base URL. One
+   * probe therefore covers all of them.
+   *
+   * ROUTE C: settled only when the address is LOOPBACK, and the asymmetry is
+   * real rather than pedantic. `docker exec pilotage_postgres psql` does not
+   * traverse the host address at all — it connects from inside the container.
+   * What ties it to the probe is `containerAddressesTheUrl()`, which requires
+   * the container to PUBLISH the URL's port, and `infra/docker-compose.yml`
+   * publishes `${POSTGRES_PORT}:5432` on all interfaces. So when the URL names
+   * this machine, nothing listening on that host port means either no such
+   * publication or a dead proxy, and C is refused by its own guard either way.
+   * When the URL names something else — a compose service name, a remote — the
+   * host probe says nothing about C, so C is still TRIED, now bounded — its
+   * port lookup at DOCKER_TIMEOUT_MS, its SQL at DOCKER_EXEC_TIMEOUT_MS, which
+   * are different numbers for the reason stated at their declarations. That
+   * direction costs seconds in a configuration this repository does not
+   * currently use; the other direction would be a false RED.
+   *
+   * Probed ONCE, LAZILY (on first `query()`/`exec()`, never at construction —
+   * `openSqlRoutes()` is called in cheap contexts), memoised on this closure and
+   * NEVER at module scope: a `LOCAL_URL` routes object and a dead-address one
+   * coexist in the same jest process, and a module-global memo would answer for
+   * the wrong address.
+   * ---------------------------------------------------------------- */
+  let preflight = null;
+  const runPreflight = () => {
+    if (preflight === null) preflight = probeAddress(source.host, source.port);
+    return preflight;
+  };
+
+  const preflightHeadline = (pre) =>
+    `nothing is accepting TCP at ${source.host}:${source.port} (${pre.detail} after ${pre.elapsedMs} ms)`;
+
+  /** ONE composer for the short-circuit narration, used by both `query()` and
+   * `exec()`. Two hand-written copies of a message this specific diverge, and the
+   * lines are load-bearing: DNC-08 requires a run to describe itself, and the
+   * guard spec asserts the output names `prisma db execute`, `psql` and
+   * `pilotage_postgres`. They are pushed into `attempts[]` so `exec()`'s
+   * `attempts[attempts.length - 1]` fallback still names route C. */
+  let preflightRecorded = false;
+  const recordPreflight = (pre) => {
+    if (preflightRecorded) return;
+    preflightRecorded = true;
+    attempts.push(
+      `preflight — ${preflightHeadline(pre)}. One probe of that address settles the ladder:`,
+      'A. prisma db execute — it executes against that same address, so it cannot connect either',
+      'B. host psql — it connects to that same address over the wire, so it cannot connect either',
+      pre.loopback
+        ? `C. docker exec ${DEFAULT_CONTAINER} psql — it requires the container to publish that same ` +
+            'port on this machine, and nothing is listening there'
+        : `C. docker exec ${DEFAULT_CONTAINER} psql — it connects from INSIDE the container, which a ` +
+            `host-side probe does not settle, so it is still tried (its port lookup bounded at ` +
+            `${DOCKER_TIMEOUT_MS} ms, its SQL at ${DOCKER_EXEC_TIMEOUT_MS} ms)`,
+    );
+  };
+
   let containerUsable = null;
   const containerAddressesTheUrl = () => {
     if (containerUsable !== null) return containerUsable;
-    const mapped = run('docker', ['port', DEFAULT_CONTAINER, '5432/tcp']);
+    const mapped = run('docker', ['port', DEFAULT_CONTAINER, '5432/tcp'], {
+      timeoutMs: DOCKER_TIMEOUT_MS,
+    });
     if (mapped.status !== 0 || mapped.stdout.trim() === '') {
       attempts.push(
         `C. docker exec ${DEFAULT_CONTAINER} psql — ${mapped.stderr.trim() || 'the container publishes no port for 5432/tcp'}`,
@@ -730,14 +1082,20 @@ function makeSqlRoutes(cli, source) {
   const psqlContainer = (database, sql) =>
     run('docker', ['exec', '-i', DEFAULT_CONTAINER, 'psql', '-U', source.user, ...psqlFlags(database)], {
       input: sql,
+      timeoutMs: DOCKER_EXEC_TIMEOUT_MS,
     });
 
   /** Rows, as arrays of strings. Throws if no route could answer. */
   const query = (database, sql) => {
-    const host = psqlHost(database, sql);
-    if (host.status === 0) return splitRows(host.stdout);
-    attempts.push(`B. host psql — ${host.stderr.trim() || `exit ${host.status}`}`);
-    if (containerAddressesTheUrl()) {
+    const pre = runPreflight();
+    if (pre.state === 'refused') {
+      recordPreflight(pre);
+    } else {
+      const host = psqlHost(database, sql);
+      if (host.status === 0) return splitRows(host.stdout);
+      attempts.push(`B. host psql — ${host.stderr.trim() || `exit ${host.status}`}`);
+    }
+    if (!preflightSettlesTheAddress(pre) && containerAddressesTheUrl()) {
       const container = psqlContainer(database, sql);
       if (container.status === 0) return splitRows(container.stdout);
       attempts.push(`C. docker exec ${DEFAULT_CONTAINER} psql — ${container.stderr.trim() || `exit ${container.status}`}`);
@@ -753,21 +1111,43 @@ function makeSqlRoutes(cli, source) {
   /** Execute-only. Returns `{ ok, detail }` rather than throwing, because every
    * caller has a verdict for a failure. */
   const exec = (url, sql) => {
-    const viaPrisma = prismaRun(
-      cli,
-      ['db', 'execute', '--schema', SCHEMA_PATH, '--stdin'],
-      { DATABASE_URL: url },
-      sql,
-    );
-    if (viaPrisma.status === 0) return { ok: true, detail: 'prisma db execute' };
-    const detailA = `A. prisma db execute — ${redactConnectionUrl(viaPrisma.output.trim()) || `exit ${viaPrisma.status}`}`;
-
     const target = parseUrl(url);
-    const host = psqlHost(target.database, sql);
-    if (host.status === 0) return { ok: true, detail: 'host psql' };
-    const detailB = `B. host psql — ${host.stderr.trim() || `exit ${host.status}`}`;
+    // The preflight is memoised for ONE address, and `exec` takes a URL. Today
+    // every caller passes a URL derived from `source` (the maintenance URL and the
+    // scratch URL both replace only the database segment), but nothing enforced
+    // it, and a memoised answer applied to a different server is a wrong verdict
+    // waiting for the next caller. So it is enforced here rather than assumed.
+    if (target.host !== source.host || String(target.port) !== String(source.port)) {
+      throw new Error(
+        `refusing to run SQL against ${target.host}:${target.port} through routes opened for ` +
+          `${source.host}:${source.port} — these routes probed and describe one server, and reusing them ` +
+          'for another would report the wrong one',
+      );
+    }
 
-    if (containerAddressesTheUrl()) {
+    const pre = runPreflight();
+    let detailA;
+    let detailB;
+    if (pre.state === 'refused') {
+      recordPreflight(pre);
+      detailA = `A. prisma db execute — not attempted: ${preflightHeadline(pre)}`;
+      detailB = `B. host psql — not attempted: ${preflightHeadline(pre)}`;
+    } else {
+      const viaPrisma = prismaRun(
+        cli,
+        ['db', 'execute', '--schema', SCHEMA_PATH, '--stdin'],
+        { DATABASE_URL: url },
+        sql,
+      );
+      if (viaPrisma.status === 0) return { ok: true, detail: 'prisma db execute' };
+      detailA = `A. prisma db execute — ${redactConnectionUrl(viaPrisma.output.trim()) || `exit ${viaPrisma.status}`}`;
+
+      const host = psqlHost(target.database, sql);
+      if (host.status === 0) return { ok: true, detail: 'host psql' };
+      detailB = `B. host psql — ${host.stderr.trim() || `exit ${host.status}`}`;
+    }
+
+    if (!preflightSettlesTheAddress(pre) && containerAddressesTheUrl()) {
       const container = psqlContainer(target.database, sql);
       if (container.status === 0) return { ok: true, detail: `docker exec ${DEFAULT_CONTAINER} psql` };
       return {
@@ -775,7 +1155,12 @@ function makeSqlRoutes(cli, source) {
         detail: `${detailA}\n${detailB}\nC. docker exec ${DEFAULT_CONTAINER} psql — ${container.stderr.trim() || `exit ${container.status}`}`,
       };
     }
-    return { ok: false, detail: `${detailA}\n${detailB}\n${attempts[attempts.length - 1] || 'C. docker exec — unavailable'}` };
+    return {
+      ok: false,
+      detail: `${detailA}\n${detailB}\n${
+        attempts[attempts.length - 1] || `C. docker exec ${DEFAULT_CONTAINER} psql — unavailable`
+      }`,
+    };
   };
 
   return { query, exec, attempts };
@@ -805,6 +1190,13 @@ function openSqlRoutes(baseUrl) {
  * A POSITIVE reachability probe, exported so the guard spec can decide whether
  * its end-to-end block can run — and say loudly when it cannot, rather than
  * guessing from `process.env.CI`.
+ *
+ * Its CONTRACT IS UNCHANGED: true only when a `SELECT 1;` returned a row. What
+ * changed (TOOL-10) is the order — the TCP preflight runs BEFORE
+ * `resolvePrismaCli()`, because this function is called at MODULE SCOPE by
+ * `schema-drift-gate.spec.ts` and every jest worker that loads that file pays it.
+ * The reorder cannot change the result: a refused loopback address returns false
+ * either way, and a missing CLI still returns false below.
  */
 function probeServer(baseUrl) {
   const url = baseUrl || process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
@@ -814,6 +1206,11 @@ function probeServer(baseUrl) {
   } catch {
     return false;
   }
+  // Only a refused loopback address short-circuits. An indeterminate probe
+  // descends the real ladder, because "the probe could not answer" is not
+  // evidence the server is absent.
+  const preflight = probeAddress(source.host, source.port);
+  if (preflightSettlesTheAddress(preflight)) return false;
   const cli = resolvePrismaCli();
   if (!cli.command) return false;
   try {
@@ -1230,8 +1627,12 @@ module.exports = {
   deployMigrations,
   runDiff,
   probeServer,
+  probeAddress,
   openSqlRoutes,
   DEFAULT_DATABASE_URL,
+  TCP_PREFLIGHT_TIMEOUT_MS,
+  DOCKER_TIMEOUT_MS,
+  DOCKER_EXEC_TIMEOUT_MS,
   migrationDirectories,
   SCRATCH_NAME_PATTERN,
   MIGRATIONS_DIR,
