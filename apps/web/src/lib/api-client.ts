@@ -150,6 +150,26 @@ export function isNextNavigationSignal(err: unknown): boolean {
 export type ApiResult<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
 
 /**
+ * Le **membre d'échec** d'`ApiResult`, dérivé — jamais re-déclaré à la main :
+ * une seconde écriture littérale de `{ ok: false; error: string }` serait une
+ * seconde source de vérité qui dériverait d'`ApiResult` au premier changement.
+ *
+ * **Pourquoi ce type existe (S-E06-9).** `apiResultFromError` renvoyait
+ * `ApiResult<never>`, dont le membre `{ ok: true; data: never }` bloque
+ * l'affectation à toute action dont la branche de succès n'est pas
+ * `{ ok: true; data: T }` — `{ ok: true; id: string }` d'`admin/roles`,
+ * `{ ok: boolean; error?: string }` des préférences, `BulkChannelResult`. Le
+ * restreindre au seul membre d'échec laisse le convertisseur partagé atterrir
+ * dans une union de succès étrangère **sans y traîner `ApiResult`** : c'est ce
+ * qui évite de migrer trois composants clients (`RoleBuilderForm`,
+ * `DeleteRoleButton`, `PreferencesPanel`) qui lisent `res.error` et
+ * `res.succeededKinds`. C'est un rétrécissement strict : tous les appelants
+ * existants font littéralement `return apiResultFromError(err);` et
+ * `{ ok: false; error: string }` reste assignable à `ApiResult<T>` pour tout `T`.
+ */
+export type ApiFailure = Extract<ApiResult, { ok: false }>;
+
+/**
  * Shared error→result converter for server actions. Re-throws Next.js
  * navigation signals so they reach the runtime and trigger the redirect.
  *
@@ -174,7 +194,7 @@ export type ApiResult<T = unknown> = { ok: true; data: T } | { ok: false; error:
  *     catch (err) { return apiResultFromError(err); }
  *   }
  */
-export function apiResultFromError(err: unknown): ApiResult<never> {
+export function apiResultFromError(err: unknown): ApiFailure {
   if (isNextNavigationSignal(err)) throw err;
   if (!(err instanceof ApiError)) {
     console.error('[apiResultFromError] non-ApiError thrown by a server action:', err);
