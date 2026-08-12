@@ -80,7 +80,29 @@ invented.
 | Id | Pri | What |
 |---|---|---|
 | **`PF-129`** | **P1** ⬆ | **Escalated latent → LIVE by this slice**, exactly as its own text predicted. `apps/web/.../parent/register/actions.ts` never calls `clientProvenanceHeaders`, so the new audit row records a null (prod) or web-container (local) address. **API side is already correct** — the fix is `apps/web`, **track c's**. |
+| **`TOOL-06`** | **P0** ⬆ | **`ci-gate.sh` can never print `GATE: PASS`, for any diff, in any track.** Was P1. Read this before your gate run — see below. |
 | **`TOOL-07`** | **P1** | **The background heartbeat loop outlives its session and pins a track forever.** Read this before Step 3 — see below. |
+
+## 🛑 READ BEFORE YOUR GATE RUN — `TOOL-06` is now P0, and it will fail your PR too
+
+**Do not go hunting in your own diff when the gate says FAIL.** Seven `run_stage` calls
+(`scripts/ci-gate.sh:102,118,142,165,198,230,235`) omit the timeout argument, so `timeout` receives the stage *label* as
+its interval and exits 125 before the command runs — `timeout: invalid time interval 'runtime engines'`, and six more.
+They run **unconditionally, before the `── ci-gate (fast) ──` header**, so **every** invocation ends
+`GATE: FAIL (7 stage(s))` however clean the tree.
+
+Run 40 measured it on exactly such a tree: `production artefacts ✓ · audit writes ✓ · prisma generate ✓ · typecheck ✓ ·
+lint ✓ (0 errors) · test:api 1021/1032 no drift ✓ · test:worker 293/300 no drift ✓`, and still `GATE: FAIL`.
+
+**What to do:** run the gate, read the `✗` names. If they are exactly those seven, your diff is not the cause — say so in
+the PR, paste the summary block, and **still leave the PR open and flagged** (AUTO-LAND keys on the printed line,
+`R-23`, not on your judgement). **Do not fix it inside a story PR:** `scripts/` matches `GATE_MACHINERY` (`:322`), so
+your diff would escalate `test:api` to the 2400 s whole-suite stage `TOOL-04` proves cannot finish.
+
+Two corrections to `TOOL-06`'s own text, since you will read it: only **four** of the broken calls have duplicates that
+run on a normal PR; `runtime engines` and `compose invocation` duplicate **only under `--full`**; and `csv escapers`
+(`scripts/csv-escape-check.js`, the ratchet holding `PF-168` closed) has **no duplicate at all** and has therefore never
+executed in CI.
 
 ## 🛑 READ BEFORE STEP 3 — `TOOL-07`, and it cost this run 22 hours
 
