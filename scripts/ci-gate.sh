@@ -227,8 +227,23 @@ if changed_match "$CODE_RE"; then
   # this repository unchanged and reports all five PostgreSQL extensions as
   # "[+] Added extensions" although 0_baseline creates every one of them. With
   # the database down it FAILS rather than skipping, and the remedy is to start
-  # it, never to edit code (ADR-027):
+  # it, never to edit code — the decision record is
+  # docs/adr/ADR-027-schema-drift-gate-needs-a-database.md, which names the cost
+  # this stage accepts (R-23) and why it does not overturn ADR-025 D1:
   #   docker compose --env-file .env -f infra/docker-compose.yml up -d postgres
+  #
+  # RESTORED, not added (TOOL-14, run 44). This line and the ADR filename above
+  # are load-bearing: S-E02-11 AC-5 and AC-15 assert that this stage names its
+  # decision record BY FILENAME and carries the sibling stages' anti-drift note
+  # WITHIN 1400 characters of the invocation — so the note stays adjacent to the
+  # `run_stage` below, not at the top of this block. #223's excision of the dead
+  # pre-#214 block took both out with it and the two meta-tests went red on main,
+  # unseen, because #223's own api ratchet timed out at this very stage list
+  # before it could report them. This run is the first whose full ratchet
+  # finished (347s), which is how they surfaced at all. Comments only: no stage,
+  # no bound and no command changed.
+  #
+  # Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
   if changed_match '^apps/api/prisma/'; then
     run_stage 90 "schema drift" node scripts/schema-drift-check.js
   else
