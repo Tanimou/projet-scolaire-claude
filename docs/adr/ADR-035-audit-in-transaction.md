@@ -711,3 +711,133 @@ keying it needs a join through `School`; recording `customRoleGranted` in `after
 second added key beyond the one this slice is permitted. **Registered as a new finding, deliberately not
 closed here.** `traceability/OPEN.md:55`'s note that `customRoleSlug` is silently lost on the PF-163 path
 stays open with it.
+
+---
+
+## S-E05-11 amendment — the one unauthenticated account-creation path joins the trail
+
+> **Amendment, not a new file.** Every element of this slice reuses a documented convention — the seam (D1),
+> the fail-closed rule (D2), provenance derived before the transaction opens (D3 / `ADR-036` D5), Keycloak
+> calls kept outside it (D5), the `.catch()` compensation at the call site (D15), the closed vocabulary
+> (D6/D14) and the tenant never taken from input (ADR-002). No new architectural decision is introduced, so
+> creating an `ADR-038` here would itself be the ADR-drift finding this epic exists to remove.
+>
+> **Numbering, ruled — and this slice deliberately does NOT take D18/D19.** The `S-E04-9` header above
+> (`:507-512`) allocates **D18** to the carried `revokeRole` / `isSchoolUpdateNoOp` documentation correction
+> and reserves **D19 onward** for `S-E04-8` (the hash chain). Neither has landed. The planning ruling for
+> this slice proposed D18 + D19; taking them would collide with two live reservations, which is precisely
+> the two-tracks-one-number defect the routine has already had to unpick once. This slice therefore takes
+> **D20–D22**, leaves D18 and D19 held by their existing claimants, and records the disagreement rather than
+> discharging it silently.
+
+### The measurement — four uncoordinated writes and no trace at all
+
+`apps/api/src/modules/identity/register.controller.ts` — `POST /auth/register-parent` is the **one
+unauthenticated account-creation path in the product**. Before this slice it performed four separate writes
+with **no `$transaction` and no compensating action**: `keycloak.createUser`, `keycloak.setUserPassword`
+(permanent), `prisma.tenant.upsert` of the `demo` tenant, `prisma.userProfile.create`. A failure at the last
+one left an **enabled, profile-less Keycloak identity** — the orphan class `PF-163` named at the sibling
+address — and step 2 then refused every retry with a 409 telling the registrant to log in.
+
+Separately and independently, the handler wrote **no audit row on any path**. Account creation is a
+privileged mutation by G-AUDIT's own definition, so the single most consequential event a public visitor can
+cause was invisible to the trail this epic exists to complete. Registered as **`PF-166` (P1)**.
+
+The fix is the one already shipped at `invite.controller.ts` (D15–D17), copied rather than invented: the two
+LOCAL writes and one new audit row move into a single `$transaction` extracted into
+`persistRegisteredParent`, both Keycloak calls stay outside it and before it, and a `.catch()` at the call
+site deletes the Keycloak identity **this** request created. One vocabulary entry is added — `user.register`
+/ *« Auto-inscription d’un parent »*, **not** `critical` — and `resourceType: 'user_profile'` is reused.
+
+### D20 — the synthetic realm-role payload is an OBSERVATION, not an invention
+
+There is no JWT on a public path, so the payload handed to `deriveAuditProvenance` is synthesised. Every
+field of it is nonetheless a statement about what this request just **created**, never a guess about who
+called:
+
+- `sub` is `kcUserId` — literally the `sub` claim every future token for this account will carry;
+- `realm_access.roles` carries the **one** realm role this handler grants, read from the module constant
+  `PARENT_REALM_ROLE` that the `createUser({ realmRoles })` call also uses. Declared once and used twice, so
+  the audit row cannot claim a role different from the one granted.
+
+Hand-writing `actorRole: 'parent'` would trip no matcher in `audit-provenance-gate.spec.ts` — and that is
+the point: it would simply be a **second decision site**, which is the invariant G-3 is stated over (*no file
+under `apps/api/src` other than `shared/audit/provenance.ts` may decide an actor role from realm roles,
+whatever it calls the code that does*). The mapper is therefore used, not bypassed.
+
+`actorId` and `resourceId` are the **same** id — the created `UserProfile.id`. Self-registration is the one
+mutation in the product where actor and subject genuinely coincide. Written in a comment at the site,
+because the next reader will otherwise read it as a copy-paste bug and "fix" it to `null`.
+
+### D21 — fail-closed is CHOSEN on the public funnel, and the amplification is a stated residual
+
+D2 (*an audit failure fails the mutation*) was decided on **admin** paths. Extending it here is a genuinely
+different trade and is taken deliberately:
+
+- `audit_log` unavailable ⇒ **no parent can create an account.** An unaudited account is worse than a
+  deferred signup, so the direction stands.
+- Each failed attempt now also spends `createUser` + `setUserPassword` + `deleteUser` against the Keycloak
+  admin API, on an endpoint that is still **unthrottled** (`PF-46`). That is a 3-call outbound amplifier
+  triggerable by anyone. **Registered under `PF-46`**, whose rate-limiting is the owning remedy — not
+  patched here, and not discovered in an incident.
+- `register.controller.spec.ts` case (c) is the proof rather than the promise: an audit-write failure rolls
+  the profile back **and** deletes the Keycloak identity, so no account survives an unaudited registration.
+
+### D22 — four things deliberately left alone, each with an owner
+
+1. **The `demo` tenant upsert stays as-is — and it is now a *contended* write.** Re-deciding tenancy inside a
+   robustness slice would be an ADR-002 change riding in on a compensation fix, so the upsert keeps its
+   shape and its owner (`PF-165`). What changed is its cost: it is unconditional, every registration
+   executes it, and inside an interactive transaction it holds a row lock on the single `demo` row for the
+   duration — including `userProfile.create` — so concurrent signups **serialise** and a burst can reach
+   Prisma's 5 s interactive timeout (P2028), each failure paying a compensating `deleteUser`. The cheap
+   hedge (`findUnique` first, `upsert` only on a miss) is a behaviour change and is **not** taken here.
+   Stated, in the method's docblock and here; silently shipping it would not have been acceptable.
+2. **The provenance residual — `PF-129`, and its seam is `apps/web`.** The planning brief asserted that
+   *"this endpoint is public so the request genuinely IS the operator's browser"*. **Measured, and false.**
+   The endpoint has exactly one caller repo-wide and it is a Next.js **server action**:
+   `apps/web/src/app/parent/register/actions.ts:1,25-29` is `'use server'` and issues a bare `fetch`
+   carrying only `Content-Type` / `Accept` — it never calls `clientProvenanceHeaders`. So
+   `extractAuditClientHints` takes branch 2, and under `TRUST_PROXY_HOPS=2` the chain is shorter than N and
+   `ipAddress` is honestly **null**; on the local `--profile app` topology (N = 0) it is the **web
+   container's** egress address — literally `PF-31` — and `userAgent` is `undici`. The seam is still the
+   right call (it never invents, and it starts recording the real operator the day the web side forwards the
+   headers, with no change on this side), but the *forwarding half* lives in `apps/web`, outside this seam.
+   Recorded as `PF-129`, pinned as spec case (a2) so the null is a known structural property rather than a
+   later "regression", and **never written into the controller as a claim the adjacent web file falsifies**.
+3. **The response body is not widened.** No `userProfileId` / `kcUserId` the way `invite` returns them:
+   `actions.ts:37` reads only `data.email`, and a widened body is still a contract change.
+4. **`apps/api/src/shared/quality/` and `scripts/` are untouched, and no ratchet needs them.**
+   `scripts/audit-write-baseline.json` covers only direct `auditLog.create` (rule A); a new `writeAudit`
+   call site is not baselineable. Every vocabulary and provenance floor in play is a **minimum** that one
+   added code only moves up. `apps/api/prisma/` is untouched: `AuditLog` already declares every column this
+   row uses, so G-MIGRATION does not trigger.
+
+### One behaviour change this slice DOES make, recorded rather than discovered in review
+
+**`P2002` on `userProfile.create` now yields the same 409 as the Keycloak-conflict branch, instead of a raw
+Prisma 500.** This state is reachable — a `seed-demo.ts` row, or any past partial failure of this very
+handler — and the compensation changes it: pre-slice the Keycloak identity survived the 500, so the *retry*
+hit the step-2 409; post-slice the identity is deleted, so without a mapping the same request would 500
+forever in a self-cleaning loop, **and** keep returning a raw driver message to an anonymous caller, which
+is both driver-detail disclosure and a user-enumeration oracle (*"this email has a local profile"* vs *"this
+email is free"*) on an endpoint `PF-46` already flags as unthrottled.
+
+Mapping it to the **existing, byte-identical** 409 copy is the cheapest correct move: no new string, no new
+status, the two conflict paths become indistinguishable (so the oracle closes rather than moves), and the
+stable-409-on-retry behaviour a caller could observe before this slice is preserved rather than lost. Pinned
+by spec case (e). Everything else a caller can observe — both 400 branches, the 409 string itself and the
+`{ ok: true, email }` body — is unchanged, and pinned by case (g) rather than asserted by reading a diff.
+
+### Evidence caveat this amendment carries in writing
+
+`scripts/ci-gate.sh:322-327` runs the full `test:api` stage only when the diff touches the gate machinery
+(`scripts/`, `.github/`, `infra/`, `apps/api/src/shared/quality/`). This diff touches none of those, so CI
+runs the **reduced** stage (`node scripts/test-ratchet.js api --skip src/shared/quality/`) and
+`audit-vocabulary-gate.spec.ts` / `audit-provenance-gate.spec.ts` **do not execute on this PR**.
+`node scripts/audit-write-check.js` still runs, so rules A–E and the no-`try` rule are machine-verified. The
+vocabulary gate's forward/reverse completeness and the provenance gate's G-2/G-3 are argued **by
+construction** here — one inline `action` literal at the `writeAudit` call site so no new forwarder is
+registered, no `critical` flag, the typographic apostrophe, a one-role bracket group and no `portal:`
+ternary anywhere in the new spec — and that reasoning is **reasoned, not measured**. It must not be reported
+as "those gates passed".

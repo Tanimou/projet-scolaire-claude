@@ -335,6 +335,22 @@ export const AUDIT_ACTIONS = [
 
   { code: 'student.account_linked', label: 'Rattachement d’un compte élève' },
   { code: 'user.invite', label: 'Invitation d’un utilisateur' },
+  // S-E05-11 — `POST /auth/register-parent` est le SEUL chemin de création de
+  // compte non authentifié du produit, et il n'écrivait aucune ligne (`PF-166`).
+  // « Auto-inscription » et non « Création d'un compte » : dans la cellule d'une
+  // seule ligne du tableau d'audit, « Création d'un compte » serait indiscernable
+  // de `user.invite` ci-dessus, alors que toute la valeur de gouvernance de cette
+  // ligne tient dans la distinction — ce compte a été créé par une requête
+  // publique anonyme, pas par un administrateur. Nommer *parent* suit le
+  // précédent `school.close` : le vocabulaire dit ce qui s'est réellement passé,
+  // et cet endpoint n'accorde qu'un seul rôle de realm.
+  //
+  // PAS `critical: true`, délibérément : `user.invite`, le frère administré, ne
+  // l'est pas non plus, et `AUDIT_CRITICAL_ACTIONS` alimente le compteur
+  // « Modifications critiques » de `/admin/audit`. Une inscription parent est du
+  // trafic public récurrent et routinier ; la marquer critique noierait le seul
+  // compteur qui sert à repérer `role.grant` / `role.revoke` / `role.delete`.
+  { code: 'user.register', label: 'Auto-inscription d’un parent' },
 ] as const satisfies readonly AuditActionEntry[];
 
 /**
