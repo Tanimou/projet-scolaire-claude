@@ -89,6 +89,7 @@ via a branded `CsvCell` in `apps/web/src/lib/csv.ts`. Still track c's, still ope
 |---|---|---|
 | **`PF-174`** | **P1** | **Narrowed, not closed.** Silence half closed with evidence; menu half re-pointed at `D-12`. |
 | **`TOOL-07`** | **P1** | **The reconciler never publishes its fold.** Read the banner at the top of this file. |
+| **`TOOL-06`** | **P1** | **Escalated, not raised.** Its severity clause is wrong: on a code diff the seven broken stages **are** counted, so `GATE: PASS` is unreachable for any non-docs-only PR. See fact 2. |
 | **`PF-179`** | **P2** | `admin/roles` actions render `NEXT_REDIRECT;…` instead of redirecting. **Next story.** |
 | **`PF-180`** | **P3** | `preferences-actions.ts` renders `HTTP 403` and discards the API's message. |
 
@@ -102,18 +103,27 @@ throughout run 40, so no concurrent track could have taken them.
    The stack was **not** touched: `docker ps` did **not return within 120 s** at the start of run 40, so the daemon
    is slow or wedged. Nothing in this slice needed it — but **do not assume the stack is healthy**; check before any
    story that does, and budget for the daemon being unresponsive.
-2. **`TOOL-04` is live and it shapes what you may touch.** Any diff matching
+2. **🛑 `TOOL-06` means your PR CANNOT reach `GATE: PASS` — budget for it, do not debug your diff.** Run 40 measured
+   the first full-code gate since that finding was raised: **every real stage passed** (`typecheck`, `lint`,
+   `test:api` 1008/1019 no drift, `test:worker` 293/300 no drift, `audit writes`, `production artefacts`,
+   `prisma generate`) and the verdict was still **`GATE: FAIL (7 stage(s))`** — the seven being exactly the
+   `run_stage` calls that omit their timeout argument. `TOOL-06`'s text says those stages are *not* counted; that is
+   true on a **docs-only** diff and **false on a code diff**. So `AUTO-LAND` is effectively off for every code change
+   on all three tracks until someone repairs `scripts/ci-gate.sh`. **Do not go hunting in your own diff** — read the
+   summary block, and if the only `✗` lines are `✗ node`/`✗ pnpm`, that is this. Report the per-stage results as your
+   evidence and leave the PR open, as runs 39 and 40 both did.
+3. **`TOOL-04` is live and it shapes what you may touch.** Any diff matching
    `^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)` escalates the gate to an api suite that **cannot
    finish on this machine**. Run 40 deliberately did **not** add a web-side server-action ratchet under `scripts/`
    for exactly this reason — the right control, unbuildable without forfeiting `GATE: PASS`. It stays a follow-up
    until the gate is repaired.
-3. **`apps/web` has no unit runner — verified this run, not inherited.** `apps/web/package.json` declares only
+4. **`apps/web` has no unit runner — verified this run, not inherited.** `apps/web/package.json` declares only
    `test:e2e*` Playwright scripts, and neither `jest` nor `vitest` is a devDependency. `pnpm typecheck` is genuine
    evidence for a type-level claim and is **not** evidence that anything rendered.
-4. **The Turbo cache is shared across track worktrees.** A gate log will print `cache hit, replaying logs` with a
+5. **The Turbo cache is shared across track worktrees.** A gate log will print `cache hit, replaying logs` with a
    path under **another track's** worktree (run 40 saw `v3-track-a` paths while running in `v3-track-c`). That is
    correct behaviour for identical inputs, not a leak — do not debug it.
-5. **Disk: 22 GB free on `C:` (96 % used)**, down from run 39's 31 GB. Not an emergency, not comfortable. The
+6. **Disk: 22 GB free on `C:` (96 % used)**, down from run 39's 31 GB. Not an emergency, not comfortable. The
    worktree residue in `.claude/worktrees/` is still uncleaned; see run 38's `NEXT.md` for the list and the three
    tests to apply.
 
