@@ -11,11 +11,16 @@
 
 ---
 
-## ✅ Closed by run 43 — a code PR can reach `GATE: PASS` again
+## ✅ Closed by run 43 — the gate examines the diff again, but it still cannot go green here
 
 **`TOOL-06` is closed** (`ci/2026-08-12-v3-a-gate-unbounded-stages`), with `TOOL-07` and `TOOL-08` found while
-closing it. Plan on auto-merge again. What follows is run 40's diagnosis, kept because it was right in every
-particular and because it explains what the gate did *not* do for the eight PRs before this one:
+closing it. **Do not read that as "auto-merge is back".** A second, independent blocker survives it — `TOOL-10`, below:
+a diff touching gate machinery runs the full api ratchet, and that ratchet cannot finish on a machine whose Postgres
+is unreachable. Run 43's own PR landed behind `⚠️ … needs human review` for exactly that reason, with seven stages
+green and one timed out.
+
+What follows is run 40's diagnosis, kept because it was right in every particular and because it explains what the
+gate did *not* do for the eight PRs before this one:
 
 `scripts/ci-gate.sh:47` documents `run_stage <timeout_seconds> <name> <command...>`, but seven calls
 (`:102 :118 :142 :165 :198 :230 :235`) pass only `<name>`. `timeout` then reads the stage **name** as its interval:
@@ -161,3 +166,23 @@ In selection order, both **inside track a's seam**:
 - `PF-179` was allocated this run for the two constant-DDL `$executeRawUnsafe` survivors outside track a's seam.
   Per `TOOL-05`, **re-check the register for your own id after your final fetch** — id allocation is a race between
   concurrent tracks and it has already been lost twice.
+
+## State of the world at the end of run 43
+
+- **`TOOL-06`, `TOOL-07`, `TOOL-08` closed.** The gate examines the diff again, and `csv escapers` runs on every PR
+  for the first time since `#215` shipped it as blocking.
+- **`TOOL-10` (P1) is the one that will bite you next, and it is not a slow suite.** `test:api (ratchet)` timed out at
+  2400 s on this PR. Inside the killed run, `schema-drift-gate.spec.ts` reports `exitCode=143` — **SIGTERM**, still
+  running when the bound expired. Standalone, `node scripts/schema-drift-check.js` takes **89 745 ms** to conclude
+  `FAIL — tooling_unavailable`, because it tries three SQL routes in turn before giving up: `prisma db execute`
+  (executes, returns no rows), host `psql` (`ENOENT`, not installed), and `docker exec pilotage_postgres psql` (*"the
+  container publishes no port for 5432/tcp"*). The meta-test invokes it repeatedly, so ~90 s each is what overruns the
+  bound. **Do not raise the timeout** — `2bd1a25` already did that once on the "the suite got slower" reading. The fix
+  is a preflight that probes the port once.
+- **Docker is half-alive.** `docker ps` and `docker compose ps` return nothing and are killed by their own timeout;
+  `docker exec` works. `127.0.0.1:5433` refuses connections, `5432` answers and is **not** the project stack (run 40's
+  warning still stands). `docker compose --env-file .env -f infra/docker-compose.yml up -d postgres` produced no
+  output and did not change the port. The `.env` lives only in the main checkout — the track worktrees do not have
+  one, so compose run from `$WT` fails with `couldn't find env file` before it does anything.
+- **Consequence for whoever takes `S-E01-2b`:** that story writes migrations, so `schema drift` will *not* be skipped
+  and it needs a working Postgres on 5433. Settle the database before planning the story, not during it.

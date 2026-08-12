@@ -170,7 +170,7 @@ run_stage 120 "production artefacts" node scripts/production-artefact-check.js
 # hole with a house-style alibi.
 run_stage 120 "audit writes" node scripts/audit-write-check.js
 
-# CSV escapers (S-E05-1, gates G-TRUTH / G-PORTAL / G-DNC, ADR-037 D8).
+# Stage 0d-bis — CSV escapers (S-E05-1, gates G-TRUTH / G-PORTAL / G-DNC, ADR-037 D8).
 #
 # PF-168 is one security predicate answered differently by different files: at
 # HEAD, "is this cell dangerous?" had FIVE implementations, and the same
@@ -198,6 +198,7 @@ run_stage 120 "audit writes" node scripts/audit-write-check.js
 # also the only executed evidence that the WEB half of S-E05-1 is wired at all
 # (apps/web has no unit runner, PF-129/PF-133). Source-only, ~1s, and outside
 # every skip — a flag that skips it is a DNC-10 hole with a house-style alibi.
+# Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
 run_stage 120 "csv escapers (one neutraliser, two escapers)" node scripts/csv-escape-check.js
 
 # ---------------------------------------------------------------------------
@@ -289,6 +290,11 @@ if [ "$MODE" = full ]; then
   run_stage 300 "observability" node scripts/observability-check.js
   run_stage 300 "tracing" node scripts/tracing-check.js
   run_stage 180 "csp" node scripts/csp-check.js
+  # Reads the emitted route manifest, so it runs after the build and only here.
+  # Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
+  # (This note was absent from the whole --full block, and the meta-test asserting
+  # it sits within 1400 characters of the call has been red on main since #214
+  # moved the stage down here — TOOL-07's fourth sibling, found the same way.)
   run_stage 180 "link integrity" node scripts/link-integrity-check.js
 else
   echo ""
