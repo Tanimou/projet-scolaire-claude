@@ -129,7 +129,11 @@ describe('web artefact gate (R-25, web half)', () => {
     // Ordering is a correctness requirement, not style: the check reads `.next/`,
     // so running it before the build would test a stale artefact or fail on a
     // missing one.
-    const buildAt = gate.indexOf('run_stage "build"');
+    // Anchored on the call INCLUDING its timeout: `run_stage "build"` stopped
+    // matching when #214 gave every stage a bound, and this assertion has been
+    // red ever since — unseen, because the ratchet skips src/shared/quality/
+    // unless the diff touches gate machinery (TOOL-06).
+    const buildAt = gate.search(/run_stage\s+\d+\s+"build"/);
     const webAt = gate.indexOf('scripts/web-artifact-check.js');
     expect(buildAt).toBeGreaterThan(-1);
     expect(webAt).toBeGreaterThan(buildAt);

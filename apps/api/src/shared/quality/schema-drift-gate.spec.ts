@@ -569,25 +569,35 @@ describe('the stage is wired into both harnesses and cannot drift', () => {
     expect(executableContent(source)).toHaveLength(source.length);
   });
 
-  it('ci-gate.sh runs it BEFORE `prisma generate`, and outside the --quick guard (AC-6)', () => {
+  it('ci-gate.sh runs it BEFORE `prisma generate`, in the tier every PR runs (AC-6)', () => {
     // Order is correctness, not style: `prisma generate` will happily generate a
     // client for a schema no migration produces, so the ledger must be refused
     // BEFORE a client is generated against a fiction.
+    //
+    // This assertion used to read `run_stage "prisma generate"` — a literal that
+    // matched ONLY the dead pre-#214 stage block, where the order did hold. The
+    // live tier had the two the other way round from the rewrite until TOOL-06
+    // was closed, and this test passed throughout by reading lines that exited
+    // 125 without running anything. Anchor on the live call, timeout and all.
     const executable = executableContent(gateSource);
-    const composeAt = executable.indexOf('scripts/compose-invocation-check.js');
     const driftAt = executable.indexOf(SCRIPT_REF);
-    const generateAt = executable.indexOf('run_stage "prisma generate"');
-    expect(composeAt).toBeGreaterThan(-1);
+    const generateAt = executable.search(/run_stage\s+\d+\s+"prisma generate"/);
+    expect(driftAt).toBeGreaterThan(-1);
     expect(generateAt).toBeGreaterThan(-1);
-    expect(driftAt).toBeGreaterThan(composeAt);
     expect(driftAt).toBeLessThan(generateAt);
 
-    // …and it is NOT inside a `--quick` guard. It reads prisma/ and a database,
-    // never dist/ or .next/, so a quick run that skipped it would be exactly the
-    // omission DNC-08 forbids.
-    const firstQuickGuard = executable.indexOf('if [ "${QUICK}" -eq 0 ]');
-    expect(firstQuickGuard).toBeGreaterThan(-1);
-    expect(driftAt).toBeLessThan(firstQuickGuard);
+    // Each stage is wired exactly once. Two call sites for one stage is how the
+    // broken one stayed invisible: the working duplicate kept the suite green.
+    expect(executable.split(SCRIPT_REF)).toHaveLength(2);
+
+    // …and it is NOT inside the `--full` branch. It reads prisma/ and a
+    // database, never dist/ or .next/, so a default run that skipped it would be
+    // exactly the omission DNC-08 forbids. (The predecessor of this assertion
+    // looked for a `${QUICK}` guard that the #214 rewrite had already replaced
+    // with `$MODE`, so it asserted on a string the file no longer contained.)
+    const fullBranchAt = executable.indexOf('if [ "$MODE" = full ]');
+    expect(fullBranchAt).toBeGreaterThan(-1);
+    expect(driftAt).toBeLessThan(fullBranchAt);
   });
 
   it('ci.yml runs it in the job that owns the database, before prisma generate (AC-6)', () => {

@@ -11,9 +11,11 @@
 
 ---
 
-## ⚠️ Read this before you plan anything: no code PR can currently reach `GATE: PASS`
+## ✅ Closed by run 43 — a code PR can reach `GATE: PASS` again
 
-`TOOL-06` is on the ledger as **P1, open**. Run 40 confirmed it **end to end**, which the original record did not:
+**`TOOL-06` is closed** (`ci/2026-08-12-v3-a-gate-unbounded-stages`), with `TOOL-07` and `TOOL-08` found while
+closing it. Plan on auto-merge again. What follows is run 40's diagnosis, kept because it was right in every
+particular and because it explains what the gate did *not* do for the eight PRs before this one:
 
 `scripts/ci-gate.sh:47` documents `run_stage <timeout_seconds> <name> <command...>`, but seven calls
 (`:102 :118 :142 :165 :198 :230 :235`) pass only `<name>`. `timeout` then reads the stage **name** as its interval:
@@ -37,10 +39,27 @@ What is actually lost in fast mode (as opposed to merely duplicated) is **three*
 `schema drift` has a working, skip-aware one (`⏭ schema drift (no prisma change)`), so **the gate does not need a
 database** despite what the comment at `:218` claims.
 
-**Run 40 deliberately did NOT fix this**, and the next track-a run should not either unless the routine says so:
-`scripts/**` is a shared path, `TOOL-06` assigns the fix to whoever owns the gate rewrite, and fixing it would **not**
-have changed run 40's disposition (its PR carries three independent merge conditions from its own review panel). Plan
-on landing behind `⚠️ … — needs human review`, not on auto-merge.
+**What run 43 changed.** The seven calls were a pre-`#214` stage list the rewrite left sitting *above* the tiers it
+introduced, so they ran unconditionally before the dispatcher. Excised. Six had working counterparts and lost no
+coverage; **`csv escapers` had none**, so it moved into TIER 1 and `#215`'s ratchet has now executed for the first
+time. `run_stage` refuses a non-numeric timeout and exits 64 rather than filing a 125 as an ordinary stage failure,
+so this class cannot return silently. Each check script is now referenced exactly once.
+
+**Two things run 40 could not see from where it stood**, both found by measuring the anchors rather than reading them:
+
+- `TOOL-07` — **three** gate meta-tests were *red on `main`* (`boot`, `web artefact`, `link integrity`: they anchor on
+  `run_stage "build"`, which `#214`'s timeout argument stopped matching) and **two more could not fail** (`audit
+  writes`, `csv escapers`: they hunt for a `${QUICK}` guard that `#214` renamed to `$MODE`, find nothing, and conclude
+  "not inside a guard" wherever the stage is wired). Nobody saw the three reds because the api ratchet runs with
+  `--skip src/shared/quality/` unless the diff touches gate machinery — and `#220`/`#221`/`#222` did not.
+- `TOOL-08` — in the live tier `prisma generate` ran **before** `schema drift`, inverting `S-E02-11` AC-6. The
+  meta-test guarding that order anchored on a literal matching only the dead block, where the order did hold. It was
+  reading a stage that exited 125 without running anything.
+
+**The lesson worth carrying, and it is not about this gate:** every one of these passed review because the assertion
+*named* the right thing. `indexOf('run_stage "build"')` reads as an ordering check and is one, right up until the
+string moves. Before trusting any meta-test that anchors on source text, evaluate its anchors against the file as
+shipped — it takes one `node -e` and it is the difference between a ratchet and a sentence about one.
 
 ---
 

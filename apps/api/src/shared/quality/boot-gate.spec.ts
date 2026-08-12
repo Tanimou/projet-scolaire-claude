@@ -161,7 +161,11 @@ describe('boot gate (PF-67, R-24)', () => {
     // Ordering is a correctness requirement, not style: the check reads
     // `dist/`, so running it before the build would either test a stale
     // artefact or fail on a missing one.
-    const buildAt = gate.indexOf('run_stage "build"');
+    // Anchored on the call INCLUDING its timeout: `run_stage "build"` stopped
+    // matching when #214 gave every stage a bound, and this assertion has been
+    // red ever since — unseen, because the ratchet skips src/shared/quality/
+    // unless the diff touches gate machinery (TOOL-06).
+    const buildAt = gate.search(/run_stage\s+\d+\s+"build"/);
     const bootAt = gate.indexOf('scripts/boot-check.js');
     expect(buildAt).toBeGreaterThan(-1);
     expect(bootAt).toBeGreaterThan(buildAt);

@@ -1992,3 +1992,41 @@ recorded on the `S-E06-6` row of `docs/spec/features/v3-e06/PROGRESS.md`. `V3-E0
 >    autonomous run redo finished work.
 >
 > `V3-E02` remains **`code-complete`**, unchanged: `PF-111` and `PF-113` are still the two residuals, and neither moved.
+
+---
+
+> **The gate this epic built stopped gating, and it took eight PRs to notice (run 43, 2026-08-12).** `TOOL-06`,
+> `TOOL-07` and `TOOL-08` are closed by `ci/2026-08-12-v3-a-gate-unbounded-stages`. All three are the same rewrite's
+> blast radius: `#214` introduced the tiered fast/full structure but left the **old stage list in place above it**,
+> and its seven `run_stage` calls passed the stage NAME where the function expects seconds.
+>
+> `timeout` read the name as its interval and exited **125** before the command ran; `run_stage` filed each as an
+> ordinary stage failure; the summary exits non-zero whenever `FAILED[]` is non-empty. **Every code-change gate
+> therefore reported `GATE: FAIL` on a diff it had never examined**, and every docs-only run reported `PASS` because
+> its `exit 0` fires before the summary and discards the seven failures unread. The banner said `▶ node` rather than
+> the stage name — with the timeout omitted the name sat in `$limit` and the command in `$2` — which is why the
+> output was in front of 39 runs and read by none of them.
+>
+> **What was actually lost, as opposed to merely duplicated:** one stage. Six of the seven had working counterparts in
+> a tier. `csv escapers` had **no other call site anywhere**, so the ratchet `#215` landed as blocking had never
+> executed once. It now runs in TIER 1; its first-ever execution scanned 698 files across six roots and found the
+> four sanctioned escapers.
+>
+> **The two that only a measurement could find**, and the reason this note is long: the meta-tests guarding all of it
+> were reading the dead code. `TOOL-08` — `prisma generate` ran *before* `schema drift` in the live tier, inverting
+> `S-E02-11` AC-6, while the test that asserts that order anchored on the literal `run_stage "prisma generate"`, which
+> matches only the pre-`#214` line, where the order did hold. `TOOL-07` — three more meta-tests (`boot`,
+> `web artefact`, `link integrity`) were **red on `main`** because `run_stage "build"` stopped matching when `#214`
+> added timeouts, and two (`audit writes`, `csv escapers`) **could not fail**, because they hunt for a `${QUICK}`
+> guard `#214` had renamed to `$MODE`, find nothing, and conclude "not inside a guard" wherever the stage is wired.
+> The three reds stayed invisible because the api ratchet runs `--skip src/shared/quality/` unless the diff touches
+> gate machinery, and no PR had touched it since.
+>
+> **Ratchet, so the class cannot return quietly:** `run_stage` now refuses a non-numeric timeout and exits 64, and
+> `csv-escape-gate.spec.ts` asserts that every `run_stage` call in the file declares one. Both depth-scanning specs
+> now assert their guard string exists before trusting their own negative result.
+>
+> `V3-E02` remains **`code-complete`** — `PF-111` and `PF-113` are still its two residuals, and neither moved.
+> `TOOL-09` (P3) is recorded, not storified: `runtime engines` is source-only and ~2 s but now runs only under
+> `--full`, and widening the fast tier's contract is a decision for `open-decisions.md`, not a side effect of
+> repairing a timeout.

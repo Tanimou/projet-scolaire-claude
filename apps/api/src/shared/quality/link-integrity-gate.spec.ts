@@ -1603,20 +1603,28 @@ describe('the stage is wired into both harnesses and cannot drift', () => {
     expect(executableContent(source)).toHaveLength(source.length);
   });
 
-  it('ci-gate.sh runs it AFTER the build, inside the --quick guard', () => {
+  it('ci-gate.sh runs it AFTER the build, inside the --full branch', () => {
     // Ordering is correctness, not style: the script reads the emitted manifest,
     // so running it before the build reads a stale artefact (reporting
     // /admin/classes/new as a capture after it was fixed) or a missing one.
+    //
+    // Both anchors below were stale and this test was RED, unseen, because the
+    // ratchet skips src/shared/quality/ unless the diff touches gate machinery
+    // (TOOL-06): #214 gave every stage a timeout, so `run_stage "build"` no
+    // longer matched, and it replaced the `${QUICK}` flag with `$MODE`, so the
+    // guard string had not existed in the file for as long.
     const executable = executableContent(gateSource);
-    const buildAt = executable.indexOf('run_stage "build"');
+    const buildAt = executable.search(/run_stage\s+\d+\s+"build"/);
     const linkAt = executable.indexOf(SCRIPT_REF);
     expect(buildAt).toBeGreaterThan(-1);
     expect(linkAt).toBeGreaterThan(buildAt);
 
-    // …and it is skipped by --quick like every other post-build stage, rather
-    // than failing a quick run on an absent .next/.
-    const guardAt = executable.lastIndexOf('if [ "${QUICK}" -eq 0 ]', linkAt);
-    expect(guardAt).toBeGreaterThan(buildAt);
+    // …and it sits in the --full branch like every other post-build stage,
+    // rather than failing a default run on an absent .next/.
+    const fullBranchAt = executable.indexOf('if [ "$MODE" = full ]');
+    expect(fullBranchAt).toBeGreaterThan(-1);
+    expect(linkAt).toBeGreaterThan(fullBranchAt);
+    expect(buildAt).toBeGreaterThan(fullBranchAt);
   });
 
   it('ci.yml runs it in the build job, after pnpm build, with no continue-on-error', () => {

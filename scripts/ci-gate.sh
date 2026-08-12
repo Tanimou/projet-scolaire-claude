@@ -18,11 +18,22 @@
 # slow stage, it was the price of admission for a third of the list.
 #
 # The default now runs what catches a broken change: types, lint, tests, and the
-# two source-only scanners that cost about a second each. Everything that needs a
-# build, a database or Docker moved behind --full, which is run before a release
-# and by the verification sweep — not on every PR.
+# three source-only scanners that cost about a second each. Everything that needs
+# a build, a database or Docker moved behind --full, which is run before a
+# release and by the verification sweep — not on every PR.
 #
 # Nothing was deleted — `--full` is the old gate, stage for stage.
+#
+# The rewrite that introduced these tiers left the OLD stage list in place above
+# them, and all seven of its calls passed the stage name where run_stage expects
+# a timeout. `timeout` read the name as its interval and exited 125 before the
+# command ran, every one landed in FAILED[], and the summary exits non-zero
+# whenever FAILED[] is non-empty — so **every code-change gate reported
+# `GATE: FAIL` regardless of the diff**, while docs-only runs returned PASS
+# because their `exit 0` fires before the summary and discarded the seven
+# failures unread. That block is now excised, run_stage refuses a non-numeric
+# timeout outright, and `csv escapers` — the one stage whose ONLY call site was
+# a broken one — moved into tier 1 (TOOL-06).
 #
 # .github/workflows/ci.yml still lists its own jobs, and has started none since
 # the billing lock. Kept in step with it — the two must not drift (S-E02-2 AC-4).
@@ -52,6 +63,20 @@ t0=$(date +%s)
 # and the run sat at 0.9s of CPU for ten minutes looking exactly like work.
 run_stage() {
   local limit="$1" name="$2"; shift 2
+  # An omitted timeout is an AUTHORING error, and it used to be a silent one.
+  # `timeout` read the stage NAME as its interval, exited 125 before running the
+  # command, and run_stage filed that under FAILED[] as an ordinary stage
+  # failure — so the gate reported `GATE: FAIL` on a diff it had never examined.
+  # Seven call sites did this from #214 until this commit (TOOL-06), and the
+  # banner said `▶ node` rather than the stage name (the name was in $limit and
+  # $2 held the command), which is why 39 runs read the output and saw nothing.
+  # Refuse to start instead: a mis-declared stage is a broken gate, not a red diff.
+  case "$limit" in
+    ''|*[!0-9]*)
+      echo "ci-gate: stage '${name}' was declared without a numeric timeout." >&2
+      echo "         run_stage <timeout_seconds> <name> <command...>  — got '${limit}'." >&2
+      exit 64 ;;
+  esac
   local s=$(date +%s)
   echo ""
   echo "▶ ${name}"
@@ -88,151 +113,6 @@ prisma_generate() {
 }
 # exported so `timeout` can run it: timeout execs a command, not a shell function.
 export -f prisma_generate
-
-# Stage 0 — the runtime everything below runs on. `engines.node` said `>=20.0.0`
-# while the API cannot start below Node 20.19/22.12 at all: `jose@6` is ESM-only
-# and `jwks-rsa@4` require()s it from CommonJS, on the boot path via AuthModule
-# (PF-73). Nothing ever checked that claim, and `.nvmrc`/`ci.yml` pinned a
-# floating `22`, whose declared meaning includes the window where boot is
-# impossible. Measured when this stage was written: **35** installed dependencies
-# contradicted the declared range, not the one the finding named. It runs first
-# and costs ~2 s, because a gate running on an unsupported runtime has validated
-# nothing below it. Kept in step with .github/workflows/ci.yml — the two must not
-# drift (S-E02-2 AC-4).
-run_stage "runtime engines" node scripts/runtime-engines-check.js
-
-# Stage 0b — production artefacts (string scan). Four surfaces of the hosted
-# deployment told real users to look for their activation email in
-# `http://localhost:1080` — a Maildev container that exists only in a
-# developer's compose stack (PF-17) — and the Keycloak admin client resolved its
-# credentials with `?? 'admin'` while compose declared neither variable, so the
-# hosted API really did authenticate as admin/admin (PF-54). Both were found by
-# reading; nothing executed. This stage is what turns "someone noticed" into
-# "the gate refuses".
-#
-# It runs HERE, second, on purpose: it reads source only, so it needs no
-# install, no generated Prisma client and no build — it costs ~1 s and fails on
-# the diff rather than ten minutes later. That also makes it the one late-added
-# stage that still runs under `--quick`. Kept in step with
-# .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
-run_stage "production artefacts (string scan)" node scripts/production-artefact-check.js
-
-# Stage 0c — compose invocation. The routine's target IS the local Docker stack
-# (SKILL Step -1), so "the documented command starts the documented stack" is a
-# release property, not a documentation nicety. It was false: compose resolves
-# `.env` from the compose file's directory (`infra/`), `infra/.env` does not
-# exist, and every port lived in the ROOT .env — so the documented invocation
-# fell through to `${VAR:-default}` and started a different stack, silently.
-#
-# Measured when this stage was written, the finding was understated. Inside
-# infra/docker-compose.yml alone, KC_HOSTNAME and KEYCLOAK_PUBLIC_URL hard-coded
-# `localhost:8180` (the api uses the latter as the EXPECTED TOKEN ISSUER) while
-# `keycloak.ports` defaulted to 8080 and the web was sent to 8080. On the
-# documented path Keycloak announced an issuer reachable on no port and the api
-# rejected every token: login was broken by construction, and "worked" only
-# because one machine's gitignored .env said 8180 on a path where compose never
-# read it.
-#
-# Like every other stage here it reads the parsed artefact rather than grepping
-# for expected shapes, so a new service inherits the rules. Beyond that it RUNS
-# `docker compose config` in both directions and asserts the refusal actually
-# happens; where docker is absent it says so rather than passing vacuously.
-# Source-only, so it runs early and under `--quick`. Kept in step with
-# .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
-run_stage "compose invocation (documented command = documented stack)" node scripts/compose-invocation-check.js
-
-# Stage 0d — audit writes (S-E04-7, gates G-AUDIT / G-DNC, ADR-035 D11-D14).
-#
-# PF-31 stayed open across two epics because each fix closed sites while nothing
-# stopped the next one being written the old way. This stage is the ratchet:
-# every audit write under apps/api/src + apps/worker/src +
-# packages/imports-core/src is either behind writeAudit(tx, {…}) inside a
-# transaction, or carries a reviewed baseline row with a class, a reason, and a
-# finding id that RESOLVES against docs/daily-improvement-v3/audit-findings-index.md
-# — resolves, not merely matches PF-nnn, which is the S-E06-5 defect measured and
-# turned into a check. It also fails any writeAudit call given a non-transactional
-# first argument, a non-literal second argument, or sitting inside a try block.
-#
-# The walk root is stated because a gate rooted at apps/api alone would be blind
-# to the two audit writes in packages/imports-core/src/engine.ts — S-E06-5 (a
-# package bundled into every portal but outside the gate's walk root) recurring at
-# a second address.
-#
-# It reads SOURCE only — no build, no database, no generated client — so it runs
-# here, early, and it sits deliberately OUTSIDE every --quick guard: a documented
-# flag that skips the audit gate is a DNC-10 hole with a house-style alibi.
-# Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
-run_stage "audit writes (every audit row through the seam, or baselined with an owner)" node scripts/audit-write-check.js
-
-# Stage 0d-bis — CSV escapers (S-E05-1, gates G-TRUTH / G-PORTAL / G-DNC, ADR-037 D8).
-#
-# PF-168 is one security predicate answered differently by different files: at
-# HEAD, "is this cell dangerous?" had FIVE implementations, and the same
-# operator-entered `profession` string escaped three different ways depending on
-# which export button emitted it. S-E05-1 lifted the predicate into
-# packages/contracts/src/security/csv-injection.ts and deleted the copies. This
-# stage is what stops the sixth one — PF-168 was itself raised against a slice
-# that had already "fixed" this once, which is the whole argument for a ratchet
-# rather than another sweep.
-#
-# It fails on: a CSV escaper anywhere under the walk root outside the two
-# sanctioned ones (detected by NAME *or* by SHAPE — an RFC-4180 quote-doubling
-# body — because two of the five deleted copies were called `escapeCell`, so a
-# name-only rule would be blind to exactly the defect being closed); the trigger
-# set re-assembled outside the shared module; or a sanctioned escaper that stops
-# importing and calling neutraliseCsvCell.
-#
-# The walk root includes .tsx, deliberately: three of the five copies lived in
-# components, so a .ts-only walk would certify a surface it could not see —
-# S-E06-5 at a third address. Two apps/api transport-CSV sites (stored and
-# re-parsed, never opened in a spreadsheet) are named exclusions, and a STALE
-# exclusion is itself a failure, so those two source comments stay true.
-#
-# There is no baseline file: after S-E05-1 the correct count is two and two is
-# the ceiling, so a "row to add" would be the off switch. It reads SOURCE only —
-# no build, no database, no generated client, ~1 s — so it runs here, early, and
-# OUTSIDE every --quick guard. Rule C is the ONLY executed evidence that the WEB
-# half of S-E05-1 is wired at all (apps/web has no unit runner, PF-129/PF-133),
-# and a documented flag that skips it is a DNC-10 hole with a house-style alibi.
-# Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
-run_stage "csv escapers (one neutraliser, two escapers)" node scripts/csv-escape-check.js
-
-# Stage 0e — schema drift. Editing apps/api/prisma/schema.prisma WITHOUT writing
-# a migration passed every stage in this file. Stage 1 below runs `prisma
-# generate`, which happily generates a client for a schema no migration produces;
-# lint, typecheck, build and boot then all validate against that fiction, and
-# `infra/docker/migrate-entrypoint.sh` runs `migrate deploy` and only `migrate
-# deploy`, so the edit reaches no database ever. That is `db push`'s failure mode
-# arriving through the front door.
-#
-# It therefore runs BEFORE `prisma generate`, deliberately: the ledger must be
-# refused before a client is generated against a schema nothing can build.
-#
-# It creates a disposable scratch database, applies apps/api/prisma/migrations to
-# it, diffs THAT DATABASE against the datamodel, and drops it on every exit path.
-# NOT a text diff over the migrations directory: measured on this repository
-# unchanged, `migrate diff --from-migrations …` returns exit 2 and reports all
-# five PostgreSQL extensions as "[+] Added extensions" although 0_baseline creates
-# every one of them — a gate built that way is permanently red on correct code.
-#
-# PRECONDITION, NEW WITH THIS STAGE: `bash scripts/ci-gate.sh` now requires a
-# reachable PostgreSQL, under --quick too (it reads prisma/ and a database, never
-# dist/ or .next/, so skipping it under --quick would be the omission DNC-08
-# forbids). With the local stack down this stage FAILS rather than skipping, and
-# the remedy is to start the database, never to edit code:
-#   docker compose --env-file .env -f infra/docker-compose.yml up -d postgres
-# That precondition contradicts ADR-025 D1 and therefore ships with its own
-# decision record — docs/adr/ADR-027-schema-drift-gate-needs-a-database.md — which
-# draws the distinction that keeps both coherent: the operator drill needs a
-# SEEDED database (a state CI cannot have), this stage needs an EMPTY PostgreSQL
-# SERVER (a capability ci.yml's build job already provisions).
-# Kept in step with .github/workflows/ci.yml — they must not drift (S-E02-2 AC-4).
-run_stage "schema drift (the migration ledger reproduces schema.prisma)" node scripts/schema-drift-check.js
-
-# Stage 1 — Prisma client. Everything downstream (typecheck, tests, build) fails
-# with unresolvable types if the generated client is missing, which is precisely
-# how the audited worktree reported "tests cannot run".
-run_stage "prisma generate" pnpm --filter @pilotage/api prisma generate
 
 # ---------------------------------------------------------------------------
 # What changed — lets the gate skip work the diff cannot possibly have broken.
@@ -290,22 +170,72 @@ run_stage 120 "production artefacts" node scripts/production-artefact-check.js
 # hole with a house-style alibi.
 run_stage 120 "audit writes" node scripts/audit-write-check.js
 
+# CSV escapers (S-E05-1, gates G-TRUTH / G-PORTAL / G-DNC, ADR-037 D8).
+#
+# PF-168 is one security predicate answered differently by different files: at
+# HEAD, "is this cell dangerous?" had FIVE implementations, and the same
+# operator-entered `profession` string escaped three different ways depending on
+# which export button emitted it. S-E05-1 lifted the predicate into
+# packages/contracts/src/security/csv-injection.ts and deleted the copies. This
+# stage is what stops the sixth one — PF-168 was itself raised against a slice
+# that had already "fixed" this once, which is the whole argument for a ratchet
+# rather than another sweep.
+#
+# It fails on: a CSV escaper anywhere under the walk root outside the two
+# sanctioned ones (detected by NAME *or* by SHAPE — an RFC-4180 quote-doubling
+# body — because two of the five deleted copies were called `escapeCell`, so a
+# name-only rule would be blind to exactly the defect being closed); the trigger
+# set re-assembled outside the shared module; or a sanctioned escaper that stops
+# importing and calling neutraliseCsvCell.
+#
+# The walk root includes .tsx, deliberately: three of the five copies lived in
+# components, so a .ts-only walk would certify a surface it could not see.
+# Two apps/api transport-CSV sites (stored and re-parsed, never opened in a
+# spreadsheet) are named exclusions, and a STALE exclusion is itself a failure.
+#
+# THIS IS THE ONLY CALL SITE, and until this commit it was the broken one: the
+# ratchet #215 landed as blocking had never executed once (TOOL-06). Rule C is
+# also the only executed evidence that the WEB half of S-E05-1 is wired at all
+# (apps/web has no unit runner, PF-129/PF-133). Source-only, ~1s, and outside
+# every skip — a flag that skips it is a DNC-10 hole with a house-style alibi.
+run_stage 120 "csv escapers (one neutraliser, two escapers)" node scripts/csv-escape-check.js
+
 # ---------------------------------------------------------------------------
 # TIER 2 — the code stages. Run when code changed.
 # ---------------------------------------------------------------------------
 CODE_RE='^(apps/|packages/|scripts/|prisma/|package\.json|pnpm-lock\.yaml|turbo\.json|tsconfig)'
 
 if changed_match "$CODE_RE"; then
-  # Prisma client first: without it typecheck/tests fail on unresolvable types.
-  run_stage 300 "prisma generate" bash -c prisma_generate
-
-  # Schema drift needs a live PostgreSQL. Only meaningful when prisma changed,
-  # and it says so rather than passing vacuously when the database is down.
+  # Schema drift runs BEFORE `prisma generate`, and the order is correctness
+  # rather than style (S-E02-11 AC-6): `prisma generate` will happily generate a
+  # client for a schema no migration produces, and lint, typecheck, build and
+  # boot then all validate against that fiction while
+  # infra/docker/migrate-entrypoint.sh runs `migrate deploy` and only `migrate
+  # deploy` — so the edit reaches no database, ever. That is `db push`'s failure
+  # mode arriving through the front door, and the ledger has to be refused before
+  # a client is generated against it.
+  #
+  # Until this commit that ordering held only in the dead pre-#214 block excised
+  # above (TOOL-06); down here the two stages had been the other way round since
+  # the rewrite, and the meta-test kept reading the dead lines and passing.
+  #
+  # It needs a live PostgreSQL, and it is only meaningful when prisma changed. It
+  # creates a disposable scratch database, applies apps/api/prisma/migrations to
+  # it, diffs THAT DATABASE against the datamodel, and drops it on every exit
+  # path — NOT a text diff over the migrations directory, which returns exit 2 on
+  # this repository unchanged and reports all five PostgreSQL extensions as
+  # "[+] Added extensions" although 0_baseline creates every one of them. With
+  # the database down it FAILS rather than skipping, and the remedy is to start
+  # it, never to edit code (ADR-027):
+  #   docker compose --env-file .env -f infra/docker-compose.yml up -d postgres
   if changed_match '^apps/api/prisma/'; then
     run_stage 90 "schema drift" node scripts/schema-drift-check.js
   else
     skip_stage "schema drift" "no prisma change"
   fi
+
+  # Then the client: without it typecheck/tests fail on unresolvable types.
+  run_stage 300 "prisma generate" bash -c prisma_generate
 
   run_stage 900 "typecheck" pnpm typecheck
   run_stage 600 "lint" pnpm lint
@@ -335,7 +265,22 @@ fi
 # TIER 3 — --full only. Everything here needs a build, Docker or a database.
 # ---------------------------------------------------------------------------
 if [ "$MODE" = full ]; then
+  # `engines.node` said `>=20.0.0` while the API cannot start below Node
+  # 20.19/22.12 at all: `jose@6` is ESM-only and `jwks-rsa@4` require()s it from
+  # CommonJS, on the boot path via AuthModule (PF-73). Measured when this stage
+  # was written, **35** installed dependencies contradicted the declared range.
+  # Source-only and ~2s, so it is a candidate for tier 1 — recorded as TOOL-08
+  # rather than promoted here, because widening the fast tier is a decision about
+  # the gate's contract, not a side effect of repairing it.
   run_stage 120 "runtime engines" node scripts/runtime-engines-check.js
+  # The documented command must start the documented stack. It did not: compose
+  # resolves `.env` from the compose file's directory (`infra/`), `infra/.env`
+  # does not exist, and every port lived in the ROOT .env — so the documented
+  # invocation fell through to `${VAR:-default}` and started a different stack,
+  # silently. Keycloak announced an issuer reachable on no port and the api
+  # rejected every token: login was broken by construction (PF-86).
+  # It stays in --full because it RUNS `docker compose config` in both
+  # directions; the fast tier is deliberately Docker-free.
   run_stage 120 "compose invocation" node scripts/compose-invocation-check.js
   run_stage 600 "lint:warnings (ratchet)" node scripts/lint-ratchet.js
   run_stage 1800 "build" pnpm build
