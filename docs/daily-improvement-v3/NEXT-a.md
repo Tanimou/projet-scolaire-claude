@@ -81,6 +81,34 @@ why it is next rather than someday.
 
 ---
 
+> **Batch `TOOL-16(a)` with it.** Same file, same seam, same sentence: `scripts/test-ratchet.js:200` synthesises
+> `<suite failed to load>` and throws away the jest report's `failureMessage`, so an operator gets a symptom and no
+> cause — the adjacent branch of the very function `TOOL-10` half B just taught to say what happened. It is
+> mechanical, and it should land **before** anyone tries to debug `TOOL-16(b)`, because (b) cannot be diagnosed
+> without it.
+
+---
+
+## ⚠️ Read before trusting any gate verdict on a gate-machinery diff
+
+`TOOL-16`: **three consecutive `ci-gate.sh` runs on run 44's unchanged branch produced three different failure
+sets** — AC-5/AC-15 (real, repaired as `TOOL-14`), then `csv-escape-gate` AC-7 (`TOOL-15`), then two suites failing to
+load with the denominator dropping `2433 → 2219`. **214 tests stopped running and the ratchet said nothing**, because
+it ratchets failures and not counts — `TOOL-13`, demonstrated rather than argued.
+
+So: a red on a gate-machinery diff is **not** evidence about that diff until it is reproduced, and `AUTO-LAND`'s
+`green` condition currently cannot be discharged for this class of diff at all. Run the gate **twice** before
+concluding anything, and read the *names* of the `✗` stages rather than the verdict line. This is the standing
+`ci-gate.sh` habit, sharpened: it is no longer only that `main` moves under you, it is that the same tree answers
+differently.
+
+Two environment facts to check first, both recorded as hypotheses and **neither measured to cause**: this host runs
+**Node v25.7.0** against the `.nvmrc` pin of **22.13.1** (GUARDRAILS §3 — "Node ≥ 23 breaks the local run"), and run
+3's ratchet began seconds after `prisma generate` rewrote `@prisma/client` while `typecheck` and `lint` were served
+from cache.
+
+---
+
 ## Alternatives, in selection order
 
 - **`TOOL-11` (P2)** — `exec()`'s cross-server guard throws from a path reached by a `finally` and by the signal
