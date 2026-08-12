@@ -38,6 +38,16 @@ const HERE = __dirname;
 const CLI_PATH = join(HERE, 'legacy-escalation-sweep.cli.ts');
 const CLI_SOURCE = readFileSync(CLI_PATH, 'utf8');
 const MODULE_SOURCE = readFileSync(join(HERE, 'legacy-escalation-sweep.ts'), 'utf8');
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+// Convention maison, reprise telle quelle d’`audit-provenance-gate.spec.ts`.
+// Non gardé, volontairement (DNC-08) : si le script disparaît ou cesse d’exporter
+// son épurateur, cette suite doit échouer AU CHARGEMENT plutôt que se dégrader en
+// « rien à vérifier, donc vert ».
+const { stripCommentsPreservingLines } = require(
+  join(HERE, '..', '..', '..', '..', '..', 'scripts', 'link-integrity-check.js')
+) as { stripCommentsPreservingLines: (source: string) => string };
+/* eslint-enable @typescript-eslint/no-require-imports */
 const API_ROOT = join(HERE, '..', '..', '..');
 const SRC_ROOT = join(HERE, '..', '..');
 
@@ -337,8 +347,15 @@ describe('T-12 / DNC-10 — aucun interrupteur dans les DEUX nouveaux fichiers',
   });
 
   it('le module pur n’importe ni Prisma ni Nest — il retourne une valeur, il ne refuse pas une requête', () => {
-    expect(MODULE_SOURCE).not.toContain('@prisma/client');
-    expect(MODULE_SOURCE).not.toContain('@nestjs/common');
+    // Sur la source EXÉCUTABLE, commentaires retirés. Le module explique en
+    // en-tête qu’il n’importe « même pas `@nestjs/common` », et un scan brut
+    // rougissait donc sur la phrase qui promet le contraire de ce qu’elle
+    // décrit. C’est la même auto-déclenche que les jetons concaténés de
+    // FORBIDDEN évitent plus haut ; ici le commentaire vit dans le fichier
+    // examiné, pas dans la spécification.
+    const executable = stripCommentsPreservingLines(MODULE_SOURCE);
+    expect(executable).not.toContain('@prisma/client');
+    expect(executable).not.toContain('@nestjs/common');
   });
 });
 
