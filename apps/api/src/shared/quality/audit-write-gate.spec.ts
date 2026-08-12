@@ -934,31 +934,36 @@ describe('AC-2 — the stage is wired into both harnesses and cannot drift', () 
     expect(stripComments(raw)).toHaveLength(raw.length);
   });
 
-  it('ci-gate.sh runs it OUTSIDE every --quick guard — a documented flag that skips it is a DNC-10 hole', () => {
-    // Stages 7-12 sit inside `if [ "${QUICK}" -eq 0 ]` because they read build
-    // output. This one reads SOURCE only. Wired by copy-paste it would land in
-    // the block the routine's fast path skips: a blocking gate the most-used
-    // invocation does not run, with a house-style alibi.
+  it('ci-gate.sh runs it OUTSIDE the --full branch — a flag that skips it is a DNC-10 hole', () => {
+    // The post-build stages sit inside `if [ "$MODE" = full ]` because they read
+    // build output. This one reads SOURCE only. Wired by copy-paste it would land
+    // in the block the routine's default path skips: a blocking gate the
+    // most-used invocation does not run, with a house-style alibi.
+    //
+    // The detector used to look for `QUICK`, which #214 replaced with `$MODE`.
+    // It therefore found nothing, concluded "not inside a guard" and passed no
+    // matter where the stage was wired — a test that cannot fail (TOOL-06,
+    // PF-105's family). Anchored on the branch the file actually has.
     const lines = gateSh.split('\n');
     const stageAt = lines.findIndex((line) => line.includes('node scripts/audit-write-check.js'));
     expect(stageAt).toBeGreaterThan(-1);
+    // The guard must exist, or this test is vacuous again.
+    expect(gateSh).toContain('if [ "$MODE" = full ]');
 
     let depth = 0;
-    let insideQuickGuard = false;
-    const quickDepths: number[] = [];
+    const fullDepths: number[] = [];
     for (let i = 0; i < stageAt; i += 1) {
       const line = lines[i] ?? '';
       if (/^\s*if\s/.test(line)) {
         depth += 1;
-        if (line.includes('QUICK')) quickDepths.push(depth);
+        if (line.includes('"$MODE" = full')) fullDepths.push(depth);
       }
       if (/^\s*fi\s*$/.test(line)) {
-        if (quickDepths.includes(depth)) quickDepths.splice(quickDepths.indexOf(depth), 1);
+        if (fullDepths.includes(depth)) fullDepths.splice(fullDepths.indexOf(depth), 1);
         depth -= 1;
       }
     }
-    insideQuickGuard = quickDepths.length > 0;
-    expect(insideQuickGuard).toBe(false);
+    expect(fullDepths.length > 0).toBe(false);
   });
 
   it('ci-gate.sh runs it BEFORE the build stage — it reads source, not build output', () => {

@@ -161,7 +161,11 @@ describe('boot gate (PF-67, R-24)', () => {
     // Ordering is a correctness requirement, not style: the check reads
     // `dist/`, so running it before the build would either test a stale
     // artefact or fail on a missing one.
-    const buildAt = gate.indexOf('run_stage "build"');
+    // Anchored on the call INCLUDING its timeout: `run_stage "build"` stopped
+    // matching when #214 gave every stage a bound, and this assertion has been
+    // red ever since — unseen, because the ratchet skips src/shared/quality/
+    // unless the diff touches gate machinery (TOOL-06).
+    const buildAt = gate.search(/run_stage\s+\d+\s+"build"/);
     const bootAt = gate.indexOf('scripts/boot-check.js');
     expect(buildAt).toBeGreaterThan(-1);
     expect(bootAt).toBeGreaterThan(buildAt);
@@ -201,10 +205,14 @@ describe('boot gate (PF-67, R-24)', () => {
     const raw = readFileSync(GATE_PATH, 'utf8');
     const poisoned = `# see scripts/boot-check.js for why this is safe\n${raw}`;
 
-    expect(poisoned.indexOf('scripts/boot-check.js')).toBeLessThan(poisoned.indexOf('run_stage "build"'));
+    // Same stale anchor as the ordering test above: `run_stage "build"` has not
+    // matched since #214 gave every stage a timeout, so both comparisons ran
+    // against -1 and this test was red on main (TOOL-07).
+    const buildRe = /run_stage\s+\d+\s+"build"/;
+    expect(poisoned.indexOf('scripts/boot-check.js')).toBeLessThan(poisoned.search(buildRe));
 
     const stripped = stripComments(poisoned);
-    expect(stripped.indexOf('scripts/boot-check.js')).toBeGreaterThan(stripped.indexOf('run_stage "build"'));
+    expect(stripped.indexOf('scripts/boot-check.js')).toBeGreaterThan(stripped.search(buildRe));
   });
 
   it('stripping comments does not blind the guard to a genuinely misordered file', () => {

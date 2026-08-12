@@ -732,25 +732,51 @@ describe('AC-7 — the stage is wired into both harnesses and cannot drift', () 
     expect(stripComments('run_stage "x" node scripts/csv-escape-check.js')).toContain('csv-escape-check.js');
   });
 
-  it('ci-gate.sh runs it OUTSIDE every --quick guard — rule C is the web half\'s only evidence', () => {
+  it('ci-gate.sh runs it OUTSIDE the --full branch — rule C is the web half\'s only evidence', () => {
+    // This stage has exactly ONE call site, and until TOOL-06 was closed that
+    // call site omitted its timeout: `timeout` read the stage name as its
+    // interval and exited 125, so the blocking ratchet #215 landed had never
+    // executed once. It now sits in tier 1, which every PR runs.
+    //
+    // The detector below used to look for `QUICK`, a flag #214 replaced with
+    // `$MODE`. Finding nothing, it concluded "not inside a guard" and passed
+    // wherever the stage was wired — including nowhere.
     const lines = gateSh.split('\n');
     const stageAt = lines.findIndex((line) => line.includes('node scripts/csv-escape-check.js'));
     expect(stageAt).toBeGreaterThan(-1);
+    // The guard must exist, or this test is vacuous again.
+    expect(gateSh).toContain('if [ "$MODE" = full ]');
 
     let depth = 0;
-    const quickDepths: number[] = [];
+    const fullDepths: number[] = [];
     for (let i = 0; i < stageAt; i += 1) {
       const line = lines[i] ?? '';
       if (/^\s*if\s/.test(line)) {
         depth += 1;
-        if (line.includes('QUICK')) quickDepths.push(depth);
+        if (line.includes('"$MODE" = full')) fullDepths.push(depth);
       }
       if (/^\s*fi\s*$/.test(line)) {
-        if (quickDepths.includes(depth)) quickDepths.splice(quickDepths.indexOf(depth), 1);
+        if (fullDepths.includes(depth)) fullDepths.splice(fullDepths.indexOf(depth), 1);
         depth -= 1;
       }
     }
-    expect(quickDepths.length > 0).toBe(false);
+    expect(fullDepths.length > 0).toBe(false);
+  });
+
+  it('every run_stage call in ci-gate.sh declares a numeric timeout (TOOL-06)', () => {
+    // The ratchet for the defect this file's own stage was the casualty of. Seven
+    // call sites passed the stage NAME where run_stage expects seconds; `timeout`
+    // exited 125 before the command ran, every one landed in FAILED[], and the
+    // summary exits non-zero whenever FAILED[] is non-empty — so every
+    // code-change gate reported GATE: FAIL on a diff it had never examined, while
+    // docs-only runs returned PASS because their `exit 0` fires first.
+    const calls = gateSh
+      .split('\n')
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      .filter(({ line }) => /^run_stage\s/.test(line));
+    expect(calls.length).toBeGreaterThan(5);
+    const unbounded = calls.filter(({ line }) => !/^run_stage\s+\d+\s/.test(line));
+    expect(unbounded.map(({ line, n }) => `${n}: ${line}`)).toEqual([]);
   });
 
   it('ci-gate.sh runs it between the audit-write stage and the schema-drift stage', () => {
