@@ -2,11 +2,28 @@ import { headers as incomingHeaders } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { auth } from '@/auth';
+import { ApiError, apiErrorMessage } from '@/lib/api-error-message';
 import {
   clientProvenanceHeaders,
   stripClientProvenanceHeaders,
   type ClientProvenanceSource,
 } from '@/lib/client-provenance';
+
+/**
+ * ⚠️ **Module serveur.** Il importe `next/headers` (`:1`) et `@/auth` (`:4`).
+ * Importer une **valeur** d'ici depuis un fichier `'use client'` casse
+ * `next build` (PF-133) ; seul `import type` est sans conséquence. Les helpers
+ * purs d'erreur vivent dans `@/lib/api-error-message`, sans aucun import — un
+ * composant client les importe **directement là-bas**, jamais via la
+ * ré-exportation ci-dessous : c'est le spécificateur d'import qui décide du
+ * graphe de bundling.
+ *
+ * `ApiError` est ré-exportée pour les ~30 appelants serveur qui font déjà
+ * `import { api, ApiError } from '@/lib/api-client'` — sa déclaration a été
+ * déplacée dans le module feuille pour qu'`apiErrorMessage` puisse continuer à
+ * restreindre par `instanceof` sans tirer ce fichier-ci.
+ */
+export { ApiError } from '@/lib/api-error-message';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:4000';
 
@@ -30,15 +47,6 @@ async function requestHeadersOrNull(): Promise<ClientProvenanceSource | null> {
     return await incomingHeaders();
   } catch {
     return null;
-  }
-}
-
-export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly body: unknown,
-  ) {
-    super(`API ${status}`);
   }
 }
 
@@ -145,6 +153,21 @@ export type ApiResult<T = unknown> = { ok: true; data: T } | { ok: false; error:
  * Shared error→result converter for server actions. Re-throws Next.js
  * navigation signals so they reach the runtime and trigger the redirect.
  *
+ * **Pourquoi la vérification de navigation vient en premier (PF-174).**
+ * `api()` appelle `redirect()` sur un 401 (plus haut) ; `redirect()` jette une
+ * erreur à `digest` `NEXT_REDIRECT;…`. Sans ce ré-jet, une session expirée
+ * deviendrait un `{ ok: false }` affichant `NEXT_REDIRECT;replace;/admin/login…`
+ * dans l'UI et l'utilisateur ne serait **jamais** envoyé vers la connexion.
+ *
+ * **Pourquoi le texte brut d'une non-`ApiError` n'est pas renvoyé.** Une panne
+ * réseau donne `fetch failed` ou `connect ECONNREFUSED 127.0.0.1:4000` : l'hôte
+ * et le port internes de l'API, transmis du serveur au navigateur. Next masque
+ * les erreurs de server action précisément pour cela ; renvoyer le message
+ * comme *donnée* contournerait ce masquage. Le brut reste dans les logs
+ * serveur, l'appelant reçoit la phrase générique d'`apiErrorMessage`
+ * (`@/lib/api-error-message`, module feuille). Les corps d'`ApiError`
+ * sont, eux, la sortie relue de notre propre API et sont restitués tels quels.
+ *
  * @example
  *   export async function createX(payload: …): Promise<ApiResult> {
  *     try { … return { ok: true, data }; }
@@ -153,12 +176,8 @@ export type ApiResult<T = unknown> = { ok: true; data: T } | { ok: false; error:
  */
 export function apiResultFromError(err: unknown): ApiResult<never> {
   if (isNextNavigationSignal(err)) throw err;
-  if (err instanceof ApiError) {
-    const body = err.body as { message?: string | string[] } | null;
-    const msg = Array.isArray(body?.message)
-      ? body!.message.join(' · ')
-      : (body?.message ?? `HTTP ${err.status}`);
-    return { ok: false, error: msg };
+  if (!(err instanceof ApiError)) {
+    console.error('[apiResultFromError] non-ApiError thrown by a server action:', err);
   }
-  return { ok: false, error: (err as Error).message };
+  return { ok: false, error: apiErrorMessage(err) };
 }

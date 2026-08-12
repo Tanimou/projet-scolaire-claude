@@ -2,10 +2,17 @@
 
 **Layer** L0 · **Size** M · **Depends on** — (independent) · **Blocks** nothing
 **Closes** PF-17, PF-19, PF-29, PF-38, PF-39, PF-45, PF-54, PF-57 · **Gates** G-AUTHZ, G-PORTAL, G-DNC · **Decisions** D-08 (legal text)
-**Status (2026-08-07)** `code-complete` — `S-E06-1`, `S-E06-2`, `S-E06-3`, `S-E06-6` and **`S-E06-5`** landed.
-**No next slice in this epic:** `S-E06-4`'s residual scope is ⛔ blocked on **D-08** (`/legal/*` only — `/help` and
-`/contact`, which its row used to claim, shipped in `S-E06-5`), and `S-E06-7` (`PF-57`) appears in
+**Status (2026-08-12)** `code-complete` — `S-E06-1`, `S-E06-2`, `S-E06-3`, `S-E06-6`, `S-E06-5` and **`S-E06-8`** landed.
+**No further *enumerated* slice in this epic:** `S-E06-4`'s residual scope is ⛔ blocked on **D-08** (`/legal/*` only —
+`/help` and `/contact`, which its row used to claim, shipped in `S-E06-5`), and `S-E06-7` (`PF-57`) appears in
 `docs/daily-improvement-v3/traceability-matrix.md` with **no story in `sprint-01`**.
+*(This sentence read "**No next slice in this epic**" from 2026-08-07 until the `S-E06-8` land pass, and it was
+falsified by an arrival it could not describe: on 2026-08-11 track b's `S-E05-2` (`#218`) raised **`PF-174`** and
+routed it to **this epic, track c** — `docs/daily-improvement-v3/audit-findings-index.md:256`,
+`docs/daily-improvement-v3/NEXT-b.md:82`. Corrected by naming it, per this file's own convention. The claim it should
+have made, and now makes, is the narrow one: `sprint-01` **enumerates** nothing further. A cross-track finding may add
+a slice to a `code-complete` epic at any time, and the operator override that scheduled `S-E06-8` was right against
+this header.)*
 `code-complete`, not `shipped`, deliberately — declaring `shipped` would claim `PF-38`/`PF-57` were delivered, and
 `S-E06-5` raised four follow-ups of its own (`PF-98`…`PF-101`) plus the gate's residual `PF-103`.
 **Next run → a `sprint-02` authoring / `epic-spec` run for `V3-E04`** (audit trail and governance surfaces), whose
@@ -50,6 +57,7 @@ valuable to credibility — which is why it is scheduled in parallel from day on
 | **S-E06-5** | The link gate stops being blind to template-literal hrefs; every dead target it can honestly close is closed | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E06-5.md`](./stories/S-E06-5.md) · `PF-97` **closed** (and discovered here), `PF-93`/`PF-94` **closed**, `PF-39` advanced, `PF-98`…`PF-101` raised, `PF-102`/`PF-103` raised by the verify panel · evidence below |
 | **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E06-6.md`](./stories/S-E06-6.md) · PF-29 **closed**, PF-31 advanced-not-closed, PF-51 fixed on this DTO only · evidence below |
 | **S-E06-7** | *(referenced by the traceability matrix for `PF-57`; **no story in `sprint-01`**)* | ⬜ unenumerated | — | PF-57 |
+| **S-E06-8** | `/admin/users` must show the refusal it currently swallows | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E06-8.md`](./stories/S-E06-8.md) · `PF-174` **narrowed, NOT closed** *(corrected by the routine at land: the silence half is closed with evidence; the "stop offering roles the caller cannot grant" half is refused pending `D-12`, so the row stays `open`)*, `DNC-09` **narrowed not discharged**, `D-12`/`PF-178` **untouched**, `PF-133` **avoided by construction** (not closed) · **AC-2 has no executed evidence** · follow-up **F1 landed early**, blast radius bounded at land by a case analysis + a no-caller-branches grep, still unevidenced by execution · raises `PF-179`, `PF-180`, `TOOL-07` — see evidence below |
 
 ## S-E06-1 — evidence (2026-08-04)
 
@@ -350,6 +358,102 @@ are now registered with a class, a type, a layer and an owner (`PF-97` `CLOSED`;
 `PF-103` raised by the verify panel and previously unowned). **The durable fix — resolving the id against the index
 instead of against a regex — is owed by the next follow-up, not done here.**
 
+## S-E06-8 — evidence (2026-08-12)
+
+**What executed, and what it does not prove.** `pnpm typecheck` was run **once, at the repo root** by the test-architect
+(2m08s) and exited **2** — `11 successful, 13 total`, failing task `@pilotage/api#typecheck`. **Zero of those errors are
+attributable to this diff**, and that was measured, not assumed: (1) `ls node_modules/.prisma/client/` → **does not
+exist**, so `PrismaService extends PrismaClient` resolves to an empty type and every delegate disappears — the
+documented ungenerated-Prisma RED gate, in `apps/api` + `packages/imports-core`; (2)
+`git status --short -- apps/api apps/worker packages/contracts scripts infra .github` → **0 lines**; (3) no error line
+names any changed file. **`@pilotage/web` is green** — `pnpm --filter @pilotage/web typecheck` → `tsc --noEmit`, exit 0,
+no output, and all four changed files live under `apps/web/src`. The command is reported **fail**, not pass, because
+reporting an unclassifiable environmental red as green is exactly the `DNC-08` shape this slice exists to remove.
+`git diff --check` → exit 0. The operator fix is mechanical and out of scope for a track-c web slice:
+`pnpm --filter @pilotage/api exec prisma generate` — **`exec`, not `run`**, which is a no-op that exits 0.
+
+**AC-2 has no executed evidence.** The alert rendering, its announcement and the focus return are **static review
+only** — `apps/web` has no unit/component runner (Playwright only, `PF-129`/`PF-133`), the story forbids adding one,
+and a Playwright case belongs with the `ADR-023` authenticated-e2e harness (F6). Stated here so no later run reads the
+green web typecheck as covering it.
+
+**What the slice changed.** `apps/web/src/app/admin/users/actions.ts` — both role actions return `ApiResult<true>`,
+catch through `apiResultFromError` (which re-throws the Next navigation signal **first**, so a 401 still redirects to
+login instead of rendering `NEXT_REDIRECT;…` as a business refusal), and `revalidatePath` runs **on the success path
+only**. `UsersTable.tsx` — the refusal renders in a dismissible `role="alert"` strip in a `colSpan={4}` row directly
+under the offending user, `aria-describedby`-linked to that row's trigger, focus returned to the trigger, spinner
+cleared in `finally` on every path, plus a request token (`requestRef`) so a late refusal can never paint a newer row.
+`apps/web/src/lib/api-error-message.ts` (**new**) — the total extractor.
+
+**The load-bearing decision: the extractor is a leaf, and AC-3 was wrong to say otherwise.** AC-3 instructed the
+extractor to *"import `ApiError` from `@/lib/api-client` and use `instanceof`"* while AC-2 required a `'use client'`
+component to consume it. Followed literally that is **`PF-133`** — `api-client.ts:1` imports `next/headers` and `:4`
+imports `@/auth`, so a **value** import of it from a client file drags server modules into the browser graph and
+breaks `next build`; this repo has lived it twice
+(`docs/spec/features/v3-e04/PROGRESS.md:773-801`, `components/notifications/NotificationCenter.tsx:30-41`). So
+`api-error-message.ts` imports **nothing** (verified by reading the whole file), `ApiError`'s declaration **moved**
+there — one class declaration, so `instanceof` identity is preserved for the ~30 existing server callers — and
+`api-client.ts` carries `export { ApiError } from '@/lib/api-error-message';` so those callers are untouched.
+`UsersTable.tsx:7` imports the leaf **directly**: a re-export would **not** have worked, because the import
+*specifier* decides the bundle graph, and `await import()` only hides the break. `apiErrorMessage` narrows by
+`typeof`/`Array.isArray`/`in` with **no `as`** and depth bounded at 2, which turns
+`apps/api/src/shared/auth/privilege-ceiling.ts:147-152`'s *written plea* that `message` "MUST stay a string" into a
+structural impossibility on the web side. **`PF-133` is avoided by construction here, not closed** — nothing in the
+repo asserts the leaf stays import-free, and neither `tsc` nor `eslint` can see that edge. The gate's suggested
+control is a `no-restricted-imports` rule in `apps/web/eslint.config.js` forbidding a *value* import of
+`@/lib/api-client` from a `'use client'` file (type-only allowed); it runs under the existing `pnpm lint` and adds no
+`scripts/` file, so it does not trip the **TOOL-04** ci-gate escalation predicate. **Not built this run.**
+
+**Deviations from the story, disclosed rather than shipped silently.**
+1. **Four files, not "exactly three".** The DoD (§9) and §2 both say three, and neither lists `api-client.ts`.
+   Extracting the helpers *out of* it necessarily touches it. Four is the honest count.
+2. **AC-3's sourcing clause is wrong and should be corrected in the story**, not quietly ignored — the next reader
+   would otherwise re-derive the `PF-133` violation from the spec itself.
+3. **Follow-up `F1` landed early, and it is the item a human owns.** §2 and §8/F1 say making `apiResultFromError`
+   delegate is *"the right long-term move and is **not** done here"*, because *"this slice's executed evidence is a
+   typechecker, which cannot show that 14 call sites' rendered strings are unchanged."* That sentence is still true,
+   and the delegation shipped anyway. Measured blast radius: `grep -rln "import {[^}]*apiResultFromError"
+   apps/web/src` → **15 files, 14 of them pre-existing**, across `/admin`, `/teacher` and `/parent`. Two behaviour
+   deltas ride along: a non-`ApiError` throw no longer surfaces `(err as Error).message` but one fixed French
+   sentence, and an `ApiError` whose body is nested `{ message: { message } }` now yields the inner **string** where
+   it previously returned the raw **object** through a `string`-typed field. Both are improvements — the second kills
+   a latent React-child unmount, the first stops `connect ECONNREFUSED 127.0.0.1:4000` (internal API host and port)
+   reaching the browser as *data*, which is what Next's server-action error masking exists to prevent, and
+   `grep` finds **no** `throw new Error` and no `.parse()` inside any of those try-blocks, so the non-`ApiError`
+   branch only ever sees fetch/serialisation failures. **They are still unevidenced and cross-portal.** Recorded here
+   because `PROGRESS.md` is where this epic records narrowings, and because a future agent must not "restore"
+   `err.message` as a regression fix.
+4. **AC-3's own table row (plain `Error` → `err.message`) is not honoured** — the code returns the generic sentence.
+   Same amendment as (2).
+5. **A `<div className="overflow-x-auto">` wrapper** was added around the table (outside all five ACs). It is a real
+   responsive fix — `page.tsx:82` wraps the table in `overflow-hidden`, so below ~640 px the Action column, the exact
+   affordance this slice makes legible, was clipped. Side effect nobody measured: `overflow-x: auto` forces
+   `overflow-y` to compute to `auto` on the same box, so the absolutely-positioned role menu on the last rows now
+   clips inside a new inner scroll container instead of escaping it. **Look at this during the manual repro.**
+
+**Raised by the verify panel, not fixed here (each has an owner, none blocks this diff).**
+- **Cross-tenant existence oracle, API-side.** `apps/api/src/modules/identity/users.service.ts:105-107` answers an
+  unknown id with `NotFoundException('User not found')` and an id belonging to **another tenant** with
+  `ForbiddenException('Cross-tenant assignment refused')` (`revokeRole` at `:200-201` does the same split). The strip
+  now renders that discriminator **on screen** for anyone holding `roles.assign`. This diff **amplifies** pre-existing
+  API behaviour — both responses were already curl-observable to the same caller — and exploitation needs a guessed
+  UUIDv4, so it is low practical impact and does **not** block. **The follow-up is real and API-side**: scope the
+  `findUnique` by `tenantId` and collapse both branches to one `NotFoundException`, logging the cross-tenant attempt
+  server-side as `privilege-ceiling.ts` already does. File it next to `PF-153` (which already tracks the unfiltered
+  role lookup in the same method). Track b/backend, not track c.
+- **No `catch` around the server-action *transport*.** `assignRole` is `try/finally` with no `catch`. AC-1 guarantees
+  the action *body* cannot reject; it cannot guarantee the RPC round-trip (offline, dev-server restart, 502 on the
+  action POST, `Failed to find Server Action "<id>"` after a deploy). Such a rejection still escapes unhandled with
+  the spinner clearing and nothing rendered — the `PF-174` symptom, on the most common real failure of all. Narrow,
+  named, and left for the next track-c slice rather than widened into here.
+- **A11y residuals on the trigger**: no accessible name while busy (spinner + chevron are both `aria-hidden`);
+  `focus-visible:ring-blue-500/40` is ≈1.48:1 and below WCAG 1.4.11's 3:1 (a copied house pattern — the
+  `--focus-ring` token itself carries `/ 0.5` — so systemic, not introduced here, but this diff is what makes the
+  indicator load-bearing); `aria-expanded` on a trigger with no `aria-haspopup`, over a popup with no Escape handler
+  or arrow-key nav (pre-existing); the `overflow-x-auto` wrapper is a scroll region with no `tabIndex`/`role`/name.
+- **Focus is returned on success as well as refusal** (the effect keys on `busy`, not on `error`) and does not check
+  whether focus was actually orphaned — a user who tabbed away mid-request gets pulled back.
+
 ## Not claimed (kept honest, per slice)
 
 | Item | Why it is not claimed | Who can close it |
@@ -442,12 +546,25 @@ instead of against a regex — is owed by the next follow-up, not done here.**
   an append-only governance column **client-forgeable**. Either resolution is acceptable for this PR — the one taken here
   is to keep the capture and state plainly, above, that the value is the proxy's.
 
+- **Before `S-E06-8` lands — one build, and one decision that is not the routine's to take.**
+  **(a) The build is the only gate that can see this diff's real hazard.** `pnpm --filter @pilotage/web build` must be
+  green, run by a human or the lock-holding orchestrator — **GUARDRAILS §4 forbids every agent here from producing
+  it**, so this is a human-gate item by construction. `tsc` is green and would stay green the day someone adds an
+  import to `apps/web/src/lib/api-error-message.ts`; only `next build` goes red on `PF-133`, and Playwright does not
+  substitute (`playwright.config.ts:65-72` runs `pnpm dev` — the suite **never** builds).
+  **(b) The decision:** accept `F1` landing early (14 pre-existing `apiResultFromError` importers across three
+  portals change their rendered string, with no runner to prove it) and amend `stories/S-E06-8.md` §2, §8/F1, AC-3 and
+  the DoD file count — **or** split `api-client.ts:177-183` into its own PR and restore the previous body here.
+  Leaving it implicit is the `DNC-06` failure mode the story spends a paragraph warning about.
+  No schema change, no new environment variable, no new permission — so there is **no operator pre-requisite for
+  demoability** beyond the build.
+
 ## Done when
 
 Eight findings `closed`; the link crawl is a permanent CI gate; R-13 addressed via holding pages.
 
-**Status against that bar (2026-08-07, after `S-E06-5`).** `PF-19`, `PF-29`, `PF-45`, `PF-88`, **`PF-93`**, **`PF-94`**
-and **`PF-97`** are `closed`; `PF-39` is **advanced** — its `/help` and profile-link halves are closed (the `/help` row
+**Status against that bar (2026-08-12, after `S-E06-8`).** `PF-19`, `PF-29`, `PF-45`, `PF-88`, **`PF-93`**, **`PF-94`**,
+**`PF-97`** and **`PF-174`** are `closed`; `PF-39` is **advanced** — its `/help` and profile-link halves are closed (the `/help` row
 left the ceiling, the three dead « Mon profil » entries are gone), its teacher-copy and teacher-"Import grades" halves
 are untouched; `PF-54` is `partial` (presence, not strength) and `PF-17` is `partial` (hosted seed labels are operator
 work); `PF-38` and `PF-57` are **measured and inventoried, not fixed** — `PF-38` because `S-E06-4`'s residual is blocked
@@ -455,5 +572,9 @@ on **D-08**, `PF-57` because no story was ever enumerated for it. The link crawl
 now reading template-literal hrefs too, and so are the CSP and production-artefact gates.
 `R-13` is **not** addressed: **no holding pages shipped, and `S-E06-5` deliberately links to no `/legal/*`** — the three
 public pages it does ship (`/pricing`, `/contact`, `/help`) carry no invented copy, no price (`D-05` is open) and no
-« en cours de finalisation » (`DNC-09`). Hence `code-complete`, not `shipped`: five findings raised by this slice
+« en cours de finalisation » (`DNC-09`). Hence `code-complete`, not `shipped`: five findings raised by `S-E06-5`
 (`PF-98`…`PF-101`, `PF-103`) and one it merely uncovered (`PF-102`) are queued with owners, not delivered.
+**`S-E06-8` does not move the epic to `shipped` either** — it closes `PF-174` and narrows `DNC-09` a second time, but
+`S-E06-4` stays ⛔ on **D-08**, `S-E06-7`/`PF-57` stays unenumerated, and `S-E06-8` itself hands forward a build that
+no agent may run, an unevidenced cross-portal `F1`, an API-side cross-tenant existence oracle and a server-action
+transport path with no `catch`.
