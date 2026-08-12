@@ -2,17 +2,28 @@
 
 **Layer** L0 · **Size** M · **Depends on** — (independent) · **Blocks** nothing
 **Closes** PF-17, PF-19, PF-29, PF-38, PF-39, PF-45, PF-54, PF-57 · **Gates** G-AUTHZ, G-PORTAL, G-DNC · **Decisions** D-08 (legal text)
-**Status (2026-08-12)** `code-complete` — `S-E06-1`, `S-E06-2`, `S-E06-3`, `S-E06-6`, `S-E06-5` and **`S-E06-8`** landed.
-**No further *enumerated* slice in this epic:** `S-E06-4`'s residual scope is ⛔ blocked on **D-08** (`/legal/*` only —
-`/help` and `/contact`, which its row used to claim, shipped in `S-E06-5`), and `S-E06-7` (`PF-57`) appears in
-`docs/daily-improvement-v3/traceability-matrix.md` with **no story in `sprint-01`**.
+**Status (2026-08-12)** `code-complete` — `S-E06-1`, `S-E06-2`, `S-E06-3`, `S-E06-6`, `S-E06-5`, **`S-E06-8`** and
+**`S-E06-9`** landed.
+**`sprint-01` enumerates no further slice in this epic — and that is not the same claim as "no next slice".** Of the
+enumerated backlog, `S-E06-4`'s residual scope is ⛔ blocked on **D-08** (`/legal/*` only — `/help` and `/contact`,
+which its row used to claim, shipped in `S-E06-5`), and `S-E06-7` (`PF-57`) appears in
+`docs/daily-improvement-v3/traceability-matrix.md` with **no story in `sprint-01`**. But at-land and cross-track
+findings keep adding slices anyway: **`S-E06-9` (landed 2026-08-12, run 41) is the second in two runs** — `S-E06-8`
+raised **`PF-179`** (P2) and **`PF-180`** (P3) *at land*, `docs/daily-improvement-v3/NEXT-c.md:26` named the story, and
+neither finding ever reached `traceability/OPEN.md` because **`TOOL-07`** keeps the reconciler's fold in a checkout
+nobody reads. Read the lead sentence as the narrow claim it now makes; a cross-track or at-land finding may add a
+slice to a `code-complete` epic at any time. Spec: [`stories/S-E06-9.md`](./stories/S-E06-9.md).
 *(This sentence read "**No next slice in this epic**" from 2026-08-07 until the `S-E06-8` land pass, and it was
 falsified by an arrival it could not describe: on 2026-08-11 track b's `S-E05-2` (`#218`) raised **`PF-174`** and
 routed it to **this epic, track c** — `docs/daily-improvement-v3/audit-findings-index.md:256`,
 `docs/daily-improvement-v3/NEXT-b.md:82`. Corrected by naming it, per this file's own convention. The claim it should
 have made, and now makes, is the narrow one: `sprint-01` **enumerates** nothing further. A cross-track finding may add
 a slice to a `code-complete` epic at any time, and the operator override that scheduled `S-E06-8` was right against
-this header.)*
+this header. **Rewritten a second time in the `S-E06-9` land pass (2026-08-12):** that pass first *appended* the new
+arrival next to the old bold claim instead of replacing it, so the file spent one run asserting "no further enumerated
+slice" three lines above the announcement of one. Appending an exception is not correcting a lead claim — the lead
+sentence itself now carries the narrow wording, and this note records that it took two passes to obey the convention
+this very paragraph states.)*
 `code-complete`, not `shipped`, deliberately — declaring `shipped` would claim `PF-38`/`PF-57` were delivered, and
 `S-E06-5` raised four follow-ups of its own (`PF-98`…`PF-101`) plus the gate's residual `PF-103`.
 **Next run → a `sprint-02` authoring / `epic-spec` run for `V3-E04`** (audit trail and governance surfaces), whose
@@ -58,6 +69,7 @@ valuable to credibility — which is why it is scheduled in parallel from day on
 | **S-E06-6** | Confirmation and explicit scope for bulk/irreversible controls | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E06-6.md`](./stories/S-E06-6.md) · PF-29 **closed**, PF-31 advanced-not-closed, PF-51 fixed on this DTO only · evidence below |
 | **S-E06-7** | *(referenced by the traceability matrix for `PF-57`; **no story in `sprint-01`**)* | ⬜ unenumerated | — | PF-57 |
 | **S-E06-8** | `/admin/users` must show the refusal it currently swallows | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E06-8.md`](./stories/S-E06-8.md) · `PF-174` **narrowed, NOT closed** *(corrected by the routine at land: the silence half is closed with evidence; the "stop offering roles the caller cannot grant" half is refused pending `D-12`, so the row stays `open`)*, `DNC-09` **narrowed not discharged**, `D-12`/`PF-178` **untouched**, `PF-133` **avoided by construction** (not closed) · **AC-2 has no executed evidence** · follow-up **F1 landed early**, blast radius bounded at land by a case analysis + a no-caller-branches grep, still unevidenced by execution · raises `PF-179`, `PF-180`, `TOOL-07` — see evidence below |
+| **S-E06-9** | Six server actions stop hand-rolling error extraction, and the login redirect stops being swallowed | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E06-9.md`](./stories/S-E06-9.md) · `PF-179` **closed**, `PF-180` **closed**, `S-E06-8` follow-up **F2 closed** — all three **on static evidence only** · 3 files (`lib/api-client.ts`, `admin/roles/actions.ts`, `admin/settings/preferences-actions.ts`), no JSX edited · **G-PORTAL 1/1 (roles) + 3/4 (preferences, student portal verified to have no `settings` route)**, `G-DNC` clean with **DNC-10** load-bearing (the converter gained no bypass flag) · **the redirect's runtime behaviour has NO executed evidence** — `apps/web` has no unit-test runner (no jest/vitest; e2e only), so the fix is typed and read, never observed · raises **F7** (stand up a unit runner + the `bulkFailure` mixed-batch spec) and four stale-anchor follow-ups — see evidence below |
 
 ## S-E06-1 — evidence (2026-08-04)
 
@@ -454,6 +466,102 @@ control is a `no-restricted-imports` rule in `apps/web/eslint.config.js` forbidd
 - **Focus is returned on success as well as refusal** (the effect keys on `busy`, not on `error`) and does not check
   whether focus was actually orphaned — a user who tabbed away mid-request gets pulled back.
 
+## S-E06-9 — evidence (2026-08-12, run 41)
+
+**What executed.** `pnpm typecheck` → **13/13 turbo tasks successful** (11 cached, 2 executed, 2 m 05 s);
+`@pilotage/web` and `@pilotage/api` were cache **misses** and compiled fresh in this worktree, so the diff is really
+covered rather than replayed. `pnpm --filter @pilotage/web lint` → **34 warnings, 0 errors**, exactly the
+`scripts/lint-warning-baseline.json` ceiling (that ratchet is two-sided: 34 is the pass, not "≤ 34"); both dropped
+`ApiError` imports are accounted for in it. `git diff --check` → exit 0. Scope, measured:
+`git status --short -- apps/api apps/worker packages prisma scripts infra .github` → **0 lines**, and
+`docs/daily-improvement-v3/traceability/OPEN.md` is untouched.
+
+**What that proves, and precisely where it stops.** `pnpm typecheck` is a *genuine* proof of AC-1/AC-2/AC-3/AC-4: the
+narrowed `ApiFailure` has to land inside three foreign success unions (`{ ok: true; id: string }`,
+`{ ok: boolean; error?: string }`, `BulkChannelResult`), and the three unedited consumers — `RoleBuilderForm.tsx`,
+`DeleteRoleButton.tsx`, `PreferencesPanel.tsx` — compile against `res.error` / `res.succeededKinds` or they do not.
+It proves **nothing at all** about the behaviour the slice exists to change. **`apps/web` has no unit-test runner**
+(`apps/web/package.json` ships only the five Playwright `test:e2e*` scripts; neither `jest` nor `vitest` is a
+dependency), so **not one line of the re-throw path has ever been executed**. `PF-179`, `PF-180` and `S-E06-8`'s `F2`
+are recorded `closed` on **static evidence only** — read, typed, and argued, never observed. That is why the row is
+`⚠️ needs human review` and not `✅`.
+
+**The one runtime unknown a human must settle, named rather than smoothed over.** When a server action throws a
+`NEXT_REDIRECT`, Next intercepts it server-side; the direct `await action()` in a client component is then expected to
+resolve to `undefined` rather than reject. `RoleBuilderForm.tsx:138`, `DeleteRoleButton.tsx:18` and
+`PreferencesPanel.tsx:119/138/160/181` each dereference `.ok` off that value with no `?.`. The navigation is already in
+flight, so the user very probably still lands on the login page — but the delivered behaviour could be *a TypeError
+racing a redirect* rather than the clean redirect this slice claims, and no static reading can settle which. If the
+repro shows `res === undefined`, the fix belongs in those three client components (`res?.ok`), **not** in the
+converter. This exposure is **pre-existing and codebase-wide** — all ~20 `apiResultFromError` call sites share it — so
+it does not belong to this diff; it is the reason to finally run the check once.
+
+**Two comment corrections made in the land pass, and why they are not cosmetic.** (1) The new `admin/roles/actions.ts`
+docblock quoted `NEXT_REDIRECT;replace;/admin/login…` as the string an admin reads. §1.2 of the story had *measured*
+against pinned Next 15.5.18 that both halves are false — the actions read `.message`, so the rendered string is the
+bare token `NEXT_REDIRECT`, and inside a server action the digest type is `push`, not `replace`. Restoring a quote the
+story explicitly told the implementer not to restore is the `DNC-06` this slice set as its own gate; corrected to the
+measured values. *(The identical sentence at `api-client.ts:179` is **inherited from `S-E06-8`**, outside this diff,
+and deliberately left alone rather than widening the change.)* (2) The `createRoleAndRedirect` docblock asserted "the
+only `try` in the file", where there are three (`:37`, `:51`, `:63`). The conclusion — the success-path `redirect()`
+sits outside all of them — is unaffected and still holds; but in a project whose comments *are* the evidence artifact,
+an assertion presented as measured and not true is a defect in the artifact. Both edits are prose; neither touches a
+statement.
+
+**Raised here, owned elsewhere — none of these blocks the diff.**
+- **`F7` — stand up a unit runner for `apps/web/src/lib`, and write the one test this diff actually needs.** The only
+  genuinely new logic is `bulkFailure`'s *all-reasons* scan, and it is the only place old and new behaviour disagree:
+  with reasons `[ApiError(400), {digest:'NEXT_REDIRECT;push;…'}]` the deleted `results.find(rejected)` silently
+  converted the redirect to `HTTP 400`, which is exactly what a token crossing `exp` mid-fan-out produces. The
+  discriminating assertion is the **reversed** pair. It is also a regression magnet: the next reader will "simplify"
+  to `apiResultFromError(reasons[0])` because the converter re-throws anyway — plausible, and wrong. Two real costs
+  make it a follow-up: `bulkFailure` is unexported (every export of a `'use server'` file must be `async`), so it must
+  move to a plain module first; and the runner does not exist. Landing it retro-covers the ~20 never-executed
+  `apiResultFromError` call sites, not just this one.
+- **Four stale anchors this diff created by deleting the code they cite** — the constraints still stand, only their
+  stated *reasons* died. `docs/adr/ADR-015-permissions-rbac-abac.md:133-134`,
+  `apps/api/src/shared/auth/privilege-ceiling.ts:89` and `:147-152`, and `privilege-ceiling.spec.ts:135` all justify a
+  live backend invariant by pointing at `admin/roles/actions.ts:26-27/45-47` "reading `body.message` with no type
+  check". Those lines are now `return apiResultFromError(err);`, and `apiErrorMessage` is total by construction, so
+  the React-child crash they guard is unreachable *from that path*. The surviving reason is narrower and real:
+  `RoleBuilderForm.tsx:322` renders the excess codes, and the sibling `missing` array alone never reaches a human.
+  **Risk if left silent:** a backend author checks `:147-152` against the web, finds the cited code gone, concludes
+  the constraint is discharged, and relaxes `message` to a structured object — at which point the excess codes stop
+  reaching the human and `apiErrorMessage` falls back to `HTTP 403`. `apps/api` is track b's seam and AC-7 forbids
+  touching it here, so this is registered, not fixed.
+- **`api-error-message.ts:41-48` and `:60-62` now contradict this diff** — inside `apps/web`, one directory from a file
+  the diff edits, which makes it the copy a future web author is most likely to act on. `:60-62` reads *"Non
+  retrofités ce run (périmètre) : `admin/roles/actions.ts` … Candidats identifiés, pas traités"*, which is precisely
+  what this slice performed; `:42` asserts `actions.ts:45-47` "renvoie `body.message` sans le restreindre", no longer
+  true. Left unedited only because AC-7 pins the diff at exactly three files under `apps/web/src`; **first item of the
+  follow-up, and disclosed rather than discovered.**
+- **The error band on the preferences panel now says the same thing twice.** With the API unreachable,
+  `apiResultFromError` returns a complete French sentence and `PreferencesPanel.tsx:305` appends its own frame — the
+  `role="alert"` band reads *"L'opération a échoué pour une raison inattendue. Réessayez dans un instant. — le réglage
+  n'a pas pu être enregistré, réessayez."*: a full stop followed by an em dash and the same call to action twice. It
+  was terse and grammatical before. AC-5 forbids editing that JSX this run. The house pattern already exists —
+  `isStatusOnlyMessage` (`api-error-message.ts`) with `UsersTable.tsx:40-56` as the worked example: own frame only
+  when the server refused without usable text, server detail on a secondary line.
+- **`bulkFailure` reports only `reasons[0]`.** In a mixed non-navigation batch (say 403 on `announcement`, socket hang
+  up on `alert`) the band and the new `console.error` describe the first failure *by `kinds` order*, and the other
+  N-1 reasons vanish with no trace. The old code was equally partial in the message and logged nothing; the diff
+  introduces a logging path that is silently partial rather than honestly absent. `reasons` is in hand at zero cost.
+- **No consumer resets its pending flag on the throw path.** `setBusy(null)` / `setSaving(false)` sit *after* the
+  `await` in all three consumers, with no `try/finally`. Today this is harmless only because the redirect target is a
+  different route and unmounts the tree — an invariant nothing states and no AC protects. A future navigation signal
+  that resolves to the *current* route (a same-segment `not-found`, or a login bounce that returns straight to
+  settings) would leave the panel frozen with every switch `disabled` and **no error band at all**, unrecoverable
+  short of a reload.
+- **`RoleBuilderForm.tsx:236`'s error band has no `role="alert"`** — the refusal message `PF-180` makes correct is
+  inserted into the DOM without being announced (WCAG 2.2 AA 4.1.3). Its sibling on this same slice,
+  `PreferencesPanel.tsx:301-306`, *does* carry it, so this is an inconsistency, not house style. **Pre-existing**; the
+  diff edits no JSX.
+- **`${kind}` is interpolated unencoded** into `/api/v1/notifications/preferences/${kind}` while server-action
+  arguments carry no runtime validation (TS types are erased at the RPC boundary), so `..` segments normalise into
+  other API paths. Codebase-wide (every `admin/*/actions.ts` interpolates ids the same way) and contained — the API
+  re-derives permissions and tenant from the JWT. This diff makes the resulting text a marginally better probing
+  oracle on that one path. Its own finding, not a blocker here.
+
 ## Not claimed (kept honest, per slice)
 
 | Item | Why it is not claimed | Who can close it |
@@ -559,6 +667,21 @@ control is a `no-restricted-imports` rule in `apps/web/eslint.config.js` forbidd
   No schema change, no new environment variable, no new permission — so there is **no operator pre-requisite for
   demoability** beyond the build.
 
+- **Before `S-E06-9` lands — nothing, and that is measured, not assumed.** No `schema.prisma` change, no new
+  environment variable, no new permission, no new route, no `packages/contracts` change: **no operator pre-requisite
+  for demoability, and no build is owed by the diff itself.** Two reds will be visible and neither belongs to it —
+  the ungenerated-Prisma `@pilotage/api#typecheck` red documented above (scoped signal:
+  `pnpm --filter @pilotage/web typecheck`), and `GATE: FAIL` from **TOOL-06**'s seven timeout-less stages, which no
+  code diff can clear today. What a human *can* still add that no agent could: the manual reproduction in
+  `stories/S-E06-9.md` §7 — expire a session mid-edit on `/admin/roles/[id]/edit` and confirm the browser reaches
+  `/admin/login?error=session_expired` instead of rendering `NEXT_REDIRECT`. **Extend it to the bulk path, which §7
+  does not cover and which is where the novel mechanism lives:** on `/admin/settings` (or `/parent/settings`, same
+  panel), let the token cross its `exp`, then fire a *"tout activer"* column toggle. Expected: the browser reaches
+  `/{portal}/login?error=session_expired`. Failure modes to watch for, both of which mean the fix is one layer out
+  and not in the converter — the panel **freezes on a spinner** (`setBusy(null)` never runs, `PF-174` relocated), or
+  the console shows a **`TypeError` reading `.ok` of `undefined`** racing the navigation. The roles path is
+  structurally proven by typecheck; the bulk fan-out is the untested logic.
+
 ## Done when
 
 Eight findings `closed`; the link crawl is a permanent CI gate; R-13 addressed via holding pages.
@@ -578,3 +701,18 @@ public pages it does ship (`/pricing`, `/contact`, `/help`) carry no invented co
 `S-E06-4` stays ⛔ on **D-08**, `S-E06-7`/`PF-57` stays unenumerated, and `S-E06-8` itself hands forward a build that
 no agent may run, an unevidenced cross-portal `F1`, an API-side cross-tenant existence oracle and a server-action
 transport path with no `catch`.
+**Nor does `S-E06-9`, and for a sharper reason.** It adds **`PF-179`** and **`PF-180`** to the `closed` column — which
+takes the epic past the numeric bar, eleven closures against "eight findings" — but both are closed on **static
+evidence only**, and the single behaviour the slice exists to deliver (an expired session actually reaching the login
+page) has never been executed by anything in this repository. A closure argued from a type and a reading is not the
+same artifact as a closure with a green test next to it; counting them together would let the bar be met by writing.
+The epic stays `code-complete` until `R-13`, `D-08` and `PF-57` are answered by decisions this routine may not take —
+and `S-E06-9` hands forward **`F7`** (the runner, plus the one `bulkFailure` spec that would retro-cover ~20
+never-executed call sites), four stale ADR/comment anchors it created by deleting the code they cite, and a
+two-sentence error band on three portals.
+
+**Next slice (recommended, track c): `F7` — stand up a unit-test runner for `apps/web/src/lib` and land the
+`bulkFailure` mixed-batch spec.** It is the cheapest slice on the board and the only one that changes the *class* of
+evidence this epic can produce: every web slice since `S-E06-8` has ended with "no executed evidence", and that is a
+property of the toolchain, not of the stories. Ordering it before more web behaviour work stops the next three slices
+inheriting the same caveat.

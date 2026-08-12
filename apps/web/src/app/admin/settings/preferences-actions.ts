@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { api, ApiError } from '@/lib/api-client';
+import { api, apiResultFromError, isNextNavigationSignal } from '@/lib/api-client';
 
 export type NotificationKindCode =
   | 'announcement'
@@ -49,8 +49,7 @@ export async function updatePreferenceAction(
     revalidateSettings();
     return { ok: true };
   } catch (err) {
-    if (err instanceof ApiError) return { ok: false, error: `HTTP ${err.status}` };
-    return { ok: false, error: (err as Error).message };
+    return apiResultFromError(err);
   }
 }
 
@@ -59,6 +58,49 @@ export interface BulkChannelResult {
   error?: string;
   /** Kinds whose PATCH actually landed — the client reconciles against these. */
   succeededKinds: NotificationKindCode[];
+}
+
+/**
+ * Branche d'échec **partagée** par les deux actions groupées (S-E06-9 · PF-180).
+ *
+ * **Pourquoi un pré-balayage, et pas simplement `apiResultFromError(reasons[0])`.**
+ * `Promise.allSettled` transforme un rejet en *donnée* : le signal de navigation
+ * que `redirect()` jette sur un 401 n'est plus jeté, il devient une `reason`. Le
+ * ré-jet interne d'`apiResultFromError` est une seconde ligne de défense, mais il
+ * ne couvre que la raison qu'on lui passe. Or les N PATCH partent en parallèle
+ * avec un seul jeton : un jeton qui franchit son `exp` en cours d'éventail donne
+ * un lot **mixte** (p. ex. `[400 validation, 401→NEXT_REDIRECT]`). Prendre la
+ * *première* raison rejetée — c'est-à-dire l'ordre de `kinds`, pas l'ordre des
+ * classes d'échec — jetterait le redirect à la poubelle. On balaie donc **toutes**
+ * les raisons avant de choisir celle qui portera le message.
+ *
+ * **Ce qui est délibérément perdu.** Quand on ré-jette, `succeededKinds` est
+ * abandonné : le panneau est démonté par la navigation vers la connexion, il n'y
+ * a plus de surface à réconcilier, et l'état serveur redevient la vérité au
+ * retour. Ne pas inventer un état « succès partiel puis redirection ».
+ *
+ * **Ordre.** Les appelants exécutent `revalidateSettings()` **avant** cette
+ * branche, volontairement : les kinds qui ont abouti doivent invalider le cache
+ * même si un kind *ultérieur* a déclenché le 401 qui expulse l'utilisateur.
+ *
+ * Non exportée : dans un fichier `'use server'`, tout export doit être une
+ * fonction `async` — l'exporter casserait `next build`.
+ */
+function bulkFailure(
+  results: PromiseSettledResult<unknown>[],
+  succeededKinds: NotificationKindCode[],
+): BulkChannelResult {
+  const reasons: unknown[] = results
+    .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    .map((r) => r.reason);
+
+  const navigationIndex = reasons.findIndex((reason) => isNextNavigationSignal(reason));
+  if (navigationIndex >= 0) throw reasons[navigationIndex];
+
+  // `reasons[0]` est `unknown` sous `noUncheckedIndexedAccess` ; c'est exactement
+  // la signature d'`apiResultFromError`, et `apiErrorMessage(undefined)` rend
+  // déjà la phrase générique française. Pas d'assertion non-nulle ici.
+  return { ...apiResultFromError(reasons[0]), succeededKinds };
 }
 
 /**
@@ -94,13 +136,7 @@ export async function setChannelForKindsAction(
     return { ok: true, succeededKinds };
   }
 
-  const firstRejected = results.find(
-    (r): r is PromiseRejectedResult => r.status === 'rejected',
-  );
-  const reason = firstRejected?.reason;
-  const error =
-    reason instanceof ApiError ? `HTTP ${reason.status}` : ((reason as Error)?.message ?? 'Erreur');
-  return { ok: false, error, succeededKinds };
+  return bulkFailure(results, succeededKinds);
 }
 
 /**
@@ -135,11 +171,5 @@ export async function setCadenceForKindsAction(
     return { ok: true, succeededKinds };
   }
 
-  const firstRejected = results.find(
-    (r): r is PromiseRejectedResult => r.status === 'rejected',
-  );
-  const reason = firstRejected?.reason;
-  const error =
-    reason instanceof ApiError ? `HTTP ${reason.status}` : ((reason as Error)?.message ?? 'Erreur');
-  return { ok: false, error, succeededKinds };
+  return bulkFailure(results, succeededKinds);
 }
