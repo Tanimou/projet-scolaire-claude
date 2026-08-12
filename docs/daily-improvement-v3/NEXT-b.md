@@ -1,4 +1,4 @@
-# NEXT — track **b** (authz & audit) · written by run 40 (`S-E05-11`), 2026-08-12
+# NEXT — track **b** (authz & audit) · written by run 41 (`S-E05-7`), 2026-08-12
 
 > Read this at Step 1. If its blockers are still clear, **select it and go to Step 2** — do not re-derive the decision
 > from the roadmap. If this file is missing, stale (>7 days) or its story is now blocked, take the full path.
@@ -6,136 +6,85 @@
 > Track b's seam (`tracks.md`): `apps/api/src/shared/auth/**` · `apps/api/src/modules/identity/**` ·
 > `apps/api/src/modules/audit/**` · guards, DTOs and permission code in other `apps/api` modules.
 
-## ▶ Next story → `S-E05-7` — throttle the public registration funnel (`PF-46`)
+## ▶ Next story → `S-E05-2b` — the fifth grant path (`PF-09` residual)
 
 | | |
 |---|---|
-| **Story** | resolve **`PF-46`** — `POST /auth/register-parent` is unauthenticated **and unthrottled** |
+| **Story** | close the **`realmRole` invite channel** — the one grant path `S-E05-2`'s privilege ceiling does **not** cover |
 | **Epic** | `V3-E05` |
 | **Layer** | **L0** |
 | **Size** | **M** |
-| **Gates** | `G-AUTHZ`, `G-AUDIT`, `G-DNC` · **`G-MIGRATION` does not trigger** unless you choose a DB-backed counter — prefer one that does not, since `prisma/**` is **track a's seam** |
-| **blockedBy** | **nothing** — but read the amplification note below before scoping |
+| **Gates** | `G-AUTHZ`, `G-AUDIT`, `G-DNC` |
+| **blockedBy** | ⚠️ **`D-12`, a human product call in `open-decisions.md`** — read the caveat below before selecting |
 
-**Why this one, and why now rather than later.** `S-E05-11` (this run) just made every *failed* registration cost strictly
-more: the handler now performs `createUser` + `setUserPassword`, and on a rolled-back transaction a compensating
-`deleteUser`, so an anonymous caller can drive **three Keycloak admin round-trips per request** on an endpoint with no
-rate limit at all. That is not a defect introduced by `S-E05-11` — fail-closed with compensation is the correct shape,
-and the alternative was leaving orphans — but it **raises `PF-46`'s priority from hygiene to the obvious next move**, and
-the amplification is registered in the `ADR-035` `S-E05-11` amendment rather than left to be discovered under load. The
-same endpoint is also the enumeration surface: step 2's 409 and the new `P2002` 409 are now deliberately
-indistinguishable, which closes the oracle but does nothing about the *rate* at which it can be probed.
+**Why it ranks first.** It is the epic's only remaining **live escalation path**. `S-E05-2` (run 39) put a privilege
+ceiling on four of five grant channels — `roles.controller` create + update, `users.service.assignRole`, and
+`invite.controller`'s `customRoleSlug` — and left `realmRole` invite provisioning unceilinged **by decision**, because a
+naive subset ceiling there would refuse an ordinary "invite a teacher". So the escalation `S-E05-2` closed reproduces
+**one email later**, and `PF-09` is recorded as *narrowed to 4 of 5 channels, not closed*.
 
-**Both halves are in your seam.** The endpoint is `apps/api/src/modules/identity/register.controller.ts`; a guard or
-interceptor belongs under `apps/api/src/shared/auth/**`. Prefer an in-process limiter over a schema change — a DB-backed
-counter would put you in **track a's** `prisma/**` seam and trigger `G-MIGRATION` for what is an authz concern.
+**⚠️ Check the blocker before you commit to it.** The shape `S-E05-2` recommends is a **grantor-relative ladder**
+(provision at or below your own level) rather than a subset ceiling, and that is the §2.4 option-2 delegation question
+which needs its own `ADR-015` entry — i.e. it plausibly still needs **`D-12`**. **Read `open-decisions.md` first.** If
+`D-12` is still unresolved, this story is **not selectable** (Step 1: never select a story with an unresolved
+`requiresDecision`) — take the alternative below instead and say so in your report.
 
-**Watch the conventions this module already fixed in place.** `writeAudit` must stay **one unconditional statement with
-an inline object literal** (`ADR-035` D1) — `scripts/audit-write-check.js` and the vocabulary gate resolve `action` and
-`resourceType` from the call-site AST. Use an early return above it, never an `if` around it. And **DNC-10**: a rate
-limit configured by `process.env` with an "off" value is an off switch; if a limit must be tunable, make absence mean
-*the strictest setting*, never *disabled*.
+## Alternative if `D-12` is still open → `PF-175`
 
-**Second candidate if `PF-46` turns out to be scoped elsewhere:** `PF-175` (P2) — pre-ceiling escalated grants pass the
-new ceiling unconditionally; the detection query is recorded in `S-E05-2`'s notes but has **never been run**. It is
-squarely in your seam, needs no decision, and is a genuine "prove the fix is complete" slice.
+`PF-175` (P2) — pre-ceiling escalated grants pass the new ceiling **unconditionally**. The detection query is recorded
+in `S-E05-2`'s notes and, as of this run, **has still never been run**. Squarely in your seam, needs no decision, and it
+is a genuine "prove the fix is complete" slice: `S-E05-2` bounded what can be granted *from now on* and grandfathered
+whatever was already granted. This was already flagged as run 40's second candidate and was not taken then either.
 
-**Still blocked, do not select:** `S-E05-2b` / `PF-09` residual and `PF-178` both need **`D-12`** (a human product call
-in `open-decisions.md`). `PF-153` needs `ADR-013`; until it lands, the unfiltered role lookup at `users.service.ts:85`
-**must stay unfiltered** and its docblock at `:67-72` must stay. `PF-174` and `PF-129`'s fix are **`apps/web` = track
-c's seam** — not yours.
+## Do NOT select
 
----
-
-## What `S-E05-11` shipped, so you do not re-derive it
-
-**`PF-166` closed.** `POST /auth/register-parent` — the product's ONE unauthenticated account-creation path — now writes
-its `tenant.upsert`, its `userProfile.create` and one new `user.register` audit row inside a **single** `$transaction`
-extracted into `persistRegisteredParent`, with both Keycloak calls outside and before it and a `.catch()` compensation
-deleting the identity this request created. That is `S-E04-7` + `S-E04-9` applied at their last address; nothing was
-invented.
-
-- **The method extraction is required, not stylistic.** Rule B of `scripts/audit-write-check.js` reddens on a `try`
-  anywhere among a `writeAudit` call's AST ancestors, **function boundaries included** — so the transaction cannot live
-  in the same function as the compensation's `catch`.
-- **`after` is an explicit allow-list, never a spread.** `RegisterParentDto` carries a plaintext `password`, and this row
-  is rendered on `/admin/audit` **and** exported by `audit-csv.generator.ts`. A `{ ...body }` would have written a
-  credential into an append-only exportable governance table in the very slice whose justification is governance.
-- **One vocabulary entry**, `{ code: 'user.register', label: 'Auto-inscription d’un parent' }`, deliberately **not**
-  `critical: true`: `AUDIT_CRITICAL_ACTIONS` feeds `/admin/audit`'s "Modifications critiques" counter, and routine public
-  signup traffic would drown the `role.*` events that counter exists to surface.
-- **Two observable deltas, stated not absorbed.** (1) `P2002` on `userProfile.create` now returns the **same 409** as the
-  pre-existing-identity branch rather than a raw-Prisma 500 — necessary once the compensation removes the identity that
-  used to make the retry 409 by itself, and it removes a driver leak that doubled as an enumeration oracle. (2)
-  Fail-closed on a public funnel means `audit_log` unavailable ⇒ **no parent can register**. Both are in the `ADR-035`
-  `S-E05-11` amendment.
-- **The `demo` tenant upsert was deliberately left alone** (`PF-165`'s territory) — but its new cost is now written down
-  in the docblock: unconditional, executed by every registration, and inside an interactive transaction it holds a row
-  lock on the single `demo` tenant row for the transaction's duration, so concurrent signups serialise and a burst can
-  hit Prisma's 5 s P2028, each failure paying a compensating `deleteUser`. The cheap hedge (`findUnique` first) is a
-  behaviour change and belongs to `PF-165`.
-
-## Findings this run
-
-| Id | Pri | What |
-|---|---|---|
-| **`PF-129`** | **P1** ⬆ | **Escalated latent → LIVE by this slice**, exactly as its own text predicted. `apps/web/.../parent/register/actions.ts` never calls `clientProvenanceHeaders`, so the new audit row records a null (prod) or web-container (local) address. **API side is already correct** — the fix is `apps/web`, **track c's**. |
-| **`TOOL-06`** | **P0** ⬆ | **`ci-gate.sh` can never print `GATE: PASS`, for any diff, in any track.** Was P1. Read this before your gate run — see below. |
-| **`TOOL-07`** | **P1** | **The background heartbeat loop outlives its session and pins a track forever.** Read this before Step 3 — see below. |
-
-## 🛑 READ BEFORE YOUR GATE RUN — `TOOL-06` is now P0, and it will fail your PR too
-
-**Do not go hunting in your own diff when the gate says FAIL.** Seven `run_stage` calls
-(`scripts/ci-gate.sh:102,118,142,165,198,230,235`) omit the timeout argument, so `timeout` receives the stage *label* as
-its interval and exits 125 before the command runs — `timeout: invalid time interval 'runtime engines'`, and six more.
-They run **unconditionally, before the `── ci-gate (fast) ──` header**, so **every** invocation ends
-`GATE: FAIL (7 stage(s))` however clean the tree.
-
-Run 40 measured it on exactly such a tree: `production artefacts ✓ · audit writes ✓ · prisma generate ✓ · typecheck ✓ ·
-lint ✓ (0 errors) · test:api 1021/1032 no drift ✓ · test:worker 293/300 no drift ✓`, and still `GATE: FAIL`.
-
-**What to do:** run the gate, read the `✗` names. If they are exactly those seven, your diff is not the cause — say so in
-the PR, paste the summary block, and **still leave the PR open and flagged** (AUTO-LAND keys on the printed line,
-`R-23`, not on your judgement). **Do not fix it inside a story PR:** `scripts/` matches `GATE_MACHINERY` (`:322`), so
-your diff would escalate `test:api` to the 2400 s whole-suite stage `TOOL-04` proves cannot finish.
-
-Two corrections to `TOOL-06`'s own text, since you will read it: only **four** of the broken calls have duplicates that
-run on a normal PR; `runtime engines` and `compose invocation` duplicate **only under `--full`**; and `csv escapers`
-(`scripts/csv-escape-check.js`, the ratchet holding `PF-168` closed) has **no duplicate at all** and has therefore never
-executed in CI.
-
-## 🛑 READ BEFORE STEP 3 — `TOOL-07`, and it cost this run 22 hours
-
-Step 3 prescribes a detached `while :; do … heartbeat; sleep 900; done`. **Nothing enforces Step 7 when the session never
-reaches it.** This run's session was suspended for ~22 h after its sprint returned `landed: true`; the loop kept
-refreshing track b's claim throughout, so `STALE_MIN=90` could never fire. `state/runs.log` shows
-`GATE=BUSY all tracks claimed or blocked` at 08:40, 08:59, 09:00 (×3) and 09:07 on 2026-08-12 — **six consecutive ticks
-lost** — until a cleanup at 09:34 committed the stranded tree to `salvage/2026-08-12-v3-b-E04-register-atomicity` and
-released the claim by hand.
-
-The heartbeat is an **anti-safety device in its current form**: it turns "this session died" from self-healing into
-manual intervention, precisely in the case the reaper exists for. **What this run did instead, and recommends: skip the
-background loop and call `routine-lock.sh heartbeat b` from your own tool calls at checkpoints.** It costs one cheap
-command per checkpoint and cannot outlive you.
-
-## ⚠️ Facts for your next run
-
-1. **The sprint's escalation panel can fail on account limits and still return `landed: true`.** Four agents
-   (`panel:security`, `panel:test`, `panel:architect`, `paige:pr`) died with *"You've hit your weekly limit"* on this
-   run. `landed: true` means the implementing agents finished — **it is not a review**. This run reviewed the diff by
-   hand and said so in the PR; do the same rather than treating the flag as a verdict.
-2. **`TOOL-04` did not bite this run, and here is the rule.** The gate escalates to the whole api suite only when the
-   diff matches `^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)`. A diff confined to `apps/api/src/modules/`,
-   `packages/contracts/` and `docs/` takes the 1200 s `--skip src/shared/quality/` stage instead. **Check your diff
-   against that regex before you budget for the gate.**
-3. **`origin/main` did not move for ~22 h** (still `c8ee4f3` at land). With tracks a and c also running, do not assume
-   that; `git fetch` before you rebase-or-not.
-4. **`packages/contracts/**` is unowned by any track.** One additive vocabulary line was safe here; a larger change
-   there should be announced in the PR body per `tracks.md`.
+- **`PF-181`** (the throttled parent faces a disabled submit button) and **`PF-174`** / **`PF-129`**'s fix — all
+  `apps/web` = **track c's seam**.
+- **`PF-182`(b)** — the edge `limit_req` companion lives in `infra/nginx/**`, which belongs to no track; it needs an
+  operator, not this routine.
+- **`PF-153`** — needs `ADR-013`. Until it lands, the unfiltered role lookup at `users.service.ts:85` **must stay
+  unfiltered** and its docblock at `:67-72` must stay.
+- **`PF-178`** — needs `D-12` as well.
 
 ---
 
-cleanup-pending: `C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\` residue — see run 38's `NEXT.md`
-for the full list and the three tests to apply. Unchanged and untouched by runs 39 and 40. Additionally, this run left
-`salvage/2026-08-12-v3-b-E04-register-atomicity` and `ci/2026-08-11-v3-b-E04-register-atomicity` in the track-b worktree
-as backup pointers; both are safe to delete once this run's PR is merged.
+## What `S-E05-7` shipped, so you do not re-derive it
+
+**`PF-46` NARROWED (not closed).** `POST /auth/register-parent` — the product's one public mutation — now refuses above
+a two-tier fixed-window admission bound applied with `@UseGuards` on **that handler only**.
+
+- **The design decision that matters is what it does *not* key on.** This endpoint has exactly one caller repo-wide and
+  it is a Next.js **server action** issuing a container-to-container `fetch`, so `req.ip` is the **web container's
+  egress address — one constant value shared by every registrant on earth**. A per-IP limiter would have been a
+  self-DoS, not a weak bound. Nothing in `public-endpoint-throttle.ts` reads a request address or a forwarding header.
+- **Tier 1** = 5 admissions per window per `sha256` digest of the submitted email — an enumeration-**rate** bound. The
+  key is caller-chosen and therefore **rotatable**; it is *not* a security bound, and the docblock says so.
+  **Tier 2** = 30 admissions per window endpoint-wide — the amplification bound, and the one that actually holds.
+- **Counters count admissions, not attempts**, and tier 2 is evaluated **first**. This is not a detail: if refusals fed
+  the global counter, an attacker hammering one address would exhaust the endpoint-wide ceiling and convert a
+  per-identity bound into a global outage.
+- **The window is epoch-aligned and the sweep is a whole-map clear**, done on the first line of `admit`. Per-key lazy
+  expiry was rejected for a measured reason — it only shrinks for keys touched again, so one busy window leaves the map
+  permanently full, the capacity test trips, and a fail-closed limiter turns signup off forever with no attacker.
+- **No dependency added** (a bump is how the **NestJS v10 pin** breaks by accident), **no `prisma/**` change** (that is
+  track a), and `register.controller.ts` differs from `HEAD` by **+7 lines** — so `ADR-035` D1's one-statement
+  `writeAudit` and the `persistRegisteredParent` / `compensateOrphanedKeycloakUser` split are untouched.
+- **All three refusal reasons return the byte-identical 429 with no `Retry-After`.** Making a per-address refusal
+  distinguishable from a global one would have rebuilt the enumeration oracle `S-E05-11` had just closed at the two 409
+  branches. The tier lives in a `Logger.warn` emitted **once per tier per window**, and nowhere else.
+- **No `auditLog` row per refusal, deliberately** — a refused request performs no mutation, so `G-AUDIT` does not
+  trigger, and a DB write per blocked anonymous request would rebuild the exact amplification the guard removes, one
+  table over. The docblock argues this so the next author does not "fix" it.
+- **Ships `ADR-038`** (in-process admission bounds on pre-auth endpoints), against the story's own §5 "no ADR" — because
+  D2's **single-replica invariant** is a claim an `infra/` editor can silently break, and an ADR is where they meet it.
+
+**Two corrections this run made to the sprint's own output**, both docblock honesty, both verified before editing:
+the guard claimed *"every French string on the API side is straight"* (**false** — 30 files under `apps/api/src` use
+`’`, including the sibling message at `write-audit.ts:129-130`), and the throttle's RGPD justification overstated what
+an **unsalted** digest of a low-entropy identifier buys. Both now state the accurate claim.
+
+**Unratified, and a human should look:** the shipped constants (`60 s · 5 · 30 · MAX_KEYS = 2×TIER2`) differ from the
+story's own §1.4 draft (`10 min · 3 · 60 · =`). The shipped values were kept — their sizing argument is written against
+a real scenario (a 200-parent onboarding evening ≈ 3.3 admissions/min, so 30/min leaves ~9× burst headroom) and tier 1
+is sized for a **fumbling parent**, since guards run before the pipes and every 400 spends tier-1 budget. Every spec
+references the constants **symbolically**, so no gate can go red for the numbers either way.

@@ -7,6 +7,7 @@ import {
   Logger,
   Post,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { UserStatus } from '@prisma/client';
@@ -16,6 +17,7 @@ import { type ClientHintsRequest, extractAuditClientHints } from '../../shared/a
 import { type AuditProvenance, deriveAuditProvenance } from '../../shared/audit/provenance';
 import { writeAudit } from '../../shared/audit/write-audit';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
+import { RegisterThrottleGuard } from '../../shared/auth/register-throttle.guard';
 import { KeycloakAdminService } from '../../shared/keycloak/keycloak-admin.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
@@ -166,6 +168,11 @@ export class RegisterController {
   ) {}
 
   @Post('register-parent')
+  // S-E05-7 — the admission bound, on THIS handler only (never a global guard).
+  // It runs before the pipes and therefore before every Keycloak call below,
+  // which is the entire point: the four admin round-trips this handler can drive
+  // are only bounded if the refusal happens above them.
+  @UseGuards(RegisterThrottleGuard)
   @ApiOkResponse({ description: 'Compte parent créé' })
   async registerParent(@Body() body: RegisterParentDto, @Req() req: ClientHintsRequest) {
     // 1. Validation — UNCHANGED, byte for byte. Both sentences are rendered raw
