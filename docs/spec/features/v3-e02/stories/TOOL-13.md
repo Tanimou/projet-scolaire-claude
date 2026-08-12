@@ -696,3 +696,27 @@ One ledger statement is measurably **stale** and is corrected here rather than i
 *"116 passed / 2 failed / 5 skipped, the two failures pre-existing (`AC-5`, `AC-15` at `schema-drift-gate.spec.ts:721`)"*.
 Re-measured on this worktree on 2026-08-12: **124 total, 119 passed, 0 failed, 5 pending.** The two failures are
 gone. The **5 pending** are still there, and they are this story's subject.
+
+`docs/spec/features/v3-e02/tasks.md` **does not exist** — the epic directory holds only `PROGRESS.md` and
+`stories/`. And `PROGRESS.md`'s last **Next slice** pointer (`:2112`) names `S-E01-2b` in `V3-E01`, a different
+epic entirely. Neither is an instruction: **the operator-supplied slice governs**, and this file is the contract.
+
+---
+
+## 14. Dispatch re-verification — every anchor above was re-measured before this story was handed over
+
+Re-run on this branch on **2026-08-12**, immediately before implementation started. Nothing in §1–§12 moved; a
+developer may treat every line number above as current.
+
+| Claim | Re-measured result |
+|---|---|
+| `scripts/lib/` does not exist | `Test-Path scripts\lib` → **False** — the new directory really is new |
+| `test-ratchet.js` builds `failing` from `status === 'failed'` | **`:195`**, verbatim |
+| the load sentinel is synthesised and its cause discarded | **`:199-201`**, `'<suite failed to load>'` |
+| the file contains **no** `pending` / `skipped` / count logic at all | confirmed by reading `:180-274` end-to-end — the reduction, the baseline write (`:209-219`), the `--skip` hold-out (`:221-233`) and the summary (`:238-242`) mention neither |
+| `known-test-failures.json` carries only `failures` keys | **`:15`** (`apps.api`, **11** entries — the table said 12 when it was handed over; corrected on landing, measured two ways: `Object.keys(b.apps.api.failures).length === 11`, and 11 `"finding"` occurrences in the `apps.api` block, which rules out a duplicate-key collapse at parse time) and **`:63`** (`apps.worker`, 7 entries); **no `skipped` key anywhere** — so the `INACTIVE` path of §3.6 is the path this repository will actually take |
+| `const describeWithDb = reachable ? describe : describe.skip;` | **`schema-drift-gate.spec.ts:1215`**, verbatim; the non-DB describes still close at **`:1202`** with the banner at **`:1204-1211`** — **insert new cases between them** |
+| `exec()`'s docstring promises `{ ok, detail }` … | **`:1111-1112`** |
+| … and nine lines later the cross-server guard **throws** | **`:1120-1126`**, verbatim |
+| **§6 anchors, `node -e` against the shipped file** — the check §11 tells you to run | `run('psql'` → **exactly 1 site, `:1077`** · `run(cli.command` → **exactly 1 site, `:940`** · all 9 `timeoutMs` occurrences are at `:674, :698, :703, :842, :843, :849, :912, :1052, :1085` — **neither anchor line is among them.** Non-vacuity holds (1 ≠ 0) and both §6 cases are genuinely **red before, green after**. |
+| host Node | **v25.7.0** against the `.nvmrc` pin of **22.13.1** — §11's warning is live, not theoretical |

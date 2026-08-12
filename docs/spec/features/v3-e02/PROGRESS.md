@@ -2,7 +2,7 @@
 
 **Layer** L0 · **Closes** PF-03, PF-55, PF-56, VAL-01, VAL-03, VAL-10 (+ PF-58, PF-59, PF-60, PF-61 discovered in flight)
 **Spec** the story contracts in `docs/daily-improvement-v3/stories/sprint-01.md` are the spec-kit for this epic.
-**Status (2026-08-12, after `TOOL-10`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
+**Status (2026-08-12, after `TOOL-13`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
 `S-E02-18` and `S-E02-19` are all ✅ done. `S-E02-18` closed the seven findings `S-E02-17` queued (`PF-104`…`PF-110`,
 plus the `PF-112` register renumber): the gate that slice made blocking **can now fail**, its wiring is **executed** by
 a test rather than asserted, and the dashboard stops under-reporting a stalled worker. `S-E02-19` then closed the
@@ -18,10 +18,15 @@ invariant — the migration ledger reproduces `schema.prisma` — and the ledger
 was stale (see the re-scoping note in the slice table). **`S-E02-1`'s residual is the only open row**, and it is
 genuinely hosted: it needs hosted credentials and an operator. Recording this epic as `shipped` would claim that
 operator half was delivered, which is the exact overstatement this epic exists to end.
-**The epic also carries a gate-hardening track** — `TOOL-06`/`TOOL-07`/`TOOL-08` (run 43) and now **`TOOL-10`** (run 44,
-the drift check's TCP preflight and the ratchet's honest kill message). Those slices repair the machinery this epic
-built rather than extending it, so they move the epic's *reliability*, never its status: `code-complete` is unchanged
-and `PF-111` / `PF-113` are still its two residuals.
+**The epic also carries a gate-hardening track** — `TOOL-06`/`TOOL-07`/`TOOL-08` (run 43), `TOOL-10` (run 44, the drift
+check's TCP preflight and the ratchet's honest kill message) and now **`TOOL-13`** (run 45, the ratchet stops calling a
+suite that stopped executing "green", batching `TOOL-16(a)`, `TOOL-11` and `TOOL-12`). Those slices repair the machinery
+this epic built rather than extending it, so they move the epic's *reliability*, never its status: `code-complete` is
+unchanged and `PF-111` / `PF-113` are still its two residuals. **One thing `TOOL-13` leaves for an operator, and it is
+not a detail:** the skip ratchet ships **disarmed** — `apps.<app>.skipped` is absent from `known-test-failures.json` on
+purpose, because a baseline may only be written from a complete run and this slice was forbidden to produce one
+(`TOOL-16(b)`). Until someone runs `node scripts/test-ratchet.js api --update` (and `worker`) from a complete run, the
+new half of the gate announces itself `INACTIVE` and qualifies its own verdict line rather than pretending to be armed.
 
 > ### ⚠️ The paragraph this replaced was wrong on one point, and it is worth saying which
 >
@@ -63,6 +68,7 @@ and `PF-111` / `PF-113` are still its two residuals.
 | **S-E02-19** | The observability gate stops false-redding, and its two new readers get coverage | ✅ done *(with two **open**, fail-**open** residuals — `PF-116`, `PF-117`)* | 2026-08-08 | **145/145** api-side observability guard (`observability-gate.spec.ts`, +493 lines, **33 new cases**) + **36/36** worker `queue-metrics.spec.ts`. `pnpm typecheck` **13/13**, `@pilotage/api` and `@pilotage/worker` **cache misses that executed**; `git diff --check` exit 0. `node scripts/observability-check.js` → **exit 0 / PASS**, *« 9 sum() aggregation(s) … read no gauge-typed metric family »*, 3/3 queues, `dist` present — so the green is **observed on this diff**, not inherited (the `S-E02-18` staleness caveat did not apply). `PF-114` reproduced verbatim on `HEAD` and closed: `sum by (queue) (max by (queue, state) (pilotage_queue_depth))` went PROBLEM → clean while `sum by (queue) (pilotage_queue_depth)` stayed PROBLEM. `PF-115` (a) closed by a 14-entry reason enum naming the file actually read (`queue-depth.collector.js`, not `queue-metrics.js`); (b) by the verified registry restore (`registryResidue`) — driven with the `finally` blanked → **exit 1 `INSTRUMENTATION UNREADABLE (registry-not-restored)`** enumerating all nine residues; (c) by driving the cuid through `observeJobStalled`'s one parameter, shown able to fail by mutating `queueLabel` to a pass-through. **⚠️ The shield introduced two fail-**open** regressions the escalation panel found and this land pass re-measured**: `topk`/`bottomk` and an unterminated quote are both **accepted now and were flagged on `HEAD`** — `PF-116`/`PF-117`, section below. Both latent in `pilotage-slo.json` today; neither is fixed here |
 | **TOOL-06/07/08** | The merge gate stops gating; its meta-tests were reading the dead code | ✅ done | 2026-08-12 (run 43) | PR #223 → `545879f`. `run_stage` refuses a non-numeric timeout (exit 64); `csv escapers` executed for the **first time** since `#215` — 698 files across six roots, four sanctioned escapers. Block at the bottom of this file |
 | **TOOL-10** | The drift check concludes "unreachable" in milliseconds; a killed ratchet stops reporting itself as a startup failure | ✅ done *(gate-hardening track; **two spec files typechecked but UNEXECUTED**)* | 2026-08-12 (run 44) | **Fail-before, measured on this worktree:** one unreachable-address `node scripts/schema-drift-check.js` **did not finish in 30 037 ms** (`SIGTERM`/`ETIMEDOUT`), and the whole `schema-drift-gate.spec.ts` **did not finish in 600 000 ms** when driven on `HEAD` — the story's `>30 037 ms` is confirmed and understated. Route C's `docker port pilotage_postgres 5432/tcp` measured **unbounded** (killed at 8 026 ms by the probe's own `spawnSync` timeout; bash-level `timeout` does **not** kill it — `ps -W` shows orphaned docker processes dated Aug 10). **Pass-after:** `DEAD_URL` → **519 ms**, exit **1**, `SCHEMA DRIFT CHECK: FAIL — tooling_unavailable`, output still naming `prisma db execute` / host `psql` / `docker exec pilotage_postgres`; the default `:5433` → **546 ms**, same verdict, same exit. **The verdict does not move** — that is the contract, and `scripts/ci-gate.sh` is **byte-identical** (`git diff --quiet` YES), so no stage bound went up. Both spec files under `--runInBand`: **17.5 s, 116 passed / 2 failed / 5 skipped**, the two failures **pre-existing** (`AC-5`, `AC-15` at `schema-drift-gate.spec.ts:721`, both asserting on `ci-gate.sh`, which this diff does not open). `pnpm typecheck` **13/13, 51.9 s**, `@pilotage/api` a real cache **miss**; `git diff --check` clean on unstaged, staged and `main...HEAD`. **⚠️ Those jest numbers come from a reviewer's own run, not from the gate**: the gate could not execute either spec (shell Node **v25.7.0** vs the **22.13.1** `.nvmrc` pin), and **no run has ever driven the ladder against a reachable PostgreSQL after the change** — see the `TOOL-10` block at the bottom of this file for why that is the one must-check |
+| **TOOL-13** | A suite that stops existing must not read as green — the ratchet learns to count what did **not** execute | ✅ done *(gate-hardening track; the new half ships **disarmed**, by design — see the block at the bottom)* | 2026-08-12 (run 45) | **Fail-before, measured on this worktree:** the two spec files under `--runInBand` report `{"total":124,"passed":119,"failed":0,"pending":5}` — and `test-ratchet.js` on `HEAD` calls that **`✓ no drift.`**, including about *"the unmodified repository PASSES — the gate is not red on correct code"*, which had never executed on this machine. **Pass-after:** the same real report fed to the new core reduces to `skipped = {"src/shared/quality/schema-drift-gate.spec.ts": 5}` — the exact five — and a baseline two lower yields `{from:2,to:5}` → **exit 1**. **147 total / 142 passed / 0 failed / 5 pending**, wall **57 s**: `test-ratchet.spec.ts` **14 → 30** (the 14 byte-identical, the diff is 475/0 in one hunk after `:273`, AC-11) and `schema-drift-gate.spec.ts` **105 → 112**, its 5 pending unchanged because they are the story's *subject*. **`TOOL-12` non-vacuity, balanced against the shipped file:** `run('psql'` and `run(cli.command` are **1 site each at `HEAD`, neither carrying `timeoutMs`; 1 site each now, both carrying it** — genuinely red-before / green-after. `pnpm typecheck` **13/13, exit 0, 5m34s** (4 errors surfaced first, all `noUncheckedIndexedAccess` in the new cases, all fixed); `git diff --check` clean; **`scripts/ci-gate.sh` byte-identical** (AC-15). ⚠️ **`apps.<app>.skipped` is deliberately absent** — see the block at the bottom of this file; the gate prints `INACTIVE` and qualifies its verdict until an operator runs `--update` from a complete run |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -2120,3 +2126,110 @@ database also discharges must-check #2 above in the same motion: with the contai
 scripts/schema-drift-check.js` must print `▶ server reachable at <host>:<port>` and reach `▶ migrate diff …`, and a
 jest run of `schema-drift-gate.spec.ts` must **not** print the `[schema-drift-gate] no PostgreSQL server answered
 at …` warning. Do that before planning the story, not during it.
+
+---
+
+## `TOOL-13` — a suite that stops existing must not read as green (run 45, 2026-08-12)
+
+`TOOL-10` ended with a must-check it could not discharge, and wrote it down: *"`test-ratchet.js` compares failures
+against a baseline, not test counts, so it cannot see tests that stopped existing."* This slice closes that
+sentence.
+
+**The defect is one direction of wrongness.** A merge gate may cry wolf; it may **never** report green about a
+check it did not perform. `scripts/test-ratchet.js` decided on a **set of failures** — `t.status === 'failed'`
+plus one `<suite failed to load>` sentinel — and compared it against a baseline of failures. A test that stops
+executing is not a failure. So it was not in the set. So the gate said `✓ no drift.`
+
+**Measured here, on `HEAD`, before anything was written:**
+
+```
+{"total":124,"passed":119,"failed":0,"pending":5}
+schema-drift-gate.spec.ts  {"passed":105,"pending":5}
+    pending | … the unmodified repository PASSES — the gate is not red on correct code (AC-2)
+    pending | … leaves no scratch database behind (AC-11)
+    pending | … the ledger really builds the schema the datamodel describes (AC-2)
+    pending | … a datamodel the ledger does not build FAILS, naming the drifted object (AC-1)
+    pending | … a migration that does not execute on PostgreSQL FAILS (AC-3)
+```
+
+`numFailedTests` is **0**, and the ratchet's verdict on that report was `✓ no drift.` — including about the one
+case whose entire job is to prove the drift gate is *not red on correct code*. It has never executed on this
+machine, and nothing said so.
+
+### What landed
+
+| Piece | Why it is that and not something cheaper |
+|---|---|
+| `scripts/lib/ratchet-core.js` — a **pure** decision layer (319 lines): `NOT_EXECUTED_STATUSES`, `LOAD_FAILURE_SENTINEL`, `suiteKey`/`testKey`, `reduceReport`, `compareToBaseline`, `formatInactiveWarning` | A module, **not** an env var and **not** a `--report-file` flag: a gate whose input can be chosen from the environment is a gate that can be bypassed (`DNC-10`, pinned by a source case). Purity is what makes the evidence fixture-driven — hand-written jest reports through *the exact code the gate runs*. No `require(`, no `process.`, no clock, no `console.` — asserted |
+| `NOT_EXECUTED_STATUSES = pending · todo · skipped · disabled`, with the measurement in its comment | `describe.skip` and `it.skip` surface as **`'pending'`**, not `'skipped'`. A `['skipped']`-only set counts **zero** on the real report — the story's #1 pre-mortem, kept as an executed mutant |
+| A **rise** fails · a baselined suite **absent** from the report fails · a **fall** is reported, never failed | The asymmetry with the failure list is deliberate and documented in code: a failure key is an *identity*, a skipped count is a *measurement* over a membership that moves for legitimate reasons. Failing on a fall reds the gate on the author who un-skipped a test, and the gate gets routed around within a week |
+| `--skip` holds counts out in **both** directions; `--update` under `--skip` stays refused, and its message names the counts as a **second** reason | A partial run has no entry for the suites it did not run, so an `--update` under `--skip` would write a `skipped` block with those suites **deleted** — leaving the ratchet permanently blind to exactly the paths the tiering skips, which are the gate's own meta-tests |
+| **`TOOL-16(a)`** — a load failure's cause, read from `suite.message`, ANSI-stripped, truncated with a stated marker, printed for **every** load-failed suite | `suite.failureMessage` does **not** exist in jest 29.7.0's `--json` output; reading it would print nothing forever. Asserted as a mutant rather than trusted |
+| **`TOOL-11`** — `exec()`'s cross-server guard **returns** `{ok:false, detail}` with the same refusal words | `exec()` is reached from `cleanup()` ← the `finally` of `check()`. A throw in a `finally` replaces the block's normal completion, so it escaped past `report(state)` and ended the run **with no verdict** — `DNC-08`, committed by the anti-`DNC-08` machinery. The one deletion in that spec file is the old `AC-P7` case, which asserted `.toThrow` and had to move with the shape |
+| **`TOOL-12`** — `PSQL_HOST_TIMEOUT_MS = 120 000` and `PRISMA_RUN_TIMEOUT_MS = 300 000`, exported and pinned as **different** from the control-plane bounds | Routes A and B were the last two unbounded spawns on the SQL ladder — the `indeterminate` branch, the one that most resembles a real CI stall, still descended them on every PR. They are **data-plane** numbers: reusing `DOCKER_TIMEOUT_MS` or the version-probe bound would kill a legitimate `migrate deploy` and report `scratch_create_failed` on correct code |
+
+### Measured — this worktree, this diff
+
+```
+jest src/shared/quality/{test-ratchet,schema-drift-gate}.spec.ts --runInBand
+  {"total":147,"passed":142,"failed":0,"pending":5}          wall 57 s
+  test-ratchet.spec.ts        14 → 30 passed   (+16; the 14 byte-identical, diff 475/0, one hunk after :273)
+  schema-drift-gate.spec.ts  105 → 112 passed  (+7), 5 pending unchanged — the story's subject, untouched
+```
+
+The **real** report above, fed to the new core, reduces to
+`skipped = {"src/shared/quality/schema-drift-gate.spec.ts": 5}` — the exact five the old ratchet called
+`✓ no drift.` A baseline two lower yields `{from: 2, to: 5}` → **exit 1**.
+
+`TOOL-12` non-vacuity, balanced against the file as shipped: `run('psql'` and `run(cli.command` are **one site each
+at `HEAD`, neither carrying `timeoutMs`; one site each now, both carrying it.** Red before, green after.
+
+`pnpm typecheck` **13/13, exit 0, 5m34s** — 4 errors surfaced on the first pass, all mine, all
+`noUncheckedIndexedAccess` on the new cases; fixed, and both specs re-run green. `git diff --check` exit 0.
+**`scripts/ci-gate.sh` is byte-identical** (AC-15) — no stage bound moved, up or down.
+
+### ⚠️ The new half ships **disarmed**, deliberately — and here is the operator step
+
+`apps.<app>.skipped` is **absent** from `scripts/known-test-failures.json`. That is a decision, not an oversight. A
+skip baseline may only be written from a **complete** run (which is why `--update` is refused under `--skip`), and
+this slice was forbidden to produce one: the full `apps/api` suite is ~350 s and currently **non-deterministic**
+(`TOOL-16(b)`, explicitly out of scope). Inventing numbers would make the gate *look* armed while comparing against
+fiction — the same class of lie the slice exists to remove.
+
+So the ratchet takes the loud path instead:
+
+```
+⚠ test-ratchet[api]: … The skip ratchet is INACTIVE for this app; run --update from a COMPLETE run.
+✓ test-ratchet[api]: no drift (skipped-count ratchet INACTIVE — baseline has no "skipped" block).
+```
+
+**To arm it:** `node scripts/test-ratchet.js api --update`, then `node scripts/test-ratchet.js worker --update`,
+each from a complete run, and review the written counts before committing them.
+
+**One residual, stated rather than left unconsidered:** a suite with **zero** recorded skips that vanishes entirely
+is still not caught — only baselined suites are checked for absence. Catching that needs a full suite inventory
+(the shape of `scripts/web-route-baseline.json`) and is a follow-on, not part of this slice. The comment in
+`known-test-failures.json`'s `$doc` says so at the point of use.
+
+`V3-E02` remains **`code-complete`**. `PF-111` and `PF-113` are still its two residuals and neither moved;
+`TOOL-15` (the non-hermetic `csv-escape-gate` probe) and `TOOL-16(b)` are untouched and still open.
+
+### The pointer, as of 2026-08-12 (run 45)
+
+**Next slice → `S-E01-2b`** in **`V3-E01`** (tenant-context hardening, the follow-on to `S-E01-2` / `PF-02(b)`,
+landed at `#221`). The run-44 pointer above is **not spent** — `TOOL-13` was an operator-supplied gate-hardening
+pick that jumped the queue, so `S-E01-2b` is still the next selectable story in track a's seam, and the dependency
+map still makes `E01 → E03` a hard edge.
+
+**Its precondition is now shared by three things, which is the argument for discharging it first:** `S-E01-2b`
+writes migrations, so `schema drift` will not be skipped and it needs a working PostgreSQL on `127.0.0.1:5433`
+(which today **refuses connections**). The same database (a) discharges `TOOL-10`'s must-check #2, (b) un-skips the
+five `schema-drift-gate.spec.ts` cases this slice just made *visible* — and the skip ratchet will then see their
+count **fall**, report it, and ask for an `--update`, which is exactly the designed behaviour, and (c) makes a
+complete, deterministic run possible, which is the precondition for arming the skip baseline at all.
+
+**If the database cannot be settled, the honest alternative pick is `TOOL-16(b)`** — the `apps/api` suite's
+non-determinism. It now blocks more than it did this morning: an unarmed skip ratchet is a gate half-built, and
+`TOOL-15` says two consecutive full-ratchet runs on the same branch already produce different failure sets, so
+`GATE: PASS` on gate-machinery diffs is not reproducible. Nothing downstream gets more trustworthy until that is
+fixed.

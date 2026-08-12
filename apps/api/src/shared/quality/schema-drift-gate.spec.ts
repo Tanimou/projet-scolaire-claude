@@ -154,6 +154,9 @@ interface SchemaDriftModule {
   TCP_PREFLIGHT_TIMEOUT_MS: number;
   DOCKER_TIMEOUT_MS: number;
   DOCKER_EXEC_TIMEOUT_MS: number;
+  PRISMA_CLI_PROBE_TIMEOUT_MS: number;
+  PSQL_HOST_TIMEOUT_MS: number;
+  PRISMA_RUN_TIMEOUT_MS: number;
   VERDICT_EXIT_CODES: Record<string, number>;
   VERDICT_PRECEDENCE: string[];
 }
@@ -1133,8 +1136,15 @@ describe('the TCP preflight settles the route ladder in milliseconds (TOOL-10)',
     // moves), but nothing enforced it — and a memoised "refused" applied to a URL
     // on a different server is a wrong verdict waiting for the next caller.
     // No child is spawned by this case: the guard fires before any route.
+    //
+    // TOOL-11 changed the SHAPE of the refusal, never the rule: it returns
+    // `{ ok:false, detail }` instead of throwing. The refusal itself is asserted
+    // exactly as before — see the TOOL-11 block below for why the shape matters.
     const routes = gate.openSqlRoutes(DEAD_URL);
-    expect(() => routes.exec(LOCAL_URL, 'SELECT 1;')).toThrow(/one server/);
+    expect(routes.exec(LOCAL_URL, 'SELECT 1;')).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/one server/),
+    });
   });
 
   it('the embedded probe source is executable code, and obeys DNC-10 (AC-P8)', () => {
@@ -1198,6 +1208,145 @@ describe('the TCP preflight settles the route ladder in milliseconds (TOOL-10)',
     const gateSource = readFileSync(GATE_PATH, 'utf8');
     expect(gateSource).toContain(SCRIPT_REF);
     expect(gateSource).toContain('2400');
+  });
+});
+
+/* ================================================================== *
+ * 5b. TOOL-11 — a cleanup path that throws ends the run with no verdict
+ *     TOOL-12 — routes A and B still descended an unbounded ladder
+ *
+ * PLACEMENT IS LOAD-BEARING. These cases sit ABOVE `describeWithDb`. Everything
+ * below it becomes `describe.skip` on a machine with no reachable PostgreSQL —
+ * which is this repository's own TOOL-13 defect, and putting evidence there would
+ * mean evidence that can only run where the bug cannot.
+ * ================================================================== */
+
+/** A URL on a DIFFERENT server from `DEAD_URL` — different host AND port. */
+const OTHER_SERVER_URL = 'postgresql://u:p@10.255.255.1:5432/other?schema=public';
+/** The same server as `DEAD_URL`, a different database. The negative control. */
+const SAME_SERVER_OTHER_DB_URL = 'postgresql://pilotage:pilotage@127.0.0.1:59999/postgres?schema=public';
+
+describe('schema-drift-check: cleanup returns its refusal instead of throwing it (TOOL-11)', () => {
+  // These EXECUTE `openSqlRoutes(...).exec(...)` — they are not text assertions.
+  // The guard fires before any SQL route is attempted, so the cross-server cases
+  // spawn nothing at all.
+
+  it('the cross-server guard REFUSES by returning, with the same words (AC-13)', () => {
+    const routes = gate.openSqlRoutes(DEAD_URL);
+    let outcome: { ok: boolean; detail: string } | undefined;
+    expect(() => {
+      outcome = routes.exec(OTHER_SERVER_URL, 'SELECT 1;');
+    }).not.toThrow();
+    expect(outcome).toEqual({
+      ok: false,
+      detail: expect.stringContaining('refusing to run SQL against'),
+    });
+    // The rule is NOT weakened: the refusal still names both servers.
+    expect(outcome?.detail).toContain('10.255.255.1:5432');
+    expect(outcome?.detail).toContain('127.0.0.1:59999');
+  });
+
+  it('a cleanup-shaped `finally` completes, so the run still reaches its verdict (DNC-08)', () => {
+    // WHY THIS SHAPE AND NOT A PLAIN CALL. `check()` ends with
+    // `finally { cleanup(); }`; `cleanup()` → `dropScratch()` → `routes.exec(...)`.
+    // A throw inside a `finally` REPLACES the normal completion of the block, so
+    // the old code escaped past the elapsed line and past `return report(state)`
+    // and the run ended with no verdict at all — DNC-08 committed by the machinery
+    // built to prevent DNC-08. This reproduces that shape and measures it.
+    const routes = gate.openSqlRoutes(DEAD_URL);
+    let reported = false;
+
+    const completed = (() => {
+      try {
+        return 'the verdict';
+      } finally {
+        // Exactly what dropScratch() does on the cleanup path.
+        routes.exec(OTHER_SERVER_URL, 'DROP DATABASE "schema_drift_1" WITH (FORCE);');
+      }
+    })();
+    reported = true;
+
+    // Before TOOL-11 the throw replaced the `return`, the IIFE threw, and neither
+    // of these lines was ever reached.
+    expect(completed).toBe('the verdict');
+    expect(reported).toBe(true);
+  });
+
+  it('a SAME-server URL is not refused — the negative control (AC-13)', () => {
+    // Without this, the case above would be satisfied by an `exec` that refuses
+    // everything. `DEAD_URL`'s port is closed, so the preflight settles the
+    // address and no SQL route is attempted; the point is only that the outcome
+    // is NOT the cross-server refusal.
+    const routes = gate.openSqlRoutes(DEAD_URL);
+    const outcome = routes.exec(SAME_SERVER_OTHER_DB_URL, 'SELECT 1;');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).not.toContain('refusing to run SQL against');
+  }, 30000);
+
+  it('the guard rests on host/port invariance, and that invariance is pinned', () => {
+    // The fast path is sound rather than lucky: `deriveMaintenanceUrl` and
+    // `buildScratchUrl` vary ONLY the database path segment, so one probe really
+    // does describe every URL `exec` is handed today. `buildScratchUrl` is pinned
+    // elsewhere; the maintenance URL's HOST was not, and that is the fact this
+    // whole guard rests on.
+    const base = new URL(LOCAL_URL);
+    const maintenance = new URL(gate.deriveMaintenanceUrl(LOCAL_URL));
+    const scratch = new URL(gate.buildScratchUrl(LOCAL_URL, 'schema_drift_11'));
+    expect([maintenance.hostname, maintenance.port]).toEqual([base.hostname, base.port]);
+    expect([scratch.hostname, scratch.port]).toEqual([base.hostname, base.port]);
+    expect(maintenance.pathname).toBe('/postgres');
+    expect(scratch.pathname).toBe('/schema_drift_11');
+  });
+});
+
+describe('schema-drift-check: routes A and B are bounded, data-plane sized (TOOL-12)', () => {
+  it('the host psql route carries a named bound, and it is NOT the control-plane one (AC-14)', () => {
+    // Route B carries the same statements as route C — `CREATE DATABASE …
+    // TEMPLATE template0`, `DROP DATABASE … WITH (FORCE)` — just over the wire
+    // instead of through `docker exec`. Same work, same budget. Collapsing it
+    // onto `DOCKER_TIMEOUT_MS` (a `docker port` metadata lookup) would kill a
+    // legitimate CREATE partway and report `scratch_create_failed` on correct
+    // code, which is the precedent `DOCKER_EXEC_TIMEOUT_MS` already carries.
+    expect(gate.PSQL_HOST_TIMEOUT_MS).toBe(120000);
+    expect(gate.PSQL_HOST_TIMEOUT_MS).toBeGreaterThan(gate.DOCKER_TIMEOUT_MS);
+
+    // NON-VACUITY FIRST, on the comment-blanked source: a bound merely NAMED in a
+    // comment must not satisfy this. TOOL-07 and TOOL-08 were made of exactly that.
+    const sites = callSites(EXECUTABLE_SCRIPT, /run\(\s*'psql'/);
+    expect(sites).toHaveLength(1);
+    expect(sites[0]).toContain('PSQL_HOST_TIMEOUT_MS');
+  });
+
+  it('the Prisma CLI route carries a named bound larger than the version probe (AC-14)', () => {
+    // `PRISMA_CLI_PROBE_TIMEOUT_MS` bounds `prisma --version`, a lookup. Route A
+    // is `db execute`, `migrate deploy` and `migrate diff` — `migrate deploy`
+    // replays the entire ledger. Reusing the probe's bound here would kill a real
+    // deploy, so the two are asserted DIFFERENT rather than merely present.
+    expect(gate.PRISMA_RUN_TIMEOUT_MS).toBe(300000);
+    expect(gate.PRISMA_RUN_TIMEOUT_MS).toBeGreaterThan(gate.PRISMA_CLI_PROBE_TIMEOUT_MS);
+
+    const sites = callSites(EXECUTABLE_SCRIPT, /run\(\s*cli\.command/);
+    expect(sites).toHaveLength(1);
+    expect(sites[0]).toContain('PRISMA_RUN_TIMEOUT_MS');
+  });
+
+  it('every spawn on the SQL ladder is now bounded — none is left unbounded', () => {
+    // The sweep, so a future route added without a bound is caught rather than
+    // discovered in CI. Measured against HEAD before this change: `run('psql'` and
+    // `run(cli.command` each had exactly 1 site and NEITHER contained `timeoutMs`,
+    // so both cases above are genuinely red-before / green-after.
+    const ladder: Array<[string, RegExp]> = [
+      ['psql', /run\(\s*'psql'/],
+      ['prisma', /run\(\s*cli\.command/],
+      ['docker exec', /run\(\s*'docker',\s*\[\s*'exec'/],
+      ['docker port', /run\(\s*'docker',\s*\[\s*'port'/],
+    ];
+    for (const [name, anchor] of ladder) {
+      const sites = callSites(EXECUTABLE_SCRIPT, anchor);
+      // Non-vacuity before content, per site.
+      expect([name, sites.length]).toEqual([name, 1]);
+      expect([name, (sites[0] ?? '').includes('timeoutMs')]).toEqual([name, true]);
+    }
   });
 });
 
