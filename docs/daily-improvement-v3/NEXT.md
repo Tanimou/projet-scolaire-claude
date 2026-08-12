@@ -1,160 +1,385 @@
-# NEXT — written by run 39 (`S-E05-1`), 2026-08-10
+# Next story
+
+_Restored as the single NEXT file when the S3 parallel tracks were reverted (2026-08-12)._
+_The three per-track files below were the last state of each track before the revert._
+
+## (was NEXT-a.md)
+
+# NEXT — track **a** (foundation) — written by run 44 (`TOOL-10`), 2026-08-12
 
 > Read this at Step 1. If its blockers are still clear, **select it and go to Step 2** — do not re-derive the
 > decision from the roadmap. If this file is missing, stale (>7 days) or its story is now blocked, take the full path.
-
-## ✅ The disk emergency run 38 escalated has CLEARED — do not re-plan around it
-
-Run 38's banner said `C:` was at **0 bytes free** and warned that the next gate would probably die on `ENOSPC`.
-At the start of run 39 the disk read **31 GB free (94 % used)**. Something outside the routine reclaimed ~30 GB
-between the two runs. **The Turbo cache is still cold** (run 38 deleted every `.turbo` and `apps/web/.next/cache`),
-so the first gate remains a full rebuild — slow, but no longer at risk. Nothing about run 38's *refusals* has changed
-and they were right: still no Docker image deletion (`PF-126` makes the `web` image unrebuildable), still no
-`node_modules/.cache/prisma`.
-
-**Keep checking `df -h /c` before Step 6 anyway.** 94 % used is not comfortable, and the underlying cause — 476 GB
-genuinely full — is unchanged and still human-owned.
+>
+> Track a owns `apps/api/prisma/**`, `apps/api/src/shared/prisma/**`, `apps/api/src/modules/analytics/**` and
+> `apps/api/src/modules/school-structure/**` (`tracks.md`), i.e. epics **`V3-E01`** (tenancy) and **`V3-E03`**
+> (canonical truth). `scripts/**` and `apps/api/src/shared/quality/**` are **shared** paths — claimable, declared in
+> the PR body, kept minimal. Track a has now taken three gate-machinery slices in a row (`TOOL-06/07/08`, `TOOL-10`);
+> that is precedent, not ownership.
 
 ---
 
-## ▶ Next story → `S-E05-2` — make an unescaped CSV cell a **type error**, not a counted one (`PF-173` (b))
+## ✅ Closed by run 44 — the gate can now finish on a machine with no database
+
+**`TOOL-10` is closed.** The drift check reaches its verdict in **825 ms** instead of never. What run 43 recorded as
+89 745 ms had degraded further by this run: `node scripts/schema-drift-check.js` was killed at **>4 minutes** still on
+its first `SELECT 1`, and `ps -W` listed **nine** orphaned `docker` processes dated **Aug 10** — bash `timeout` does
+not kill the docker CLI on this platform, so route C's cost was *unbounded*, not 90 s.
+
+The fix is the preflight the finding asked for, plus a `spawnSync`-level bound (which *does* kill on Windows, because
+libuv maps it to `TerminateProcess`). `ci-gate.sh` is byte-identical — raising the bound was tried once already
+(`2bd1a25`) and is not the fix.
+
+**Two things worth carrying forward, and neither is about this script:**
+
+- **Three states, not two.** The preflight distinguishes `refused` from `indeterminate`, and only `ECONNREFUSED` from
+  every resolved address may stop the ladder. The review panel built the obvious simplification — `!pre.open` at the
+  two call sites — and it left **all 123 other cases green** while making the gate permanently red on any machine
+  whose probe cannot answer in 2 s. Measured both directions before trusting the new case: the short-circuit
+  narration appears **0** times on correct code and **2** under the mutant, **with the verdict identical in both**.
+  That identity is exactly why nothing else could see it. When a change makes a control cheaper, the test that earns
+  its keep is the one that fails on the cheaper-still version you did not write.
+- **A bound is not a safeguard if it is the wrong size.** `docker port` (metadata) and `docker exec … psql` (which
+  carries `CREATE DATABASE` / `DROP DATABASE`) started with one number. A control-plane bound on the data plane kills
+  a legitimate `CREATE` on a cold Docker Desktop and reports `scratch_create_failed` **on correct code** — and
+  `run()`'s bound does not kill grandchildren, so the orphaned scratch database survives it. They now carry different
+  numbers, and the spec pins that they differ.
+
+---
+
+## ▶ Next story → `TOOL-13` — a suite that stops existing must not read as green
 
 | | |
 |---|---|
-| **Story** | resolve **`PF-173` half (b)** *(no story file yet; the contract is `PF-173`'s row in `OPEN.md`)* |
-| **Epic** | `V3-E05` |
+| **Story** | `TOOL-13` *(no story file; the contract is its row in `OPEN.md` + this section)* |
+| **Epic** | `V3-E02` |
 | **Layer** | **L0** |
-| **Size** | **M** — a typed-API change across **seven** call sites |
-| **Gates** | `G-TRUTH`, `G-DNC`, `G-PORTAL` *(admin, teacher **and parent** — parent has two export surfaces)* · `G-MIGRATION`, `G-TENANT`, `G-AUTHZ` do **not** trigger |
-| **blockedBy** | **nothing** |
+| **Size** | **S/M** |
+| **Gates** | `G-DNC` |
+| **blockedBy** | **empty** — and that is why it is selected over `S-E01-2b`, which is not |
 
-**Take the id `S-E05-2`, and read the collision note in the epic's `PROGRESS.md` first.** Run 39 consumed `S-E05-1`
-for the CSV neutraliser, and the `PF-08` cross-tenant-custom-roles row that used to hold that id was **renumbered
-`S-E05-13`**. `S-E05-2`…`S-E05-11` are matrix rows with no authored story, so taking `S-E05-2` means *enumerating*
-it, not overwriting anything — but say so explicitly in the story file, because the next run will otherwise repeat
-run 39's collision.
+### The finding, verified by reading the code rather than by inference
 
-**What is actually left, stated precisely.** `S-E05-1` closed `PF-168` and closed `PF-173`'s **live half** (`(a)`) at
-land: `ExportReportButton.tsx:68` now wraps `academicYear?.name`. What remains is the **structural** half, and it is
-the interesting one:
+`schema-drift-gate.spec.ts:829` reads `const describeWithDb = reachable ? describe : describe.skip`. When no database
+answers, the whole end-to-end block — **including the case named *"the unmodified repository PASSES — the gate is not
+red on correct code"*** — becomes `describe.skip`.
 
-> `scripts/csv-escape-check.js` rules A–E are all conditioned on an escaper **existing**. A surface that hand-joins
-> user data — or calls `csvRow`, which is a bare `cells.join(CSV_SEPARATOR)` typed `Array<string | number>` —
-> declares no escaper, assembles no trigger set, and **passes every rule while shipping exactly the defect `PF-168`
-> names**. The gate counts escapers; it cannot see an unescaped cell.
+`scripts/test-ratchet.js` cannot see that. Re-measured this run by reading it: it builds `failing` from
+`t.status === 'failed'` (`:195`) and one `<suite failed to load>` sentinel (`:200`), compares that set against a
+baseline of **failures**, and never looks at a count. A test that stops existing is not a failure, so it is not in the
+set, so the ratchet reports **GREEN**.
 
-**The repo already owns the answer, and the precedent is recent.** `ADR-035` / `apps/api/src/shared/audit/write-audit.ts`
-(commit `64f64dd`, *« a brand that makes it a type error to leave it »*) solved the identical shape for audit rows.
-Do the same here: have `csvEscape` / `csvFixed1` return a branded `CsvCell`, and let `csvRow` / `buildCsv` accept only
-`CsvCell[]`. That converts *« we count escapers »* into *« you cannot emit an unescaped cell »* and retires rule C's
-status as the only executed evidence for the web half.
+That is the one direction a gate may never fail in, and it is **pre-existing** — `TOOL-10` did not introduce it. But
+`TOOL-10` put a preflight *upstream* of `probeServer()`, so the blast radius is now one wrong `refused` away, which is
+why it is next rather than someday.
 
-**Two traps in this one.** (1) `csvFixed1` output is deliberately **not** passed through `csvEscape` today — a
-negative number would be neutralised into text and Excel would stop treating it as a number. So `csvFixed1` must mint
-a `CsvCell` **without** neutralising, and its docblock must say why, or the brand will be "fixed" into a regression.
-(2) The `parent/grades` and `parent/attendance` surfaces were only discovered during run 39 (a `csvEscape` grep could
-not see their `escapeCell` copies) — enumerate call sites by **walking `csvRow`/`buildCsv`/`downloadCsv` callers**,
-not by grepping for an escaper name.
+### Acceptance, as it stands today
 
-⚠️ **`apps/web` still has no unit runner** — Playwright only (`PF-129`/`PF-133`). A brand is compile-time, so
-`pnpm typecheck` **is** genuine executed evidence here, which is unusually favourable. Say plainly that the runtime
-behaviour is still unevidenced on the web side; do **not** claim a web unit test.
+1. `test-ratchet.js` records a per-suite (or per-app) **skipped/pending count** in the baseline alongside failures, and
+   **fails** when it rises. A disappearing case becomes a red like any other.
+2. `--update` must rewrite that count only from a **complete** run — the file already refuses `--update` combined with
+   `--skip` (`:68-73`) for exactly this class of reason; extend that rule, do not weaken it.
+3. Baseline entries under a `--skip` path already "did not run" (`:222`) and are held out of the drift comparison.
+   Skipped-count accounting must not collide with that: a path deliberately skipped by the gate's own tiering is not
+   the same event as a suite that skipped itself.
+4. Prove it with a fixture, not with the drift gate: the drift gate's own skip depends on a database this machine does
+   not have, and a test that can only run where the bug cannot is not evidence.
+
+**The fix does not need a database.** Only closing `TOOL-13`'s *drift-gate-specific* half does — see below.
 
 ---
 
-## What `S-E05-1` shipped, so you do not re-derive it
+> **Batch `TOOL-16(a)` with it.** Same file, same seam, same sentence: `scripts/test-ratchet.js:200` synthesises
+> `<suite failed to load>` and throws away the jest report's `failureMessage`, so an operator gets a symptom and no
+> cause — the adjacent branch of the very function `TOOL-10` half B just taught to say what happened. It is
+> mechanical, and it should land **before** anyone tries to debug `TOOL-16(b)`, because (b) cannot be diagnosed
+> without it.
 
-**`PF-168` closed. The count in the ledger was wrong and is now corrected on the record.** `PF-168` and
-`audit-findings-index.md:244` both asserted *"the real count is **2**"* `csvEscape` copies. The measured number was
-**3**, and **5** counting two `escapeCell` copies on the **parent** portal that a `csvEscape` grep structurally could
-not see. So this was never a two-portal finding — it was **four portals' worth of export surfaces, seven in total**:
-`admin/enrollments`, `admin/guardians`, `admin/alerts`, `teacher/reports`, `teacher/students`, `parent/grades`,
-`parent/attendance`.
+---
 
-- **One predicate, at `packages/contracts/src/security/csv-injection.ts`.** Exports `CSV_INJECTION_TRIGGERS`,
-  `CSV_NEUTRALISER` and `neutraliseCsvCell(value) → {text, neutralised}`. Pure, imports **nothing** (it runs in a
-  browser bundle, a Node worker *and* a `require()`-based gate script), and declares **no class and no `instanceof`** —
-  `contracts` ships CJS to a **git-ignored** `dist/`, so a spec resolving `src/` and a runtime resolving `dist/` hold
-  two different module objects and a class would disagree with itself across that seam.
-- **This is `ADR-037` D7 *relocated*, not changed** — the behaviour is the worker's, byte for byte. Recorded as
-  **`ADR-037` D8**. The ADR's old sentence *"`csvEscape` is not duplicated anywhere"* was **false when written**
-  (`PROGRESS.md:1929` had already flagged it); D8 is what finally makes it true, and the text was corrected rather
-  than left to rot — that is the `DNC-06` evidence.
-- **The dialect is deliberately NOT in the contract.** Web keeps `;` + CRLF + BOM and quotes on `[",;\n\r]`; the
-  worker keeps `,` + `\n` and quotes on `[",\n\r]`. Folding them into one union regex would force-quote every worker
-  cell containing a `;` and silently rewrite the regulator's audit file. **`PF-169` stays open** — unifying the
-  dialect is a versioned, announced format change, not a security fix.
-- **Three intended behaviour deltas, and the third was found at land.** (i) A guardian phone `+33 6 12 34 56 78` now
-  exports as `"'+33 6 12 34 56 78"` — accepted, because uniform beats an allowlist (`ADR-037` D7). (ii) The
-  `admin/alerts` private copy prefixed a triggering cell but then tested the **original** against the quote regex, so
-  `=1+1` was emitted bare as `'=1+1`; the shared escaper force-quotes it. (iii) — see the ratchet note below.
-- **Transport CSV is excluded, by name and with the reason in the code.** `imports.service.ts` (`template()`) and
-  `oneroster.adapter.ts` (`rowsToCsv`) emit CSV that is **re-parsed**, never opened in a spreadsheet —
-  `ImportBatch.rawCsv`, read back by the rollback and preview surfaces. Prefixing an apostrophe there would corrupt
-  stored source data. Both sites carry a comment saying so, *stated as a rule rather than left to omission, because
-  the next agent will otherwise "fix" them.* Those two diffs are **comment-only**.
-- **The ratchet detects by NAME *and* by SHAPE.** `scripts/csv-escape-check.js` (new stage `0d-bis` in `ci-gate.sh`,
-  plus a `ci.yml` lint job), driven by `apps/api/src/shared/quality/csv-escape-gate.spec.ts` so it runs in a runner
-  that actually exists. Shape detection matters: two of the five copies were called `escapeCell`, so a name-only rule
-  would have been blind to precisely the defect being closed. The walk root includes `.tsx` for the same reason.
+## ⚠️ Read before trusting any gate verdict on a gate-machinery diff
+
+`TOOL-16`: **three consecutive `ci-gate.sh` runs on run 44's unchanged branch produced three different failure
+sets** — AC-5/AC-15 (real, repaired as `TOOL-14`), then `csv-escape-gate` AC-7 (`TOOL-15`), then two suites failing to
+load with the denominator dropping `2433 → 2219`. **214 tests stopped running and the ratchet said nothing**, because
+it ratchets failures and not counts — `TOOL-13`, demonstrated rather than argued.
+
+So: a red on a gate-machinery diff is **not** evidence about that diff until it is reproduced, and `AUTO-LAND`'s
+`green` condition currently cannot be discharged for this class of diff at all. Run the gate **twice** before
+concluding anything, and read the *names* of the `✗` stages rather than the verdict line. This is the standing
+`ci-gate.sh` habit, sharpened: it is no longer only that `main` moves under you, it is that the same tree answers
+differently.
+
+Two environment facts to check first, both recorded as hypotheses and **neither measured to cause**: this host runs
+**Node v25.7.0** against the `.nvmrc` pin of **22.13.1** (GUARDRAILS §3 — "Node ≥ 23 breaks the local run"), and run
+3's ratchet began seconds after `prisma generate` rewrote `@prisma/client` while `typecheck` and `lint` were served
+from cache.
+
+---
+
+## Alternatives, in selection order
+
+- **`TOOL-11` (P2)** — `exec()`'s cross-server guard throws from a path reached by a `finally` and by the signal
+  handlers, so a future caller could end a run with **no verdict at all**: `DNC-08` committed by the anti-`DNC-08`
+  machinery. Unreachable today (checked, not assumed: `deriveMaintenanceUrl` / `buildScratchUrl` vary only the
+  database segment, and a spec pins the latter). One-line repair — `return { ok: false, detail: … }` — plus a case
+  that drives the cleanup path. Cheap enough to **batch with `TOOL-13`**: same seam, same file family.
+- **`TOOL-12` (P2)** — routes A and B still carry no spawn bound. Measured: `run('docker'` → 2 sites both bounded,
+  `run('psql'` → 1 unbounded, `run(cli.command` → 1 unbounded. It does not bite here only because `psql` is `ENOENT`
+  on Windows; on `ubuntu-latest`, where `ci.yml` runs, a client ships and the OS TCP timeout is ~130 s. So the
+  `refused` path is bounded everywhere and the `indeterminate` path is bounded only on this machine. Also batchable.
+- **`S-E01-2b`** — the RLS half. **Still blocked on the same precondition, for the fifth run running:** it writes
+  migrations, so `schema drift` will *not* be skipped and it needs a reachable PostgreSQL on `127.0.0.1:5433`. Run
+  40's brief for it is intact and was right in every particular — `FORCE ROW LEVEL SECURITY` (the app role owns the
+  tables and an owner bypasses RLS), `current_setting(…, true)` with `missing_ok`, cast rather than compare as text,
+  an index on every tenant predicate before enabling, and narrowing `fn` to `Prisma.TransactionClient`. Read
+  `docs/daily-improvement-v3/` git history for run 40's version of this file rather than re-deriving it.
+
+---
+
+## State of the world at the end of run 44
+
+- **There is still no reachable project PostgreSQL.** `127.0.0.1:5433` refuses connections (`ECONNREFUSED`, measured
+  in 276-288 ms by the new preflight — which is at least now a *cheap* way to find out). Something unrelated answers
+  on 5432; do not mistake it for the stack.
+- **Docker is worse than run 43 recorded.** `docker ps` hangs past 150 s, `timeout` does not kill it, and **nine**
+  orphaned `docker` CLI processes dated **Aug 10** are resident. `docker exec` reportedly still works. No rebuild was
+  attempted and no container was started — nothing in `TOOL-10` needed one, and `TOOL-13` does not either.
+- **The database is now the single blocker on the highest-value remaining track-a work.** It gates `S-E01-2b`,
+  `TOOL-13`'s second half, and the one manual check this slice could not discharge: **the ladder has never run
+  against a live PostgreSQL since the preflight landed.** If the preflight ever answered `refused` on a healthy
+  server, the end-to-end block would vanish and the ratchet would say green. The unit case with a real
+  `net.createServer()` listener proves `open` works on a live socket, which is as far as this machine can go.
+  **Settling the database discharges all three in one motion — do it before planning, not during.**
+- `TOOL-09` (P3, `runtime engines` runs only under `--full`) remains deliberately not storified: widening the fast
+  tier's contract is an `open-decisions.md` call, not a repair.
+
+## (was NEXT-b.md)
+
+# NEXT — track **b** (authz & audit) · written by run 41 (`S-E05-7`), 2026-08-12
+
+> Read this at Step 1. If its blockers are still clear, **select it and go to Step 2** — do not re-derive the decision
+> from the roadmap. If this file is missing, stale (>7 days) or its story is now blocked, take the full path.
+>
+> Track b's seam (`tracks.md`): `apps/api/src/shared/auth/**` · `apps/api/src/modules/identity/**` ·
+> `apps/api/src/modules/audit/**` · guards, DTOs and permission code in other `apps/api` modules.
+
+## ▶ Next story → `S-E05-2b` — the fifth grant path (`PF-09` residual)
+
+| | |
+|---|---|
+| **Story** | close the **`realmRole` invite channel** — the one grant path `S-E05-2`'s privilege ceiling does **not** cover |
+| **Epic** | `V3-E05` |
+| **Layer** | **L0** |
+| **Size** | **M** |
+| **Gates** | `G-AUTHZ`, `G-AUDIT`, `G-DNC` |
+| **blockedBy** | ⚠️ **`D-12`, a human product call in `open-decisions.md`** — read the caveat below before selecting |
+
+**Why it ranks first.** It is the epic's only remaining **live escalation path**. `S-E05-2` (run 39) put a privilege
+ceiling on four of five grant channels — `roles.controller` create + update, `users.service.assignRole`, and
+`invite.controller`'s `customRoleSlug` — and left `realmRole` invite provisioning unceilinged **by decision**, because a
+naive subset ceiling there would refuse an ordinary "invite a teacher". So the escalation `S-E05-2` closed reproduces
+**one email later**, and `PF-09` is recorded as *narrowed to 4 of 5 channels, not closed*.
+
+**⚠️ Check the blocker before you commit to it.** The shape `S-E05-2` recommends is a **grantor-relative ladder**
+(provision at or below your own level) rather than a subset ceiling, and that is the §2.4 option-2 delegation question
+which needs its own `ADR-015` entry — i.e. it plausibly still needs **`D-12`**. **Read `open-decisions.md` first.** If
+`D-12` is still unresolved, this story is **not selectable** (Step 1: never select a story with an unresolved
+`requiresDecision`) — take the alternative below instead and say so in your report.
+
+## Alternative if `D-12` is still open → `PF-175`
+
+`PF-175` (P2) — pre-ceiling escalated grants pass the new ceiling **unconditionally**. The detection query is recorded
+in `S-E05-2`'s notes and, as of this run, **has still never been run**. Squarely in your seam, needs no decision, and it
+is a genuine "prove the fix is complete" slice: `S-E05-2` bounded what can be granted *from now on* and grandfathered
+whatever was already granted. This was already flagged as run 40's second candidate and was not taken then either.
+
+## Do NOT select
+
+- **`PF-181`** (the throttled parent faces a disabled submit button) and **`PF-174`** / **`PF-129`**'s fix — all
+  `apps/web` = **track c's seam**.
+- **`PF-182`(b)** — the edge `limit_req` companion lives in `infra/nginx/**`, which belongs to no track; it needs an
+  operator, not this routine.
+- **`PF-153`** — needs `ADR-013`. Until it lands, the unfiltered role lookup at `users.service.ts:85` **must stay
+  unfiltered** and its docblock at `:67-72` must stay.
+- **`PF-178`** — needs `D-12` as well.
+
+---
+
+## What `S-E05-7` shipped, so you do not re-derive it
+
+**`PF-46` NARROWED (not closed).** `POST /auth/register-parent` — the product's one public mutation — now refuses above
+a two-tier fixed-window admission bound applied with `@UseGuards` on **that handler only**.
+
+- **The design decision that matters is what it does *not* key on.** This endpoint has exactly one caller repo-wide and
+  it is a Next.js **server action** issuing a container-to-container `fetch`, so `req.ip` is the **web container's
+  egress address — one constant value shared by every registrant on earth**. A per-IP limiter would have been a
+  self-DoS, not a weak bound. Nothing in `public-endpoint-throttle.ts` reads a request address or a forwarding header.
+- **Tier 1** = 5 admissions per window per `sha256` digest of the submitted email — an enumeration-**rate** bound. The
+  key is caller-chosen and therefore **rotatable**; it is *not* a security bound, and the docblock says so.
+  **Tier 2** = 30 admissions per window endpoint-wide — the amplification bound, and the one that actually holds.
+- **Counters count admissions, not attempts**, and tier 2 is evaluated **first**. This is not a detail: if refusals fed
+  the global counter, an attacker hammering one address would exhaust the endpoint-wide ceiling and convert a
+  per-identity bound into a global outage.
+- **The window is epoch-aligned and the sweep is a whole-map clear**, done on the first line of `admit`. Per-key lazy
+  expiry was rejected for a measured reason — it only shrinks for keys touched again, so one busy window leaves the map
+  permanently full, the capacity test trips, and a fail-closed limiter turns signup off forever with no attacker.
+- **No dependency added** (a bump is how the **NestJS v10 pin** breaks by accident), **no `prisma/**` change** (that is
+  track a), and `register.controller.ts` differs from `HEAD` by **+7 lines** — so `ADR-035` D1's one-statement
+  `writeAudit` and the `persistRegisteredParent` / `compensateOrphanedKeycloakUser` split are untouched.
+- **All three refusal reasons return the byte-identical 429 with no `Retry-After`.** Making a per-address refusal
+  distinguishable from a global one would have rebuilt the enumeration oracle `S-E05-11` had just closed at the two 409
+  branches. The tier lives in a `Logger.warn` emitted **once per tier per window**, and nowhere else.
+- **No `auditLog` row per refusal, deliberately** — a refused request performs no mutation, so `G-AUDIT` does not
+  trigger, and a DB write per blocked anonymous request would rebuild the exact amplification the guard removes, one
+  table over. The docblock argues this so the next author does not "fix" it.
+- **Ships `ADR-038`** (in-process admission bounds on pre-auth endpoints), against the story's own §5 "no ADR" — because
+  D2's **single-replica invariant** is a claim an `infra/` editor can silently break, and an ADR is where they meet it.
+
+**Two corrections this run made to the sprint's own output**, both docblock honesty, both verified before editing:
+the guard claimed *"every French string on the API side is straight"* (**false** — 30 files under `apps/api/src` use
+`’`, including the sibling message at `write-audit.ts:129-130`), and the throttle's RGPD justification overstated what
+an **unsalted** digest of a low-entropy identifier buys. Both now state the accurate claim.
+
+**Unratified, and a human should look:** the shipped constants (`60 s · 5 · 30 · MAX_KEYS = 2×TIER2`) differ from the
+story's own §1.4 draft (`10 min · 3 · 60 · =`). The shipped values were kept — their sizing argument is written against
+a real scenario (a 200-parent onboarding evening ≈ 3.3 admissions/min, so 30/min leaves ~9× burst headroom) and tier 1
+is sized for a **fumbling parent**, since guards run before the pipes and every 400 spends tier-1 budget. Every spec
+references the constants **symbolically**, so no gate can go red for the numbers either way.
+
+## (was NEXT-c.md)
+
+# NEXT — track **c** (web surface) · written by run 40 (`S-E06-8`), 2026-08-12
+
+> Read this at Step 1. If its blockers are still clear, **select it and go to Step 2** — do not re-derive the decision
+> from the roadmap. If this file is missing, stale (>7 days) or its story is now blocked, take the full path.
+>
+> Track c's seam (`tracks.md`): `apps/web/**` · `packages/ui/**` · `packages/design-tokens/**`.
+>
+> **This file did not exist before run 40.** Runs 38–39 wrote the un-suffixed `NEXT.md`, which is track-agnostic and
+> now describes a story (`PF-173` (b), the CSV brand) that is **still track c's and still open** — see below. Do not
+> delete `NEXT.md`; read it *after* this one.
+
+## 🛑 READ FIRST — `OPEN.md` is NOT the complete open set (`TOOL-07`, raised by this run)
+
+**Do not select a story from `OPEN.md` alone until `TOOL-07` is fixed.** The reconciler folds the inbox into the
+**main checkout's working tree** and never commits it, then deletes the inbox file there — so the fold happens once,
+into a checkout no track reads, and can never be redone. Nine rows filed on 2026-08-11 are absent from `origin/main`'s
+`OPEN.md`, including **`PF-174` (P1)**, which is the story *this* run implemented. Run 40 found it in `NEXT-b.md`
+prose, not in the ledger.
+
+**Until it is fixed, add one step to Step 1:** `ls docs/daily-improvement-v3/traceability/inbox/` and read every file
+there. That is where the newest findings actually live. Full mechanism and recovery instructions in this run's inbox
+file and in `audit-findings-index.md`.
+
+---
+
+## ▶ Next story → `S-E06-9` — route the three `admin/roles` actions through the shared converter (`PF-179` + F2)
+
+| | |
+|---|---|
+| **Story** | close **`PF-179` (P2)**, and with it `S-E06-8`'s follow-up **F2** *(no story file yet; the contract is `PF-179`'s row in this run's inbox file)* |
+| **Epic** | `V3-E06` |
+| **Layer** | **L0** |
+| **Size** | **S** — one file, three catch blocks |
+| **Gates** | `G-DNC` · `G-PORTAL` **1/1, admin-only — verify, do not assert** · `G-TENANT`, `G-AUTHZ`, `G-MIGRATION`, `G-AUDIT`, `G-TRUTH` do **not** trigger |
+| **blockedBy** | **nothing** |
+
+**What it is.** `apps/web/src/app/admin/roles/actions.ts` — none of `createRoleAction` (`:24-31`),
+`updateRoleAction` (`:44-50`) or `deleteRoleAction` (`:58-64`) re-throws the Next navigation signal. `api()` calls
+`redirect()` on a 401; `redirect()` throws an error whose `digest` starts `NEXT_REDIRECT;`. Their blanket `catch`
+returns that digest **as data**, and `RoleBuilderForm.tsx:236` renders it — so an admin whose session expired mid-edit
+is shown `NEXT_REDIRECT;replace;/admin/login…` and is **never navigated to login**.
+
+**Why it is small and safe now.** `S-E06-8` built exactly the seam this needs: `apiResultFromError`
+(`apps/web/src/lib/api-client.ts`) checks `isNextNavigationSignal` **first**, then delegates to the total
+`apiErrorMessage`. All three actions already return the compatible `{ ok, error }` shape, so the change is
+`catch (err) { return apiResultFromError(err); }` three times. It closes **F2** in the same pass — those three catches
+are the divergent copies (`createRoleAction` handles the nested `{ message: { message } }` form, the other two do
+not), and `PF-180` (`admin/settings/preferences-actions.ts`, three more actions that render `HTTP 403` and discard the
+message) is the natural batch partner: **same seam, same fix, one test — batch them.**
+
+**The trap.** `createRoleAndRedirect` (`:67-71`) calls `redirect()` *itself* on success. It must keep working: the
+re-throw is what makes that possible, but check that the success path is not accidentally routed through the catch.
+
+**Second candidate if `PF-179` is closed by other work:** `PF-173` (b) — make an unescaped CSV cell a **type error**
+via a branded `CsvCell` in `apps/web/src/lib/csv.ts`. Still track c's, still open, fully described in `NEXT.md`
+(run 39). It is larger (a typed API across seven call sites) and, unlike `PF-179`, has no already-built seam waiting.
+
+---
+
+## What `S-E06-8` shipped, so you do not re-derive it
+
+**`PF-174`'s silence half is closed. Its menu half is refused on purpose, and the difference is the whole story.**
+
+- **The defect was singular, and that was measured rather than assumed.** `admin/users/actions.ts` was the **only**
+  `'use server'` file in the entire web surface with **zero** `catch` clauses (counted across every `'use server'`
+  file in `apps/web/src`). `admin/alerts/actions.ts` funnels its six actions through one catching `callApi`;
+  `admin/settings/preferences-actions.ts` uses `Promise.allSettled`. **Do not go sweeping the other action files for
+  this shape — it is not there.** What *is* there is a different defect: divergent hand-rolled extraction (`PF-179`,
+  `PF-180`, F2).
+- **One leaf module, importing nothing: `apps/web/src/lib/api-error-message.ts`.** That emptiness is the design, not
+  tidiness. `api-client.ts` imports `next/headers` and `@/auth`; a **value** import of it from a `'use client'` file
+  drags them into the browser graph and breaks `next build` — that is **`PF-133`**, and neither `tsc` nor `eslint`
+  can see the edge. Two non-fixes are recorded in the docblock so nobody retries them: a **re-export** from
+  `api-client.ts` does not help (the *import specifier* decides the graph, not the symbol), and `await import()` only
+  moves the break out of the bundler's view.
+- **`ApiError` now lives in the leaf and is re-exported from `api-client.ts`.** ~30 existing server callers and
+  `instanceof` identity are untouched. Necessary because `apiErrorMessage` narrows by `instanceof`.
+- **The extractor is total by `typeof`/`Array.isArray`/`in`, with no `as`.** That converts
+  `privilege-ceiling.ts:147-152`'s *written plea* that its `message` "MUST stay a string" into a structural
+  impossibility on the web side — a plea the API could not enforce, since `new ForbiddenException(obj)` accepts any
+  object.
+- **`AC-4` — the role menu is deliberately NOT pre-filtered**, and there is a comment at the menu saying so. Which
+  roles a `school_admin` may grant is the open decision **`D-12` / `PF-178`**. **`DNC-09` is narrowed, not
+  discharged.** If you are tempted to hide the failing options: that is the decision, not the fix.
 
 ## Findings this run
 
 | Id | Pri | What |
 |---|---|---|
-| **`PF-168`** | **P1** | **CLOSED.** Moved to `traceability/CLOSED-L0.md` with evidence. |
-| **`PF-173`** | **P2** | **Half (a) closed at land** (the live teacher-facing site). **Half (b) — the brand — is the next story.** |
+| **`PF-174`** | **P1** | **Narrowed, not closed.** Silence half closed with evidence; menu half re-pointed at `D-12`. |
+| **`TOOL-07`** | **P1** | **The reconciler never publishes its fold.** Read the banner at the top of this file. |
+| **`TOOL-06`** | **P1** | **Escalated, not raised.** Its severity clause is wrong: on a code diff the seven broken stages **are** counted, so `GATE: PASS` is unreachable for any non-docs-only PR. See fact 2. |
+| **`PF-179`** | **P2** | `admin/roles` actions render `NEXT_REDIRECT;…` instead of redirecting. **Next story.** |
+| **`PF-180`** | **P3** | `preferences-actions.ts` renders `HTTP 403` and discards the API's message. |
 
-`PF-173` was raised by `S-E05-1`'s own security lens against `S-E05-1`'s own header claim, which had said
-*"teacher/reports … all go through `csvEscape`"*. The claim was **narrowed at land** in `apps/web/src/lib/csv.ts` and
-in the gate's sanctioned-entry reason, rather than left standing. Read `lib/csv.ts` as *« one escaper, uniqueness
-enforced »*, **never** as *« every web cell is neutralised »* — that is still not true, and `PF-173` (b) is why.
+All three new ids are declared in `audit-findings-index.md` in the same commit that raised them (`TOOL-01` applied
+prospectively), and were allocated **after** a fresh `git fetch` per `TOOL-05` — `origin/main` was `c8ee4f3`
+throughout run 40, so no concurrent track could have taken them.
 
-## ⚠️ Container and tooling facts
+## ⚠️ Facts for your next run
 
-1. **No Docker rebuild in run 39** — the change is pure TS/JS with no container-observable behaviour, so the stack
-   was neither restarted nor rebuilt. Stack state is therefore **exactly as run 38 left it**, and unverified by run 39.
-2. **`pilotage_web` still serves an image from 2026-08-07** and **`PF-126` still blocks every `web` image rebuild**.
-   Both obvious explanations are already falsified. **Do not re-test connectivity.** Owner `V3-E02`.
-3. **`ci-gate.sh` now has 19 `run_stage` stages** — 18 plus the new `0d-bis`. Step 4's standalone `pnpm build` must
-   still be skipped; the gate builds at what is now stage 13.
-4. **The story-id collision is a recurring failure mode, not a one-off.** Run 39's Intake caught it *before* land only
-   because the epic's `PROGRESS.md` was read. Check the epic's slice table for the id you intend to take, every time.
-5. **`scriptPath` still breaks on CRLF** — the permission handler rejects the file's control characters. Copy the
-   workflow to the scratchpad with `tr -d '\r'` first; run 39 did.
-
-## Still open in `V3-E05` after this run
-
-`PF-173` (b) *(next story)* · `PF-169` — **the epic's most-owed item**, ranked behind `PF-173` only because it is
-larger and needs a versioned, announced format change · `PF-07`, `PF-08` *(now `S-E05-13`)*, `PF-09`, `PF-10`,
-`PF-11`, `PF-25`, `PF-26`, `PF-46`, `PF-51`, `PF-52`, `PF-53`, `VAL-07`.
-
-Still open in `V3-E04`: `PF-164` *(durable half)* · `PF-136`, `PF-141`, `PF-148`, `PF-150` (id collision unresolved —
-renumber in both files at once or not at all) · `PF-154` · `PF-160` · `PF-121` and `PF-123`'s write half · `PF-166`,
-`PF-167`, `PF-170`, `PF-172`, `TOOL-01`, `TOOL-03` *(P2/P3)* · `PF-153`, `PF-156`, `PF-165`, `PF-171` → `V3-E05`.
+1. **A normal run does not build, and this one did not.** No `pnpm build`, no build slot taken, no Docker rebuild.
+   The stack was **not** touched: `docker ps` did **not return within 120 s** at the start of run 40, so the daemon
+   is slow or wedged. Nothing in this slice needed it — but **do not assume the stack is healthy**; check before any
+   story that does, and budget for the daemon being unresponsive.
+2. **🛑 `TOOL-06` means your PR CANNOT reach `GATE: PASS` — budget for it, do not debug your diff.** Run 40 measured
+   the first full-code gate since that finding was raised: **every real stage passed** (`typecheck`, `lint`,
+   `test:api` 1008/1019 no drift, `test:worker` 293/300 no drift, `audit writes`, `production artefacts`,
+   `prisma generate`) and the verdict was still **`GATE: FAIL (7 stage(s))`** — the seven being exactly the
+   `run_stage` calls that omit their timeout argument. `TOOL-06`'s text says those stages are *not* counted; that is
+   true on a **docs-only** diff and **false on a code diff**. So `AUTO-LAND` is effectively off for every code change
+   on all three tracks until someone repairs `scripts/ci-gate.sh`. **Do not go hunting in your own diff** — read the
+   summary block, and if the only `✗` lines are `✗ node`/`✗ pnpm`, that is this. Report the per-stage results as your
+   evidence and leave the PR open, as runs 39 and 40 both did.
+3. **`TOOL-04` is live and it shapes what you may touch.** Any diff matching
+   `^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)` escalates the gate to an api suite that **cannot
+   finish on this machine**. Run 40 deliberately did **not** add a web-side server-action ratchet under `scripts/`
+   for exactly this reason — the right control, unbuildable without forfeiting `GATE: PASS`. It stays a follow-up
+   until the gate is repaired.
+4. **`apps/web` has no unit runner — verified this run, not inherited.** `apps/web/package.json` declares only
+   `test:e2e*` Playwright scripts, and neither `jest` nor `vitest` is a devDependency. `pnpm typecheck` is genuine
+   evidence for a type-level claim and is **not** evidence that anything rendered.
+5. **The Turbo cache is shared across track worktrees.** A gate log will print `cache hit, replaying logs` with a
+   path under **another track's** worktree (run 40 saw `v3-track-a` paths while running in `v3-track-c`). That is
+   correct behaviour for identical inputs, not a leak — do not debug it.
+6. **Disk: 22 GB free on `C:` (96 % used)**, down from run 39's 31 GB. Not an emergency, not comfortable. The
+   worktree residue in `.claude/worktrees/` is still uncleaned; see run 38's `NEXT.md` for the list and the three
+   tests to apply.
 
 ---
 
-cleanup-pending: C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\ecstatic-mcclintock-1d0445
+cleanup-pending: `C:\Users\HP\Downloads\pilotage-scolaire-claude\.claude\worktrees\` residue — unchanged by run 40.
+**New and more urgent:** the uncommitted 2026-08-11 ledger fold in `C:\Users\HP\Downloads\pilotage-scolaire-claude`
+(`TOOL-07`). Commit it before any `git checkout .` or salvage-stash in the main checkout discards it.
 
-> **Step 0.5 D — run 39 could not discharge this, and the reason is new.** Runs 37 and 38 could not delete it because
-> they were *standing in it*. Run 39 ran from a different worktree (`nervous-leakey-2a2508`) and **applied all three
-> Step 0.5 C tests successfully** — not mine · clean (`git status --porcelain` empty) · merged — for **nine**
-> worktrees: `cool-rubin-2aa032`, `dazzling-dubinsky-890a8f`, `ecstatic-mcclintock-1d0445`, `modest-turing-871db3`,
-> `nifty-jepsen-1025f9`, `quirky-liskov-177cdc`, `recursing-pasteur-6c8a4e`, `strange-montalcini-d03dc0`,
-> `wonderful-knuth-1aea4b`. **`git worktree remove` was then denied by the session's permission classifier**, with and
-> without `--force`. This is an *environment* limitation, not a git or lock problem — a future run in a session that
-> permits it can remove all nine in one pass. **Run 39's own worktree is `nervous-leakey-2a2508`**; add it to the list.
->
-> Also inert on disk, unchanged: `jolly-engelbart-789ce0`, `vigorous-cannon-d1d65a`, `clever-haibt-fff645`,
-> `awesome-spence-9e6f69`, `pensive-raman-4baf7c`, `brave-almeida-541d05`, `distracted-cartwright-5287d0`,
-> `keen-mendeleev-53ae1d`, `quizzical-hermann-8d4460`, `agitated-cerf-ad2bdf`, `dazzling-agnesi-18e92e`,
-> `inspiring-mclaren-a76c8e`, `sharp-albattani-ec7c4d`, `stoic-allen-b8284b`, `sweet-euler-fdad66`,
-> `sweet-lichterman-b7c1b7`. With 31 GB free these are clutter again rather than an emergency.
->
-> Still requiring a human, said by runs 29–39: `laughing-wing-54e738` is unregistered but **not empty** (~1.4 MB) —
-> unreachable *and* unattributable. `youthful-chaum-6aad5c` is **dirty**; the hard rule forbids removing it.
->
-> **Remote `ci/*` branch deletion works, but `--merged` will not find them** — they are squash-merged, so resolve each
-> branch's PR state with `gh pr list --head <branch> --state all`. Run 39 deleted `ci/2026-08-10-v3-e04-s11-audit-export`
-> that way.
