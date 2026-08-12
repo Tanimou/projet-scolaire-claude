@@ -120,6 +120,31 @@ the `PF-09` label.** Not a subset ceiling but a **grantor-relative ladder** (pro
 which is the §2.4 option-2 delegation decision and needs its own `ADR-015` entry. Detail and the full residual list:
 `docs/spec/features/v3-e05/PROGRESS.md` § `S-E05-2`.
 
+**V3 slice ledger — `V3-E01` · Tenant isolation and identity resolution · layer L0 · `in-progress` (2026-08-11) — 1 of 4 slices started, and that one only in part**
+
+*(This ledger is new on 2026-08-11, together with `docs/spec/features/v3-e01/PROGRESS.md`. Neither existed before,
+because no `S-E01-*` slice had ever landed. **`docs/daily-improvement-v3/stories/sprint-02.md` does not exist** —
+`sprints/sprint-plan.md` §"Sprint 02" lists the four `S-E01-*` slices as bullet lines and nothing more, so none has a
+written story contract. `S-E01-2` authored its own in-run, the `S-E05-2` posture.)*
+
+| Slice | State |
+|---|---|
+| **`S-E01-2`** — **the tenant value stops being written into SQL text, and the seam stops claiming an isolation that does not exist.** `prisma.service.ts:29` read `tx.$executeRawUnsafe("SET LOCAL app.current_tenant_id = '" + tenantId + "'")` — `SET` accepts no parameter, so that form can only interpolate. The context now travels as a **bound parameter** through a tagged `$queryRaw`: `SELECT set_config('app.current_tenant_id', $1, true) AS applied`. A non-canonical-UUID id is **refused before `$transaction` opens** (`TenantContextError`; the non-`string` check precedes the regex, because `tenantId: string` is a compile-time promise over a JWT claim, and `['<uuid>']` would be coerced by the regex alone) — **refusal, never sanitisation**: no `trim()`, no case-folding, no character stripping, since a sanitiser that removes a quote turns an attack into a silently *wrong* tenant context. The value `set_config` returns is then **read back** and compared `!==` to the id requested, one comparison covering four failure modes (empty result, absent/renamed column, non-string, different value), so `fn` never runs under an unproven context. `DNC-10` holds **structurally**: no system id, no privileged constant, no escape env var, no background-job branch. Ships **`ADR-032`** (`accepted (partial)`: D1 bound parameter, D2 fail-closed refusal before the transaction, D3 read-back, D4 no bypass are decided **and executed**; the RLS-policy half stays *proposed*), and **annotates** `ADR-002` in two places rather than rewriting it. **Evidence, no DB and no generated client**: a fake implementing **all four** raw entry points — which is what makes "the id appears in no SQL text" falsifiable rather than tautological — plus a **source ratchet** over `apps/api/src/shared/prisma/**` that greps for `*RawUnsafe`, the assignment-form `SET LOCAL`, and untagged interpolation. **⚠️ Closes `PF-02` half (b) ONLY. Half (a) — "RLS claimed, not implemented" — stays open and the row stays `in-progress`**: measured on this tree, **zero** `ENABLE ROW LEVEL SECURITY`, **zero** `CREATE POLICY` anywhere including `0_baseline`, and **zero production call sites** for `withTenant`. Runtime blast radius is therefore **exactly zero** — an injection sink removed from a seam nobody calls, guarding a database with no policies. Records **`PF-179`** (two constant-DDL `$executeRawUnsafe` survivors in modules another track owns, deliberately not fixed across the boundary) | ⚠️ **2026-08-11 — this run, needs human review (NOT auto-merged); `pnpm typecheck` 13/13 exit 0 (api/worker/web cache misses that executed), `jest prisma.service.spec.ts` **57/57**, `git diff --check` exit 0. The 57th test was added by the gate, not by the implementation, and it is the load-bearing one: flipping `set_config`'s third argument `true`→`false` moves the GUC from transaction scope to **connection scope** — a pooled connection then carries tenant A's context into tenant B's next request — and **56 of 56 pre-existing tests stayed green on that one-character mutation**. **Three merge conditions, none fixed here:** `ADR-032` §D3 overstates its proof (the read-back proves the value *round-tripped*, not that it was *applied* — `set_config` outside a transaction block warns, does not stick, and still returns what you passed); **`TENANT_GUC` cannot reach the artefact it guards** (the future policy predicate lives in a `.sql` migration, which cannot import a TS constant); and **`fn` is typed `PrismaClient`, not `Prisma.TransactionClient`**, so a first caller closing over the injected service instead of `tx` runs on a different pooled connection with no GUC and the types say nothing** |
+| `S-E01-1` · `S-E01-3` | ⬜ not started — `PF-01`, `VAL-02`. `S-E01-3`'s fail-before/pass-after criterion is unsatisfiable until a policy exists to defeat |
+| `S-E01-4` | ⛔ blocked on decision **D-02** (student Keycloak client) — `PF-18`, `VAL-04` |
+
+**Next `V3-E01` slice → `S-E01-2b` — the RLS half, and the first caller that gives it meaning.** Not "add the
+policies": four prerequisites are acceptance criteria, not notes. (1) **`FORCE ROW LEVEL SECURITY`** — the application
+role owns the tables, and a table owner **bypasses RLS**, so policies + green tests + zero isolation is the default
+outcome; the denial test must run as the role the API actually connects with. (2) **`current_setting(name, true)`** —
+without `missing_ok`, every connection that never went through `withTenant` (migrations, seeds, health checks, every
+BullMQ job) raises `42704` on day one, and the obvious repair `IS NULL OR tenant_id = …` **fails open for the whole
+application**. (3) **Cast, never compare as text** — the GUC holds `text`, PostgreSQL renders `uuid` lowercase, and
+`assertTenantId` preserves case on purpose, so a text predicate silently returns **zero rows** for a mixed-case tenant
+id. (4) An index on every tenant predicate before enabling RLS (R-11), with a p95 benchmark. Plus: narrow `fn` to
+`Prisma.TransactionClient` **before** the first call site is written. Detail and the full residual list:
+`docs/spec/features/v3-e01/PROGRESS.md`.
+
 **Next V3 slice → `S-E04-8` — the hash chain from a declared genesis, its verification, and the documented gap. It
 is the LAST slice of the epic: shipping it moves `V3-E04` to `shipped`.**
 *(Unchanged by run 39. That run shipped `S-E05-1` under a **2026-08-10 operator override** naming the epic and the
