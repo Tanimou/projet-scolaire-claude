@@ -2,21 +2,28 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-11)** `in-progress` — **two slices landed**: `S-E05-12` (2026-08-07) and **`S-E05-2` (this run)**.
-`S-E05-2` was authored and implemented in the same run: its story
-[`stories/S-E05-2.md`](./stories/S-E05-2.md) **is** the authoring pass this file used to say was missing. The remaining
-nine (`S-E05-1`, `S-E05-3` … `S-E05-11`) still exist as **rows in
+**Status (2026-08-12)** `in-progress` — **four slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222) and **`S-E05-7` (this run)**. Each was authored and implemented in the same
+run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
+remaining eight (`S-E05-1`, `S-E05-3` … `S-E05-6`, `S-E05-8` … `S-E05-10`) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
 `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
 without an authoring pass of its own.
-**Next slice → `S-E05-2b` — the `realmRole` invite channel, the fifth grant path this slice deliberately left open.**
-See "Next run" below.
+**Next slice → `S-E05-2b` — the `realmRole` invite channel, the fifth grant path `S-E05-2` deliberately left open.**
+Still open, still unclaimed: `S-E05-7` was scheduled over it by operator override, not instead of it. See "Next run"
+below, and § `S-E05-7` → "Next run" for the ranking as it stands after this slice.
 
 *(Corrected 2026-08-11, `S-E05-2` land pass. Lines 5-12 used to read "`S-E05-12` … is the only one with a written
 story" and "**Next slice → not in this epic** … nothing in this epic is enumerated". Both were falsified by the diff
 that carries this edit — `S-E05-2.md` §0.4 names the contradiction and overrides it rather than obeying it. Named here
 rather than silently overwritten: a status line the next autonomous run reads at Step 1 is exactly the kind of stale
 truth that makes it skip work that is ready.)*
+
+*(Corrected again 2026-08-12, `S-E05-7` land pass. The block above said **two** slices landed and left `S-E05-11`
+marked `⬜ unenumerated` in the table below — a row already falsified by `HEAD` at the time it was read, since
+`db2473b` (#222) shipped `S-E05-11` on 2026-08-12. `S-E05-7.md` §0.1 named both stale rows in advance and this pass
+discharges that instruction. The count is now **four**, and the `Next slice` pointer is annotated rather than deleted:
+it was a recommendation from the `S-E05-2` land pass, never an instruction, and it survives this run untouched.)*
 
 > **Why there is no `spec.md` here.** Same posture as
 > [`docs/spec/features/v3-e02/PROGRESS.md`](../v3-e02/PROGRESS.md) and
@@ -45,11 +52,68 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-5 | Attendance reads without ABAC (`PF-07`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-6 | Unvalidated PATCH / query params / enum (`PF-51`) | ⬜ unenumerated | — | matrix row only; `S-E06-6` fixed **one DTO** of this family |
-| S-E05-7 | Public unthrottled registration (`PF-46`) | ⬜ unenumerated | — | matrix row only |
+| **S-E05-7** | **The public registration funnel gains an admission bound: two tiers, one fixed window, in process** (`PF-46`, throttling third) | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E05-7.md`](./stories/S-E05-7.md) · **`PF-46` NARROWED, not closed** — the `emailVerified` third (R-3) stays open · new **`ADR-038`** (in-process admission bounds on pre-auth endpoints) — shipped *against* the story's own §5 "no new ADR", on Winston's ruling · raises **R-1** (the global ceiling is itself a DoS lever, real fix `infra/nginx/`) and **R-2** (per-process counters, `ADR-038` D2) · **the shipped constants diverge from the story's §1.4 and a human must ratify the numbers** · evidence below |
 | S-E05-8 | Wrong password reported as "MFA required" (`PF-25`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
 | S-E05-10 | Unused `hasPermission`, `users.suspend` unimplemented (`PF-52`) | ⬜ unenumerated | — | matrix row only |
-| S-E05-11 | Non-atomic invite/permission rewrite, catalogue drift (`PF-53`) | ⬜ unenumerated | — | matrix row only |
+| **S-E05-11** | **The public registration path becomes atomic, compensated and audited** (`PF-166`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as commit `db2473b` (#222). **`PF-166` closed.** *(Row corrected by the `S-E05-7` land pass: it read `⬜ unenumerated · matrix row only` while the code was already on `main`. Note the **subject changed**: the matrix row this line inherited names "non-atomic invite/permission rewrite, catalogue drift (`PF-53`)", which is a **different finding** — `PF-53` is still open and still unenumerated.)* |
+
+---
+
+## S-E05-7 — evidence (2026-08-12)
+
+### What the slice changed
+
+**One decorator in the handler, two new pure files beside it.** `register.controller.ts` differs from `HEAD` by
+**+7 lines and nothing else** — the `UseGuards` import, the guard import, a comment block and the decorator on
+`registerParent`. §8.3 of the story required exactly that, and it holds: `writeAudit` stays one unconditional
+statement with an inline object literal (`ADR-035` D1), `persistRegisteredParent` and
+`compensateOrphanedKeycloakUser` stay separate methods, and the `emailVerified` docblock is byte-for-byte unchanged.
+
+| File | Shape |
+|---|---|
+| `apps/api/src/shared/auth/public-endpoint-throttle.ts` (NEW, 335 L) | the decision core: `PublicEndpointFixedWindowThrottle.admit(key, now = clock())` over an **epoch-aligned** `Math.floor(now / windowMs)` window. No I/O, no Nest, no timers, no env read, injected clock, arity-bounded. Exports the four constants, the class, the `registrationThrottle` singleton, `registrationIdentityKey` and a `reset()` for tests |
+| `apps/api/src/shared/auth/register-throttle.guard.ts` (NEW, 150 L) | the HTTP adapter: a `CanActivate` that reads the raw body **defensively** (it runs before the pipes, so the body is `unknown`), calls the limiter, **throws** `HttpException(…, 429)` rather than returning `false` (a falsy `canActivate` is a **403**, which is the wrong refusal and the wrong copy), and logs once per tier per window |
+| three specs (916 L total) | `public-endpoint-throttle.spec.ts` (the pure core, injected clock), `register-throttle.guard.spec.ts` (the adapter), `register-throttle.supertest.spec.ts` (the real Nest pipeline, `createUser` call-count assertions) |
+| `docs/adr/ADR-038-…md` (NEW, 66 L) | D1 in-process rather than DB-backed · D2 the **single-replica invariant** · D3 keyed on the submitted email, never on `req.ip` · D4 the accepted availability trade |
+
+**Why not `req.ip`.** Measured, not assumed: `POST /auth/register-parent` has exactly **one caller repo-wide** and it
+is a Next.js server action issuing a container-to-container `fetch` (`NEXT_PUBLIC_API_URL: http://api:4000`). `req.ip`
+is therefore the **web container's egress address — one constant address shared by every registrant on earth**. A
+per-IP limiter here is not a weak bound, it is a self-DoS. The story called this out and the implementation obeys it.
+
+**Why no `@nestjs/throttler`.** `apps/api/package.json` and the lockfile are untouched: a dependency bump is precisely
+how the **NestJS v10 pin** (GUARDRAILS §3) gets broken by accident. `@nestjs/testing` and `supertest` were already
+declared, so the supertest spec adds no dependency either.
+
+### What executed
+
+| Check | Result |
+|---|---|
+| `pnpm typecheck` (Murat, **once**) | **13 successful / 13 total**, 12 cached, **1 executed** — and the cache miss was `@pilotage/api`, i.e. the package holding the entire diff was compiled fresh rather than replayed. Not a stale-cache green |
+| `git diff --check` | **exit 0**, clean, with `git add -N` so the untracked new files were really inspected. Only the benign LF→CRLF advisory on the two new `.md` files |
+| `npx tsc --noEmit` in `apps/api` (independent re-run) | **exit 0** (tsc 5.9.3) |
+
+### The residuals — named, owned, not papered over
+
+| id | What | Owner |
+|---|---|---|
+| **R-1** | **The global ceiling is itself a DoS lever, and it is cheap.** The guard runs **before** the `ValidationPipe`, so an anonymous `curl -d '{}'` loop spends tier-2 budget while reaching **zero** Keycloak calls: the availability cost is paid without the amplification benefit ever being at stake. `ADR-038` D4 accepts the trade in principle; it does not state this sharpened form. The real fix is an upstream edge limiter (`limit_req` in `infra/nginx/`), **out of seam** | orchestrator → new finding against `infra/**` |
+| **R-2** | **Per-process state.** The ceiling multiplies by the replica count and resets on deploy. `ADR-038` D2 records the single-replica invariant but nothing **enforces** it; the diff itself demonstrates the idiom that would (`register-throttle.supertest.spec.ts` reads `identity.module.ts` and asserts `not.toContain('APP_GUARD')`) | `V3-E05` follow-up |
+| **R-3** | **`PF-46` stays open** on its `emailVerified` third. Deliberately out of scope: flipping it needs Keycloak realm SMTP wiring in `infra/**` and it changes the login funnel (a parent could no longer log in immediately after submitting) — a product decision, not a hardening one | `V3-E05` / product |
+| **R-4** | **The shipped constants are not the story's.** `60_000 / 5 / 30 / 2×TIER2` against §1.4's `10 min / 3 / 60 / =TIER2`. Every spec references the constants **symbolically**, so all ~30 cases stay green at any values and **no gate can see the divergence**. Each change is argued in a source docblock and defensible; the decision was still re-taken silently. The story is annotated (§0.5) rather than overwritten — **a human ratifies the numbers, or reverts them** | human reviewer, before merge |
+| **R-5** | **The digest is unsalted.** `registrationIdentityKey` is `sha256(normalisedEmail)` and 48 bits of it reach `Logger.warn`. Literally true that no plaintext is stored or logged — but an email is a low-entropy, fully enumerable input, so an unsalted digest is **pseudonymised** personal data, not anonymised, and the docblock claims more than that. One-line fix (a module-level `randomBytes(32)` salt) with **zero test churn**, because every spec computes its expectation through `registrationIdentityKey` itself | `V3-E05` follow-up / this PR if the reviewer asks |
+| **R-6** | **A 429 is unrecoverable at the glass.** `ParentRegisterForm.tsx` sets `status='error'` on any failure and never returns to `'idle'`, while `canSubmit` requires `'idle'` — so the throttle message renders above a permanently disabled submit button, and the only recovery is a reload that discards both password fields. Latent for 400/409 (the user must change their input anyway); **load-bearing for 429**, the first refusal in this funnel whose only prescribed remedy is to retry the identical payload. One line, in **track c's** seam | track c (`apps/web`) |
+
+### Next run
+
+1. **The R-4 ratification** is a merge condition, not a slice: revert to `3 / 60 / 10 min`, or keep `5 / 30 / 60 s`
+   and let the story's §0.5 annotation stand as the record.
+2. **`S-E05-2b`** — unchanged in priority and still the epic's only live escalation path (the `realmRole` invite
+   channel, refusal attribution, the `PF-09` label). See § `S-E05-2` → "Next run".
+3. **The R-1 companion in `infra/nginx/`** — a `limit_req` zone on `location /api/v1/auth/register-parent`. It is
+   the only thing that makes the in-process bound survive contact with a determined caller, and it is the one
+   residual that a human, not the routine, has to schedule (different seam, different track).
 
 ---
 
