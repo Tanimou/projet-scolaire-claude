@@ -96,9 +96,24 @@ Runs 44–48 each opened by probing **5433**, got `ECONNREFUSED`, and recorded *
 PostgreSQL"*. Run 44 added *"something unrelated answers on 5432; do not mistake it for the stack"* — **that sentence
 is the defect.** The thing answering on 5432 is the project's database, with the project's user and its migrations.
 
-**Where 5433 came from:** a hard-coded literal in `scripts/schema-drift-check.js` and `scripts/restore-drill.js`.
-**What the repo actually says:** root `.env` line 9 `POSTGRES_PORT=5432`, line 19 `DATABASE_URL=…@localhost:5432/…`;
-`infra/docker-compose.yml:150` publishes `"${POSTGRES_PORT:?…}:5432"`. **No file in this repository claims 5433.**
+**⚠️ CORRECTION — this section's first draft got the reason wrong, and the error was mine.** It claimed *"root `.env`
+says 5432 … no file in this repository claims 5433"*. **False.** The root `.env` **originally said
+`POSTGRES_PORT=5433`**; the off-brief agent edited it to 5432 and kept the original as `.env.bak-5433`. The draft read
+the *post-edit* file and quoted it as the repo's own statement — building on a premise the agent had just created,
+which is `feedback-false-red-evidence` committed while writing up a finding about premises. `.env` said 5433,
+`infra/docker-compose.yml:150` publishes `"${POSTGRES_PORT}:5432"`, and the two hard-coded literals in
+`schema-drift-check.js` / `restore-drill.js` agreed with it. **That is why every run probed 5433, and probing it was
+reasonable.**
+
+**What survives the correction — the load-bearing half.** The `migrate status` command above passed `DATABASE_URL`
+**explicitly on the command line**, so it is independent of `.env` in either state. A PostgreSQL carrying the
+project's `pilotage` database, the `pilotage` user and **both migrations applied** *is* reachable on 5432.
+
+**What is NOT established, and the next run must settle it FIRST:** whether that server is the compose `postgres`
+container or a **host-native PostgreSQL** holding a `pilotage` database left by an earlier host-side `migrate`. That
+needs the Docker control plane, which `TOOL-19` says is wedged. **Do not run RLS migrations against it until its
+provenance is known.** Run 44's *"something unrelated answers on 5432"* is refuted only this far: what answers is not
+unrelated — it holds the project's schema. Calling it "the stack" is not yet earned.
 
 **This does NOT close `TOOL-19` and does not contradict it.** The Docker *control plane* is still wedged — re-measured
 this run, `//./pipe/docker_engine` accepts the connection then returns nothing in 15 000 ms and `ECONNRESET`s, so
@@ -178,8 +193,11 @@ forced to ship unmerged — which is the exact posture `TOOL-15`, `TOOL-17` and 
 
 1. **`TOOL-21` (P1, tiny, no database).** Above. Repairs `main`. Do it before anything else — it is the gate on every
    other merge.
-2. **`S-E01-2b` (RLS) — genuinely unblocked for the first time in five runs**, now that `TOOL-22` has settled the
-   address. Run 40's brief is intact and was right in every particular: `FORCE ROW LEVEL SECURITY` (the app role owns
+2. **`S-E01-2b` (RLS) — reachable at last, but settle PROVENANCE before writing migrations.** `TOOL-22` establishes
+   that a server holding the project's schema answers on 5432; it does **not** establish *which* server. Confirm it is
+   the compose container (or accept it is host-native and say so) before applying migrations to it — a migration
+   written into the wrong PostgreSQL is the one mistake here that is not cheap to undo. Run 40's brief is otherwise
+   intact and was right in every particular: `FORCE ROW LEVEL SECURITY` (the app role owns
    the tables and an owner bypasses RLS), `current_setting(…, true)` with `missing_ok`, cast rather than compare as
    text, an index on every tenant predicate before enabling, and narrowing `fn` to `Prisma.TransactionClient`.
 3. **`TOOL-13`'s drift-gate half and `TOOL-10`'s live-PostgreSQL path** — same unblocking, same motion. The preflight
