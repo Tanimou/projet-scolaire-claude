@@ -3,6 +3,75 @@
 _Restored as the single NEXT file when the S3 parallel tracks were reverted (2026-08-12)._
 _The three per-track files below were the last state of each track before the revert._
 
+---
+
+# NEXT — written by run 45 (`TOOL-13`), 2026-08-12 — **this section supersedes the three track sections below**
+
+> The per-track NEXT files below are the pre-revert state, kept for their content. Read **this** section first.
+
+## ✅ Closed by run 45 — the ratchet can no longer certify a check it did not perform
+
+`TOOL-13`, `TOOL-16(a)`, `TOOL-11`, `TOOL-12` are **closed**. The decision layer is now `scripts/lib/ratchet-core.js`
+(pure), the baseline carries per-suite not-executed counts, a rise fails, a fall is reported loudly, and a baseline
+with no `skipped` block prints `INACTIVE` **and qualifies its verdict line**. The PR was left **OPEN** — see below.
+
+**The one thing an operator must do:** the skip baseline ships **deliberately empty**. It may only be written from a
+complete run, which this slice was forbidden to produce. Until then the ratchet is honest but disarmed:
+
+```
+node scripts/test-ratchet.js api --update      # from a COMPLETE run, never under --skip
+node scripts/test-ratchet.js worker --update
+```
+
+Do **not** hand-write numbers into `scripts/known-test-failures.json`. A fabricated count makes the gate look armed,
+which is the exact failure this story exists to remove.
+
+## ⛔ Read before trusting any gate verdict — now with a mechanism, not just a warning
+
+Run 44 recorded that three gate runs on one tree gave three failure sets. **Run 45 found why: `TOOL-17`.**
+
+Specs write probe files **into the real working checkout** (`__audit_write_probe.ts`, `__csv_escape_probe.tsx`), and
+other specs `walk()` those directories and then `readFileSync` each entry. Under parallel jest the probe is deleted
+between the walk and the read, so the *reader* fails to LOAD. Measured twice on one unchanged tree, two different
+victims:
+
+| Run | Suite that failed to load | Missing probe | Written by |
+|---|---|---|---|
+| 1 | `audit-vocabulary-gate.spec.ts` | `__audit_write_probe.ts` | `audit-write-gate.spec.ts:689` |
+| 2 | `portal-landing-gate.spec.ts` | `__csv_escape_probe.tsx` | `csv-escape-gate.spec.ts` (TOOL-15's own probe) |
+
+`audit-vocabulary-gate.spec.ts` passes **73/73 alone** and the two racing specs pass **149/149 together** — the window
+only opens under the full parallel suite, which is why it has read as flake for four runs. **The victims are
+innocent**: both scanners do the correct thing. The writers are the defect.
+
+Fix direction, cheapest first: make the walkers tolerate a file that vanishes between `walk` and `read` (two lines,
+fixes every current and future victim), or probe in a scratch tree (the hermetic repair `TOOL-15` is parked on).
+**`TOOL-17` is now the highest-value gate-machinery slice** — it is what stops `AUTO-LAND`'s `green` from being
+dischargeable at all for this class of diff.
+
+## ▶ Recommended next story
+
+1. **`TOOL-17` (P1, `blockedBy` empty)** — the probe-file race. Cheap, mechanical, needs no database, and it unblocks
+   every future auto-merge decision. Take the tolerate-a-vanishing-file half even if the hermetic half stays a design
+   call in `open-decisions.md`.
+2. **`S-E01-2b` (RLS)** — still blocked on the same precondition for the sixth run running: it writes migrations, so
+   `schema drift` will **not** be skipped, and it needs a reachable PostgreSQL on `127.0.0.1:5433`.
+3. **`TOOL-13`'s drift-gate half** — also database-blocked, for the same reason.
+
+## State of the world at the end of run 45
+
+- **Still no reachable project PostgreSQL**: `127.0.0.1:5433` → `ECONNREFUSED` in **30 ms** (measured this run).
+- **Docker's control plane is unresponsive**: `docker ps` produced **no output in 12 minutes**, and the orphaned
+  docker CLI processes dated Aug 10 are still resident. **No rebuild was attempted, deliberately** — this slice's
+  AC-4 required database-free evidence, so a rebuild would have bought nothing and Step −1 asks for one only when the
+  evidence needs it. Settling Docker is a prerequisite for items 2 and 3, not for item 1.
+- **`main` moved twice mid-run** (#229 and #230 landed while the sprint was working). The branch was rebased onto it
+  cleanly. Check `origin/main` before assuming your base is current — the gate's `ensure_clean_main` runs once, at
+  Step 0, and the sprint outlives it.
+- **The sprint's own verify phase graded the wrong tree.** It ran before the implementer wrote anything, reported the
+  diff as "+27 doc lines", and returned a typecheck that described a docs-only tree. Its blocker was correct *at the
+  time* and the fix phase then implemented the story. Do not inherit a sprint's typecheck number — re-measure it.
+
 ## (was NEXT-a.md)
 
 # NEXT — track **a** (foundation) — written by run 44 (`TOOL-10`), 2026-08-12

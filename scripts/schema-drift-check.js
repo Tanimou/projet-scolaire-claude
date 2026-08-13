@@ -269,6 +269,39 @@ const DOCKER_EXEC_TIMEOUT_MS = 120000;
  */
 const PRISMA_CLI_PROBE_TIMEOUT_MS = 60000;
 
+/**
+ * The bound on route B — the host-side `psql` (TOOL-12).
+ *
+ * It is a DATA-plane bound, and it is `DOCKER_EXEC_TIMEOUT_MS`'s twin on purpose:
+ * route B carries the *same statements* as route C (`CREATE DATABASE … TEMPLATE
+ * template0`, `DROP DATABASE … WITH (FORCE)`), just over the wire instead of
+ * through `docker exec`. Same work ⇒ same budget. Collapsing it onto
+ * `DOCKER_TIMEOUT_MS`, the control-plane number, would kill a legitimate `CREATE`
+ * partway and report `scratch_create_failed` on correct code — read
+ * `DOCKER_EXEC_TIMEOUT_MS`'s comment above for why that trade is the wrong way
+ * round.
+ *
+ * Why it needs a bound at all, given nothing hangs here today: `psql` is `ENOENT`
+ * on this Windows host, so route B fails instantly for the wrong reason. `ci.yml`
+ * runs on `ubuntu-latest`, where a PostgreSQL client ships in the image and the
+ * OS TCP timeout is ~130 s per attempt — and the `indeterminate` preflight branch
+ * (deliberately kept, so a loaded-but-alive server is not read as absent)
+ * descends that ladder on purpose, unbounded, on every PR.
+ */
+const PSQL_HOST_TIMEOUT_MS = 120000;
+
+/**
+ * The bound on route A — the Prisma CLI's real work (TOOL-12).
+ *
+ * Deliberately NOT `PRISMA_CLI_PROBE_TIMEOUT_MS`: that one bounds
+ * `pnpm … prisma --version`, a version lookup, and reusing it here would kill a
+ * real `migrate deploy`. Route A is `db execute`, `migrate deploy` and
+ * `migrate diff` — `migrate deploy` replays the ENTIRE ledger and `migrate diff`
+ * shells out to the schema engine. The measured healthy end-to-end run of this
+ * check is ~17 s (S-E02-5), so 300 s is ~17× headroom and still a bound.
+ */
+const PRISMA_RUN_TIMEOUT_MS = 300000;
+
 /* ================================================================== *
  * The pure verdict layer — no IO, no clock, no environment.
  *
@@ -937,7 +970,12 @@ function prismaRun(cli, argv, envOverlay, input) {
   if (!cli || !cli.command) {
     return { status: -1, stdout: '', stderr: 'the Prisma CLI could not be resolved', output: '' };
   }
-  const result = run(cli.command, [...cli.prefix, ...argv], { cwd: API_DIR, env: envOverlay, input });
+  const result = run(cli.command, [...cli.prefix, ...argv], {
+    cwd: API_DIR,
+    env: envOverlay,
+    input,
+    timeoutMs: PRISMA_RUN_TIMEOUT_MS,
+  });
   return { ...result, output: `${result.stdout}${result.stderr}` };
 }
 
@@ -1077,6 +1115,7 @@ function makeSqlRoutes(cli, source) {
     run('psql', ['-h', source.host, '-p', source.port, '-U', source.user, ...psqlFlags(database)], {
       input: sql,
       env: source.password ? { PGPASSWORD: source.password } : undefined,
+      timeoutMs: PSQL_HOST_TIMEOUT_MS,
     });
 
   const psqlContainer = (database, sql) =>
@@ -1117,12 +1156,37 @@ function makeSqlRoutes(cli, source) {
     // scratch URL both replace only the database segment), but nothing enforced
     // it, and a memoised answer applied to a different server is a wrong verdict
     // waiting for the next caller. So it is enforced here rather than assumed.
+    //
+    // It RETURNS the refusal rather than throwing it (TOOL-11), and that shape is
+    // load-bearing rather than tidy. `exec` is reached from `cleanup()` →
+    // `dropScratch()` → `routes.exec(maintenanceUrl, 'DROP DATABASE …')`, and
+    // `check()` ends with `finally { cleanup(); }`. A throw inside a `finally`
+    // REPLACES the normal completion of the block, so it would escape past the
+    // elapsed line and past `return report(state)` and the run would end with no
+    // verdict at all — DNC-08, committed by the machinery built to prevent
+    // DNC-08. Worse on the signal path: the SIGINT/SIGTERM handlers also call
+    // `cleanup()`, a throw from there lands in the `uncaughtException` handler,
+    // which calls `cleanup()` again, which throws again with no handler left.
+    // `dropScratch()` is already written for a returned failure
+    // (`if (!dropped.ok) { … return dropped; }`).
+    //
+    // The guard is NOT weakened: it still refuses the cross-server URL, with the
+    // same words. It refuses by returning, which is what the docstring above
+    // promises.
+    //
+    // It is unreachable today, and that is fine — this is defence in depth, not a
+    // live bug. `deriveMaintenanceUrl()` and `buildScratchUrl()` vary ONLY the
+    // database path segment (both pinned by `schema-drift-gate.spec.ts`), so host
+    // and port are invariant across the base, maintenance and scratch URLs. The
+    // fast path is sound rather than lucky.
     if (target.host !== source.host || String(target.port) !== String(source.port)) {
-      throw new Error(
-        `refusing to run SQL against ${target.host}:${target.port} through routes opened for ` +
+      return {
+        ok: false,
+        detail:
+          `refusing to run SQL against ${target.host}:${target.port} through routes opened for ` +
           `${source.host}:${source.port} — these routes probed and describe one server, and reusing them ` +
           'for another would report the wrong one',
-      );
+      };
     }
 
     const pre = runPreflight();
@@ -1633,6 +1697,9 @@ module.exports = {
   TCP_PREFLIGHT_TIMEOUT_MS,
   DOCKER_TIMEOUT_MS,
   DOCKER_EXEC_TIMEOUT_MS,
+  PRISMA_CLI_PROBE_TIMEOUT_MS,
+  PSQL_HOST_TIMEOUT_MS,
+  PRISMA_RUN_TIMEOUT_MS,
   migrationDirectories,
   SCRATCH_NAME_PATTERN,
   MIGRATIONS_DIR,
