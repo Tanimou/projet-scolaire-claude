@@ -75,6 +75,10 @@ export class UsersController {
       me.tenantId,
       provenance,
       grantorPermissions,
+      // ADR-040 — the grantor's realm roles decide their rung on the delegation
+      // ladder. Read from the same `realm_access` the permission lookup above
+      // uses, so the two bounds cannot disagree about who the grantor is.
+      jwt.realm_access?.roles ?? [],
     );
   }
 
