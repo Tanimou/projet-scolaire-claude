@@ -154,6 +154,20 @@ jobs:
           --health-retries=10
     env:
       DATABASE_URL: postgresql://pilotage:pilotage@localhost:5432/pilotage?schema=public
+      # S-E01-2b — the NON-OWNER role the RLS policies are proven against.
+      #
+      # It is declared here and not derived, because `.env` is gitignored: a fresh
+      # checkout has no source for it, and `scripts/rls-isolation-check.js` FAILS
+      # rather than guessing a credential. The role does not exist in the service
+      # container above (roles are cluster state and the image ships none); the
+      # checker creates it, because `POSTGRES_USER` IS the bootstrap superuser
+      # there, and drops it again at the end.
+      #
+      # This is an ADDRESS, never a bypass: before any visibility assertion the
+      # checker asserts over this very connection that `current_user` owns none of
+      # the tables under test and does not carry BYPASSRLS. Pointing it at the
+      # owner therefore makes the step FAIL, not pass.
+      DATABASE_URL_APP: postgresql://app_user:app_user@localhost:5432/pilotage?schema=public
       # S-E06-1 / PF-54 — `KEYCLOAK_URL` and the two admin credentials no longer
       # have `??` defaults, and `JwtStrategy` is constructed by
       # `scripts/boot-check.js` when it compiles the real module graph. The
@@ -199,6 +213,21 @@ jobs:
       # cannot run is a failure, never a skip (DNC-08). Kept in step with
       # scripts/ci-gate.sh stage 0d — the two must not drift (S-E02-2 AC-4).
       - run: node scripts/schema-drift-check.js
+      # S-E01-2b — the RLS half, and it is NOT redundant with the step above.
+      # `prisma migrate diff` cannot see policies: measured, with the policies and
+      # GRANTs installed it still returns "No difference detected", exit 0. So the
+      # drift step can never observe a policy dropped out of band, nor a 45th
+      # tenant_id table shipped without one. This step is the only thing that can,
+      # and it proves it by EXECUTION — scratch database, full ledger applied,
+      # connected AS app_user, rows appearing and disappearing as the tenant GUC
+      # changes, with the positive control asserted FIRST (app_user had zero
+      # privileges before the migration, so "foreign rows are invisible" alone
+      # would be green on a database with no policies at all).
+      #
+      # No continue-on-error: a check that cannot run is a failure, never a skip
+      # (DNC-08). Kept in step with scripts/ci-gate.sh stage "rls isolation" — the
+      # two must not drift (S-E02-2 AC-4).
+      - run: node scripts/rls-isolation-check.js
       - run: pnpm --filter @pilotage/api prisma generate
       - run: pnpm build
       # Every stage before this one proves the code compiles; not one of them

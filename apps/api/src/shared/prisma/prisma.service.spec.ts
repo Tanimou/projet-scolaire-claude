@@ -386,3 +386,125 @@ describe('Cliquet de source — l’interpolation ne peut pas revenir en silence
     expect(runWithTenant.length).toBe(3);
   });
 });
+
+/**
+ * S-E01-2b / AC-10 — LE TROISIÈME BRIN DU CLIQUET DU NOM DE GUC.
+ *
+ * Le nom du réglage doit être LE MÊME en trois endroits, et jusqu'à cette story
+ * seuls deux d'entre eux étaient liés :
+ *
+ *   (1) la constante `TENANT_GUC`  ──liée par les tests ci-dessus──▶  (2) le SQL
+ *       runtime de `applyTenantContext`, qui en écrit le littéral
+ *   (2) ────────────────── NON LIÉ jusqu'ici ─────────────────────▶  (3) le
+ *       prédicat des policies, dans `prisma/migrations/**\/*.sql`
+ *
+ * Une divergence sur le brin (2)↔(3) est INDÉTECTABLE et son symptôme est le
+ * pire possible : tout fonctionne, rien n'est isolé. Le helper poserait
+ * `app.current_tenant_id` pendant que les policies liraient autre chose, donc
+ * elles verraient toujours NULL et refuseraient tout — ou, si le nom divergeait
+ * dans l'autre sens, ne refuseraient rien.
+ *
+ * L'assertion INTERPOLE `TENANT_GUC` au lieu de retaper la chaîne : renommer la
+ * constante sans toucher au SQL rend la suite ROUGE, ce qui est tout l'objet.
+ */
+describe('AC-10 — le nom du GUC ne peut pas dériver entre le TypeScript et le SQL des policies', () => {
+  const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..');
+  const MIGRATIONS_DIR = join(REPO_ROOT, 'apps', 'api', 'prisma', 'migrations');
+
+  /** Chemins MARCHÉS : lus par la couture tolérante de TOOL-17, jamais en direct. */
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mapWalkedFiles, maxVanishedFor, warnSkipped } = require(
+    join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
+  ) as {
+    mapWalkedFiles: (
+      paths: string[],
+      build: (path: string, source: string) => [string, string],
+    ) => { entries: [string, string][]; skipped: string[] };
+    maxVanishedFor: (n: number) => number;
+    warnSkipped: (label: string, skipped: string[]) => boolean;
+  };
+
+  function walkSql(dir: string): string[] {
+    const found: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) found.push(...walkSql(path));
+      else if (entry.name.endsWith('.sql')) found.push(path);
+    }
+    return found;
+  }
+
+  const SQL_FILES = walkSql(MIGRATIONS_DIR);
+  const { entries, skipped } = mapWalkedFiles(SQL_FILES, (path, source) => [path, source]);
+  warnSkipped('prisma.service.spec.ts AC-10', skipped);
+  const SQL = new Map(entries);
+
+  /**
+   * Commentaires SQL retirés, longueur préservée.
+   *
+   * Indispensable et non cosmétique : l'en-tête de la migration EXPLIQUE
+   * longuement pourquoi `FORCE ROW LEVEL SECURITY` et `IS NULL OR` sont
+   * proscrits. Un scan sur le texte brut serait donc rouge à cause de la
+   * documentation de sa propre interdiction — le genre de faux rouge qui finit
+   * par faire supprimer la règle plutôt que la faute.
+   */
+  function executableSql(source: string): string {
+    return source.replace(/--[^\n]*/g, (m) => ' '.repeat(m.length));
+  }
+
+  /** Le texte EXÉCUTABLE de toutes les migrations, concaténé. */
+  const CODE = [...SQL.values()].map(executableSql).join('\n');
+
+  it('le corpus de migrations n’est pas vide, et la tolérance TOOL-17 n’a rien avalé', () => {
+    // Non-vacuité AVANT tout : un corpus vide rendrait chaque `not.toContain`
+    // ci-dessous satisfait pour rien.
+    expect(SQL_FILES.length).toBeGreaterThanOrEqual(3);
+    expect(skipped.length).toBeLessThanOrEqual(maxVanishedFor(SQL_FILES.length));
+    expect(SQL.size).toBeGreaterThanOrEqual(SQL_FILES.length - maxVanishedFor(SQL_FILES.length));
+  });
+
+  it('le SQL de policy existe, et il nomme EXACTEMENT la constante exportée', () => {
+    // Plancher de non-vacuité : « le SQL référence TENANT_GUC » est vert sur un
+    // dépôt qui n'a AUCUNE policy. On exige donc d'abord qu'il y en ait.
+    expect(CODE).toContain('CREATE POLICY tenant_isolation');
+    expect(CODE).toContain('ENABLE ROW LEVEL SECURITY');
+    // INTERPOLÉ, pas retapé : renommer la constante sans toucher au SQL = rouge.
+    expect(CODE).toContain(`current_setting('${TENANT_GUC}', true)`);
+  });
+
+  it('le prédicat CASTE en uuid et ne compare jamais en texte (AC-3)', () => {
+    // `tenant_id::text = current_setting(…)` filtre ZÉRO ligne pour un id de
+    // tenant en majuscules — fail-closed mais INVISIBLE. Le sens du cast est
+    // asservi dans les deux directions.
+    expect(CODE).toContain(`nullif(current_setting('${TENANT_GUC}', true), '')::uuid = tenant_id`);
+    expect(CODE).not.toMatch(/tenant_id\s*::\s*text/i);
+  });
+
+  it('n’écrit JAMAIS la forme fail-open `IS NULL OR` (DNC-10, AC-4)', () => {
+    // Cette forme ouvre la base entière à toute connexion sans contexte. Elle est
+    // interdite par un scan, pas seulement par une phrase d'en-tête.
+    expect(CODE).not.toMatch(/current_setting\s*\([^)]*\)\s*IS\s+NULL\s+OR/i);
+    expect(CODE).not.toMatch(/IS\s+NULL\s+OR\s+tenant_id/i);
+    expect(CODE).not.toMatch(/\bOR\s+true\b/i);
+  });
+
+  it('ne pose PAS `FORCE ROW LEVEL SECURITY` — décision consignée, pas oubli (ADR-032 §D5)', () => {
+    // Aujourd'hui l'app se connecte comme le PROPRIÉTAIRE : `FORCE` rendrait zéro
+    // ligne à toutes ses requêtes. Le jour où quelqu'un l'ajoutera, ce sera avec
+    // la bascule de connexion, et c'est ce test qu'il faudra venir lire.
+    expect(CODE).not.toMatch(/FORCE\s+ROW\s+LEVEL\s+SECURITY/i);
+  });
+
+  it.each([
+    ['un tenant « système »', 'SYSTEM_' + 'TENANT'],
+    ['un drapeau SKIP_', 'SKIP' + '_'],
+    ['un drapeau ALLOW_', 'ALLOW' + '_'],
+    ['une option de contournement', 'skip' + 'Tenant'],
+    ['une exemption BYPASSRLS', 'BYPASS' + 'RLS'],
+  ])('le SQL des migrations ne contient pas %s (DNC-10)', (_label, token) => {
+    // Le cliquet de jetons qui gardait déjà les modules TypeScript, étendu au SQL :
+    // un contournement écrit en SQL serait exactement aussi grave, et personne ne
+    // le cherchait.
+    expect(CODE).not.toContain(token);
+  });
+});
