@@ -2,8 +2,8 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-12)** `in-progress` — **four slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222) and **`S-E05-7` (this run)**. Each was authored and implemented in the same
+**Status (2026-08-13)** `in-progress` — **five slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12) and **`S-E05-2c` (2026-08-12, #229)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
 remaining eight (`S-E05-1`, `S-E05-3` … `S-E05-6`, `S-E05-8` … `S-E05-10`) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
@@ -48,6 +48,7 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | **S-E05-12** | The post-authentication redirect target becomes same-origin-only, on all four portal login forms | ⚠️ done — **needs human review** | 2026-08-07 | spec: [`stories/S-E05-12.md`](./stories/S-E05-12.md) · **`PF-102` closed**, `PF-103`'s `PORTAL_LANDING`-declared-twice note retired, no new finding raised · evidence below |
 | S-E05-1 | Global custom roles are cross-tenant (`PF-08`) + `VAL-07` | ⬜ unenumerated | — | matrix row only — no story in `sprint-01` |
 | **S-E05-2** | **The privilege ceiling: no grantor may mint, rewrite or assign a permission they do not themselves hold** (`PF-09`, `PF-156`) | ⚠️ done — **needs human review** | 2026-08-11 | spec: [`stories/S-E05-2.md`](./stories/S-E05-2.md) · **`PF-09` narrowed to 4 of 5 grant channels, NOT closed** (the `realmRole` invite channel stays open — see evidence below) · `PF-156` closed with its `isSystem` remedy **declined and argued** · `ADR-015` gains its first `D<n>` amendment; `ADR-035`'s "we do not change who may grant what" posture marked SUPERSEDED · raises the `S-E05-2b` residual set · evidence below |
+| **S-E05-2c** | **The detection sweep for pre-ceiling escalated grants** (`PF-175`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as **#229** · spec: [`stories/S-E05-2c.md`](./stories/S-E05-2c.md) · **`PF-175` NARROWED, not closed** — the detector exists and is proven, but has **never been executed against a database** · evidence below |
 | S-E05-3 | Coefficient-matrix foreign-tenant write (`PF-10`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-5 | Attendance reads without ABAC (`PF-07`) | ⬜ unenumerated | — | matrix row only |
@@ -57,6 +58,57 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
 | S-E05-10 | Unused `hasPermission`, `users.suspend` unimplemented (`PF-52`) | ⬜ unenumerated | — | matrix row only |
 | **S-E05-11** | **The public registration path becomes atomic, compensated and audited** (`PF-166`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as commit `db2473b` (#222). **`PF-166` closed.** *(Row corrected by the `S-E05-7` land pass: it read `⬜ unenumerated · matrix row only` while the code was already on `main`. Note the **subject changed**: the matrix row this line inherited names "non-atomic invite/permission rewrite, catalogue drift (`PF-53`)", which is a **different finding** — `PF-53` is still open and still unenumerated.)* |
+
+---
+
+## S-E05-2c — evidence (landed 2026-08-12 as #229; this section written 2026-08-13)
+
+### What the slice changed
+
+`PF-175` existed only as a **prose SQL string in a ledger row that had never been executed**. The slice turned it into
+a tested, repeatable detector: `apps/api/src/shared/auth/legacy-escalation-sweep.ts` (pure, fail-closed, imports
+neither Prisma nor Nest — it *returns a value*, it does not refuse a request), a read-only CLI
+(`legacy-escalation-sweep.cli.ts`, one `findMany`, no mutating verb), 49 tests, and one `package.json` script line.
+`privilege-ceiling.ts`, `user-sync.service.ts` and the four grant call sites are **untouched**.
+
+```bash
+pnpm --filter @pilotage/api sweep:legacy-escalation
+```
+
+**Three exit codes, not two** — `0` clean · `1` findings · `2` inconclusive. The third exists so a wedged database or
+a baseline that failed to derive can never be read as « propre », nor as an escalation.
+
+### Why the finding is NARROWED and not closed
+
+A detector that has never been run detects nothing. **The sweep has still not been executed against any database.**
+The run that should have discharged that (2026-08-13) could not: the local Docker daemon was wedged — Docker Desktop
+processes alive since 2026-08-08 while the daemon answered nothing and the Compose Postgres refused on its mapped
+port — and the three V3 track worktrees were removed mid-run by the S3 revert (#227). This is the whole residual, and
+it belongs to a verification sweep with a healthy stack, not to a new slice.
+
+### Two corrections this section makes to the ledger
+
+1. **The SQL recorded on `PF-175`'s row was invalid and could never have run.** It names `r."isSystem"` and
+   `rp."roleId"`; the physical columns are `is_system` and `role_id` (`@map`, `schema.prisma:906/917`), so it dies on
+   « column r.isSystem does not exist » — an *error* that a reader would have scored as a *finding*. It was also
+   shaped wrong: the permission **code** lives on `Permission`, not on `role_permission`, so `count(rp.*)` yields
+   nothing to compare against the baseline. The row now says so, so nobody restores it.
+2. **The row's « no test: the condition is data, not code » is superseded.** The *condition* is data; the *detector*
+   is code, and it is now tested.
+
+### What a red report does and does not mean
+
+`school_admin` is **not** a superset of `teacher`, so a legitimate teacher-shaped custom role carrying `grades.revise`
+**will** be reported. That is correct fail-closed behaviour for a detector, and it is why the report's own text says a
+finding is a candidate for human triage rather than proof of `PF-09` exploitation: `role` carries no grant provenance
+(`grantedBy` is on `user_role`), so a legitimate grant is indistinguishable from an artefact. **Revocation is a human
+decision** — the CLI has no revocation path and is not to be given one.
+
+### Residual risk
+
+- The sweep is **unrun** (above). Until it is, `PF-175` stays `open`.
+- `S-E05-2b` — the fifth grant path, the `realmRole` invite channel — remains this epic's live escalation path and is
+  still blocked on **`D-12`**, an unanswered product decision in `open-decisions.md`. Nothing in this slice touches it.
 
 ---
 
