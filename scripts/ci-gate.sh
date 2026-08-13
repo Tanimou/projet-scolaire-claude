@@ -246,8 +246,28 @@ if changed_match "$CODE_RE"; then
   # Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
   if changed_match '^apps/api/prisma/'; then
     run_stage 90 "schema drift" node scripts/schema-drift-check.js
+    # S-E01-2b — the RLS half, and it is not redundant with the stage above.
+    #
+    # `prisma migrate diff` CANNOT SEE POLICIES: measured, with ENABLE ROW LEVEL
+    # SECURITY, CREATE POLICY tenant_isolation and the app_user GRANTs installed,
+    # the drift diff returns "No difference detected", exit 0, byte-identical to
+    # the clean baseline. So the stage above can never observe a policy dropped
+    # out of band, nor a 45th tenant_id table shipped without one. This stage is
+    # the ONLY thing that can, and it proves it by EXECUTION: scratch database,
+    # full ledger applied, connected AS THE NON-OWNER ROLE app_user, rows
+    # appearing and disappearing as the tenant GUC changes.
+    #
+    # It FAILS and never skips when PostgreSQL, the client set, or the role is
+    # unreachable (DNC-08, ADR-027) — the remedy is to start PostgreSQL, never to
+    # edit code. 600 s covers create + migrate deploy + the adversarial run + drop
+    # on a cold cluster; the local measured wall time is ~15 s.
+    #
+    # Kept in step with .github/workflows/ci.yml — the two must not drift
+    # (S-E02-2 AC-4).
+    run_stage 600 "rls isolation" node scripts/rls-isolation-check.js
   else
     skip_stage "schema drift" "no prisma change"
+    skip_stage "rls isolation" "no prisma change"
   fi
 
   # Then the client: without it typecheck/tests fail on unresolvable types.

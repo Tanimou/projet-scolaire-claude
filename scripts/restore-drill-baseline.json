@@ -16,9 +16,10 @@
   "ledger": {
     "migrations": [
       "0_baseline",
-      "20260809120000_tenant_timezone"
+      "20260809120000_tenant_timezone",
+      "20260813120000_tenant_rls_policies"
     ],
-    "reason": "Every directory under apps/api/prisma/migrations must come back in the restored _prisma_migrations, finished and not rolled back. A restore without the migration history is a restore of the data, not of the database. 20260809120000_tenant_timezone was added by S-E04-5 (additive `tenant.timezone`, expand-only) and is recorded here by hand as part of that review — this list is a reviewed record, so a migration reaching disk without reaching this file is exactly the drift the check exists to catch."
+    "reason": "Every directory under apps/api/prisma/migrations must come back in the restored _prisma_migrations, finished and not rolled back. A restore without the migration history is a restore of the data, not of the database. 20260809120000_tenant_timezone was added by S-E04-5 (additive `tenant.timezone`, expand-only) and is recorded here by hand as part of that review — this list is a reviewed record, so a migration reaching disk without reaching this file is exactly the drift the check exists to catch. 20260813120000_tenant_rls_policies was added by S-E01-2b (RLS: ENABLE ROW LEVEL SECURITY plus a tenant_isolation policy on the 44 tenant_id tables, and DML grants to the non-owner role app_user) and is recorded here by hand as part of that review — it reached disk in run 52 and this check caught its absence from this file on the very same run, which is the mechanism working rather than a nuisance. TWO RESTORE-SPECIFIC CONSEQUENCES, recorded because a bare name in a list would hide them: (1) pg_dump does emit CREATE POLICY and ALTER TABLE ... ENABLE ROW LEVEL SECURITY, so a restore reproduces the policies — but it does NOT recreate the cluster-wide role app_user, which lives outside the database, so a restore onto a cluster without that role comes back with the policies intact and the grants silently absent; (2) the durations below were measured against a two-migration ledger on a database with no policies at all, and RLS adds per-row predicate evaluation to nothing here because the local database holds zero rows — so they are not invalidated by this migration, but they will need re-measuring from a seeded database before they mean anything about a restore under RLS."
   },
   "durations": {
     "dumpMs": {

@@ -1,5 +1,11 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+// `type Prisma` DÉLIBÉRÉMENT en spécificateur de TYPE : `Prisma` est un espace de
+// noms qui porte aussi des valeurs à l'exécution, et l'importer comme valeur
+// ferait entrer ce runtime dans un spec qui tourne SANS client généré et SANS
+// `DATABASE_URL`. Seul le TYPE `Prisma.TransactionClient` est utilisé ici, et un
+// spécificateur `type` est effacé à la compilation. Un seul `import` depuis le
+// module, pour ne pas heurter `import/no-duplicates`.
+import { PrismaClient, type Prisma } from '@prisma/client';
 
 /**
  * Nom du réglage PostgreSQL (GUC) qui porte le tenant courant.
@@ -98,9 +104,18 @@ export interface TenantRawClient {
   $queryRaw(strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
 }
 
-/** Le minimum qu'un client racine doit savoir faire pour ouvrir la transaction. */
-export interface TenantTransactionRunner {
-  $transaction<R>(fn: (tx: TenantRawClient) => Promise<R>): Promise<R>;
+/**
+ * Le minimum qu'un client racine doit savoir faire pour ouvrir la transaction.
+ *
+ * PARAMÉTRÉ par le type du client de transaction (`TTx`), avec `TenantRawClient`
+ * pour défaut — de sorte que les appelants existants sont inchangés, et que
+ * `runWithTenant` peut rendre à `fn` le type EXACT que le client fournit au lieu
+ * de le forcer par un cast. C'est ce qui supprime le
+ * `fn(tx as unknown as PrismaClient)` d'avant : le cast n'est pas déplacé, il
+ * n'existe plus.
+ */
+export interface TenantTransactionRunner<TTx extends TenantRawClient = TenantRawClient> {
+  $transaction<R>(fn: (tx: TTx) => Promise<R>): Promise<R>;
 }
 
 /**
@@ -145,17 +160,21 @@ async function applyTenantContext(tx: TenantRawClient, id: string): Promise<void
  * `$transaction`. Valider dans le callback coûterait une connexion du pool et un
  * BEGIN/ROLLBACK par requête refusée — une amplification de déni de service
  * offerte — et rendrait inécrivable l'assertion « aucune requête n'a été émise ».
+ *
+ * `fn` reçoit le client de TRANSACTION avec son type exact, pas un `PrismaClient`
+ * reconstitué par cast. Voir `PrismaService.withTenant` pour ce que cette
+ * distinction rend impossible à compiler.
  */
-export async function runWithTenant<T>(
-  client: TenantTransactionRunner,
+export async function runWithTenant<T, TTx extends TenantRawClient = TenantRawClient>(
+  client: TenantTransactionRunner<TTx>,
   tenantId: unknown,
-  fn: (tx: PrismaClient) => Promise<T>,
+  fn: (tx: TTx) => Promise<T>,
 ): Promise<T> {
   const id = assertTenantId(tenantId);
 
   return client.$transaction(async (tx) => {
     await applyTenantContext(tx, id);
-    return fn(tx as unknown as PrismaClient);
+    return fn(tx);
   });
 }
 
@@ -181,44 +200,84 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   /**
    * Exécute un bloc avec le contexte tenant posé sur la transaction.
    *
-   * CE QUE CE HELPER EST AUJOURD'HUI (mesuré, V3-E01 / PF-02, ADR-032) :
+   * ┌──────────────────────────────────────────────────────────────────────────┐
+   * │ CE QUI EST VRAI DEPUIS S-E01-2b (mesuré, exécuté — pas déduit)            │
+   * └──────────────────────────────────────────────────────────────────────────┘
    *
-   * 1. Il a ZÉRO appelant. Un grep de `withTenant` sur `apps/**` et `packages/**`
-   *    ne rend que sa propre définition. Les appelants (chemin requête, chemin
-   *    job) vivent dans la couture identité, qui est le périmètre d'une autre
-   *    story.
-   * 2. Il n'existe AUCUNE policy RLS dans cette base : zéro `ENABLE ROW LEVEL
-   *    SECURITY`, zéro `CREATE POLICY` dans tout le dépôt, `0_baseline` compris.
-   *    La moitié RLS d'ADR-002 n'est pas implémentée.
-   * 3. Donc : ceci est la COUTURE D'APPLICATION FUTURE, pas un mécanisme
-   *    d'isolation actif. Personne ne doit conclure d'ici que les dépôts sont
-   *    isolés par RLS aujourd'hui — ils ne le sont pas. L'ancien commentaire
-   *    « utilisé par tous les dépôts, donc les policies RLS s'appliquent » était
-   *    faux sur ses DEUX propositions ; c'est la moitié (b) de PF-02, avec
-   *    l'interpolation du tenant dans le texte SQL, supprimée par cette story.
-   * 4. Un UUID bien formé est une FORME, pas un DROIT. Ce helper ne sait pas
+   * 1. Les policies RLS EXISTENT. `20260813120000_tenant_rls_policies` pose
+   *    `ENABLE ROW LEVEL SECURITY` et une policy `tenant_isolation`
+   *    (`FOR ALL TO PUBLIC`, `USING` = `WITH CHECK`) sur les 44 tables portant
+   *    une colonne `tenant_id`, et accorde le DML de ces 44 tables à `app_user`.
+   * 2. Elles REFUSENT, et c'est PROUVÉ PAR EXÉCUTION contre un vrai PostgreSQL,
+   *    connecté comme `app_user` — un rôle qui sait se connecter, ne possède
+   *    AUCUNE des tables et n'a pas `BYPASSRLS`
+   *    (`scripts/rls-isolation-check.js`, G-TENANT). La preuve montre les lignes
+   *    APPARAÎTRE puis DISPARAÎTRE selon le GUC, pas seulement disparaître :
+   *    `app_user` n'avait aucun privilège avant cette migration, donc une preuve
+   *    qui n'aurait montré que l'absence aurait été verte pour la mauvaise
+   *    raison.
+   * 3. Le prédicat est
+   *    `nullif(current_setting('app.current_tenant_id', true), '')::uuid = tenant_id`.
+   *    Le `nullif` n'est pas cosmétique : APRÈS le COMMIT d'une transaction, un
+   *    `set_config(…, true)` laisse le GUC à `''` — PAS à NULL — et un cast nu
+   *    lèverait alors `22P02` sur la DEUXIÈME requête de chaque connexion du
+   *    pool. Mesuré sur ce cluster. Contexte absent ou vide ⇒ AUCUNE ligne, et
+   *    AUCUNE erreur.
+   *
+   * ┌──────────────────────────────────────────────────────────────────────────┐
+   * │ CE QUI N'EST TOUJOURS PAS VRAI — à lire avant d'en conclure quoi que ce   │
+   * │ soit sur l'isolation                                                     │
+   * └──────────────────────────────────────────────────────────────────────────┘
+   *
+   * 4. **L'APPLICATION QUI TOURNE N'EST PAS ISOLÉE PAR RLS.** Elle se connecte
+   *    comme `pilotage`, PROPRIÉTAIRE des 55 tables, et un propriétaire n'est pas
+   *    soumis à ses propres policies tant que `FORCE ROW LEVEL SECURITY` n'est
+   *    pas posé. `FORCE` est absent DÉLIBÉRÉMENT : posé aujourd'hui, il rendrait
+   *    zéro ligne à toutes les requêtes de toute l'application. Le correctif est
+   *    la BASCULE DE CONNEXION vers `app_user`, pas davantage de policy.
+   * 5. Ce helper a toujours ZÉRO appelant. Les appelants (chemin requête, chemin
+   *    job) vivent dans la couture identité (S-E01-1), qui n'est pas commencée.
+   *    La narrowing de type ci-dessous atterrit donc AVANT le premier appelant,
+   *    exprès : c'est le seul moment où elle ne casse rien.
+   * 6. Les policies ne couvrent PAS tout. Six tables sans `tenant_id` sont
+   *    dérivées d'un tenant par clé étrangère et restent NON protégées —
+   *    `grade_revision`, `announcement_receipt`, `branding`, `import_row`,
+   *    `user_role`, `outbox_event`. PF-02 moitié (a) est refermée
+   *    PARTIELLEMENT. Les noms et leurs raisons sont dans l'en-tête de la
+   *    migration.
+   * 7. Un UUID bien formé est une FORME, pas un DROIT. Ce helper ne sait pas
    *    distinguer le tenant A du tenant B : la résolution et l'autorisation
-   *    appartiennent à la couture identité. Ne pas lire cette validation comme
-   *    un contrôle d'accès.
-   * 5. Activer RLS est une story ULTÉRIEURE, parce que le prédicat de policy ne
-   *    vaut rien tant qu'il n'existe pas d'appelants sur les chemins requête et
-   *    job. Deux pièges y sont déjà consignés (voir ADR-032) : le propriétaire
-   *    des tables contourne RLS sans `FORCE ROW LEVEL SECURITY`, et
-   *    `current_setting(name)` sans son second argument casse migrations, jobs et
-   *    health checks.
+   *    appartiennent à la couture identité. Ne pas lire cette validation comme un
+   *    contrôle d'accès. (Proposition inchangée, et toujours la plus mal lue.)
+   *
+   * ┌──────────────────────────────────────────────────────────────────────────┐
+   * │ CE QUE LA SIGNATURE REND IMPOSSIBLE À COMPILER                            │
+   * └──────────────────────────────────────────────────────────────────────────┘
+   *
+   * `fn` reçoit un `Prisma.TransactionClient`, pas un `PrismaClient`. Ce type
+   * n'expose ni `$transaction` ni `$connect`, donc DEUX erreurs deviennent des
+   * erreurs de COMPILATION plutôt que des fuites silencieuses :
+   * - ouvrir une transaction imbriquée (Prisma en ouvrirait une SECONDE, sur une
+   *   AUTRE connexion, où le contexte n'est pas posé) ;
+   * - émettre la requête sur le service injecté au lieu de `tx` — la faute du
+   *   « on a fermé sur `this` » — puisque le service, lui, porte `$transaction`.
    *
    * PRÉCAUTIONS D'EMPLOI, pour le premier appelant réel :
    * - ceci ouvre une transaction INTERACTIVE Prisma (défauts maxWait 2 s /
    *   timeout 5 s) : uniquement de courtes unités de travail, jamais un import ou
    *   un rapport complet ;
-   * - ne pas l'appeler depuis une transaction déjà ouverte : Prisma ouvrirait une
-   *   SECONDE transaction indépendante, sur une autre connexion, et le contexte
-   *   ne s'appliquerait qu'à celle-ci ;
    * - la relecture prouve que le contexte a été APPLIQUÉ, pas qu'il persistera :
    *   sa portée est la transaction, donc la requête doit être émise sur `tx` et
    *   non sur le client racine.
    */
-  async withTenant<T>(tenantId: string, fn: (tx: PrismaClient) => Promise<T>): Promise<T> {
-    return runWithTenant(this as unknown as TenantTransactionRunner, tenantId, fn);
+  async withTenant<T>(
+    tenantId: string,
+    fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return runWithTenant(
+      this as unknown as TenantTransactionRunner<Prisma.TransactionClient>,
+      tenantId,
+      fn,
+    );
   }
 }

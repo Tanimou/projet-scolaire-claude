@@ -128,6 +128,12 @@ const CONSUMERS: Array<[string, RegExp]> = [
   ['scripts/schema-drift-check.js', RELATIVE_REQUIRE],
   ['scripts/restore-drill.js', RELATIVE_REQUIRE],
   ['apps/api/src/shared/quality/schema-drift-gate.spec.ts', COMPUTED_REQUIRE],
+  // S-E01-2b adds the fourth. The RLS isolation proof builds its scratch database
+  // on the SAME server as the drift gate, so it must resolve the SAME address —
+  // and it is enumerated here in the slice that wrote it, which is the whole
+  // point of this list: the three earlier entries were free to drift for three
+  // slices precisely because nothing forced a new consumer to declare itself.
+  ['scripts/rls-isolation-check.js', RELATIVE_REQUIRE],
 ];
 
 /** The literal that used to be copied into each consumer. */
@@ -136,8 +142,8 @@ const RETIRED_LITERAL = 'postgresql://pilotage:pilotage@127.0.0.1:5433/pilotage?
 /**
  * Blank `//` and block comments, length preserved — the helper the gate specs in
  * this directory carry. Without it, `toContain('default-database-url')` is
- * satisfied by a file that merely MENTIONS the module in its header, and all
- * three of these files have a header that does exactly that. Verified in the
+ * satisfied by a file that merely MENTIONS the module in its header, and every
+ * one of these files has a header that does exactly that. Verified in the
  * failing direction: deleting the require from a copy of `restore-drill.js` while
  * leaving its `:140` header sentence in place turns the case red.
  */
@@ -155,8 +161,9 @@ describe('DNC-10 — every consumer shares ONE default, and it is not a bypass',
   it('the enumeration is not empty, and it names the drift gate SPEC too', () => {
     // Non-vacuity before content: an emptied list would make every case below
     // pass without reading a single file.
-    expect(CONSUMERS).toHaveLength(3);
+    expect(CONSUMERS).toHaveLength(4);
     expect(CONSUMERS.map(([file]) => file)).toContain('apps/api/src/shared/quality/schema-drift-gate.spec.ts');
+    expect(CONSUMERS.map(([file]) => file)).toContain('scripts/rls-isolation-check.js');
   });
 
   it('a header MENTION does not satisfy the call-site anchor (the failing direction)', () => {

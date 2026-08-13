@@ -60,7 +60,24 @@ const FALLBACK_DATABASE_URL = 'postgresql://pilotage:pilotage@127.0.0.1:5433/pil
 const ENV_FILES = [join(REPO_ROOT, 'apps', 'api', '.env'), join(REPO_ROOT, '.env')];
 
 /**
- * Extract `DATABASE_URL` from one env file, or `undefined`.
+ * The variable naming the NON-OWNER application role's address (S-E01-2b).
+ *
+ * `.env:20` has declared `DATABASE_URL_APP` since before any RLS policy existed,
+ * and until this story nothing read it. `scripts/rls-isolation-check.js` reads it
+ * to learn WHICH ROLE to prove the policies against — the whole point being that
+ * the role must NOT be the table owner, because an owner is not subject to its
+ * own policies without `FORCE`.
+ *
+ * It is an ADDRESS, never a bypass, and the checker does not take its word for
+ * it: before any visibility assertion it asserts over that very connection that
+ * `current_user` owns none of the tables under test and does not carry
+ * `BYPASSRLS`. Pointing this variable at the owner therefore makes the check
+ * FAIL, not pass — which is the only property that makes reading it safe.
+ */
+const APP_DATABASE_URL_VAR = 'DATABASE_URL_APP';
+
+/**
+ * Extract one variable from one env file, or `undefined`.
  *
  * Deliberately a small hand-rolled reader rather than `dotenv`: these scripts run
  * before any install step is guaranteed, and a gate that cannot start because a
@@ -70,8 +87,13 @@ const ENV_FILES = [join(REPO_ROOT, 'apps', 'api', '.env'), join(REPO_ROOT, '.env
  * comments and blank lines are skipped, `export ` prefixes are tolerated, and
  * surrounding single or double quotes are stripped. An unreadable file is not an
  * error — it is simply not a source.
+ *
+ * The name is anchored with `\s*=` immediately after it, so `DATABASE_URL` does
+ * NOT match a line declaring `DATABASE_URL_APP` — the two are different variables
+ * in this repository's `.env` and reading one for the other would silently point
+ * a gate at the wrong ROLE. `default-database-url-gate.spec.ts` pins that case.
  */
-function readDatabaseUrlFrom(file) {
+function readEnvVarFrom(file, name) {
   if (!existsSync(file)) return undefined;
   let text;
   try {
@@ -79,10 +101,11 @@ function readDatabaseUrlFrom(file) {
   } catch {
     return undefined;
   }
+  const pattern = new RegExp(`^(?:export\\s+)?${name}\\s*=\\s*(.*)$`);
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line === '' || line.startsWith('#')) continue;
-    const match = /^(?:export\s+)?DATABASE_URL\s*=\s*(.*)$/.exec(line);
+    const match = pattern.exec(line);
     if (!match) continue;
     let value = match[1].trim();
     if (
@@ -94,6 +117,11 @@ function readDatabaseUrlFrom(file) {
     return value === '' ? undefined : value;
   }
   return undefined;
+}
+
+/** Extract `DATABASE_URL` from one env file, or `undefined`. Behaviour unchanged. */
+function readDatabaseUrlFrom(file) {
+  return readEnvVarFrom(file, 'DATABASE_URL');
 }
 
 /**
@@ -110,4 +138,29 @@ function defaultDatabaseUrl() {
   return FALLBACK_DATABASE_URL;
 }
 
-module.exports = { ENV_FILES, FALLBACK_DATABASE_URL, defaultDatabaseUrl, readDatabaseUrlFrom };
+/**
+ * The non-owner application role's address, or `undefined` when nothing declares
+ * it.
+ *
+ * There is deliberately NO fallback literal here, unlike `defaultDatabaseUrl()`:
+ * inventing a credential for a role that may not exist would let a checkout with
+ * no `.env` reach a connection failure that reads like a server problem. Absent
+ * means absent, and the one consumer FAILS with that word rather than guessing.
+ */
+function defaultAppDatabaseUrl() {
+  for (const file of ENV_FILES) {
+    const url = readEnvVarFrom(file, APP_DATABASE_URL_VAR);
+    if (url) return url;
+  }
+  return undefined;
+}
+
+module.exports = {
+  APP_DATABASE_URL_VAR,
+  ENV_FILES,
+  FALLBACK_DATABASE_URL,
+  defaultAppDatabaseUrl,
+  defaultDatabaseUrl,
+  readDatabaseUrlFrom,
+  readEnvVarFrom,
+};
