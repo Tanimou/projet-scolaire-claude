@@ -259,6 +259,61 @@ the workaround and the vulnerability are the same door. Compounding it, `/admin/
 
 ---
 
+## D-13 — How is a repo-wide scanner tested hermetically? · `resolved` · raised by `TOOL-15`/`TOOL-17`/`TOOL-18`, settled by `TOOL-15`
+
+> **Entered already `resolved`, and that is deliberate rather than a shortcut.** This file previously had **no**
+> `TOOL-15` entry — measured before writing: the ids ran `D-01`…`D-12` and the string `TOOL-15` did not appear
+> anywhere in it. The decision had been described three times in `audit-findings-index.md` as *"an open design
+> call for `open-decisions.md`"* and never actually written here. So AC-6's *"move it to `resolved`"* is
+> discharged by **adding the row in the resolved state**, with the question, the options and the ruling, rather
+> than by editing a row that was never created. Saying so is the point — silently doing nothing would have left
+> the ledger claiming a decision was recorded when it was not.
+
+**Question.** Two quality specs prove their gate can go RED by planting a probe file **inside the real working
+checkout** and deleting it again. Under parallel jest that races every process which lists the directory and
+then reads what it listed. How is such a scanner driven red without mutating the shared tree — given that
+`scripts/csv-escape-check.js` deliberately exposes **no root parameter**?
+
+**Why it had to be decided rather than deferred again.** It was raised three times and parked three times. Then
+`TOOL-18` measured the second, independent consequence: `scripts/link-integrity-check.js` walks
+`apps/web/src` — the exact directory the CSV probe is planted in — and died on an uncaught `ENOENT`, printing a
+stack trace where its verdict line belongs. Two consecutive no-flag `scripts/ci-gate.sh` runs on one unchanged
+tree gave `GATE: FAIL` then `GATE: PASS`, denominator 2532 in both. **`AUTO-LAND`'s `green` cannot be
+discharged from a single gate run for any gate-machinery diff while this stands**, which makes it a throughput
+decision and not only a hygiene one.
+
+**Options.** (a) A scratch-tree copy of the script, rooted by its own location. (b) Serialise the two writer
+specs. (c) Weaken the two assertions to rule-scoped ones.
+
+**Decision:** **(a)**, ratified in `ADR-039`. · **Decided by:** `TOOL-15` (run 47), on measurement · **Date:** 2026-08-13
+
+Three facts decided it, each checked rather than argued:
+
+1. **(a) is already this repository's technique.** Measured by AST over all **108** spec files under `apps/**`:
+   7 files perform real filesystem writes (61 call sites), 5 of them exclusively into an os-tmpdir scratch tree,
+   and the 2 exceptions are precisely the two probes — each of which *already contained* a scratch-tree
+   `DNC-08` block, eight cases deep. The text-scan reading that raised the finding says 6 of 8; both readings
+   agree on the conclusion and on the exceptions.
+2. **The "no root parameter" objection — the one thing blocking (a) — does not apply, and no flag was added.**
+   Every check script computes `const REPO_ROOT = resolve(__dirname, '..')`, so the root follows the *script's
+   own location*: a copy under `<scratch>/scripts/` spawned with `cwd: scratch` roots itself in the scratch tree
+   with no interface change. The `argv` whitelists and the DNC-10 "no way to turn this gate off" assertions are
+   untouched.
+3. **(b) and (c) are both worse.** (b) leaves the probe in the real tree — `git status` is still dirty mid-run
+   and any future walker is still a victim; it narrows the window instead of closing it. (c) deletes the only
+   executed evidence that the real script can go red on a real fourth escaper, which is the one thing that case
+   exists for (`R-30`).
+
+**Consequence.** A spec may write only into a tree it created under `tmpdir()`, and that rule is now held by an
+executed ratchet (`apps/api/src/shared/quality/hermetic-spec-writers-gate.spec.ts`) rather than by review.
+`scripts/link-integrity-check.js` now pronounces `DNC-08 — <path> is unreadable: <errno>` and exits non-zero
+instead of crashing — **more legible, not more tolerant**: no file is skipped into a PASS, and the in-process
+exports still throw. `scripts/lib/walk-read.js` is unchanged and stays: it protects every *future* writer.
+`TOOL-16(b)` is advanced, not closed — one of its two named causes is removed. `TOOL-17(b)`'s three residuals
+stay open.
+
+---
+
 ## Resolution log
 
 | id | Status | Decision | Decided by | Date | Consequence |
@@ -266,3 +321,4 @@ the workaround and the vulnerability are the same door. Compounding it, `/admin/
 | D-01 … D-10 | `open` | — | — | — | — |
 | D-11 | `open` | — | — | — | Raised 2026-08-09 by `S-E04-10` (`PF-155`). Blocks no story; a school closed by mistake has no in-product recovery until it is answered |
 | D-12 | `open` | — | — | — | Raised 2026-08-11 by `S-E05-2` (`PF-178`). Blocks `S-E05-2b`; `PF-09`'s residual cannot close without it. Admin onboarding of teacher/parent/student via `POST /users/:id/roles` is refused until answered |
+| D-13 | `resolved` | (a) scratch-tree copy, rooted by the script's own location — `ADR-039` | `TOOL-15` (run 47), on measurement | 2026-08-13 | Raised three times by `TOOL-15`/`TOOL-17` and re-raised by `TOOL-18`; **entered here for the first time, already resolved** (this file had no `TOOL-15` row — ids ran `D-01`…`D-12`). A spec may write only into a tree it created under `tmpdir()`, held by `hermetic-spec-writers-gate.spec.ts`. **No root flag was added to any check script and none was needed.** Unblocks reproducible `GATE:` verdicts on gate-machinery diffs; advances `TOOL-16(b)`, closes neither it nor `TOOL-17(b)` |

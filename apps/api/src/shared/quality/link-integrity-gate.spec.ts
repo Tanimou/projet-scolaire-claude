@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 /**
  * S-E06-3 / PF-19 — guard for the link-integrity gate.
@@ -1905,5 +1905,138 @@ describeWithBuild('the CLI verdict is the classifier verdict — no gap between 
     // blind spot is still a blind spot — just one with a counter behind it.
     expect(output).toMatch(/interpolated \(\d+ union-expanded · \d+ shape-checked/);
     expect(output).toContain('interpolated href shapes');
+  });
+});
+
+/* ================================================================== *
+ * TOOL-18 (DNC-08) — an unreadable source is a VERDICT, not a stack trace
+ * ================================================================== */
+
+/**
+ * The defect this pins, and why the CONTROL is asserted before the RED.
+ *
+ * `scanApp`'s loop read every walked file with a bare `readFileSync`. A file that
+ * vanished between the walk and the read threw an uncaught `ENOENT`, and the CLI
+ * printed a STACK TRACE where its verdict line belongs — so the parity case above
+ * (`:1903`) had no `LINK INTEGRITY CHECK:` line to assert on. That is the check-
+ * script half of the same probe-file race `TOOL-17` fixed on the spec side.
+ *
+ * THE ORDERING IS THE POINT, NOT A FORMALITY
+ * -------------------------------------------
+ * `main()` reaches `readInventory` BEFORE it scans, and a tree with no `.next`
+ * directory pushes a structural failure that falls into the SAME FAIL block —
+ * printing `LINK INTEGRITY CHECK: FAIL` and exiting 1 without the scan ever
+ * running. "Non-zero, and a verdict line was printed" is therefore satisfiable
+ * without the new code being executed at all. So this block builds a tree the
+ * REAL script rates PASS, ASSERTS that pass, and only then makes one walked file
+ * unreadable — and it asserts the failure NAMES the file and the errno, which no
+ * other exit path in this script can produce.
+ *
+ * WHY A `--require` SHIM AND NOT `chmod`
+ * --------------------------------------
+ * `chmod` is a no-op on Windows and this repository is developed on Windows; the
+ * two sibling DNC-08 blocks in `csv-escape-gate.spec.ts` and
+ * `audit-write-gate.spec.ts` say the same thing and withhold inputs instead.
+ * Withholding does not work here — an absent file is simply not walked. The shim
+ * makes `fs.readFileSync` throw `ENOENT` for ONE chosen absolute path inside the
+ * scratch tree, which is the errno every measured occurrence of this race
+ * carried. It patches the shared `node:fs` object before the script is loaded, so
+ * the script's own module-scope destructure picks it up; it lives in the scratch
+ * tree, it is passed to a spawned child, and it touches neither the real tree nor
+ * the script's interface. This is the same "inject a reader that throws a chosen
+ * errno" technique `scripts/lib/walk-read.js`'s docblock records as the only
+ * portable way to drive this branch.
+ */
+describe('TOOL-18 / DNC-08 — an unreadable walked source is a printed verdict, never a crash', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'link-integrity-dnc08-'));
+  const scriptCopy = join(scratch, 'scripts', 'link-integrity-check.js');
+  const UNREADABLE_REL = 'apps/web/src/app/unreadable.tsx';
+  const unreadableAbs = join(scratch, ...UNREADABLE_REL.split('/'));
+  const preload = join(scratch, '__unreadable-preload.js');
+
+  const put = (relPath: string, contents: string) => {
+    const target = join(scratch, ...relPath.split('/'));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, contents, 'utf8');
+  };
+  const runScratch = (nodeArgs: string[] = []) =>
+    spawnSync(process.execPath, [...nodeArgs, scriptCopy], { cwd: scratch, encoding: 'utf8' });
+
+  beforeAll(() => {
+    // `REPO_ROOT = resolve(__dirname, '..')` — the copy roots itself in the
+    // scratch tree. No flag is added to the script, and none is needed.
+    put('scripts/link-integrity-check.js', readFileSync(SCRIPT_PATH, 'utf8'));
+    // Hand-written, not copied: the real baseline's rows are keyed on targets this
+    // tree does not contain, and "a baselined target nothing links to any more" is
+    // itself a failure. An empty ceiling is the only correct one here.
+    put('scripts/link-integrity-baseline.json', `${JSON.stringify({ dead: {}, deadShapes: {} }, null, 2)}\n`);
+    // Discovery is filesystem-driven: a `next.config.*` is what makes this an app.
+    put('apps/web/next.config.mjs', 'export default {};\n');
+    // Hand-written, because AC-8 forbids running a build to obtain one.
+    put(
+      'apps/web/.next/app-path-routes-manifest.json',
+      `${JSON.stringify({ '/page': '/', '/admin/page': '/admin' }, null, 2)}\n`,
+    );
+    put('apps/web/src/app/page.tsx', 'export default function Page() {\n  return <a href="/admin">go</a>;\n}\n');
+    put(UNREADABLE_REL, 'export const x = 1;\n');
+    writeFileSync(
+      preload,
+      [
+        "const fs = require('node:fs');",
+        `const BAD = ${JSON.stringify(unreadableAbs)};`,
+        'const real = fs.readFileSync;',
+        'fs.readFileSync = function (p, ...rest) {',
+        '  if (String(p) === BAD) {',
+        "    const error = new Error(`ENOENT: no such file or directory, open '${BAD}'`);",
+        "    error.code = 'ENOENT';",
+        '    error.errno = -4058;',
+        '    error.path = BAD;',
+        '    throw error;',
+        '  }',
+        '  return real.call(this, p, ...rest);',
+        '};',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+  });
+
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+  it('0. CONTROL — the scratch tree is GREEN on the real script, so the RED below is attributable', () => {
+    const green = runScratch();
+    expect(green.status).toBe(0);
+    expect(green.stdout).toContain('LINK INTEGRITY CHECK: PASS');
+    // Green because it CLASSIFIED, not because it found nothing to classify: the
+    // scan ran, saw the manifest's routes, and resolved the one literal link.
+    expect(green.stdout).toMatch(/2 routes · 1 literal targets · 1 alive/);
+  });
+
+  it('goes RED with a printed verdict line that NAMES the unreadable file and its errno', () => {
+    const red = runScratch(['--require', preload]);
+    expect(red.status).toBe(1);
+
+    const output = `${red.stdout ?? ''}${red.stderr ?? ''}`;
+    // The whole point: `:1903`'s assertion has something to read.
+    expect(output).toMatch(/LINK INTEGRITY CHECK: (PASS|FAIL)/);
+    expect(red.stderr).toContain('LINK INTEGRITY CHECK: FAIL');
+    // Named, in the vocabulary the two sibling check scripts already use.
+    expect(red.stderr).toContain('DNC-08');
+    expect(red.stderr).toContain(UNREADABLE_REL);
+    expect(red.stderr).toContain('is unreadable: ENOENT');
+    // And it did NOT die: a stack trace is what this replaces.
+    expect(red.stderr).not.toContain('at scanApp');
+  });
+
+  it('no tolerance was added — the in-process exports still THROW on an unreadable source', () => {
+    // `extractLiteralLinks` / `extractTemplateLinks` pass no collector, so their
+    // path is unchanged. Asserted over the script's own text because the guard
+    // spec drives those exports against the REAL tree, where nothing is
+    // unreadable: the seam is the `if (!unreadable) throw error;` line, and a
+    // refactor that dropped it would make this gate tolerant everywhere.
+    const source = readFileSync(SCRIPT_PATH, 'utf8');
+    expect(source).toContain('if (!unreadable) throw error;');
+    // …and a partial pass is never memoised into the shared scan cache.
+    expect(source).toContain('if (!degraded) SCAN_CACHE.set(root, result);');
   });
 });
