@@ -9,18 +9,19 @@ kept for content._
 
 ## ✅ The gate is reproducible. That sentence has not been true in this programme before.
 
-`scripts/ci-gate.sh` (no flags) was run **twice** on this run's branch and printed **`GATE: PASS (fast)` both
-times**, with **byte-identical** ratchet lines:
+`scripts/ci-gate.sh` (no flags) was run **three times** on this run's branch — the third on the exact committed tree that merges — and
+printed **`GATE: PASS (fast)` every time**, with **byte-identical** ratchet lines:
 
 | Gate run | Verdict | api ratchet | worker ratchet |
 |---|---|---|---|
 | 1 (286 s) | **`GATE: PASS (fast)`** | `2539/2555 passed · 11 failing · 11 known` | `293/300 · 7 failing · 7 known` |
 | 2 (174 s) | **`GATE: PASS (fast)`** | `2539/2555 passed · 11 failing · 11 known` | `293/300 · 7 failing · 7 known` |
+| 3 (on the COMMITTED tree) | **`GATE: PASS (fast)`** | `2539/2555 passed · 11 failing · 11 known` | `293/300 · 7 failing · 7 known` |
 
 Compare the two preceding pairs on unchanged trees: run 44 got **three failure sets in three runs**; run 46 got
 **`FAIL` then `PASS`**. **`AUTO-LAND`'s `green` is dischargeable from a single gate run again for gate-machinery
-diffs.** Keep running it twice for one or two more runs before trusting that — two agreeing runs is one data point
-about reproducibility, not proof of it.
+diffs.** Keep running it twice for one or two more runs before trusting that — three agreeing runs on one branch is a
+strong data point about reproducibility, not yet proof of it across diffs.
 
 ## ✅ Closed by run 47 — `TOOL-15` and `TOOL-18`, which were one defect at two addresses
 
