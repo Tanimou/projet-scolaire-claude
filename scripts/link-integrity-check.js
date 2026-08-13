@@ -1048,17 +1048,73 @@ function referenceContext(lineText) {
  */
 const SCAN_CACHE = new Map();
 
-function scanApp(srcDir) {
+/**
+ * TOOL-18 — an input this script cannot read is a verdict it cannot pronounce,
+ * and it must SAY SO instead of dying with a stack trace.
+ *
+ * WHAT WAS WRONG, AND WHAT IS AND IS NOT BEING FIXED
+ * --------------------------------------------------
+ * The loop below reads every walked file. Under parallel jest a sibling spec
+ * could plant and delete a probe file inside `apps/web/src` between the walk and
+ * the read; the `readFileSync` threw an uncaught `ENOENT`, and the CLI printed a
+ * STACK TRACE where its verdict line belongs. `link-integrity-gate.spec.ts`
+ * asserts a verdict line exists, so the run failed with no verdict to read.
+ *
+ * `TOOL-15` removes the writers, so the race itself is gone. This seam is the
+ * *legibility* half, and it is deliberately NOT the tolerance half:
+ *
+ *   • the script still FAILS — the unreadable file becomes a STRUCTURAL failure,
+ *     which `main()` already treats exactly like a missing build artefact: the
+ *     application is not classified at all, and the run exits 1;
+ *   • the message carries `DNC-08`, the repo-relative path and the errno, in the
+ *     same shape `audit-write-check.js` and `csv-escape-check.js` already use;
+ *   • nothing is skipped into a PASS. A partial scan is never handed to
+ *     `classifyAll`, and it is never memoised (see `degraded` below) — a cached
+ *     partial result would make the SECOND caller in the same process silently
+ *     believe a truncated corpus.
+ *
+ * This is NOT `scripts/lib/walk-read.js` in disguise, and that module's own
+ * docblock argues the divergence: a spec measures a tree a sibling is mutating,
+ * a check script IS the verdict. `PF-146` and `PF-105` are the two existing
+ * instances in this repository of converting an unclassifiable state into a
+ * PASS; this is not a third.
+ *
+ * WHY THE COLLECTOR IS A PARAMETER RATHER THAN A MODE
+ * ---------------------------------------------------
+ * `extractLiteralLinks` and `extractTemplateLinks` are public exports the guard
+ * spec drives IN PROCESS. They pass no collector, so they keep throwing the
+ * original error object, unwrapped — no tolerance is added on any in-process
+ * path. Only `main()` passes one, and only in order to print a verdict. It is
+ * not reachable from the command line and it cannot make any check pass, so it
+ * is a seam, not a flag (DNC-10).
+ *
+ * @param {string} [srcDir]
+ * @param {{unreadable?: string[]}} [options] CLI-only sink for DNC-08 failures.
+ */
+function scanApp(srcDir, options) {
   const root = srcDir || (discoverNextApps()[0] || {}).srcDir;
   if (!root) return { targets: [], templates: [] };
   const cached = SCAN_CACHE.get(root);
   if (cached) return cached;
 
+  const unreadable = options && Array.isArray(options.unreadable) ? options.unreadable : null;
+  let degraded = false;
+
   const targets = [];
   const templates = [];
 
   for (const file of walkSources(root)) {
-    const source = readFileSync(file, 'utf8');
+    let source;
+    try {
+      source = readFileSync(file, 'utf8');
+    } catch (error) {
+      // No collector → this is an in-process caller. Rethrow the ORIGINAL object,
+      // unwrapped: same instance, same `code`, same message.
+      if (!unreadable) throw error;
+      degraded = true;
+      unreadable.push(`DNC-08 — ${rel(file)} is unreadable: ${(error && (error.code || error.message)) || error}`);
+      continue;
+    }
     const executable = stripCommentsPreservingLines(source);
     const where = rel(file);
 
@@ -1151,7 +1207,10 @@ function scanApp(srcDir) {
   }
 
   const result = { targets, templates };
-  SCAN_CACHE.set(root, result);
+  // A partial pass is never memoised. Caching it would hand the next caller in
+  // this process a truncated corpus that looks complete — the one way this seam
+  // could turn an unreadable input into a green run.
+  if (!degraded) SCAN_CACHE.set(root, result);
   return result;
 }
 
@@ -1588,8 +1647,20 @@ function main() {
       continue;
     }
 
-    const targets = extractLiteralLinks(app.srcDir);
-    const templates = extractTemplateLinks(app.srcDir);
+    // TOOL-18: one pass, with the DNC-08 sink attached. An unreadable source is a
+    // structural failure — the same treatment a missing build artefact gets, and
+    // for the same reason: the application is NOT classified from what could be
+    // read, because a classification over a truncated corpus is the vacuous PASS
+    // this gate exists to refuse.
+    const unreadable = [];
+    const scan = scanApp(app.srcDir, { unreadable });
+    if (unreadable.length > 0) {
+      console.log('FAILED');
+      structuralFailures.push(...unreadable.map((problem) => `${app.id} — ${problem}`));
+      continue;
+    }
+    const targets = scan.targets;
+    const templates = scan.templates;
     const { problems, stats, patterns } = classifyAll({ targets, routes, baseline, templates, deadShapes });
     console.log(
       `${routes.length} routes · ${stats.targets} literal targets · ` +

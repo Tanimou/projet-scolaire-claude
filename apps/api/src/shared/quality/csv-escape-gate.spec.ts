@@ -489,20 +489,109 @@ describe('AC-7 — the REAL repository is green, and a real fourth copy turns it
     expect(run.stdout).toMatch(/apps\/web\/src … \d+ files \(\d+ \.tsx\)/);
   });
 
+  /**
+   * TOOL-15 — the fourth copy is planted in a SCRATCH TREE, never in the checkout.
+   *
+   * WHAT THIS CASE USED TO DO, AND WHY IT COULD NOT STAY
+   * ----------------------------------------------------
+   * It wrote `apps/web/src/lib/__csv_escape_probe.tsx` into the REAL working
+   * tree and deleted it in an `afterEach`. Under parallel jest any process that
+   * listed `apps/web/src` and then read what it listed could be handed a path
+   * that no longer existed: `TOOL-17` (five spec victims) and `TOOL-18`
+   * (`scripts/link-integrity-check.js`, which walks that exact directory) are
+   * both this one file. Two `node scripts/test-ratchet.js api` runs over ONE
+   * unchanged tree produced two DIFFERENT failure sets, so `AUTO-LAND`'s `green`
+   * could not be discharged from a single gate run.
+   *
+   * `TOOL-17` taught the readers to survive it. This removes the writer, which is
+   * the actual repair — `ADR-039` records the decision and the measurement behind
+   * it (6 of the 8 `apps/**` spec files that write already write into an
+   * os-tmpdir scratch tree; these two probes were the only exceptions).
+   *
+   * NO FLAG WAS ADDED, AND NONE IS NEEDED
+   * -------------------------------------
+   * `csv-escape-check.js:128` is `const REPO_ROOT = resolve(__dirname, '..')` —
+   * the root follows the SCRIPT'S OWN LOCATION. Copying the script to
+   * `<scratch>/scripts/` and spawning it with `cwd: scratch` makes the scratch
+   * tree its root with no interface change at all, so the standing objection
+   * ("a flag that lets a caller choose what is compared is a bypass flag wearing
+   * a different hat") is answered by not needing one. The `DNC-08` block below
+   * has used this technique, eight cases deep, since it was written.
+   *
+   * THE TRAP, AND WHY THE GREEN CONTROL IS ASSERTED FIRST
+   * -----------------------------------------------------
+   * The script has SIX preflights before rule A can speak — the parser, the
+   * predicate module and its three exports, the security barrel's re-export,
+   * every declared walk root existing AND non-empty, and the vacuity floor.
+   * Rule D is additionally ONE-WAY: a `SANCTIONED` or `EXCLUDED` row that matches
+   * nothing is itself RED. So a naive scratch tree goes red for a PREFLIGHT
+   * reason and `expect(status).toBe(1)` would pass while proving nothing about a
+   * fourth escaper. The green control below is what makes the RED attributable,
+   * and it is asserted, not assumed.
+   *
+   * The four keyed files are COPIED rather than hand-written: a stand-in that
+   * stops matching the script's own detector turns this case green for the wrong
+   * reason.
+   */
   describe('a deliberately-added fourth copy, in a .tsx file', () => {
-    const probe = join(REPO_ROOT, 'apps', 'web', 'src', 'lib', '__csv_escape_probe.tsx');
+    const scratch = mkdtempSync(join(tmpdir(), 'csv-escape-ac7-'));
+    const scriptCopy = join(scratch, 'scripts', 'csv-escape-check.js');
+    const probe = join(scratch, 'apps', 'web', 'src', 'lib', '__csv_escape_probe.tsx');
 
-    afterEach(() => {
-      // The probe NEVER survives the test. A gate whose failure is still in the
-      // tree is a broken build, and `git status` must be clean afterwards.
-      if (existsSync(probe)) rmSync(probe);
+    /** The four files the detector is keyed on, plus the two predicate files. Copied verbatim. */
+    const COPIED = [
+      'scripts/csv-escape-check.js',
+      'packages/contracts/src/security/csv-injection.ts',
+      'packages/contracts/src/security/index.ts',
+      'apps/web/src/lib/csv.ts',
+      'apps/worker/src/modules/exports/generators/audit-csv.generator.ts',
+      'apps/api/src/modules/imports/imports.service.ts',
+      'apps/api/src/modules/integrations/oneroster.adapter.ts',
+    ];
+
+    const put = (relPath: string, contents: string) => {
+      const target = join(scratch, ...relPath.split('/'));
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, contents, 'utf8');
+    };
+    const runScratch = () =>
+      spawnSync(process.execPath, [scriptCopy], { cwd: scratch, encoding: 'utf8' });
+
+    beforeAll(() => {
+      // Copying is AST-only work: the script never resolves an import, so a copied
+      // file whose imports are unresolvable inside the scratch tree is fine.
+      for (const relPath of COPIED) {
+        put(relPath, readFileSync(join(REPO_ROOT, ...relPath.split('/')), 'utf8'));
+      }
+      // The parser is an input (DNC-08 case 1). Same shim as the block below.
+      put('node_modules/typescript/package.json', JSON.stringify({ name: 'typescript', main: 'index.js' }));
+      put(
+        'node_modules/typescript/index.js',
+        `module.exports = require(${JSON.stringify(require.resolve('typescript'))});\n`,
+      );
+      // Walk roots 5 and 6 carry no keyed file, and "matched ZERO source files"
+      // is a preflight failure — so each gets one production source.
+      put('packages/ui/src/__scratch_placeholder.ts', 'export const placeholder = 1;\n');
+      put('packages/imports-core/src/__scratch_placeholder.ts', 'export const placeholder = 1;\n');
+    });
+
+    afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+    it('0. CONTROL — the scratch tree is GREEN on the real script, so the RED below is attributable', () => {
+      const green = runScratch();
+      expect(green.status).toBe(0);
+      expect(green.stdout).toContain('CSV ESCAPE CHECK: PASS');
+      // …and green for the RIGHT reason: all four keyed files were matched, so
+      // neither rule D nor the vacuity floor is what is being measured next.
+      for (const key of SANCTIONED_KEYS) expect(green.stdout).toContain(key);
+      for (const key of Object.keys(gate.EXCLUDED)) expect(green.stdout).toContain(key);
     });
 
     it('exits non-zero naming rule A and the file, and the tree is green again after', () => {
       writeFileSync(
         probe,
         [
-          '// Temporary AC-7 probe. Removed in afterEach — never committed.',
+          '// Temporary AC-7 probe. Lives in an os-tmpdir scratch tree (TOOL-15) — never in the checkout.',
           'export function escapeCell(v: string): string {',
           '  return /[",;\\n\\r]/.test(v) ? `"${v.replace(/"/g, \'""\')}"` : v;',
           '}',
@@ -510,14 +599,14 @@ describe('AC-7 — the REAL repository is green, and a real fourth copy turns it
         ].join('\n'),
         'utf8',
       );
-      const red = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: REPO_ROOT, encoding: 'utf8' });
+      const red = runScratch();
       expect(red.status).toBe(1);
       expect(red.stderr).toContain('CSV ESCAPE CHECK: FAIL');
       expect(red.stderr).toContain('RULE A (a fourth CSV escaper)');
       expect(red.stderr).toContain('__csv_escape_probe.tsx');
 
       rmSync(probe);
-      const green = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: REPO_ROOT, encoding: 'utf8' });
+      const green = runScratch();
       expect(green.status).toBe(0);
     });
   });

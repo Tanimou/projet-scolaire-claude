@@ -1,8 +1,131 @@
 # Next story
 
-_Rewritten by run 46 (`TOOL-17`), 2026-08-13. Read this section first; everything below it is older and kept for content._
+_Rewritten by run 47 (`TOOL-15` + `TOOL-18`), 2026-08-13. Read this section first; everything below it is older and
+kept for content._
 
 ---
+
+# NEXT — written by run 47 (`TOOL-15` + `TOOL-18`), 2026-08-13 — **this section supersedes every section below**
+
+## ✅ The gate is reproducible. That sentence has not been true in this programme before.
+
+`scripts/ci-gate.sh` (no flags) was run **twice** on this run's branch and printed **`GATE: PASS (fast)` both
+times**, with **byte-identical** ratchet lines:
+
+| Gate run | Verdict | api ratchet | worker ratchet |
+|---|---|---|---|
+| 1 (286 s) | **`GATE: PASS (fast)`** | `2539/2555 passed · 11 failing · 11 known` | `293/300 · 7 failing · 7 known` |
+| 2 (174 s) | **`GATE: PASS (fast)`** | `2539/2555 passed · 11 failing · 11 known` | `293/300 · 7 failing · 7 known` |
+
+Compare the two preceding pairs on unchanged trees: run 44 got **three failure sets in three runs**; run 46 got
+**`FAIL` then `PASS`**. **`AUTO-LAND`'s `green` is dischargeable from a single gate run again for gate-machinery
+diffs.** Keep running it twice for one or two more runs before trusting that — two agreeing runs is one data point
+about reproducibility, not proof of it.
+
+## ✅ Closed by run 47 — `TOOL-15` and `TOOL-18`, which were one defect at two addresses
+
+**No spec plants a probe file in the shared checkout any more.** Both offenders now build an os-tmpdir scratch tree
+holding a **copy of the real check script**, and spawn that copy with `cwd: scratch`.
+
+**The three things worth carrying forward:**
+
+- **The parked decision was settleable by measurement, and had been parked three times.** It was recorded as *"an
+  open design call for `open-decisions.md`, not a side effect of a slice"* in `TOOL-15`, `TOOL-17` and `TOOL-18`.
+  What unparked it: **the objection that blocked the scratch-tree option does not apply.** The objection was
+  *"`csv-escape-check.js` deliberately exposes no root parameter — a flag that lets a caller choose what is compared
+  is a bypass flag wearing a different hat."* True, and still true: **no flag was added.** Every check script
+  computes `const REPO_ROOT = resolve(__dirname, '..')`, so the root follows the **script's own location** — a copy
+  under `<scratch>/scripts/` roots itself in the scratch tree with no interface change. And each offending spec's own
+  `DNC-08` block had been doing exactly this, eight cases deep, since it was written. Recorded as **`D-13`**
+  (entered already `resolved`, because the entry had never actually been created) and **`ADR-039`**.
+  **The lesson is general: before deferring a design call again, check whether the objection that parked it still
+  holds. This one had not held since the day it was written.**
+- **The green control is the whole difficulty, and it is not optional.** `csv-escape-check.js` has **six** preflights
+  that speak before rule A — parser, predicate module and its three exports, barrel re-export, every walk root
+  present *and* non-empty, the vacuity floor — and rule D is **one-way**: a `SANCTIONED` *or* `EXCLUDED` row matching
+  nothing is itself RED. So a naive scratch tree goes red for a **preflight** reason and `expect(status).toBe(1)`
+  passes while proving nothing. Both rewritten cases therefore assert the scratch tree **GREEN first**, as a named
+  `0. CONTROL — …` case, and assert it green *for the right reason* (all four keyed files matched). Copy the real
+  keyed sources; a hand-written stand-in that stops matching the detector turns the case green for the wrong reason.
+- **`TOOL-18` was fixed at the writer, and the check script was made legible — not tolerant.**
+  `scripts/link-integrity-check.js` no longer dies with a stack trace where its verdict belongs: an unreadable walked
+  source becomes a **structural failure** carrying `DNC-08 — <path> is unreadable: <errno>`, `main()` prints
+  `LINK INTEGRITY CHECK: FAIL`, and it exits non-zero. Two details that are the difference between this and
+  `DNC-08`: a partial scan is **never memoised** (a cached truncated corpus is the one way this seam could go green),
+  and the in-process exports pass no collector so they still **rethrow the original error unwrapped**.
+  `scripts/lib/walk-read.js` was neither used here nor modified — it stays, because it protects every *future*
+  writer.
+
+**Held by an executed ratchet, not by review:** `apps/api/src/shared/quality/hermetic-spec-writers-gate.spec.ts`
+fails if any spec under `apps/**` writes to a destination not derived from `mkdtempSync`/`tmpdir()`. It **parses with
+the TypeScript compiler rather than grepping** — `test-ratchet.spec.ts` contains `rmSync(scratch, …)` inside a
+**string literal**, and a text matcher flags it, which is exactly the pressure that gets a ratchet weakened (`R-30`).
+It carries shown-red cases, including a scratch-*looking* name that was never rooted at `tmpdir()`.
+
+## ⛔ `TOOL-19` — Docker's ENGINE is wedged, and three runs bounded the wrong layer
+
+Runs 44, 45 and 46 each recorded `docker ps` hanging and concluded the **CLI** was the problem; run 44 added
+`spawnSync`-level bounds on that basis. Measured a layer down this run: `//./pipe/docker_engine` **accepts a
+connection** — the daemon is listening and the pipe exists — but `GET /v1.43/containers/json?all=1` returns
+**nothing in 15 000 ms, then `ECONNRESET`**. The CLI is not slow; it is **blocked on an engine that never answers**,
+and no client-side bound repairs that — it only makes the client give up sooner.
+
+`dockerd` and `com.docker.service` are resident, alongside **11 orphaned `docker` CLI processes dated Aug 10–12** and
+**5 `docker-ai` processes** (newest 2026-08-13 02:06 — notable, since this project's standing configuration records
+`EnableDockerAI=false`).
+
+**This is an operator action, not a story.** Restart the Docker engine; the 11 orphans should be reaped with it.
+Until then **Step −1's "just rebuild the local stack" is not executable on this host**, and everything parked behind
+"settle the database" stays blocked for an **8th consecutive run**.
+
+Two cheap standing checks, so nobody re-measures the CLI: `127.0.0.1:5433` refuses in **5 ms**; the named-pipe probe
+above distinguishes *no stack* from *no engine*.
+
+## ▶ Recommended next story
+
+1. **`TOOL-16(b)` — confirm or refute that the gate is now reproducible (P1, cheap, no database).** One of its two
+   named causes is gone. Do not close it on this run's two agreeing runs alone: run the no-flag gate twice on an
+   unrelated code diff and see whether they still agree. If they do, close it with the evidence; if they do not, the
+   *second* cause is now isolated by construction, which is worth more than a guess. **This is the highest-value
+   next slice precisely because it is a measurement, not a repair.**
+2. **Populate the skipped-count baselines (operator, one command each).** Both ratchets still print
+   `⚠ this baseline records no skipped counts. The skip ratchet is INACTIVE`. `TOOL-13` shipped it disarmed on
+   purpose. From a **COMPLETE** run: `node scripts/test-ratchet.js api --update` and `… worker --update`.
+   **Never hand-write those numbers** — and note `feedback-shell-backticks-execute-docs`: writing that command into
+   markdown via `node -e "…"` in double quotes has **executed** it once already and mutated the baseline.
+3. **`TOOL-17(b)`'s three residuals (P2, no database)** — the sixth walked-read victim at
+   `apps/api/src/shared/audit/write-audit.spec.ts:416`; the FR-4 named-path leak (`MAP.get('<literal>') ?? ''` served
+   from a tolerant map turns a skipped **named** file into `''`); and the shared `MAX_VANISHED_FILES = 5` applied to
+   `portal-landing-gate`'s **10-file** corpus. All three are now *less* likely to fire — the writers are gone — which
+   is an argument for doing them while they are cheap, not for dropping them.
+4. **`S-E01-2b` (RLS)** — blocked for the **8th** run running, now with a named cause (`TOOL-19`) rather than "docker
+   is slow". It writes migrations, so `schema drift` will not be skipped, and it needs a reachable PostgreSQL on
+   `127.0.0.1:5433`. **Unblocked the moment an operator restarts the Docker engine** — at which point it, `TOOL-13`'s
+   drift-gate half, and the never-executed live-PostgreSQL path of `TOOL-10`'s preflight all become available in one
+   motion.
+
+## State of the world at the end of run 47
+
+- **`pnpm --filter @pilotage/api exec nest build` — the run's single build.** Verified by its **artefact**, not by
+  `$?`: `apps/api/dist/main.js` was rewritten 12 s before the check. The first attempt read the exit code through a
+  pipe, which reports `tail`'s status — **`R-23` committed by the routine itself**, caught and re-measured. `R-23`
+  is about pipes and compound commands, and it is easy to commit while quoting it.
+- **No Docker was started and no container was rebuilt** — see `TOOL-19`: on this host it is not currently possible.
+  Nothing in this slice needed one (every fixture is a `mkdtempSync(tmpdir())` scratch tree). The stack's health is
+  **unknown**, unchanged from runs 45 and 46. Do not assume it is healthy.
+- **The api denominator moved 2532 → 2555** (+23), all of it the new hermetic-writers ratchet. `11 failing · 11
+  known` in both runs, no drift.
+- **`INFLIGHT` was 1 at Step 0** — PR #234, a docs-only correction to this file, was open and untouched by this run.
+- Two ledger repairs made at land: the two closed `TOOL` rows were **moved** from `OPEN.md` to `CLOSED-L0.md`, which
+  is `OPEN.md`'s own stated discipline and had not been done for them; and **`TOOL-19` was declared in both ledgers
+  in the same commit that measured it** (the `TOOL-01`/`TOOL-05` id-allocation discipline). Note the standing
+  convention drift: `TOOL-03…07` live in `audit-findings-index.md`'s register, `TOOL-08…18` only in `OPEN.md`.
+  `TOOL-19` is in both.
+
+
+---
+
+## (previous NEXT, run 46 and earlier — kept for content)
 
 # NEXT — written by run 46 (`TOOL-17`), 2026-08-13 — **this section supersedes every section below**
 

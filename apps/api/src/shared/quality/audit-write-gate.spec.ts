@@ -685,20 +685,117 @@ describe('AC-1 — the real repository reconciles, and the run is the evidence',
  * 6 (AC-3) — SHOWN able to fail, on the real script, driven
  * ================================================================== */
 
+/**
+ * TOOL-15 — the probe is planted in a SCRATCH TREE, never in the checkout.
+ *
+ * This case used to write `apps/api/src/shared/quality/__audit_write_probe.ts`
+ * into the REAL working tree and delete it in an `afterEach`. Under parallel
+ * jest, any process that listed this directory and then read what it listed
+ * could be handed a path that no longer existed — `TOOL-17` (five spec victims)
+ * and `TOOL-18` (`scripts/link-integrity-check.js`) are both that one file.
+ * `TOOL-17` taught the readers to survive the race; this removes the writer,
+ * which is the actual repair. `ADR-039` records the decision.
+ *
+ * No root flag was added to `audit-write-check.js` and none is needed: its
+ * `REPO_ROOT = resolve(__dirname, '..')` follows the SCRIPT'S OWN LOCATION, so a
+ * copy under `<scratch>/scripts/` spawned with `cwd: scratch` roots itself in the
+ * scratch tree with no interface change. The `DNC-08` block below has used this
+ * technique since it was written.
+ *
+ * WHY THE GREEN CONTROL IS ASSERTED FIRST, AND WHAT IT COSTS
+ * ----------------------------------------------------------
+ * The script has seven preflights before rule A can speak, and the last of them
+ * is the vacuity floor `MIN_WRITE_AUDIT_CALLS = 12`. A scratch tree that misses
+ * any one of them goes red for a PREFLIGHT reason, and `expect(status).toBe(1)`
+ * would then pass while proving nothing about a direct `auditLog.create`. So the
+ * tree below synthesises TWELVE call sites of the shape rule B accepts — the
+ * `writeAudit` first argument LEXICALLY BOUND by a `$transaction` callback
+ * parameter (an alias is rejected, by design), the second an inline object
+ * literal (rule C), and no call inside a `try` block (`ADR-035` D2) — and the
+ * green is asserted before the probe is planted.
+ *
+ * The seam and the findings index are COPIED rather than invented: rule E
+ * resolves a baseline row's finding id against the real index, and that rule
+ * exists precisely because a shape-only resolver is not a resolver. The baseline
+ * is `{ "sites": {} }`, which is correct rather than lazy — the scratch tree
+ * carries no rule-A violation, and a baseline row matching nothing is itself red
+ * (rule D).
+ */
 describe('AC-3 — a deliberately-added non-transactional write turns the real script RED', () => {
-  const probe = join(REPO_ROOT, 'apps', 'api', 'src', 'shared', 'quality', '__audit_write_probe.ts');
+  const scratch = mkdtempSync(join(tmpdir(), 'audit-write-ac3-'));
+  const scriptCopy = join(scratch, 'scripts', 'audit-write-check.js');
+  const probe = join(scratch, 'apps', 'api', 'src', 'shared', 'quality', '__audit_write_probe.ts');
 
-  afterEach(() => {
-    // The probe NEVER survives the test. A gate whose failure is still in the
-    // tree is a broken build, and `git status` must be clean afterwards.
-    if (existsSync(probe)) rmSync(probe);
+  const put = (relPath: string, contents: string) => {
+    const target = join(scratch, ...relPath.split('/'));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, contents, 'utf8');
+  };
+  const copy = (relPath: string) => put(relPath, readFileSync(join(REPO_ROOT, ...relPath.split('/')), 'utf8'));
+  const runScratch = () => spawnSync(process.execPath, [scriptCopy], { cwd: scratch, encoding: 'utf8' });
+
+  /** One rule-B/rule-C-clean `writeAudit` call site. Twelve of these satisfy the vacuity floor. */
+  const seamCallSite = (n: number) =>
+    [
+      "import { writeAudit } from '../../shared/audit/write-audit';",
+      '',
+      'interface Client {',
+      '  $transaction: (fn: (tx: unknown) => Promise<void>) => Promise<void>;',
+      '}',
+      '',
+      `export async function scratchSite${n}(prisma: Client, tenantId: string, actorId: string) {`,
+      '  await prisma.$transaction(async (tx) => {',
+      '    await writeAudit(tx, {',
+      '      tenantId,',
+      '      actorId,',
+      `      action: 'scratch.site_${n}',`,
+      "      resourceType: 'scratch_resource',",
+      '      resourceId: null,',
+      `      after: { summary: 'scratch site ${n}' },`,
+      '    });',
+      '  });',
+      '}',
+      '',
+    ].join('\n');
+
+  beforeAll(() => {
+    copy('scripts/audit-write-check.js');
+    copy(gate.SEAM_REL);
+    copy(gate.FINDINGS_INDEX_REL);
+    put(gate.BASELINE_REL, `${JSON.stringify({ sites: {} }, null, 2)}\n`);
+    // The parser is an input (DNC-08 case 1). Same shim as the block below.
+    put('node_modules/typescript/package.json', JSON.stringify({ name: 'typescript', main: 'index.js' }));
+    put(
+      'node_modules/typescript/index.js',
+      `module.exports = require(${JSON.stringify(require.resolve('typescript'))});\n`,
+    );
+    for (let n = 1; n <= gate.MIN_WRITE_AUDIT_CALLS; n++) {
+      put(`apps/api/src/modules/scratch/scratch-${n}.service.ts`, seamCallSite(n));
+    }
+    // Walk roots 2 and 3 carry no call site, and "matched ZERO production .ts
+    // files" is itself a preflight failure — so each gets one production source.
+    put('apps/worker/src/__scratch_placeholder.ts', 'export const placeholder = 1;\n');
+    put('packages/imports-core/src/__scratch_placeholder.ts', 'export const placeholder = 1;\n');
+  });
+
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+  it('0. CONTROL — the scratch tree is GREEN on the real script, so the RED below is attributable', () => {
+    const green = runScratch();
+    expect(green.status).toBe(0);
+    expect(green.stdout).toContain('AUDIT WRITE CHECK: PASS');
+    // …and green having cleared the vacuity floor, not under it: the floor is the
+    // preflight most likely to be what an `expect(status).toBe(1)` really measured.
+    expect(green.stdout).toContain(`${gate.MIN_WRITE_AUDIT_CALLS} audit writes`);
+    expect(green.stdout).toContain(`${gate.MIN_WRITE_AUDIT_CALLS} through the seam inside a transaction`);
   });
 
   it('exits non-zero, names the rule, names the file, and the tree is clean again', () => {
+    mkdirSync(dirname(probe), { recursive: true });
     writeFileSync(
       probe,
       [
-        '// Temporary AC-3 probe. Removed in afterEach — never committed.',
+        '// Temporary AC-3 probe. Lives in an os-tmpdir scratch tree (TOOL-15) — never in the checkout.',
         'export async function auditWriteProbe(prisma: { auditLog: { create: (a: unknown) => Promise<void> } }) {',
         '  await prisma.auditLog.create({ data: {} });',
         '}',
@@ -706,14 +803,14 @@ describe('AC-3 — a deliberately-added non-transactional write turns the real s
       ].join('\n'),
       'utf8',
     );
-    const red = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: REPO_ROOT, encoding: 'utf8' });
+    const red = runScratch();
     expect(red.status).toBe(1);
     expect(red.stderr).toContain('AUDIT WRITE CHECK: FAIL');
     expect(red.stderr).toContain('RULE A (auditLog.create outside shared/audit)');
     expect(red.stderr).toContain('__audit_write_probe.ts');
 
     rmSync(probe);
-    const green = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: REPO_ROOT, encoding: 'utf8' });
+    const green = runScratch();
     expect(green.status).toBe(0);
   });
 });
