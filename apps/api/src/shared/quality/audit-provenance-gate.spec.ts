@@ -454,10 +454,14 @@ describe('G-3 / AC-1 — exactly one file in apps/api/src decides an actor role 
     //
     // Both are read from the real sources, never re-listed here: re-listing is the
     // exact failure this whole rule exists to prevent.
-    const provenanceSource = EXECUTABLE.get(PROVENANCE_REL) ?? '';
-    const ladderSource = EXECUTABLE.get(ROLE_LADDER_REL) ?? '';
-    expect(provenanceSource).not.toBe('');
-    expect(ladderSource).not.toBe('');
+    // Read through `namedExecutable`, NOT `EXECUTABLE.get(…) ?? ''`. TOOL-21 shipped
+    // the bare form, and that is precisely the defect TOOL-17(b) closes: a NAMED
+    // path served as `''` when it vanishes, and `''` satisfies every `.not.` and
+    // every comparison below for ever — this case would have passed vacuously with
+    // both files absent. `namedReader` throws instead, which is why the two
+    // `not.toBe('')` guards that used to sit here are gone: they are now structural.
+    const provenanceSource = namedExecutable(PROVENANCE_REL);
+    const ladderSource = namedExecutable(ROLE_LADDER_REL);
 
     const captureList = (source: string, name: string): string[] => {
       const body = new RegExp(`${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(source)?.[1] ?? '';
