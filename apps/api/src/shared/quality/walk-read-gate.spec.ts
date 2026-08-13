@@ -94,6 +94,11 @@ interface Io {
 
 interface WalkRead {
   MAX_VANISHED_FILES: number;
+  VANISHED_FRACTION: number;
+  /** TOOL-17b — the corpus-scaled skip budget. */
+  maxVanishedFor: (n: number) => number;
+  /** TOOL-17b — a NAMED read out of a tolerant map: throws, never yields `''`. */
+  namedReader: (label: string, map: Map<string, string>) => (key: string) => string;
   readWalkedFile: (
     path: string,
     options?: { encoding?: string; io?: Io; skipped?: string[] },
@@ -117,7 +122,27 @@ interface WalkRead {
 const walkRead = require(HELPER_PATH) as WalkRead;
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-const { MAX_VANISHED_FILES, mapWalkedFiles, readWalkedFile, readWalkedFiles, warnSkipped } = walkRead;
+const {
+  MAX_VANISHED_FILES,
+  mapWalkedFiles,
+  maxVanishedFor,
+  namedReader,
+  readWalkedFile,
+  readWalkedFiles,
+  warnSkipped,
+} = walkRead;
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+/**
+ * TOOL-17b / AC-8 — the ratchet below is PARSED, never grepped, so the compiler
+ * comes in the same computed, unguarded way the helper does.
+ *
+ * `typescript` is already a root devDependency (`hermetic-spec-writers-gate.spec.ts`
+ * uses it exactly like this); no new dependency is taken.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ts = require('typescript') as any;
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 /* ================================================================== *
  * The scratch tree — the ONLY filesystem this suite writes to
@@ -510,7 +535,9 @@ describe('the tolerance lives in exactly one place, and every victim uses it', (
     ]);
     warnSkipped('walk-read-gate / apps/api/src', skipped);
     expect(entries.length + skipped.length).toBe(apiFiles.length);
-    expect(skipped.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    // TOOL-17b: the budget scales with the walked list. `MAX_VANISHED_FILES` is
+    // still the ceiling, so this only ever tightens.
+    expect(skipped.length).toBeLessThanOrEqual(maxVanishedFor(apiFiles.length));
 
     const offenders = entries
       .filter(([file, source]) => !file.endsWith('.spec.ts') && source.includes('walk-read'))
@@ -531,6 +558,236 @@ describe('the tolerance lives in exactly one place, and every victim uses it', (
     expect(helper).not.toContain('process.argv');
   });
 });
+
+/* ================================================================== *
+ * 7 (TOOL-17b) — a NAMED path is never served OUT of the tolerance
+ * ================================================================== */
+
+describe('TOOL-17b — namedReader turns an absent key into a failure, never into `\'\'`', () => {
+  it('AC-1 — throws on a key the tolerance skipped, naming DNC-08, the site and the KEY', () => {
+    const { walked, vanished } = walkThenVanish();
+    const { contents, skipped } = readWalkedFiles(walked);
+    // The precondition this case exists for: the key is absent BECAUSE it was
+    // tolerated, not because the corpus was never built.
+    expect(skipped).toEqual([vanished]);
+    expect(contents.size).toBe(walked.length - 1);
+
+    const read = namedReader('T-7 / scratch corpus', contents);
+    expect(() => read(vanished)).toThrow(/DNC-08 \(TOOL-17b\)/);
+
+    let message = '';
+    try {
+      read(vanished);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    // A count with no identity is the same "cannot tell" DNC-08 refuses, so the
+    // message must carry the EXACT key and the reading site, not just a token.
+    expect(message).toContain('DNC-08 (TOOL-17b)');
+    expect(message).toContain('T-7 / scratch corpus');
+    expect(message).toContain(vanished);
+  });
+
+  it('AC-2 — a present key is served byte-for-byte, unchanged', () => {
+    const walked = walkScratch(scratch);
+    const { contents } = readWalkedFiles(walked);
+    const read = namedReader('T-7 / scratch corpus', contents);
+    // `toBe`, not `toContain`: the accessor is a lookup, not a transformation.
+    expect(read(scratchFile('alpha.ts'))).toBe('export const alpha = 1;\n');
+    expect(read(scratchFile('probe.ts'))).toBe('export const probe = 3;\n');
+  });
+
+  it('AC-3 — the GREEN control: with no skips, every named key is served', () => {
+    // This is the case that proves AC-1 detects a DEFECT rather than announcing a
+    // change of behaviour: over the SAME tree, unskipped, the throw is unreachable.
+    const walked = walkScratch(scratch);
+    const { contents, skipped } = readWalkedFiles(walked);
+    expect(skipped).toEqual([]);
+    const read = namedReader('T-7 / scratch corpus', contents);
+    for (const key of walked) {
+      expect(() => read(key)).not.toThrow();
+      expect(read(key).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('AC-6 — the skip budget is PROPORTIONAL: boundaries, never the formula', () => {
+    // Deliberately no assertion on `VANISHED_FRACTION`'s value or on the shape of
+    // the expression: pinning the arithmetic would make any re-derivation a RED
+    // that says nothing about the invariant. These five properties are the invariant.
+    const LADDER = [1, 10, 50, 108, 210, 300, 1000];
+
+    // 1. the measured defect: `apps/web/tests` walks ~10 files, and a budget of 5
+    //    let HALF of that corpus vanish while the gate stayed green.
+    expect(maxVanishedFor(10)).toBeLessThan(MAX_VANISHED_FILES);
+    expect(maxVanishedFor(10)).toBeGreaterThanOrEqual(1);
+    // 2. large corpora keep the constant EXACTLY, so no existing assertion moved.
+    expect(maxVanishedFor(300)).toBe(MAX_VANISHED_FILES);
+    expect(maxVanishedFor(1000)).toBe(MAX_VANISHED_FILES);
+    // 3. never 0 for a non-empty corpus — a zero budget is `toBe(0)`, i.e. the
+    //    flake relocated from load time to assert time.
+    expect(maxVanishedFor(1)).toBeGreaterThanOrEqual(1);
+    for (const n of LADDER) expect(maxVanishedFor(n)).toBeGreaterThanOrEqual(1);
+    // 4. monotonic non-decreasing.
+    for (let i = 1; i < LADDER.length; i += 1) {
+      expect(maxVanishedFor(LADDER[i] as number)).toBeGreaterThanOrEqual(
+        maxVanishedFor(LADDER[i - 1] as number),
+      );
+    }
+    // 5. the constant stays the CEILING.
+    for (const n of LADDER) expect(maxVanishedFor(n)).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+  });
+});
+
+/* ================================================================== *
+ * 8 (TOOL-17b / AC-8) — the ratchet, PARSED and never grepped
+ * ================================================================== */
+
+/**
+ * R2 — no spec serves a NAMED path out of a tolerant map.
+ *
+ * Why this is an AST rule and not a `grep`: this very file, and the specs it
+ * judges, spell `MAP.get(x) ?? ''` inside STRING LITERALS and COMMENTS — as
+ * fixtures and as design notes. A text matcher flags its own needle, and the
+ * only way to make a text matcher green again is to weaken it, which is `R-30`
+ * exactly. The compiler sees a literal as a literal.
+ *
+ * Pure by construction: `(source: string) => Violation[]`, so it is driven over
+ * SYNTHETIC sources for its red half and its green control, and the real corpus
+ * is just one more input.
+ */
+interface TolerantDefault {
+  rule: 'R2';
+  line: number;
+  text: string;
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type TsNode = any;
+
+export function findTolerantMapDefaults(
+  source: string,
+  fileName = 'synthetic.ts',
+): TolerantDefault[] {
+  const sf = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.ES2022,
+    true,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const found: TolerantDefault[] = [];
+  const unwrap = (node: TsNode): TsNode =>
+    ts.isParenthesizedExpression(node) ? unwrap(node.expression) : node;
+  const isEmptyStringLiteral = (node: TsNode): boolean =>
+    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text === '';
+
+  const visit = (node: TsNode): void => {
+    if (
+      ts.isBinaryExpression(node) &&
+      // Both spellings: `??` is the one in the tree, `||` is the one a future
+      // edit reaches for when `??` is banned.
+      (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+        node.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
+      isEmptyStringLiteral(unwrap(node.right))
+    ) {
+      const left = unwrap(node.left);
+      if (
+        ts.isCallExpression(left) &&
+        ts.isPropertyAccessExpression(left.expression) &&
+        left.expression.name.text === 'get'
+      ) {
+        found.push({
+          rule: 'R2',
+          line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+          text: node.getText(sf),
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+describe('TOOL-17b / AC-8 — no spec serves a named path out of a tolerant map', () => {
+  it('RED half — the classifier flags the defect, in both spellings', () => {
+    const nullish = ["const MAP = new Map();", "const s = MAP.get('a/b.ts') ?? '';"].join('\n');
+    const logical = ["const MAP = new Map();", "const s = MAP.get('a/b.ts') || '';"].join('\n');
+    const parenthesised = [
+      'const MAP = new Map();',
+      "const n = (MAP.get('a/b.ts') ?? '').length;",
+      'const t = MAP.get(KEY) ?? ``;',
+    ].join('\n');
+
+    expect(findTolerantMapDefaults(nullish)).toHaveLength(1);
+    expect(findTolerantMapDefaults(nullish)[0]?.line).toBe(2);
+    expect(findTolerantMapDefaults(logical)).toHaveLength(1);
+    expect(findTolerantMapDefaults(parenthesised)).toHaveLength(2);
+  });
+
+  it('GREEN control — the CONVERTED shape is not flagged, and neither are look-alikes', () => {
+    // Without this half, a classifier that returned every `??` would also be
+    // "green on the corpus" for the worst possible reason.
+    const converted = [
+      'const read = namedReader("label", MAP);',
+      "const s = read('a/b.ts');",
+      'const n = read(KEY).length;',
+    ].join('\n');
+    const lookAlikes = [
+      "const a = MAP.get('k') ?? 'fallback';", // a non-empty default is a choice, not a leak
+      "const b = other.fetch('k') ?? '';", //   not a `.get`
+      "const c = value ?? '';", //              not a call at all
+      "const d = 'MAP.get(k) ?? \\'\\'';", //   the spelling INSIDE a string literal
+    ].join('\n');
+
+    expect(findTolerantMapDefaults(converted)).toEqual([]);
+    expect(findTolerantMapDefaults(lookAlikes)).toEqual([]);
+  });
+
+  it('the real corpus under apps/** yields ZERO — over a corpus with a floor', () => {
+    const specs = walkSpecCorpus();
+    // The floor: "no violations" must never be able to mean "nothing was read".
+    // Measured 110 spec files under `apps/**` on 2026-08-13.
+    expect(specs.length).toBeGreaterThanOrEqual(100);
+
+    // Dogfooding: this corpus read is itself a walk-then-read over a tree the
+    // probe writers mutate, so it goes through the seam with the identity and
+    // the scaled cap, like every other site.
+    const { entries, skipped } = mapWalkedFiles(specs, (file, source): [string, string] => [
+      file,
+      source,
+    ]);
+    warnSkipped('walk-read-gate / apps spec corpus', skipped);
+    expect(entries.length + skipped.length).toBe(specs.length);
+    expect(skipped.length).toBeLessThanOrEqual(maxVanishedFor(specs.length));
+
+    const offenders = entries.flatMap(([file, source]) =>
+      findTolerantMapDefaults(source, file).map(
+        (violation) => `${file.slice(REPO_ROOT.length + 1).split('\\').join('/')}:${violation.line} — ${violation.text}`,
+      ),
+    );
+    expect(offenders).toEqual([]);
+  });
+});
+
+/** Every `*.spec.ts(x)` under `apps/**` — the corpus AC-8's R2 rule judges. */
+function walkSpecCorpus(): string[] {
+  const files: string[] = [];
+  const stack = [join(REPO_ROOT, 'apps')];
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (['node_modules', '.next', '.turbo', 'dist', 'coverage'].includes(entry.name)) continue;
+        stack.push(join(current, entry.name));
+      } else if (/\.spec\.tsx?$/.test(entry.name)) {
+        files.push(join(current, entry.name));
+      }
+    }
+  }
+  return files.sort();
+}
 
 function walkApiSrc(): string[] {
   const files: string[] = [];

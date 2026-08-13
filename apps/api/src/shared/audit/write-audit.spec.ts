@@ -47,6 +47,26 @@ const API_SRC = join(REPO_ROOT, 'apps', 'api', 'src');
 const { stripCommentsPreservingLines } = require(
   join(REPO_ROOT, 'scripts', 'link-integrity-check.js'),
 ) as { stripCommentsPreservingLines: (source: string) => string };
+/**
+ * TOOL-17b — the shared walk-then-read seam, required the same computed,
+ * unguarded way as in the six quality specs: a MISSING MODULE is a different
+ * seam from a VANISHING WALKED FILE, and only the second one is tolerated.
+ *
+ * This file is the sixth victim of the walk/read race, at ONE address only —
+ * AC-9's loop over `PRODUCTION_FILES` below. Every other read here names a
+ * FIXED path and keeps its bare `readFileSync` on purpose (asserted in AC-9's
+ * companion): named is total, walked is tolerated.
+ */
+const { mapWalkedFiles, warnSkipped, maxVanishedFor } = require(
+  join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
+) as {
+  mapWalkedFiles: (
+    paths: string[],
+    build: (path: string, source: string) => [string, string],
+  ) => { entries: [string, string][]; skipped: string[] };
+  warnSkipped: (label: string, skipped: string[]) => boolean;
+  maxVanishedFor: (n: number) => number;
+};
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 const repoRel = (file: string): string => relative(REPO_ROOT, file).split(sep).join('/');
@@ -411,9 +431,23 @@ describe('W-4 / AC-9 / DNC-10 — there is no way to write the mutation without 
     // "let's not fail the mutation for an audit hiccup" patch would take.
     const offenders: string[] = [];
     let calls = 0;
-    for (const file of PRODUCTION_FILES) {
+    // TOOL-17b — the sixth walked-read site, routed through the shared seam.
+    // `PRODUCTION_FILES` comes out of `walk()` above, and a sibling spec's probe
+    // can be listed by the walk and gone by the read. Here that surfaced as a
+    // spurious RED rather than a spurious LOAD failure (this read is inside the
+    // `it()`), which is milder but just as untrue. The conclusion is unchanged:
+    // the accounting identity and the scaled cap are asserted below, and the
+    // vacuity guard `calls >= 10` still carries the verdict.
+    const { entries: SCANNED, skipped: VANISHED } = mapWalkedFiles(
+      PRODUCTION_FILES,
+      (file, source): [string, string] => [file, source],
+    );
+    warnSkipped('write-audit.spec / AC-9 apps/api/src', VANISHED);
+    expect(SCANNED.length + VANISHED.length).toBe(PRODUCTION_FILES.length);
+    expect(VANISHED.length).toBeLessThanOrEqual(maxVanishedFor(PRODUCTION_FILES.length));
+    for (const [file, source] of SCANNED) {
       if (repoRel(file) === SELF_REL) continue;
-      const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true);
+      const sf = ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true);
       const visit = (node: ts.Node): void => {
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'writeAudit') {
           calls += 1;
@@ -434,5 +468,41 @@ describe('W-4 / AC-9 / DNC-10 — there is no way to write the mutation without 
     // The vacuity guard: the walk found the real call sites, so `[]` above is a
     // measurement and not an empty scan.
     expect(calls).toBeGreaterThanOrEqual(10);
+  });
+
+  it('TOOL-17b — the NAMED reads in this file KEEP their bare readFileSync', () => {
+    // The companion to the conversion above, and the reason it is narrow: the
+    // tolerance is for WALK-DERIVED paths only. A fixed, named path that
+    // disappears must still fail loudly, so an over-eager future conversion of
+    // these five sites goes RED here rather than silently buying a vacuous pass.
+    // Stated over the AST: a text scan would flag its own needle (`R-30`).
+    const selfSource = readFileSync(join(__dirname, 'write-audit.spec.ts'), 'utf8');
+    const sf = ts.createSourceFile(
+      'write-audit.spec.ts',
+      selfSource,
+      ts.ScriptTarget.ES2022,
+      true,
+    );
+    const firstArgs: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'readFileSync'
+      ) {
+        const arg = node.arguments[0];
+        firstArgs.push(arg ? arg.getText(sf).replace(/\s+/g, ' ') : '');
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    // Three reads of SELF_PATH, one of the contracts vocabulary, one of this file.
+    expect(firstArgs.filter((a) => a === 'SELF_PATH').length).toBeGreaterThanOrEqual(3);
+    expect(firstArgs).toContain("join(__dirname, 'write-audit.spec.ts')");
+    expect(firstArgs.some((a) => a.includes("'vocabulary.ts'"))).toBe(true);
+    expect(firstArgs.length).toBeGreaterThanOrEqual(5);
+    // …and NOTHING reads a walked binding bare any more: no first argument is a
+    // loop variable. `walk()`'s own output is served by the seam or not at all.
+    expect(firstArgs.filter((a) => /^(file|path|entry|current)$/.test(a))).toEqual([]);
   });
 });
