@@ -1,6 +1,109 @@
 # Next story
 
-# NEXT — written by run 52 (`S-E01-2b`), 2026-08-13 — **this section supersedes every section below**
+# NEXT — written by run 53 (`S-E01-2c`), 2026-08-13 — **this section supersedes every section below**
+
+## ✅ The tenant-DERIVED tables are policied, and the proof runs — 49 = 44 + 5
+
+`PF-183` is closed. The five tables that belong to a tenant by FOREIGN KEY now carry an FK-path `tenant_isolation`
+policy and a per-table DML grant to `app_user`, proven by execution in the same scratch-database harness:
+
+```
+RLS ISOLATION: PROVEN for the non-owner role                       (exit 0, real PostgreSQL, scratch DB)
+  ✓ AC-5  the derived set measured from pg_constraint equals the set this check proves
+          — announcement_receipt, branding, grade_revision, import_row, user_role
+  ✓ AC-5b the tables with no tenant_id OUTSIDE the derived set are exactly the NAMED ones
+          — outbox_event, permission, role, role_permission, tenant
+  ✓ every tenant-scoped OR tenant-derived table has ROW LEVEL SECURITY enabled — 49
+  ✓ AC-6  POSITIVE CONTROL per table, all five: GUC = A the row IS VISIBLE, then GUC = B it is NOT
+  ✓ AC-7d an INSERT carrying a foreign tenant id is REJECTED by WITH CHECK
+```
+
+**The agreement survived growth, which was the hard part.** The census used to read `RLS_ON == POLICIES == GRANTED ==
+TENANT_COLS`, all keyed to the count of `tenant_id` columns, so adding five policied tables broke all three. The
+tempting repair — hard-code 49, or subtract a frozen list — is precisely how a *seventh* derived table would later
+ship unprotected and invisible. It is now `TENANT_COLS + DERIVED_EXPECTED` with **both terms computed from the
+catalog** (`pg_constraint`: child without `tenant_id`, parent with one), plus an `AC-5b` residue assertion that every
+unreached table matches a **named** exclusion list with a written reason. A new derived table therefore either lands
+in the derived set and must be policied, or lands in the residue and fails the set equality. Neither direction is
+silent.
+
+**Three details worth carrying, none of which were in the routine's brief:**
+
+- **A policy expression is evaluated AS THE CALLING USER.** So every parent named in a derived policy must stay
+  `SELECT`-able by `app_user`, or every read of the child fails with `permission denied` *raised from inside a
+  policy* — which reads like a broken feature, not a broken grant. Asserted as `AC-5c`.
+- **The `role` fixture row is SHARED between both tenants on purpose.** If the `user_role` policy were routed through
+  `role_id` (reference data, no tenant) instead of `user_profile_id`, that row would be visible to both tenants or to
+  neither, and the assertions would say so. The fixture is built to kill the plausible wrong predicate.
+- **`grade_revision` is `SELECT, INSERT` only**, because it IS the grade audit trail — the same append-only reasoning
+  `S-E01-2b` applied to `audit_log`. **No derived table receives `DELETE`**, asserted as a count so a widening shows up
+  even if a name is added to the tuple.
+
+## 🛑 The adversarial panel DID NOT RUN, and that is this run's honest gap
+
+Three workflow agents — **`quinn:adversarial`, `panel:security`, `panel:test`** — died on `API Error: 529
+Overloaded`. The sprint still returned **`landed: true`**, on a slice it had itself risk-tiered
+`[schema][security][auth]` and explicitly said *"expects the escalation panel and the human-review flag"*. So a
+migration that installs authorization policies and grants a non-owner role DML on five tables shipped **without its
+adversarial review, without its security panel and without its test panel**.
+
+What stands in their place, and it is not equivalent: the routine read the migration and the check by hand, and the
+executed evidence above is real. What is genuinely missing is the mutation testing `S-E01-2b` had (that run's panel
+injected 5 mutants into the migration and killed 5). **Nobody tried to defeat these five policies.**
+
+Recorded as **`TOOL-27` (P1)**: the sprint's verdict does not degrade when its own verification agents die. A
+`landed: true` earned by 14 of 17 agents is not the same claim as one earned by 17, and today the three that failed
+were exactly the three whose job is to disbelieve the other fourteen.
+
+## ⚠️ `PF-80` recurred, for the second consecutive run
+
+`scripts/restore-drill-baseline.json` is a **reviewed record** of the migration ledger, and a new migration reaching
+disk without reaching that file is the exact drift it exists to catch. It caught it again — run 52 hit this and so did
+run 53, because the agents that write a migration cannot see that file from where they work. Fixed at the **record**
+(the 4th entry, with its written reason), never at the assertion. The reason written in names a restore consequence
+specific to the FK-path shape: a restore that brings back the five children while dropping a parent's `SELECT` grant
+comes back **silently broken**, failing from inside a policy.
+
+## ▶ Recommended next story
+
+1. **`PF-185` (P1, discovered this run) — `outbox_event`, and it is now the LAST thing between here and the cutover.**
+   It has **no foreign key at all** (polymorphic: `aggregate_type` + `aggregate_id`), so the catalog derivation can
+   never reach it and no FK-path policy is possible. It needs a **denormalised `tenant_id` + backfill**, which is a
+   `schema.prisma` change — so budget the `prisma generate` RED-typecheck trap (`project-prisma-generate-red-gate`),
+   and note the backfill has no single FK to follow: the tenant must come from the aggregate each row names. Today it
+   is **fail-closed and asserted so** (no grant, no policy), which is why this is not an incident.
+2. **`S-E01-1` (identity seam + connection cutover) — it now meets a COMPLETE grant surface.** That is the whole point
+   of this slice: before it, the cutover forked two ways and both were bad. After `PF-185`, `DATABASE_URL` → `app_user`
+   plus the first `withTenant` call site can proceed without discovering six permission-denied features mid-flip.
+3. **`S-E01-3` (VAL-02, two-tenant adversarial suite) — still unblocked, and now MORE valuable.** With 49 policied
+   tables there is a great deal to defeat, and `TOOL-27` means five of them have never been attacked by anything.
+   Expect it to be RED against the running app — the app still connects as owner — and that red is the finding, not a
+   defect in the suite.
+4. **Arm the skipped-count ratchet — still disarmed.** Both apps still print `⚠ this baseline records no skipped
+   counts. The skip ratchet is INACTIVE`. This run added **34** api tests and skipped none. From a COMPLETE run:
+   `node scripts/test-ratchet.js api --update`, `… worker --update`. **Never hand-write those numbers**, and note
+   `feedback-shell-backticks-execute-docs`.
+
+## State of the world at the end of run 53
+
+- **`GATE: PASS (fast)`**, verdict line read rather than `$?` of a pipeline (`R-23`), and the log's **mtime checked**
+  so it could not be a stale file (run 50's near-miss): `test-ratchet[api] 2727/2738 · 11 failing · 11 known-failing`,
+  `test-ratchet[worker] 293/300 · 7 · 7`. **No excess failure.** api denominator **2704 → 2738** (+34, 0 skipped).
+- **`pnpm --filter @pilotage/api build`** — the run's single build, verified by its **artefact** (`dist/main.js`
+  rewritten 12 s before the check), not by an exit code.
+- **The sprint wrote into the MAIN checkout this time**, not the session worktree — the opposite of run 52. The
+  bidirectional worktree bug remains unpredictable; keep checking, keep never measuring from `.claude/worktrees/`.
+- **No Docker was started and no container rebuilt.** None was needed: the database is the native Windows service
+  `postgresql-x64-15` on `127.0.0.1:5432`. **`TOOL-19` is untouched and the local Docker stack's health remains
+  UNKNOWN** — do not read this run as evidence about it.
+- **PostgreSQL was written to deliberately and left clean.** Scratch databases created, migrated and dropped;
+  `rls_isolation_%` and `schema_drift_%` verified `(none)`. The live `pilotage` database is **untouched** — the two RLS
+  migrations have still not been applied to it, by design.
+- **`INFLIGHT` was 0 at Step 0**, and `git log origin/main..main` was empty.
+
+---
+
+# NEXT — written by run 52 (`S-E01-2b`), 2026-08-13 — superseded by run 53 above, kept for content
 
 ## ✅ RLS exists, and it is proven to deny — the oldest open L0 trust finding finally moved
 

@@ -5,11 +5,15 @@ satisfied: `S-E02-3` done 2026-08-07) · **Blocks** `V3-E03`, and transitively e
 **Closes** PF-01, PF-02, PF-18, VAL-02, VAL-04 · **Gates** G-TENANT, G-AUTHZ, G-MIGRATION · **DNC** DNC-10
 **Epic brief** [`docs/daily-improvement-v3/epics/V3-E01-tenant-isolation.md`](../../../daily-improvement-v3/epics/V3-E01-tenant-isolation.md)
 
-**Status (2026-08-13)** `in-progress` — **two partial slices landed**: `S-E01-2` (one of its three thirds) and
-`S-E01-2b` (the policies, proven to refuse for a real non-owner role — but **not** the connection cutover). The epic
-is **not** `shipped`, and the sentence that must not be misread is: **after `S-E01-2b`, the running application is
-still not RLS-isolated.** It connects as `pilotage`, the table owner; `FORCE ROW LEVEL SECURITY` is deliberately
-absent; the remaining step is a **connection cutover**, which belongs to `S-E01-1`.
+**Status (2026-08-13)** `in-progress` — **three partial slices landed**: `S-E01-2` (one of its three thirds),
+`S-E01-2b` (the policies on the 44 tables that carry a `tenant_id`, proven to refuse for a real non-owner role — but
+**not** the connection cutover) and `S-E01-2c` (the FK-path policies on the **five** tenant-DERIVED tables, plus
+`ADR-042`). The epic is **not** `shipped`, and the sentence that must not be misread is unchanged by `S-E01-2c`:
+**the running application is still not RLS-isolated.** It connects as `pilotage`, the table owner;
+`FORCE ROW LEVEL SECURITY` is deliberately absent; the remaining step is a **connection cutover**, which belongs to
+`S-E01-1`. Policy coverage is now **49 of 55** base tables (44 by column + 5 by FK path); the residue is
+`outbox_event` (no FK — `PF-185`), `tenant`, `permission`, `role`, `role_permission` and `_prisma_migrations`, each
+outside **by name and with a reason** (`ADR-042 §D4`).
 
 > **This file is new on 2026-08-11.** The epic had no `PROGRESS.md` and no `docs/spec/features/v3-e01/` directory at
 > all, because no `S-E01-*` slice had ever landed. `docs/daily-improvement-v3/stories/sprint-02.md` **does not exist**
@@ -29,6 +33,7 @@ absent; the remaining step is a **connection cutover**, which belongs to `S-E01-
 | **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **next** | — | `PF-01` open. No story written; bullet only in `sprint-plan.md`. **This is the slice that mints the first real tenant claim**, so it is the natural owner of the first `withTenant` call site — and, since `S-E01-2b`, of the `DATABASE_URL` → `app_user` cutover that is the only thing still standing between the shipped policies and an actually isolated application. See [Next slice](#next-slice) |
 | **S-E01-2** | RLS policies + real `withTenant` call sites + **parameterised GUC** | 🟡 **partial — the parameterisation third only** | 2026-08-11 | 57/57 jest in `apps/api/src/shared/prisma/prisma.service.spec.ts` (no DB, no `DATABASE_URL`, no generated client), `pnpm typecheck` 13/13 exit 0, `git diff --check` exit 0. Ships **`ADR-032`**; annotates `ADR-002`. Closes **`PF-02` half (b)**; **half (a) stays open**; records **`PF-179`**. See the section below |
 | **S-E01-2b** | The RLS half: 44 policies, the `nullif` NULL-context decision, the append-only grant split, and the `Prisma.TransactionClient` narrowing — **without** `FORCE` and **without** a call site, both on purpose | 🟡 **partial — the policy half, proven; not the cutover** | 2026-08-13 | `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0** against the real local PostgreSQL (44/44 RLS enabled, 44/44 `tenant_isolation` policies, connected as `app_user` owning 0 tables without `BYPASSRLS`, positive control first, executed rollback). `pnpm typecheck` **13/13 exit 0**; `git diff --check` exit 0. **5 mutants injected into the migration, 5 killed.** Ships `ADR-032` §D5–§D8. **`PF-02` half (a) closes only PARTIALLY.** See the section below |
+| **S-E01-2c** | The tenant-**DERIVED** half: 5 FK-path `EXISTS` policies, a derived set computed from `pg_constraint` rather than listed, a per-table grant with **no `DELETE` anywhere**, and `outbox_event` deferred by name | 🟡 **partial — the five FK-derivable tables; `outbox_event` deferred, and still not the cutover** | 2026-08-13 | `apps/api/prisma/migrations/20260813180000_tenant_rls_derived_policies/migration.sql` (hand-reviewed, `schema.prisma` untouched so the `prisma generate` RED trap stays disarmed); `scripts/rls-isolation-check.js` extended from 44 to **44 + 5**, with `DERIVED_EXPECTED` derived from `pg_constraint` and an `AC-5b` **set-equality** residue check; `rls-isolation-gate.spec.ts` +450 lines. `pnpm typecheck` **13/13 exit 0** (`@pilotage/api` a genuine cache **miss** that compiled the new spec); `git diff --check` exit 0, extended by `--no-index` over the three untracked files. Ships **`ADR-042`** (extends `ADR-032`, supersedes nothing); annotates `ADR-032` in two places **in place**. Advances `PF-02` half (a); records **`PF-185`** (`outbox_event`) and **`PF-186`** (`ON DELETE CASCADE` vs append-only). **⚠️ The checker's own green is NOT established by this run's gate** — see the section below |
 | **S-E01-3** | Two-tenant adversarial suite in CI (VAL-02) | ⬜ not started — **unblocked** | — | `VAL-02` open. **`S-E01-2b` gave it something to defeat**, so its fail-before/pass-after criterion is satisfiable for the first time. Partly pre-empted: the gate already runs a two-tenant adversarial proof through `psql`; what remains is the same shape **through the application's own query paths** |
 | **S-E01-4** | Student Keycloak client split | ⛔ blocked on decision **D-02** | — | `PF-18`, `VAL-04` open |
 
@@ -151,6 +156,97 @@ interpolated as an unquoted identifier into `CREATE ROLE`/`REVOKE`/`DROP ROLE`; 
 LEVEL SECURITY` in one transaction takes `ACCESS EXCLUSIVE` across the schema, so the deploy note should say "quiet
 window".
 
+## `S-E01-2c` — the derived half, what it decided, and the one thing it does not prove
+
+**Delivered.** `apps/api/prisma/migrations/20260813180000_tenant_rls_derived_policies/migration.sql` poses
+`ENABLE ROW LEVEL SECURITY` + a `tenant_isolation` policy — same **name** as the 44, because the census counts by
+name — on the **five** base tables that carry no `tenant_id` and hold a foreign key to a table that does:
+
+| child | FK column | parent | index that already leads with the FK |
+|---|---|---|---|
+| `announcement_receipt` | `announcement_id` | `announcement` | `announcement_receipt_announcement_id_user_profile_id_key` |
+| `branding` | `school_id` *(also the PK)* | `school` | `branding_pkey` |
+| `grade_revision` | `grade_id` | `grade` | `grade_revision_grade_id_revised_at_idx` |
+| `import_row` | `batch_id` | `import_batch` | `import_row_batch_id_row_index_key` |
+| `user_role` | `user_profile_id` | `user_profile` | `user_role_user_profile_id_role_id_school_id_key` |
+
+The predicate is `EXISTS (SELECT 1 FROM <parent> p WHERE p.id = <child>.<fk> AND p.tenant_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid)`
+— `ADR-032 §D6`'s inner expression reused **verbatim**, never restated. `USING` and `WITH CHECK` are identical **by
+construction**: one `predicate` variable injected twice into one `format()`.
+
+**Three corrections to the record, each re-measured against `pg_constraint` rather than relayed.**
+
+1. **FIVE derive by FK, not six.** `outbox_event` holds **no** foreign key — polymorphic `aggregate_type` +
+   `aggregate_id`, unconstrained. There is no path to predicate on and none was invented. It stays fail-closed, both
+   its absent grant *and* its absent policy are **asserted by name**, and it is recorded as **`PF-185`**. Measured
+   cost of deferring: **zero features** — `outboxEvent.` has no caller anywhere in `apps/**` or `packages/**`.
+2. **No index needed creating.** R-11's precondition was already discharged for all five (table above); the slice
+   **asserts** it instead of adding it.
+3. **`user_role`'s tenant path is `user_profile_id`, never `role_id`.** The second FK leads to `role`, which carries
+   no `tenant_id` — a dead end a transposed tuple would route into, which the migration's apply-time guards refuse.
+
+**Two decisions the finding did not anticipate, and both are load-bearing.**
+
+- **The obvious census formula is vacuous.** `RLS_ON == TENANT_COLS + DERIVED_POLICIED` passes on the exact defect it
+  exists to catch (a sixth derived table shipped with no policy keeps both sides at 49). The agreement is therefore
+  against **`DERIVED_EXPECTED`**, computed from `pg_constraint` *structure* — so a sixth raises the expectation while
+  `RLS_ON` does not, and the gate goes red (`ADR-042 §D3`). `AC-5b` closes the one-level-deep hole by **set equality**
+  against a named six-table residue, a *partition* check rather than a subtraction list.
+- **`ON DELETE CASCADE` defeats append-only, and the slice says so rather than smoothing it over.** All five FKs are
+  `CASCADE`; PostgreSQL runs RI actions as the referencing table's owner with RLS off, so `app_user` — holding
+  `DELETE` on `grade` — removes `grade_revision` rows through the parent despite the child's `SELECT, INSERT` grant.
+  The cascade **cannot cross a tenant** (the parent must be visible first), so it is tenant-safe and audit-unsafe.
+  Recorded as **`PF-186`**, not fixed here.
+
+**Deliberate divergence from this slice's own story spec, recorded rather than silent.**
+`stories/S-E01-2c.md` §AC-4/§AC-12 prescribes `DELETE` for three of the five and a "closed set of exactly **three**"
+privilege strings. `ADR-042 §D5` re-measured the call sites, found **zero** delete callers for any of the five
+(`imports.service.ts` `rollback()` re-classifies with `update`; it removes no rows) and ruled **no `DELETE` for any of
+the five**, a closed set of **two**. The migration, the ADR and the checker constant all agree on two.
+**Read the story against `ADR-042 §D5`, which is the record; the story text has not been annotated.**
+
+**NOT delivered, and the distinction is the point of the epic.**
+
+- **The application is still not RLS-isolated.** Same sentence as after `S-E01-2b`, unchanged: owner connection, no
+  `FORCE`, zero `withTenant` call sites. What remains is the **cutover**.
+- **`outbox_event` carries no policy** (`PF-185`), and the grant must not be widened to silence a future
+  `permission denied`.
+- **`PF-183` is discharged for the five, and its residue is named** — `PF-185` and `PF-186`.
+
+**⚠️ Conditions a human owns before this merges.**
+
+1. **The checker's green is not established by this run's gate.** The gate ran `pnpm typecheck` (13/13 exit 0) and
+   `git diff --check` only. One reviewer reports `node scripts/rls-isolation-check.js` exiting 0 with 97 assertions;
+   the escalation panel records the opposite — *"964 lines of new checker are landing whose green nobody has
+   observed"* — and `OPEN.md`'s `PF-183` row still says the executed proof *"has not run yet"*. **Those three
+   statements cannot all be true.** Run it from the main checkout against the local PostgreSQL, with an operator
+   watching (it creates and drops a scratch database), and confirm `RLS_ON = POLICIES = GRANTED` derived as **44 + 5**
+   before anyone closes `PF-183`. Two of the new fixture chains are deep (`grade_revision` ≈ 11 rows/tenant); a
+   fixture FK violation there surfaces as `ToolingUnavailable`, **not** as a security failure.
+2. **The three foreign-INSERT `WITH CHECK` proofs attribute on a session-global regex.** `rls-isolation-check.js:1398`
+   (`school`) and `:1428` (the loop over `branding`, `announcement_receipt`) both decide PASS on
+   `/violates row-level security policy/i` tested against the **whole** `psql` session's stderr, under
+   `onErrorStop: false`. The `school` rejection earlier in the same run satisfies that regex permanently, so a
+   `branding` or `announcement_receipt` INSERT that fails for **any other reason** (23502, 23503, 23505, or a `25P02`
+   aborted transaction) still records "REJECTED by `WITH CHECK`". The positive controls keep the security *property*
+   honest; the hole is in the **proof**, on the slice whose entire claim is "proven by execution". One-line repair per
+   site: match the table PostgreSQL already names —
+   `new RegExp('violates row-level security policy for table "' + child + '"', 'i')`.
+3. **The `has_app_user = false` branch of the migration is unexercised** — the checker creates the role *before* the
+   scratch database, so the guard is always true. On a cluster where `app_user` post-dates the migration, the five
+   policies land, the five GRANTs are skipped with a `RAISE NOTICE`, and `_prisma_migrations` records the migration as
+   applied. This is the same condition `S-E01-2b` left open, now covering 49 tables instead of 44.
+4. **`SET lock_timeout = '5s'` at `migration.sql:316` is session-scoped, not `SET LOCAL`.** `prisma migrate deploy`
+   applies the whole ledger on one connection, so every migration appended after this one inherits the 5 s bound.
+
+**Recorded, not fixed** (doc drift this slice leaves behind, all cheap): `NEXT.md:36-41` still says all **six** derive
+by FK and still names `outbox_event` — the migration header at `:221` claims that prose was *"corrigée sur place"* and
+it was not; `OPEN.md`'s `PF-183` row lands stale in the same commit that refutes it; `stories/S-E01-2c.md` §AC-4 still
+prescribes the superseded three-privilege set; `prisma.service.ts:245`'s `withTenant` doc block still says all six
+derived tables *"restent NON protégées"*, which is now false for five of them; and `ADR-042:157` claims the four
+reference tables are asserted un-granted **by name** when only `outbox_event` actually is — the rest rest on the
+aggregate count.
+
 ## Merge conditions and inherited obligations
 
 Three things the verify panel and the test architect established that a human must carry forward.
@@ -191,6 +287,11 @@ Annotations are inline below rather than deletions, so the reasoning stays reada
 **→ `S-E01-1` — the identity seam, and the connection cutover that makes the shipped policies protect the application
 instead of a test role.**
 
+*(Updated 2026-08-13 by `S-E01-2c`. The pointer is **unchanged** — `S-E01-2c` did not consume it. What changed is
+that prerequisite 4 below, "decide the six unprotected tables", is now **discharged for five of them** and is no
+longer `S-E01-1`'s to decide under cutover pressure, which was the whole reason `PF-183` asked for it to be settled
+first.)*
+
 `S-E01-2b` closed the four prerequisites this section used to list: the predicate is shipped and mutation-proven
 (`missing_ok` + `nullif` + `::uuid`), the fail-open `IS NULL OR` form is banned by a ratchet, `fn` is narrowed, and
 `FORCE ROW LEVEL SECURITY` turned out **not** to be the answer — the owner-bypass trap closes when the application
@@ -209,9 +310,14 @@ The slice, in the order it must be done:
    slice, not a surprise at cutover. **Pre-flight, on every long-lived cluster:** `app_user` must exist *before* the
    RLS migration is applied, must not be superuser, must not carry `BYPASSRLS`, and must not inherit `pilotage`.
    Otherwise the `has_app_user` guard skips all 44 GRANTs while `_prisma_migrations` records the migration as applied.
-4. **Decide the six unprotected tables** — `grade_revision`, `announcement_receipt`, `branding`, `import_row`,
-   `user_role`, `outbox_event` — either a policy through the parent's `tenant_id`, or a documented acceptance with the
-   reason. They are FK-derived, so today they are the hole in the coverage `S-E01-2b` closed everywhere else.
+4. ~~**Decide the six unprotected tables**~~ — **discharged for five by `S-E01-2c` (`ADR-042`), 2026-08-13.**
+   `grade_revision`, `announcement_receipt`, `branding`, `import_row` and `user_role` now carry an FK-path
+   `tenant_isolation` policy **and** a per-table grant, so the cutover meets them already decided rather than deciding
+   them under pressure. **What survives into this slice is one table and one grant question:** `outbox_event` holds no
+   FK, stays fail-closed and **must not be granted** to silence a `permission denied` (`PF-185`, `ADR-042 §D7`); and
+   the grant set is still incomplete for `tenant`, `permission`, `role` and `role_permission`, which `ADR-042 §D4`
+   names as reference data outside the derived set — that call belongs here. Carry `S-E01-2c`'s own merge conditions
+   too: the `has_app_user = false` branch is still unexercised, now across 49 tables.
 5. **Correct `ADR-032` §D3's overstatement** (obligation 1 above) — one line, and it must not be inherited a third
    time.
 
