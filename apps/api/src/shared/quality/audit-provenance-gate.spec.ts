@@ -448,7 +448,9 @@ describe('G-3 / AC-1 — exactly one file in apps/api/src decides an actor role 
 
     const captureList = (source: string, name: string): string[] => {
       const body = new RegExp(`${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(source)?.[1] ?? '';
-      return [...body.matchAll(/['"]([a-z_]+)['"]/g)].map((m) => m[1]);
+      return [...body.matchAll(/['"]([a-z_]+)['"]/g)]
+        .map((m) => m[1])
+        .filter((role): role is string => role !== undefined);
     };
 
     // `ROLE_PRECEDENCE` is DESCENDING authority; `REALM_ROLE_LADDER` is ASCENDING.

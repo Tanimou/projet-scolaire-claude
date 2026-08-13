@@ -188,10 +188,22 @@ const PRISMA_DIR = join(API_DIR, 'prisma');
 const SCHEMA_PATH = join(PRISMA_DIR, 'schema.prisma');
 const MIGRATIONS_DIR = join(PRISMA_DIR, 'migrations');
 
-/** The local Docker stack, the routine's own target (SKILL Step -1). Same
- * default as `restore-drill.js`, deliberately: two scripts addressing two
- * different databases by default would be a trap of its own. */
-const DEFAULT_DATABASE_URL = 'postgresql://pilotage:pilotage@127.0.0.1:5433/pilotage?schema=public';
+/**
+ * The local stack, the routine's own target (SKILL Step -1). Same default as
+ * `restore-drill.js` — and that sameness is now STRUCTURAL rather than a promise:
+ * both read it from `scripts/lib/default-database-url.js`, so "two scripts
+ * addressing two different databases by default" cannot happen by drift.
+ *
+ * TOOL-22: this used to be a literal naming port 5433, and the port the project
+ * actually uses lives in `.env`. On a checkout configured for 5432 both gate
+ * scripts probed 5433 and reported « no PostgreSQL server answered » while a
+ * server was answering the whole time — five V3 runs parked RLS and this very
+ * gate behind that measurement error. The resolver reads the project's own env
+ * files first and falls back to the historical literal unchanged.
+ */
+const { defaultDatabaseUrl } = require('./lib/default-database-url');
+
+const DEFAULT_DATABASE_URL = defaultDatabaseUrl();
 const DEFAULT_CONTAINER = 'pilotage_postgres';
 
 /**
