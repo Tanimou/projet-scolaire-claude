@@ -172,3 +172,57 @@ naming it.
 | A dedicated `schema-drift` CI job with its own service | A second service block bought nothing: the `build` job already declares one, and two jobs would be two places for the wiring to drift. |
 | Add the `pg` npm package | A new workspace dependency for a gate script — a new decision *and* `E11-S1`'s RED-gate class. |
 | Let the spec add a field to the tracked `schema.prisma` and revert it | `ADR-025 D7` / `PF-77`: a jest process killed between the two halves leaves the tracked schema modified, and the routine's git salvage would commit it. The mutation lives in a temp directory and reaches the gate through an exported function, never through a CLI flag. |
+
+## Amendment — 2026-08-13 (TOOL-23 / TOOL-24)
+
+**What is amended.** `D3.1` above says, in prose, that `tooling_unavailable` *and* `unreachable_server` both
+print the "start a database" remedy, so "the route back to green is starting a database and never editing
+code". That sentence is true of the first verdict only when the second one's evidence holds — and the gate
+was not checking. This amendment narrows it. Nothing else in ADR-027 changes: the verdict taxonomy, the
+exit codes, the precedence order and the `REQUIRED_EVIDENCE` rule are untouched, and this is an amendment
+rather than a new ADR because ADR-027 owns that taxonomy and splitting it across two files would cost the
+next reader more than it saves.
+
+**Measured, 2026-08-13 (run 50).** `127.0.0.1:5432` accepts TCP in 3 ms; a complete PostgreSQL 15 client
+set sits at `C:\Program Files\PostgreSQL\15\bin`; and
+`psql -h 127.0.0.1 -p 5432 -U pilotage -d pilotage -c "select version();"` returns `PostgreSQL 15.3`,
+exit 0. The gate nevertheless printed **« no PostgreSQL server answered at the resolved address »**. Two
+independent defects produced that one false sentence:
+
+- **TOOL-23** — the client was resolved through the inherited PATH and nothing else, so a stale environment
+  block read as "there is no client on this host".
+- **TOOL-24** — `check()`'s reachability catch asserted `serverReachable = false` for ANY route failure.
+  `error.routeFailure` means "no CLIENT could run the query"; it is not evidence about the server. The run
+  already held the instrument that tells the two apart — the three-state TCP preflight — and printed the
+  opposite of what that instrument had measured.
+
+**The decision.** A pure client failure is **absence of evidence, not evidence of absence**:
+
+1. `state.serverReachable` is left `null` when the query failed with `error.routeFailure` **and** the
+   preflight carried on that error measured something other than `refused`. `null` is the only permitted
+   softening — `REQUIRED_EVIDENCE` then reports an additional `unknown` finding ("Missing:
+   serverReachable"), which is the truthful outcome. A sentinel string would satisfy the evidence filter
+   while carrying no evidence, which is DNC-08 committed inside the DNC-08 enforcer.
+2. A `refused` preflight is unchanged: `serverReachable = false`, and the `unreachable_server` finding
+   fires with its existing text, byte for byte. This amendment removes a CONFLATION; it does not make the
+   gate tolerant. The headline verdict on a refused address also stays `tooling_unavailable` by precedence,
+   exactly as before.
+3. An `open` preflight NEVER sets `serverReachable = true`. A TCP accept is not a PostgreSQL — a tunnel, a
+   proxy or Traefik accepts identically. Only a successful `SELECT 1;` may set it true.
+4. The `tooling_unavailable` message gains one APPENDED sentence naming the preflight state it measured.
+   The existing text is appended to, never rewritten, and `preflightState` is narration: it is deliberately
+   **not** part of `REQUIRED_EVIDENCE`, so no verdict rests on it.
+
+**The remedy split** that `D3.1`'s single sentence used to conflate is now three rows in
+`docs/runbooks/backup-restore-drill.md` §9: `unreachable_server` — and `tooling_unavailable` with a
+`refused` preflight — → **start the stack**; `tooling_unavailable` with a live preflight → **install a
+PostgreSQL client, or check the discovery roots**, and the script prints every place it searched.
+
+**What did NOT change, and is load-bearing that it did not.** No new environment variable and no new CLI
+flag: a client-substitution variable would let a caller choose the program a gate reaches its verdict with,
+which is DNC-10 wearing a different hat, and `parseArgs`'s surface stays exactly `['--help','-h']`.
+Discovery reads only `PATH` and (on Windows) `PATHEXT` — the two variables `spawnSync` already consults to
+perform today's bare-name lookup — from the single module `scripts/lib/postgres-client-path.js`, whose own
+guard spec pins that set by equality so `scripts/lib/` cannot become the hole the per-file environment
+scans would miss. Route C (`docker exec`), `VERDICT_EXIT_CODES`, `VERDICT_PRECEDENCE` and `run()`'s
+`shell: false` are untouched, no dependency is added, and there is no schema change.

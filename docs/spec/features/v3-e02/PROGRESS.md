@@ -76,6 +76,7 @@ new half of the gate announces itself `INACTIVE` and qualifies its own verdict l
 | **TOOL-13** | A suite that stops existing must not read as green — the ratchet learns to count what did **not** execute | ✅ done *(gate-hardening track; the new half ships **disarmed**, by design — see the block at the bottom)* | 2026-08-12 (run 45) | **Fail-before, measured on this worktree:** the two spec files under `--runInBand` report `{"total":124,"passed":119,"failed":0,"pending":5}` — and `test-ratchet.js` on `HEAD` calls that **`✓ no drift.`**, including about *"the unmodified repository PASSES — the gate is not red on correct code"*, which had never executed on this machine. **Pass-after:** the same real report fed to the new core reduces to `skipped = {"src/shared/quality/schema-drift-gate.spec.ts": 5}` — the exact five — and a baseline two lower yields `{from:2,to:5}` → **exit 1**. **147 total / 142 passed / 0 failed / 5 pending**, wall **57 s**: `test-ratchet.spec.ts` **14 → 30** (the 14 byte-identical, the diff is 475/0 in one hunk after `:273`, AC-11) and `schema-drift-gate.spec.ts` **105 → 112**, its 5 pending unchanged because they are the story's *subject*. **`TOOL-12` non-vacuity, balanced against the shipped file:** `run('psql'` and `run(cli.command` are **1 site each at `HEAD`, neither carrying `timeoutMs`; 1 site each now, both carrying it** — genuinely red-before / green-after. **Typecheck, re-measured by the routine on the final rebased tree** (the sprint ledger credited this slice with a `13/13, exit 0, 5m34s` run that the test-architect had actually performed on the **docs-only** tree, before any implementation existed — that provenance is corrected here rather than inherited): `ci-gate.sh` stage **`✓ typecheck`**, with `@pilotage/api` and `@pilotage/web` both real cache **misses that executed**. `git diff --check` clean; **`scripts/ci-gate.sh` byte-identical** (AC-15). ⚠️ **`apps.<app>.skipped` is deliberately absent** — see the block at the bottom of this file; the gate prints `INACTIVE` and qualifies its verdict until an operator runs `--update` from a complete run ⚠️ **Gate verdict on this diff: `GATE: FAIL (1 stage(s))` — `test:api (ratchet)`, and NOT this diff.** Two runs of that one stage on this unchanged tree produced two DIFFERENT load failures — `audit-vocabulary-gate.spec.ts` on `__audit_write_probe.ts`, then `portal-landing-gate.spec.ts` on `__csv_escape_probe.tsx` — each a probe another spec wrote into the shared checkout and deleted mid-walk. Neither suite is in this diff; `audit-vocabulary-gate` passes **73/73 alone**. Recorded as **`TOOL-17`** (the measured mechanism behind `TOOL-16(b)`, and `TOOL-15` generalised). **The PR was left OPEN, not auto-merged.** Both reds were diagnosable only because `TOOL-16(a)` — batched into this very diff — prints jest own explanation |
 | **TOOL-17** | A spec that writes a probe into the real working tree must not make an unrelated suite fail to **LOAD** — the walk-then-read race gets one narrow, accounted tolerance | ✅ done *(gate-hardening track; **typechecked, UNEXECUTED** — no jest run; three residuals named below)* | 2026-08-13 (run 46) | **Fail-before, measured by run 45's own gate** (this is the mechanism `TOOL-13` recorded and could not fix): two `node scripts/test-ratchet.js api` runs on **one unchanged tree** produced **two different** load failures — `audit-vocabulary-gate.spec.ts` on `__audit_write_probe.ts`, then `portal-landing-gate.spec.ts` on `__csv_escape_probe.tsx`. **Pass-after is asserted, not yet executed:** the new `walk-read-gate.spec.ts` (550 lines, **17 cases**) drives the four-step tolerance against a real scratch tree under the OS temp dir — including **AC-5, the PRE-SLICE construction throwing `ENOENT` on the vanished path**, so the fix has a red-before case in the same file as the green-after one; `EISDIR` off the real filesystem is rethrown with the same `code` **and** message; a non-`ENOENT` failure **aborts the whole map** rather than skipping one file; the re-check is proven to be asked about the *same* path that failed; a wholesale-missing root walks to **nothing** instead of being absorbed as N skips. **Nine** walked-read sites across five specs converted (the brief named five; reading the code found nine — three of them in-test, where the failure mode was a spurious RED rather than a spurious load failure). `scripts/lib/walk-read.js` is a **new file beside `scripts/lib/ratchet-core.js`**; **no existing script, check, `ci-gate.sh` or baseline is opened**. `pnpm typecheck` **13/13**, `@pilotage/api` a real cache **MISS** that executed `tsc --noEmit` over the five edited specs and the new one; `git diff --check` exit **0**. ⚠️ **No suite was executed by this run** — the first full `test:api` run is the evidence that matters, and until it exists this slice is a typechecked hypothesis about a race. See the block at the bottom of this file |
 | **TOOL-15 / TOOL-18** | No spec plants a probe file in the shared checkout — the race `TOOL-17` taught the readers to survive stops happening, and the one check script that crashed on it learns to pronounce a verdict | ✅ done *(gate-hardening track; **`ci-gate.sh` still owed — see the block at the bottom**)* | 2026-08-13 (run 47) | **The writers are relocated, which is the actual repair.** `csv-escape-gate.spec.ts` AC-7's fourth-copy case and `audit-write-gate.spec.ts` AC-3 now build an **os-tmpdir scratch tree** (script copy + the keyed files copied verbatim + a `typescript` shim + placeholder roots; for audit-write, **12 synthesized `writeAudit` sites** to clear `MIN_WRITE_AUDIT_CALLS`), assert the **GREEN control first** — `CSV ESCAPE CHECK: PASS` with all four keyed files named, `AUDIT WRITE CHECK: PASS` with the floor cleared — then RED, then green again. **No root flag was added to either check script and none is needed** (`REPO_ROOT = resolve(__dirname, '..')` follows the script's own location), which is the objection that had parked this decision three times. The **real-tree halves are untouched** (AC-3), so the only executed evidence that the real repository satisfies each rule survives. **`scripts/link-integrity-check.js` (`TOOL-18`)**: `scanApp` gains a **CLI-only** `unreadable` collector — an unreadable walked file becomes a **structural failure** carrying `DNC-08 — <repo-relative path> is unreadable: <errno>`, the app is **not classified from a truncated corpus**, and a degraded pass is **never memoised** (`if (!degraded) SCAN_CACHE.set(root, result)`). The in-process exports **still throw**, unwrapped (`if (!unreadable) throw error;`) — no tolerance anywhere, per §2/`DNC-08`. `main()` also stops calling `extractLiteralLinks` and `extractTemplateLinks` independently: **one `scanApp` pass**, so the two halves can no longer sample the tree at two instants. **New `hermetic-spec-writers-gate.spec.ts` (544 lines)** — an **AST** ratchet (parsed, never grepped: `test-ratchet.spec.ts:110`/`:214` carry `rmSync(...)` inside string literals, and a text scan would false-red them, which is `R-30`) read through `scripts/lib/walk-read.js` with the accounting identity, the `MAX_VANISHED_FILES` cap, a corpus floor of **≥ 90** and a floor on write calls **recognised** (≥ 30), plus **5 red-proofs driven with fixture source as a string** so nothing is planted in `apps/**`. **`ADR-039`** + `open-decisions.md` **`D-13`** (added already-`resolved` — the file had **no** `TOOL-15` row to move; said out loud rather than silently doing nothing) + `OPEN.md` lines 51/57 flipped to `closed` | ⚠️ **`pnpm typecheck` 13/13**, api a real cache miss that executed (a first run found 2 real `TS2532` under `noUncheckedIndexedAccess` in the new file; fixed, re-run green). **`git diff --check` exit 0**, both new untracked files whitespace-checked out-of-index. **jest, scoped to `src/shared/quality`, once: 24 suites, 1369 passed, 5 skipped, 0 failed** — a deviation from GUARDRAILS §4, taken deliberately and flagged, because a gate-machinery diff that had only been typechecked is exactly what `TOOL-17` shipped and got caught for. `git status` clean after every run; neither probe file exists at any point. **⚠️ `scripts/ci-gate.sh` (no flags) has NOT been run twice** — story §7 item 5, and it is *this story's own acceptance test*. See the block at the bottom of this file |
+| **TOOL-23 / TOOL-24** | The drift gate reaches the PostgreSQL that IS running: the client is located instead of assumed, and a client failure stops being reported as an absent server | ✅ done *(gate-hardening track; **executed against a refused and an unresolvable address only — the live `127.0.0.1:5432` end-to-end run is deliberately NOT part of this slice**)* | 2026-08-13 (run 50) | **Fail-before, measured on this host:** `127.0.0.1:5432` accepts TCP in **3 ms**, a complete client set exists at `C:\Program Files\PostgreSQL\15\bin`, and `PGPASSWORD=… psql -h 127.0.0.1 -p 5432 -U pilotage -d pilotage -c "select current_database(), version();"` returns `pilotage\|PostgreSQL 15.3`, exit **0** — while `node scripts/schema-drift-check.js` printed **« no PostgreSQL server answered at the resolved address »**. Two defects, one false sentence: the client was resolved through the inherited PATH and nothing else (**TOOL-23** — the directory *is* in the persisted user PATH; every running process had a stale environment block), and `check()`'s catch asserted `serverReachable = false` for **any** route failure although `error.routeFailure` is a statement about the CLIENT (**TOOL-24**). **The fix:** one shared **`scripts/lib/postgres-client-path.js`** (mirroring `default-database-url.js`, the TOOL-22 precedent) resolving `psql`/`pg_dump`/`pg_restore` — inherited PATH first, returning the **bare name** so nothing that works today changes, then well-known install roots highest-major-first on **both** platform families; a root qualifies only if it holds the **whole** client set, `/^\d+$/`-filtered (this machine's `C:\Program Files\PostgreSQL\` contains `15` **and `psqlODBC`**) and sorted **numerically** (`['9','10','15'].sort()` picks 9). `serverReachable` is now left **`null`** — never a sentinel — when a `routeFailure` meets a non-`refused` preflight, and `evaluateDrift` refuses a non-boolean, non-null value outright. **Pass-after, executed:** `schema-drift-gate.invalid:5433` (preflight `indeterminate`) → the false sentence is **gone**, the run reports `Missing: serverReachable`, names the measured state, and still exits **1** with `SCHEMA DRIFT CHECK: FAIL — tooling_unavailable`; `127.0.0.1:59999` (preflight `refused`) → `no PostgreSQL server answered at the resolved address …` still present **byte-identical**, same headline, same exit. Route B is now really attempted here — its failure line is `psql: error: could not translate host name …`, i.e. the discovered binary ran. **No new environment variable and no new CLI flag** (DNC-10): `parseArgs` stays `['--help','-h']`, and the new module reads only `PATH`/`PATHEXT` — the two `spawnSync` already consults — pinned by set-equality in its own `postgres-client-path-gate.spec.ts` so `scripts/lib/` cannot be the hole the per-file scans miss. `ADR-027` gains an **amendment** (it narrows `D3.1`); route C, `VERDICT_EXIT_CODES`, `VERDICT_PRECEDENCE`, `ci-gate.sh` and every Prisma file are untouched. ⚠️ **No jest run and no typecheck by this agent** (GUARDRAILS §4); every new spec assertion was pre-verified by executing the same predicates in plain node against the real files and against `mkdtempSync` fixture trees. **Three open items a human owns — a now-live DDL path in `ci-gate.sh` stage 90, the whole-client-set rule enforced on one rung of two, and a leaked plaintext dump at `restore-drill.js:1374` — plus two recording defects. See the `TOOL-23` / `TOOL-24` block at the bottom of this file** |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -2491,9 +2492,195 @@ is. Recorded here as the residual rather than silently scoped away.
 `V3-E02` remains **`code-complete`**. `PF-111` and `PF-113` are still its two residuals; `S-E02-1`'s hosted half is
 still the one open row, and it still needs an operator.
 
-### The pointer, as of 2026-08-13 (run 47)
+## `TOOL-23` / `TOOL-24` — the gate reaches the PostgreSQL that IS running (run 50, 2026-08-13)
 
-**Next slice → `TOOL-17(b)`** — close `TOOL-17`'s own three residuals, in the order run 46 listed them: the **sixth
+**The sentence that parked three stories for eight runs was false, and it was cheap to prove.** Measured on this host
+*before* any code was written:
+
+| Measurement | Result |
+|---|---|
+| TCP to `127.0.0.1:5432` | **accepted in 3 ms** |
+| client set at `C:\Program Files\PostgreSQL\15\bin` | `psql.exe`, `pg_dump.exe`, `pg_restore.exe` — **complete** |
+| `psql -h 127.0.0.1 -p 5432 -U pilotage -d pilotage -c "select current_database(), version();"` | `pilotage\|PostgreSQL 15.3`, **exit 0** |
+| `node scripts/schema-drift-check.js` | **« no PostgreSQL server answered at the resolved address »** |
+
+Two independent defects producing one false sentence:
+
+- **`TOOL-23` — the client was never looked for.** Routes B spawned the bare names `psql` / `pg_dump` / `pg_restore`,
+  i.e. through the **inherited PATH and nothing else**. The install directory *is* in the persisted user PATH; every
+  long-lived process on this machine simply carried a stale environment block. Three separate comments in the two
+  scripts had hardened that accident into a recorded fact about the machine — *"there is no host `psql` here"*,
+  *"`psql` is `ENOENT` on this Windows host"*, *"the route that works on the local stack, where there is no host
+  `psql`"*. All three are corrected **in place**, and each correction says what was measured rather than deleting the
+  claim silently.
+- **`TOOL-24` — the verdict contradicted evidence the run already held.** `check()`'s catch asserted
+  `serverReachable = false` for *any* route failure, although `error.routeFailure` means **"no CLIENT could run the
+  query"** and says nothing about the server. The instrument that separates the two — `TOOL-10`'s three-state TCP
+  preflight — had already run.
+
+### What shipped
+
+**One shared module, not a second copy.** `scripts/lib/postgres-client-path.js` (331 lines) mirrors
+`scripts/lib/default-database-url.js`, the `TOOL-22` precedent — same artefact class, same `require` by relative path,
+**no new architectural decision and no ADR owed for the discovery ladder itself**. The ladder is: inherited PATH first,
+**returning the bare name** so a host where this already works spawns byte-identical argv; then well-known install
+roots, highest major first, on both platform families. A root qualifies **only if it holds the whole client set**,
+`/^\d+$/`-filtered (this machine's `C:\Program Files\PostgreSQL\` also contains `psqlODBC`) and sorted **numerically**
+— `['9','10','15'].sort()` picks `9`, which is the bug a lexicographic sort would have shipped.
+
+**`serverReachable` becomes strictly tri-state.** `true` = a `SELECT 1;` returned. `false` = absence was **measured**
+(a `refused` preflight). `null` = the run does not know. The condition is conjunctive —
+`routeFailure && preflightState !== null && preflightState !== 'refused' ? null : false` — so the `refused` path is
+byte-identical to before and an `open` preflight **never** promotes to `true` (a TCP accept is not a PostgreSQL: a
+tunnel, a proxy or Traefik accepts identically). `evaluateDrift` then **refuses** a non-boolean, non-null value
+outright, because the obvious next move after *"don't assert false"* is `'unknown'` — and a truthy string would skip
+every `=== false` check *and* satisfy `REQUIRED_EVIDENCE`, i.e. `DNC-08` committed inside the function written to
+enforce `DNC-08`.
+
+**Executed, both directions:**
+
+| Address | Preflight | Result |
+|---|---|---|
+| `schema-drift-gate.invalid:5433` | `indeterminate` | the false sentence is **gone**; the run reports `Missing: serverReachable`, names the measured state, still **exit 1** `tooling_unavailable`. Route B genuinely ran — its failure line is `psql: error: could not translate host name …`, i.e. the discovered binary executed |
+| `127.0.0.1:59999` | `refused` | `no PostgreSQL server answered at the resolved address …` present **byte-identical**, same headline, same exit |
+
+**No new environment variable and no new CLI flag** (`DNC-10`): `parseArgs` stays `['--help','-h']`, the Windows roots
+are fixed literals rather than `%ProgramFiles%` (caller-settable), and the module reads only `PATH`/`PATHEXT` — pinned
+by **set-equality** in its own `postgres-client-path-gate.spec.ts`, which closes the hole the *per-file* env scans in
+`schema-drift-gate.spec.ts:799` / `restore-drill-gate.spec.ts:517` would have missed once discovery moved out of those
+files. `PGPASSWORD` still travels in `options.env`, never argv (`ADR-025 D6`) — discovery changed **which** binary is
+spawned, never **how** the credential travels. `ADR-027` gains an amendment because `TOOL-24` narrows its `D3.1`
+taxonomy; route C, `VERDICT_EXIT_CODES`, `VERDICT_PRECEDENCE`, `ci-gate.sh`, `schema.prisma` and every migration are
+untouched.
+
+### ⚠️ What this slice does **not** have, stated plainly
+
+**There is no green control.** Every assertion that executes drives a *failure* address. Nothing in the suite proves
+that a **successful** route B produces a PASS — which is the premise of the slice. The read-only proof the
+test-architect measured live (`openSqlRoutes(url).query('postgres', "SELECT current_setting('server_version')…")` →
+`15.3`, no database created) is the substitute, and it belongs in the PR body rather than in a spec.
+
+**The end-to-end block is still skipped, on the very host the slice is about.** `schema-drift-gate.spec.ts:96` holds a
+private `LOCAL_URL = '…@127.0.0.1:5433/…'`; `describeWithDb` gates on it; `probeServer` measures `true` for 5432 and
+`false` for 5433. So the five cases that would prove the fix — **including *"the unmodified repository PASSES — the
+gate is not red on correct code" (AC-2)*** — are `describe.skip`. This is the **same stale 5433 literal** `TOOL-22`
+removed from the script one commit ago; the spec kept a copy. The fix is known and cheap (call
+`defaultDatabaseUrl()` rather than hold a literal, which also respects rule A6's ban on a `5432` literal under
+`apps/api/src`) and it is **deliberately not taken here**: pointing that literal at 5432 as a side effect arms a
+**destructive** block against the operator's live database. It is its own `TOOL` row.
+
+**`AC-9` is unmet, and named rather than hidden.** It asked for the gate to be re-measured against the resolved default
+address with the output pasted into the PR. Only the refused and unresolvable addresses were run. Rationale below.
+
+### The three open items a human owns
+
+1. **`ci-gate.sh` stage 90 is now a live DDL path, and nothing in this diff gates the first run.**
+   `scripts/ci-gate.sh:248` runs `node scripts/schema-drift-check.js`. Until now that stage was inert on this host —
+   route B found no client, route C needed a container. After `TOOL-22` (address from `.env` → `127.0.0.1:5432`) plus
+   `TOOL-23` (client found), the **next** `ci-gate.sh` — *including an unattended hourly routine tick* — reaches the
+   live `pilotage` cluster holding the 55 migrated tables and executes
+   `CREATE DATABASE schema_drift_<ts><pid> TEMPLATE template0`, `DROP DATABASE … WITH (FORCE)` and `sweepOrphans`
+   before any operator is watching. The deferral note above is a **note, not a guard**. Decide deliberately: run it
+   once attended before the next tick, or accept it.
+   Two things that make it **bounded** rather than dangerous, both verified in code so a reviewer is not re-deriving
+   them: `sweepOrphans`'s looser `LIKE 'schema\_drift\_%'` is safe — `dropScratch` re-applies `isSafeScratchTarget`
+   (`/^schema_drift_\d+$/` **and** `!== sourceDatabase`) to every swept name, so `schema_drift_keepme` is refused, not
+   dropped (this is the open question the run-50 pointer asks the next run to confirm — **it is confirmed**); and
+   `isSafeScratchTarget` is evaluated in `main()` at `:1668`, **before** `sweepOrphans` (`:1670`) and before the first
+   `CREATE DATABASE` (`:1674`), not only inside the reporting path. Residual requirement: the `pilotage` role needs
+   `CREATEDB`, or the stage fails as `scratch_create_failed`.
+2. **The whole-client-set invariant is enforced on one rung of two.** The module header states it absolutely — *"a
+   candidate bin directory is accepted only when it contains EVERY name in `CLIENT_NAMES`"* — and justifies it by the
+   hazard of `restore-drill.js` dumping with one major and restoring with another. `postgres-client-path.js:281-285`
+   (the PATH rung) checks **only the requested binary** and returns the bare name. Measured against fixtures: with
+   `psql` + `pg_restore` on PATH and a complete 16 set under a root, `pg_dump` resolves to `…\16\bin\pg_dump.exe`
+   while `pg_restore` resolves to the bare PATH name. That is a **false RED** on a healthy backup, not a false green
+   — but this PR is what makes `--mode host` reachable on Windows at all, so the exposure is created here. The fix is
+   three lines (require all of `CLIENT_NAMES` to resolve in the same PATH directory) and keeps CI byte-identical,
+   since `ubuntu-latest`'s `postgresql-client` ships all three.
+3. **`restore-drill.js:1374` leaks a plaintext dump of children's data, newly reachably.** The `-Fc` dump is removed
+   with `run('rm', ['-f', dumpPath])`. `run()` is `shell: false` and `rm` does not exist on Windows → `status: -1`
+   (`ENOENT`) — **and the return value is discarded**. `dropScratch` checks only the `DROP DATABASE` status, so
+   `state.scratchDropped = true`, the drill reports **PASS**, and `C:\tmp\restore_drill_<ts>.dump` — every pupil
+   record, unencrypted, no expiry — stays on disk with nothing in the verdict mentioning it. There is no
+   `existsSync(dumpPath)` verification anywhere in the file, so no evidence of removal is ever collected: the same
+   `DNC-08` shape the rest of the file exists to refuse. Same discarded call on the SIGINT path and in the orphan
+   sweep (`:1402`). **This was unreachable before this slice** — `pg_dump` was `ENOENT` here, so `--mode host` never
+   produced a dump. Minimum fix: `rmSync({force:true})`, assert absence, and carry the result into a
+   `dump_not_removed` verdict; also write to `os.tmpdir()` rather than the literal `/tmp/` (`:1036`), which on Windows
+   resolves to `C:\tmp` on the current drive.
+
+### Two recording defects to settle before the PR is merged
+
+- **The story spec is not in the spec-kit.** `docs/spec/features/v3-e02/stories/TOOL-23-24.md` as committed is an
+  **86-line post-hoc summary** with none of the headings every sibling carries (`## Acceptance criteria`,
+  `## Definition of done`, `## FORBIDDEN / out of scope`, `## Gates`, `## Ledger disagreement, recorded`); its
+  siblings run 380–722 lines. The authoritative **386-line** spec written for this slice exists only under
+  `.claude/worktrees/…`, which `GUARDRAILS` §5 forbids committing. Net effect: the epic's spec-kit loses this story's
+  acceptance criteria, at the exact address §6 tells the next run to look. **Relocate the 386-line spec and fold the
+  summary's measured tables into it as the outcome section.**
+- **Two untracked plaintext secret files are `git add`-able on this branch.** `.env.bak-5433` and
+  `apps/api/.env.bak-5433` (the 2026-08-13 port-switch backups, **not** introduced by this diff) carry four Keycloak
+  client secrets, `KEYCLOAK_ADMIN_PASSWORD`, `RESEND_API_KEY` and both `DATABASE_URL`s with their passwords.
+  `git check-ignore` exits **1** for both — the `.gitignore` env block covers `.env`, `.env.local`, `.env.*.local`
+  and `.env.prod`, and the `.bak-5433` suffix escapes every one. `GUARDRAILS` §2 forbids committing secrets. Stage
+  this diff with **explicit paths**, never `git add -A`.
+
+### Two smaller defects found by the panel, both cosmetic-to-minor
+
+- **`attempts[attempts.length - 1]` is no longer the route-C line.** `recordLivePreflight()` pushes narration onto the
+  shared `attempts` array; `exec()`'s final fallback renders the last entry in the slot reserved for route C. When
+  `query()` **succeeds** via route B — exactly what this slice enables here and what already happens on
+  `ubuntu-latest` — a later failing `exec()` (e.g. `CREATE DATABASE` denied to a role without `CREATEDB`) prints the
+  preflight sentence as its third line with no route line below it. Fix: have `exec()` build its own route-C line, or
+  select the last entry whose prefix is `C. `.
+- **`§8` vs `§9`.** The new ADR-027 amendment cites `docs/runbooks/backup-restore-drill.md` **§9** (correct — that is
+  where the verdict table lives, and this diff edits it), while `scripts/schema-drift-check.js:1824` and ADR-027's own
+  `D3` item 4 still print **§8**, which is *"Pourquoi le drill n'est pas dans `ci-gate.sh`"*. An operator following
+  the message this slice reshapes lands on the wrong section. Two one-word edits.
+- **`unavailableClient()` hand-rolls indentation** (`restore-drill.js:806`) where `indent()` already exists in the same
+  file and the sibling site added by this same diff (`schema-drift-check.js:1233`) uses it; the two messages for the
+  identical condition also diverge in wording, and one carries `timedOut` while the other does not. `TOOL-24`'s
+  distinction is likewise implemented in `schema-drift-check.js` only — `restore-drill.js:1122` still folds a
+  client-not-found into `unreachable_source`. Shape drift between two files whose thesis is structural sameness.
+
+`V3-E02` remains **`code-complete`** — this is a gate-hardening slice, so it moves the epic's *reliability*, never its
+status. `PF-111` and `PF-113` are still its two residuals; `S-E02-1`'s hosted half is still the one open row, and it
+still needs an operator.
+
+### The pointer, as of 2026-08-13 (run 50) — supersedes run 47's
+
+**Next slice → `S-E01-2b`** (RLS / tenant-context hardening), and for the first time in eight runs **its precondition is
+met and measured** rather than assumed:
+
+- **The address was wrong, and is fixed.** `TOOL-22` (#241) made both gate scripts read the project's own `.env`
+  instead of a literal. The precondition sentence repeated below — *"a working PostgreSQL on `127.0.0.1:5433`"* — is
+  **stale**: nothing has listened on 5433 for weeks. `127.0.0.1:**5432**` answers in 3 ms, it is a native Windows
+  `postgresql-x64-15` service (no container involved), and the `pilotage` database there holds the 55 migrated tables.
+- **The client was missing, and is fixed.** `TOOL-23` (run 50) locates
+  `C:\Program Files\PostgreSQL\15\bin\psql.exe` instead of assuming the inherited PATH, so route B is live on this
+  machine.
+- **The verdict was lying, and is fixed.** `TOOL-24` (run 50) stops reporting « no PostgreSQL server answered » when a
+  server answered and only the client was missing.
+
+**What run 50 deliberately did NOT do, and why the next slice must.** This slice made the SQL route *reachable*; it did
+not *use* it. `node scripts/schema-drift-check.js` against the live `127.0.0.1:5432` was **not** run, because the first
+such run creates and drops a real `schema_drift_*` database on the operator's own server and sweeps every
+`schema_drift_%` it finds — a step that belongs to `S-E01-2b` / `VAL-03` with an operator watching, not to a discovery
+change. Two things to check on that first live run: `sweepOrphans`'s `LIKE 'schema\_drift\_%'` is **looser** than
+`SCRATCH_NAME_PATTERN` (`dropScratch` re-applies `isSafeScratchTarget` to every swept name — confirm it), and any real
+drift it finds is **its own story**, never a reason to touch the TOOL-23/24 diff.
+
+**Also still open, and now cheap.** `schema-drift-gate.spec.ts:96` still hard-codes `LOCAL_URL = '…@127.0.0.1:5433/…'`,
+and `PROBE_URL` derives from it — so under jest with `DATABASE_URL` unset the probe hits the dead port and the whole
+`describeWithDb` block, *including "the unmodified repository PASSES"*, stays `describe.skip` **precisely on the host
+where the route finally works**. `TOOL-22` fixed the scripts and not the spec. It is a sibling defect worth its own
+`TOOL` row, and it must NOT be fixed by pointing that literal at 5432 as a side effect of another slice: doing so arms
+the destructive end-to-end block against the operator's live database.
+
+### The superseded pointer, as of 2026-08-13 (run 47)
+
+**Was: next slice → `TOOL-17(b)`** — close `TOOL-17`'s own three residuals, in the order run 46 listed them: the **sixth
 victim** at `apps/api/src/shared/audit/write-audit.spec.ts:416` (the last hand-rolled walk-then-read in the repo), the
 **FR-4 named-key leak** (~15 reads of the shape `EXECUTABLE.get('<literal>') ?? ''` now served out of a tolerant map,
 so a skipped *named* file becomes `''` — one `expect(NAMED_RELS.filter(r => !MAP.has(r))).toEqual([])` per suite), and
@@ -2510,7 +2697,9 @@ the `apps/api` suite was not deterministic. `TOOL-17` + `TOOL-15` are the two re
 this PR's `ci-gate.sh` runs **agree twice**, `node scripts/test-ratchet.js api --update` (and `worker`) from a complete
 run is an **operator** step that finally closes `TOOL-16(b)`.
 
-**The `S-E01-2b` pointer from runs 44–46 is still not spent.** Its precondition is unchanged and still unmet: a working
-PostgreSQL on `127.0.0.1:5433`. `TOOL-10`, `TOOL-13`, `TOOL-17` and now `TOOL-15` are all gate-hardening picks that
+**The `S-E01-2b` pointer from runs 44–46 is still not spent.** ⚠️ **The precondition sentence that followed here is
+stale as of run 50** — it read *"unchanged and still unmet: a working PostgreSQL on `127.0.0.1:5433`"*. Nothing listens
+on 5433; the server answers on **5432**, and `TOOL-22`/`TOOL-23`/`TOOL-24` have removed all three reasons the gate
+could not see it. Read the run-50 pointer above instead. `TOOL-10`, `TOOL-13`, `TOOL-17` and now `TOOL-15` are all gate-hardening picks that
 jumped the queue — deliberately, because until `GATE: PASS` on a gate-machinery diff is reproducible, nothing
 downstream of the gate gets more trustworthy.
