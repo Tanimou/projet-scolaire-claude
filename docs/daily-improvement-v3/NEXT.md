@@ -1,6 +1,112 @@
 # Next story
 
-# NEXT — written by run 51 (`TOOL-25`), 2026-08-13 — **this section supersedes every section below**
+# NEXT — written by run 52 (`S-E01-2b`), 2026-08-13 — **this section supersedes every section below**
+
+## ✅ RLS exists, and it is proven to deny — the oldest open L0 trust finding finally moved
+
+`PF-02` half (a) — *"RLS claimed, not implemented"* — has been open since the round-5 audits. Measured at the start of
+this run, it still reproduced exactly: **zero** `ENABLE ROW LEVEL SECURITY`, **zero** `CREATE POLICY`, **zero**
+`withTenant` call sites, against an `ADR-002` that claimed tenant isolation.
+
+```
+RLS ISOLATION: PROVEN for the non-owner role      (exit 0, real PostgreSQL, scratch DB)
+  ✓ every tenant_id table has ROW LEVEL SECURITY enabled — 44
+  ✓ AC-6  POSITIVE CONTROL: with GUC = tenant A, A rows ARE VISIBLE — 1
+  ✓ AC-7b with GUC = tenant A, tenant B rows are NOT visible — 0
+  ✓ AC-7d an INSERT carrying a foreign tenant id is REJECTED by WITH CHECK
+  ✓ AC-8 THE DELIBERATE LIMIT: the OWNER sees every tenant — this is why the app is NOT isolated yet — 3
+```
+
+`G-TENANT` is discharged **by execution**, and the check is wired into `ci-gate.sh` behind the `apps/api/prisma/`
+trigger, where it **fails and never skips**.
+
+## 🛑 Read this before you write "the app is RLS-isolated" anywhere
+
+**It is not.** It connects as `pilotage`, which **owns** all 55 tables, and an owner is not subject to its own policies
+without `FORCE ROW LEVEL SECURITY`. `FORCE` was omitted **deliberately**: with zero `withTenant` callers it would
+return zero rows to every query of every portal — an outage, not a hardening. `ADR-032` §Deferred item 1 offered
+exactly two ways to close the owner-bypass trap (FORCE everything, **or** land the `app_user` split first); this run
+took the second, and wrote the replacement into **`ADR-032` §D5** rather than into a migration comment, because *a
+comment cannot supersede a record* — which is the lesson runs 50 and 51 paid for three times.
+
+**`PF-02` stays `in-progress`.** What remains is a **connection cutover**, not more policy work.
+
+## ▶ Recommended next story
+
+1. **`PF-183` (P1, discovered this run) — settle it BEFORE the cutover, not during it.** Six tables derive their
+   tenant by FOREIGN KEY and carry no `tenant_id`, so they sit outside every policy: `grade_revision`,
+   `announcement_receipt`, `branding`, `import_row`, `user_role`, `outbox_event`. Today they are **fail-closed**
+   (ungranted, so `app_user` gets `permission denied`), which is why this is not an incident. But the cutover forks
+   two ways and **both are bad**: grant them without a policy and `user_role` — the RBAC assignment table — becomes a
+   cross-tenant read; leave them ungranted and six features break with permission errors that will read like feature
+   bugs. Fix direction: an FK-path policy (`EXISTS (SELECT 1 FROM parent p WHERE p.id = child.parent_id AND
+   p.tenant_id = nullif(current_setting(…),'')::uuid)`) with an index on each FK **before** enabling — the same R-11
+   discipline this run discharged for the 44 — or a recorded denormalisation. **Never by widening the grant.**
+2. **`S-E01-1` (identity seam) — now the critical path, and it owns the cutover.** It mints the first trusted tenant
+   claim, so it is the rightful owner of the first `withTenant` call site *and* of switching `DATABASE_URL` to
+   `app_user`. Both were excluded from this run on purpose: a call site on an owner connection proves nothing, and
+   inventing a tenant-resolution rule here would contradict the seam that is meant to define it. Sequence it after
+   `PF-183`. Note `Prisma.TransactionClient` is already in place, so the "closed over the injected service instead of
+   `tx`" mistake is now a **compile** error rather than a silent unguarded query.
+3. **`S-E01-3` (VAL-02, the two-tenant adversarial suite) — unblocked for the first time.** Its fail-before/pass-after
+   criterion could never be honoured while there was no policy to defeat. There is one now.
+4. **`PF-184` (P2) — fix it as a monitoring gap, not a CI gap.** `prisma migrate diff` cannot see policies (confirmed:
+   `SCHEMA DRIFT CHECK: PASS` printed on a tree whose newest migration is 447 lines of policy DDL). The **45th-table**
+   case *is* covered, because `rls-isolation-check.js` counts from the live catalog rather than a frozen list — that
+   half was **corrected downward** from the sprint's framing by reading the code. What is genuinely uncovered: an
+   out-of-band `DROP POLICY` on a **running** database. Every check here runs against a scratch database built from
+   the ledger, never against the instance serving traffic. A startup assertion or health probe that counts policies
+   against `tenant_id` columns is the right shape.
+5. **Arm the skipped-count ratchet — still disarmed, and still worth a survey first.** Both apps still print
+   `⚠ this baseline records no skipped counts. The skip ratchet is INACTIVE`. This run added **58** api tests and
+   skipped **none**, so the moment is comparatively clean — but `TOOL-25` remains proof that a skip can be a defect
+   wearing a green hat, so **look at what would be baselined before baselining it**. From a COMPLETE run:
+   `node scripts/test-ratchet.js api --update`, `… worker --update`. **Never hand-write those numbers**, and note
+   `feedback-shell-backticks-execute-docs` — writing that command into markdown via `node -e "…"` in double quotes has
+   **executed** it once already.
+
+## What this run learned, and it is the same lesson wearing a new hat
+
+**My own brief was wrong, and the agent that measured instead of obeying was right — for the third consecutive time.**
+The brief specified `current_setting('app.current_tenant_id', true)::uuid = tenant_id`. Measured on this cluster:
+after a transaction **commits**, `set_config(…, true)` leaves the GUC at `''`, **not** `NULL` — so a bare cast raises
+`22P02` on the *second* query of every pooled connection. The shipped predicate wraps it in `nullif(…, '')`. That is
+not a relaxation and not a disguised `IS NULL OR`; it is the difference between a policy that works and one that takes
+the application down on its second request. The sprint also added a privilege split nobody asked for —
+`audit_log` and `conversation_message` receive `SELECT, INSERT` only — so the audit hash chain stays unrewritable.
+
+**The second lesson is about where the sprint's blast radius is invisible from.** `landed: true` came back on a tree
+whose `restore-drill-gate.spec.ts` was **red**: adding a third migration invalidated a reviewed record
+(`scripts/restore-drill-baseline.json`) that the editing agents could not see from where they worked. That is `PF-80`
+recurring, and it is why Step 6 runs `ci-gate.sh` from the main checkout rather than trusting the sprint's verdict.
+Fixed at the **record**, never at the assertion — the check's own stated purpose is to catch *"a migration reaching
+disk without reaching this file"*, and it did exactly that.
+
+## State of the world at the end of run 52
+
+- **`GATE: PASS (fast)`** on the committed tree, verdict line read rather than `$?` of a pipeline (`R-23`):
+  `test-ratchet[api] 2693/2704 · 11 failing · 11 known-failing`, `test-ratchet[worker] 293/300 · 7 · 7`.
+  **No excess failure.** api denominator **2646 → 2704** (+58, all from this slice, **0 skipped**).
+  Gate run 1 was a genuine `FAIL` for the restore-drill record above; runs 2 and 3 are the post-fix measurements.
+- **`pnpm --filter @pilotage/api build`** — the run's single build, verified by its **artefact** (`dist/main.js`
+  rewritten 10 s before the check), not by an exit code.
+- **The sprint wrote into the session's linked worktree, not the main checkout**, despite being given the main
+  checkout as `worktree`. The 14 files were relocated by patch (`git diff --cached --binary` → `git apply`). This is
+  the `project-workflow-worktree-path-bug` shape **mirrored**, and it matters more than usual here: that worktree
+  lives under `.claude/worktrees/`, a **dot path where jest finds 0 tests**, so measuring from it would have read a
+  green nothing.
+- **No Docker was started and no container rebuilt.** None was needed: this host's database is the **native Windows
+  service** `postgresql-x64-15` on `127.0.0.1:5432`. **`TOOL-19` is untouched and the local Docker stack's health
+  remains UNKNOWN** — do not read this run as evidence about it.
+- **PostgreSQL was written to deliberately and left clean.** Scratch databases created, migrated and dropped by the
+  RLS check and the drift gate; `rls_isolation_%` and `schema_drift_%` both verified `(none)` **independently of the
+  scripts that assert their own cleanup**. The live `pilotage` database is **untouched**: 0 policies, 0 RLS tables,
+  2 migrations — the new migration has **not** been applied to it, by design.
+- **`INFLIGHT` was 0 at Step 0**, `git log origin/main..main` was empty, and the 6 open PRs were all dependabot.
+
+---
+
+# NEXT — written by run 51 (`TOOL-25`), 2026-08-13 — superseded by run 52 above, kept for content
 
 ## ✅ The drift gate's end-to-end block EXECUTED, for the first time in this programme
 
