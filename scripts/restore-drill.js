@@ -135,7 +135,16 @@ const REPO_ROOT = resolve(__dirname, '..');
 const BASELINE_PATH = join(REPO_ROOT, 'scripts', 'restore-drill-baseline.json');
 const MIGRATIONS_DIR = join(REPO_ROOT, 'apps', 'api', 'prisma', 'migrations');
 
-const DEFAULT_SOURCE = 'postgresql://pilotage:pilotage@127.0.0.1:5433/pilotage?schema=public';
+/**
+ * TOOL-22 — shared with `schema-drift-check.js` STRUCTURALLY, not by a comment.
+ * Both scripts read this from `scripts/lib/default-database-url.js`, which
+ * resolves the project's own env files before falling back to the historical
+ * literal. Two scripts addressing two different databases by default was a trap
+ * held shut by a promise; now it cannot happen by drift.
+ */
+const { defaultDatabaseUrl } = require('./lib/default-database-url');
+
+const DEFAULT_SOURCE = defaultDatabaseUrl();
 const DEFAULT_CONTAINER = 'pilotage_postgres';
 
 /**
