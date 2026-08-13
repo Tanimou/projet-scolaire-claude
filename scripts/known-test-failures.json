@@ -8,7 +8,27 @@
     "",
     "Every entry carries the finding id that owns the fix, so nothing here is 'silenced' — it is queued.",
     "Established 2026-08-02 by the Daily Improvement V3 run for S-E02-2 (PF-55 / VAL-01), the first time these",
-    "suites had ever been executed. 18 entries at establishment."
+    "suites had ever been executed. 18 entries at establishment.",
+    "",
+    "SECOND HALF — 'skipped' (TOOL-13, 2026-08-12). A failure list alone cannot notice a test that STOPS",
+    "EXECUTING: a skipped test is not a failure, so it left the set, and the ratchet reported '✓ no drift.'",
+    "about checks it had not performed. So each app may also carry a 'skipped' block: per suite path, the number",
+    "of tests that DID NOT RUN (jest statuses pending / todo / skipped / disabled — a describe.skip surfaces as",
+    "'pending', not 'skipped').",
+    "",
+    "The counts may only ever FALL. A RISE fails the gate exactly the way a new failure does — it means fewer",
+    "tests executed than this file records. A suite recorded here but ABSENT from the run fails too: the suite",
+    "stopped existing. A FALL does NOT fail: it is usually someone un-skipping a test, and reddening the gate on",
+    "them would get the gate routed around within a week — it is reported instead, loudly, because a fall is also",
+    "what a DELETED test looks like, so check before you run --update.",
+    "",
+    "Only non-zero counts are recorded. The residual is stated rather than hidden: a suite with no entry here that",
+    "vanishes entirely is not caught by this half — that needs a full suite inventory, which is a follow-on.",
+    "An app with no 'skipped' block at all is not an error: the ratchet prints an unmissable INACTIVE warning and",
+    "qualifies its verdict line, so a half-performed check can never read as an unqualified green. Populate it with",
+    "`node scripts/test-ratchet.js <app> --update` from a COMPLETE run — --update and --skip stay mutually",
+    "exclusive, now for two reasons: a partial run drops the failures it did not see AND writes the counts of the",
+    "unrun suites as absent."
   ],
   "apps": {
     "api": {
@@ -61,19 +81,19 @@
     },
     "worker": {
       "failures": {
+        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope is idempotent — a re-run on unchanged grades produces identical figures": {
+          "finding": "PF-65",
+          "reason": "Same root cause — no snapshot write captured. Owner: V3-E03."
+        },
         "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope writes per-subject averages byte-identical to the live mean (and the year roll-up)": {
           "finding": "PF-65",
           "reason": "TypeError: Cannot read properties of undefined (reading 'studentId') — the harness captured no snapshot write at all, so recomputeScope wrote nothing. Attribution between a stale harness and a genuinely inert snapshot pipeline is NOT yet established; if it is the pipeline, this is the same defect as PF-24 (snapshot queue has no consumer) and the G-TRUTH evidence for snapshots does not exist. Owner: V3-E03."
-        },
-        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope writes the coefficient-WEIGHTED global byte-identical to the live weightedSum/totalCoef": {
-          "finding": "PF-65",
-          "reason": "Same root cause — no snapshot write captured. Owner: V3-E03."
         },
         "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope writes the class distribution histogram byte-identical to the live buckets": {
           "finding": "PF-65",
           "reason": "Same root cause — no snapshot write captured (reading 'subjectId' of undefined). Owner: V3-E03."
         },
-        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope is idempotent — a re-run on unchanged grades produces identical figures": {
+        "src/modules/analytics-snapshots/snapshot-recompute.spec.ts::SnapshotRecomputeService.recomputeScope writes the coefficient-WEIGHTED global byte-identical to the live weightedSum/totalCoef": {
           "finding": "PF-65",
           "reason": "Same root cause — no snapshot write captured. Owner: V3-E03."
         },
@@ -89,7 +109,8 @@
           "finding": "PF-66",
           "reason": "TypeError: release is not a function — the lock double no longer matches the service's lock contract, so the re-entrancy guard that prevents duplicate parent digests is unverified. Owner: V3-E11."
         }
-      }
+      },
+      "skipped": {}
     }
   }
 }

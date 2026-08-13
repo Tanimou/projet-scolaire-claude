@@ -171,13 +171,32 @@ shapes cannot collide.
 | its `SchemaDriftModule` interface (extend it or it will not typecheck) | `:122-159` |
 | its helpers: `callSites()` paren-balancer `:221`, `executableJs()` `:204`, `EXECUTABLE_SCRIPT` `:210`, `runInChild()` `:242`, `DEAD_URL` `:99` |
 | the existing bound-pinning case to copy the register of | `:1175-1192` |
-| **non-DB describes end here** | the `});` at `:1204` |
+| **non-DB describes end here** | the `});` at **`:1202`** (re-measured 2026-08-12 — see the correction below) |
+| the section-6 banner comment | **`:1204-1211`** (`/* ===… *` opens at `:1204`, `*/` closes at `:1211`) |
 | ⛔ `const describeWithDb = reachable ? describe : describe.skip;` | `:1215` — **`describe.skip` on this machine** |
 | ⛔ the DB-gated blocks | `:1246`, `:1261` |
 
-> **Where your new drift-gate cases go: after `:1204`, before the section banner at `:1206`.** Anything you put at
-> `:1215+` is inside `describeWithDb` and **will not run on this machine** — which would make it evidence that can
-> only run where the bug cannot, the precise thing AC-4 forbids.
+> ### ⚠️ Correction to this story's own anchor — re-measured against the file as shipped, 2026-08-12
+>
+> An earlier draft of this section said *"after `:1204`, before the section banner at `:1206`."* **That is wrong on
+> the file as shipped and following it literally produces a broken file:** `:1204` is the banner's *opening* line
+> (`/* ================… *`) and `:1206` is a line *inside* it, so code inserted "between" them lands inside a block
+> comment — it would not parse as a `describe`, and it would silently not run. Measured today:
+>
+> ```
+> 1201:   });                                    <- last it() of the last non-DB describe
+> 1202: });                                      <- the non-DB describes END HERE
+> 1203: (blank)
+> 1204: /* ================================================================== *
+> 1211:  * ================================================================== */
+> 1215: const describeWithDb = reachable ? describe : describe.skip;
+> ```
+>
+> **Where your new drift-gate cases go: after `:1202`, before the banner at `:1204`** — i.e. in the blank gap at
+> `:1203`, at top level, as a new `describe(...)` sibling. Anything you put at `:1215+` is inside `describeWithDb`
+> and **will not run on this machine** — which would make it evidence that can only run where the bug cannot, the
+> precise thing AC-4 forbids. Re-evaluate these numbers yourself before inserting: the file is a shared path and the
+> lines move.
 
 ---
 
@@ -559,8 +578,14 @@ Add source-level pins on `EXECUTABLE_SCRIPT` proving **the logic really moved** 
 
 ### 7.2 `apps/api/src/shared/quality/schema-drift-gate.spec.ts` — §5 and §6 evidence
 
-**Insert after `:1204`, before the banner at `:1206`. Never at `:1215+`.** Anything inside `describeWithDb` is
-`describe.skip` on this machine — which is this story's own defect, used as a place to hide from it.
+**Insert after the `});` at `:1202`, before the banner that opens at `:1204`. Never at `:1215+`.** (See the
+corrected anchor in §2 — the earlier "`:1204`/`:1206`" pair pointed *inside* the banner comment.) Anything inside
+`describeWithDb` is `describe.skip` on this machine — which is this story's own defect, used as a place to hide
+from it.
+
+**Prove the insertion landed outside `describeWithDb`, do not eyeball it.** After inserting, run the drift-gate
+spec and check that your new case names appear in the *executed* set, not the pending set — the run in §11 prints
+exactly 5 pending, and if your count of pending rises above 5 you inserted inside the DB-gated block.
 
 Cases: §5's three (execution-driven, including the `finally`-shaped reproduction and the same-server negative
 control) and §6's four (two constant pins, two paren-balanced call-site pins with non-vacuity first).
@@ -696,3 +721,34 @@ One ledger statement is measurably **stale** and is corrected here rather than i
 *"116 passed / 2 failed / 5 skipped, the two failures pre-existing (`AC-5`, `AC-15` at `schema-drift-gate.spec.ts:721`)"*.
 Re-measured on this worktree on 2026-08-12: **124 total, 119 passed, 0 failed, 5 pending.** The two failures are
 gone. The **5 pending** are still there, and they are this story's subject.
+
+---
+
+## 14. Delivery note — what shipped, and what did NOT (2026-08-12)
+
+**Shipped (TOOL-13 primary + TOOL-16(a)):** `scripts/lib/ratchet-core.js` (new, pure), `scripts/test-ratchet.js`
+rewired to `require()` it, the skipped-count ratchet with its rise / fall / missing-suite verdicts, the load-failure
+cause from `suite.message`, the `--skip` hold-out in both directions, the extended `--update` + `--skip` refusal, the
+`$doc` rewrite in `scripts/known-test-failures.json`, and 14 new cases in `test-ratchet.spec.ts` (12 executing the
+core against hand-written jest reports, 2 pinning that the decision really moved).
+
+**NOT shipped — §5 (`TOOL-11`) and §6 (`TOOL-12`) are DROPPED, under §4's own scope order.** Neither
+`scripts/schema-drift-check.js` nor `schema-drift-gate.spec.ts` is touched by this diff. Both findings stay **OPEN**;
+the corrected insertion anchor in §2 / §7.2 is left in place for whoever picks them up. They were dropped because the
+primary reached a clean, reviewable size on its own — not because they were re-scoped away.
+
+**The baseline's `skipped` block is deliberately ABSENT and the ratchet is therefore INACTIVE for both apps.**
+Populating it requires `--update` from a **complete** run of each app's suite; this slice forbids running the full
+`apps/api` suite (~350 s, non-deterministic — `TOOL-16(b)`), so inventing numbers would have made the gate *look*
+armed while comparing against fiction. That is the one failure mode §3.6 names explicitly. **Arming it is an operator
+step:** `node scripts/test-ratchet.js api --update` and `… worker --update`, each from a complete run. Until then the
+script prints the `⚠ … INACTIVE` line and its verdict reads
+`✓ test-ratchet[api]: no drift (skipped-count ratchet INACTIVE — baseline has no "skipped" block).`
+
+**Evidence limits, stated rather than implied.** The 12 core cases were replayed in plain `node` against the shipped
+module (12/12 green) and every source pin was evaluated against the shipped `test-ratchet.js` before being written.
+The jest run of `src/shared/quality/test-ratchet.spec.ts` itself was **not** performed by the implementing agent —
+the sprint's resource budget gives the toolchain to the test-architect. `AC-11`'s "14/14 existing cases green,
+unedited" is therefore **pinned but not re-measured here**: the four byte-identical source anchors those cases assert
+(`const report = runJest();`, `const app = process.argv[2];`, the four output strings, the single `process.exit(2)`)
+were each re-checked against the diff.

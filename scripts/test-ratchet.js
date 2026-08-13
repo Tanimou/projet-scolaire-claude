@@ -20,6 +20,22 @@
  *   • a baseline entry that still fails      → reported, tolerated, and carries a
  *                                              finding id so it is tracked, not lost
  *
+ * A SET OF FAILURES IS NOT ENOUGH (TOOL-13)
+ * -----------------------------------------
+ * The ratchet used to decide on that set alone — and a test that STOPS EXECUTING
+ * is not a failure, so it was not in the set, so the verdict was `✓ no drift.`
+ * Measured on 2026-08-12: `schema-drift-gate.spec.ts` reported 5 pending and 0
+ * failed, including the one case whose whole job is to prove the drift gate is not
+ * red on correct code — and this script said green about all five.
+ *
+ * So the baseline now carries a second half: a per-suite count of tests that DID
+ * NOT RUN. A rise fails the gate exactly the way a new failure does; a fall is
+ * reported, never failed (see `scripts/lib/ratchet-core.js` for why that asymmetry
+ * is not an inconsistency). The decision layer lives in that module so a spec can
+ * feed it hand-written jest reports and prove the verdict — this file keeps ALL
+ * the I/O: argv, the guards, `runJest()`, the baseline read/write, every `console`
+ * call and every `process.exit`.
+ *
  * This is not "silencing failing tests" (S-E02-2 note 4 forbids that): every
  * tolerated failure is enumerated in `known-test-failures.json` with a reason and
  * a finding id, and the ratchet makes it impossible to add another one quietly.
@@ -36,6 +52,11 @@ const { spawnSync } = require('node:child_process');
 const { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } = require('node:fs');
 const { join, resolve } = require('node:path');
 const { tmpdir } = require('node:os');
+
+// The PURE decision layer. Required — never inlined, never duplicated — so that
+// `test-ratchet.spec.ts` exercises the EXACT code this gate runs on hand-written
+// jest reports, and the evidence cannot drift away from the gate.
+const core = require('./lib/ratchet-core');
 
 const REPO_ROOT = resolve(__dirname, '..');
 const BASELINE_PATH = join(REPO_ROOT, 'scripts', 'known-test-failures.json');
@@ -68,9 +89,18 @@ if (!app || (skipIdx !== -1 && !skip)) {
 // --update rewrites the baseline from the run's failures. Combined with --skip
 // it would rewrite it from a PARTIAL run and silently delete every baselined
 // failure under the skipped path — losing the findings they carry.
+//
+// The rule now protects the SKIPPED COUNTS too, and more sharply: a partial run
+// has no entry at all for the skipped suites, so an --update under --skip would
+// write a `skipped` block with those suites DELETED — and the gate would then be
+// permanently blind to exactly the suites the tiering skips, which are the gate's
+// own meta-tests. No --force. DNC-10.
 if (update && skip) {
   console.error('test-ratchet: --update and --skip are mutually exclusive.');
   console.error('  A baseline must be rebuilt from a complete run, or it drops what it did not see.');
+  console.error('  That now applies twice over: the skipped-test counts of the unrun suites would be');
+  console.error('  written as absent, silently disarming the half of the gate that notices tests that');
+  console.error('  stopped running.');
   process.exit(2);
 }
 
@@ -177,29 +207,14 @@ function runJest() {
   return report;
 }
 
-/**
- * Stable identity for a test: "<spec path relative to the app>::<full test name>".
- * Path is normalised to forward slashes so a Windows run and a Linux CI run
- * produce the same key.
- */
-function testKey(specPath, fullName) {
-  const rel = specPath.replace(/\\/g, '/').replace(`${appDir.replace(/\\/g, '/')}/`, '');
-  return `${rel}::${fullName}`;
-}
-
 const report = runJest();
 
-const failing = new Set();
-for (const suite of report.testResults || []) {
-  for (const t of suite.assertionResults || []) {
-    if (t.status === 'failed') failing.add(testKey(suite.name, t.fullName));
-  }
-  // A suite that fails to even load reports no assertions — that must not slip
-  // through as "zero failures".
-  if ((suite.assertionResults || []).length === 0 && suite.status === 'failed') {
-    failing.add(testKey(suite.name, '<suite failed to load>'));
-  }
-}
+// The reduction and the comparison are the ratchet's DECISION, and they live in
+// `scripts/lib/ratchet-core.js` — pure, and therefore provable against fixture
+// reports. Key identity (`testKey`) moved with them: it is a baseline key, so it
+// has exactly one definition.
+const reduced = core.reduceReport({ report, appDir });
+const failing = new Set(reduced.failing);
 
 const baseline = existsSync(BASELINE_PATH)
   ? JSON.parse(readFileSync(BASELINE_PATH, 'utf8'))
@@ -212,34 +227,71 @@ if (update) {
   for (const key of [...failing].sort()) {
     failures[key] = previous[key] || { finding: 'UNTRIAGED', reason: 'TODO: triage and assign a finding id' };
   }
-  baseline.apps[app] = { failures };
+  // Only NON-ZERO counts are recorded, so the baseline stays small and every line
+  // in it means something. The cost is real and is written down at
+  // `ratchet-core.js`'s `compareToBaseline`: a suite with zero recorded skips that
+  // vanishes entirely is NOT caught by this half.
+  //
+  // Reached only from a COMPLETE run — the --skip guard at the top of this file is
+  // what makes that true, and it is the reason this write can be trusted.
+  const skipped = {};
+  for (const key of Object.keys(reduced.skipped).sort()) skipped[key] = reduced.skipped[key];
+  baseline.apps[app] = { failures, skipped };
   writeFileSync(BASELINE_PATH, `${JSON.stringify(baseline, null, 2)}\n`);
-  console.log(`test-ratchet[${app}]: baseline updated — ${failing.size} known failure(s) recorded.`);
+  console.log(
+    `test-ratchet[${app}]: baseline updated — ${failing.size} known failure(s) recorded, ` +
+      `and ${Object.keys(skipped).length} suite(s) with tests that did not run.`
+  );
   process.exit(0);
 }
 
-const allKnown = Object.keys((baseline.apps[app] && baseline.apps[app].failures) || {});
-// Baseline entries under a skipped path did not run, so they can be neither a
-// regression nor a fix. Excluding them is what makes --skip safe.
-const knownSkipped = skip ? allKnown.filter((k) => k.includes(skip)) : [];
-const known = new Set(skip ? allKnown.filter((k) => !k.includes(skip)) : allKnown);
+const verdict = core.compareToBaseline({
+  reduced,
+  baselineApp: baseline.apps[app],
+  skip,
+});
+const { regressions, fixed, knownSkipped, skipRises, skipFalls, missingSuites } = verdict;
+const known = new Set(
+  Object.keys((baseline.apps[app] && baseline.apps[app].failures) || {}).filter(
+    (k) => !(skip && k.includes(skip))
+  )
+);
 
 if (skip) {
-  // Never silent: a run that covered less must say so, and say how much less.
+  // Never silent: a run that covered less must say so, and say how much less —
+  // now in both currencies, because a held-out COUNT is as much unmeasured ground
+  // as a held-out failure. This is the gate's own tiering choosing not to run a
+  // path; it is NOT a suite that skipped itself, and the two must never be
+  // conflated: the second is counted, compared and failed on a rise.
   console.log(
     `test-ratchet[${app}]: SKIPPED specs matching "${skip}" ` +
-      `(${knownSkipped.length} baseline entr(ies) held out of the drift comparison).`
+      `(${knownSkipped.length} baseline entr(ies) and ${verdict.heldOutSkipEntries} skip-count ` +
+      `entr(ies) held out of the drift comparison).`
   );
 }
 
-const regressions = [...failing].filter((k) => !known.has(k)).sort();
-const fixed = [...known].filter((k) => !failing.has(k)).sort();
-
 const total = report.numTotalTests || 0;
 const passed = report.numPassedTests || 0;
+const notExecuted = Object.values(reduced.skipped).reduce((a, b) => a + b, 0);
 console.log(
-  `test-ratchet[${app}]: ${passed}/${total} passed · ${failing.size} failing · ${known.size} known-failing (baseline)`
+  `test-ratchet[${app}]: ${passed}/${total} passed · ${failing.size} failing · ${notExecuted} not executed · ` +
+    `${known.size} known-failing (baseline)`
 );
+
+// TOOL-16(a): a suite that failed to load is reported with its CAUSE, for every
+// such suite — baselined or not, because a tolerated load failure whose cause
+// changed is still something the operator must be able to see. Previously the
+// script synthesised the sentinel and discarded the report's explanation, so an
+// operator read a symptom with no cause.
+if (reduced.loadFailures.length) {
+  console.error(`\n✗ ${reduced.loadFailures.length} suite(s) FAILED TO LOAD — none of their tests ran:\n`);
+  for (const lf of reduced.loadFailures) {
+    console.error(`    ${lf.key}`);
+    for (const line of (lf.cause || '(jest reported no cause)').split('\n')) {
+      console.error(`      ${line}`);
+    }
+  }
+}
 
 if (regressions.length) {
   console.error(`\n✗ ${regressions.length} NEW test failure(s) — not in the baseline:\n`);
@@ -255,7 +307,59 @@ if (fixed.length) {
   );
 }
 
-if (regressions.length || fixed.length) process.exit(1);
+// A RISE is the whole finding: fewer tests executed than the baseline records.
+// It fails exactly the way a new failure does.
+if (skipRises.length) {
+  console.error(`\n✗ ${skipRises.length} suite(s) record MORE tests that DID NOT RUN than the baseline:\n`);
+  for (const r of skipRises) console.error(`    ${r.suite}   ${r.from} → ${r.to}   (+${r.to - r.from})`);
+  console.error(
+    '\n  A test that stopped executing is not a failure, so nothing else here would have noticed it.' +
+      '\n  Find why it stopped (a `describe.skip` on an absent dependency is the usual cause) — do not run --update.'
+  );
+}
+
+// The third case, and the one that catches the OTHER shape of disappearance: the
+// suite stopped existing. At least as suspicious as a count that rose.
+if (missingSuites.length) {
+  console.error(
+    `\n✗ ${missingSuites.length} suite(s) recorded in the baseline are ABSENT from this run:\n`
+  );
+  for (const m of missingSuites) console.error(`    ${m.suite}   (baseline recorded ${m.from} not executed)`);
+  console.error(
+    '\n  The suite was renamed, deleted, or no longer matched jest\'s test paths. If that was deliberate,' +
+      '\n  run --update from a COMPLETE run — the same escape hatch a fixed baseline entry uses.'
+  );
+}
+
+// A FALL is good news — more tests executed — and failing on it would red the gate
+// on the very change that improved it. Reported loudly all the same, because a
+// fall is ALSO what a deleted test looks like from inside a suite.
+if (skipFalls.length) {
+  console.log(
+    `\n▲ ${skipFalls.length} suite(s) record FEWER skipped tests than the baseline — good news if you` +
+      '\n  un-skipped them, and a DISAPPEARANCE if you did not. Check before you run --update:\n'
+  );
+  for (const f of skipFalls) console.log(`    ${f.suite}   ${f.from} → ${f.to}   (${f.to - f.from})`);
+}
+
+// A run that could not perform half its check SAYS SO — it never implies it did
+// (DNC-08). An old baseline with no `skipped` block does not crash and does not
+// fail the gate (that would leave it red with no way back except a complete run,
+// which is not always available), but the green it prints is never unqualified.
+//
+// This sits UPSTREAM of the single exit deliberately. Emitted after it, the
+// notice would be unreachable on precisely the runs that need it most: a run
+// already red for an unrelated regression would never disclose that the skip
+// half did not run at all. "Could not check" is not a property of a green run —
+// it is a property of THE run, so it is disclosed before the verdict branches.
+if (!verdict.baselineHasSkipBlock) {
+  console.log(
+    `\n⚠ test-ratchet[${app}]: this baseline records no skipped counts. The skip ratchet is INACTIVE ` +
+      'for this app; run --update from a COMPLETE run.'
+  );
+}
+
+if (regressions.length || fixed.length || skipRises.length || missingSuites.length) process.exit(1);
 
 if (failing.size) {
   console.log(`\n  ${failing.size} known failure(s) tolerated. Each is tracked:`);
@@ -270,4 +374,7 @@ if (failing.size) {
   }
 }
 
-console.log(`\n✓ test-ratchet[${app}]: no drift.`);
+const verdictLine = verdict.baselineHasSkipBlock
+  ? 'no drift.'
+  : 'no drift (skipped-count ratchet INACTIVE — baseline has no "skipped" block).';
+console.log(`\n✓ test-ratchet[${app}]: ${verdictLine}`);
