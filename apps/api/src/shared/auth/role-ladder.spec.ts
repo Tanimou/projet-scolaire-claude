@@ -23,7 +23,16 @@ const SUBJECT = 'subject-user-id';
 
 describe('the ladder is the seeded role set, and nothing else', () => {
   it('ranks exactly the five seeded realm roles, in ascending authority', () => {
-    expect([...REALM_ROLE_LADDER]).toEqual(['student', 'parent', 'teacher', 'school_admin', 'super_admin']);
+    // Asserted by DRIVING `rankOf` pairwise rather than by re-listing the roles in
+    // one bracketed literal. That is not a style choice: `audit-provenance-gate`
+    // G-3 forbids any second bracketed role ordering in the app, precisely so a
+    // test asserts against the SHIPPED ordering instead of its own copy. Listing
+    // them here would make this file the offender (`TOOL-21`).
+    expect(REALM_ROLE_LADDER).toHaveLength(5);
+    expect(rankOf('student')).toBeLessThan(rankOf('parent') as number);
+    expect(rankOf('parent')).toBeLessThan(rankOf('teacher') as number);
+    expect(rankOf('teacher')).toBeLessThan(rankOf('school_admin') as number);
+    expect(rankOf('school_admin')).toBeLessThan(rankOf('super_admin') as number);
   });
 
   it('covers every key of REALM_ROLE_PERMISSIONS — a seeded role added without a rung is a RED test, not a silent refusal', () => {

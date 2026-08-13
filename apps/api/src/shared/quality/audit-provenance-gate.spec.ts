@@ -99,7 +99,30 @@ const PROVENANCE_REL = 'apps/api/src/shared/audit/provenance.ts';
  * for any real audit row.
  */
 const AUDIT_GATE_REL = 'apps/api/src/shared/quality/audit-provenance-gate.spec.ts';
-const G3_EXCLUSIONS = [AUDIT_GATE_REL, PROVENANCE_REL];
+/**
+ * TOOL-21 — the THIRD named exclusion, and the only one that is not about audit.
+ *
+ * `role-ladder.ts` (ADR-040, `S-E05-2b`) declares `REALM_ROLE_LADDER`, an ordering
+ * of the five realm roles used to decide **who may confer which role**. It trips
+ * this matcher because it is a bracketed literal naming the roles — but it is a
+ * DELEGATION ordering, not an audit-provenance one, and the two answer different
+ * questions: `provenance.ts` asks *which role do we attribute this action to*,
+ * `role-ladder.ts` asks *may this grantor confer that identity*.
+ *
+ * Excluding it by name would ordinarily weaken G-3's claim that exactly one
+ * ordering exists. It does NOT here, because the exclusion is paired with the
+ * agreement case below: the two orderings are asserted to rank the SHARED roles
+ * identically. The invariant G-3 protects — that no second, DIVERGENT notion of
+ * role precedence can appear — is therefore still enforced, by comparison rather
+ * than by absence. Reordering either list turns that case red.
+ *
+ * Introduced by `63f8650` (PR #238), which shipped `role-ladder.ts` having run the
+ * `identity` and `auth` suites only — a set that does not contain this file. That
+ * is `PF-80`: a shared-invariant gate has a blast radius the editing agent cannot
+ * see from the directory it is working in.
+ */
+const ROLE_LADDER_REL = 'apps/api/src/shared/auth/role-ladder.ts';
+const G3_EXCLUSIONS = [AUDIT_GATE_REL, PROVENANCE_REL, ROLE_LADDER_REL];
 const PROVENANCE_PATH = join(API_SRC, 'shared', 'audit', 'provenance.ts');
 const BARREL_PATH = join(API_SRC, 'shared', 'audit', 'index.ts');
 
@@ -402,13 +425,46 @@ describe('G-3 / AC-1 — exactly one file in apps/api/src decides an actor role 
     expect(offenders).toEqual([]);
   });
 
-  it('both G-3 exclusions really DO trip the matcher — the exclusion is load-bearing', () => {
-    // If either stopped tripping it, the exclusion would be silently protecting
-    // nothing and could be deleted; if BOTH stopped, the matcher itself is broken.
+  it('every G-3 exclusion really DOES trip the matcher — the exclusion is load-bearing', () => {
+    // If one stopped tripping it, the exclusion would be silently protecting
+    // nothing and could be deleted; if ALL stopped, the matcher itself is broken.
     for (const path of G3_EXCLUSIONS) {
       expect(declaresRolePrecedenceOrdering(EXECUTABLE.get(path) ?? '')).toBe(true);
     }
-    expect(G3_EXCLUSIONS).toHaveLength(2);
+    expect(G3_EXCLUSIONS).toHaveLength(3);
+  });
+
+  it('TOOL-21 — the delegation ladder and the provenance ordering AGREE on the roles they share', () => {
+    // This is what makes excluding `role-ladder.ts` honest rather than a hole.
+    // G-3 forbids a second, DIVERGENT role precedence; the ladder is a second
+    // ordering, so it is checked against the first instead of merely waved past.
+    //
+    // Both are read from the real sources, never re-listed here: re-listing is the
+    // exact failure this whole rule exists to prevent.
+    const provenanceSource = EXECUTABLE.get(PROVENANCE_REL) ?? '';
+    const ladderSource = EXECUTABLE.get(ROLE_LADDER_REL) ?? '';
+    expect(provenanceSource).not.toBe('');
+    expect(ladderSource).not.toBe('');
+
+    const captureList = (source: string, name: string): string[] => {
+      const body = new RegExp(`${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(source)?.[1] ?? '';
+      return [...body.matchAll(/['"]([a-z_]+)['"]/g)].map((m) => m[1]);
+    };
+
+    // `ROLE_PRECEDENCE` is DESCENDING authority; `REALM_ROLE_LADDER` is ASCENDING.
+    const precedence = captureList(provenanceSource, 'ROLE_PRECEDENCE');
+    const ladderAscending = captureList(ladderSource, 'REALM_ROLE_LADDER');
+    // Positive control: a regex that silently matched nothing would satisfy the
+    // comparison below forever.
+    expect(precedence.length).toBeGreaterThanOrEqual(4);
+    expect(ladderAscending.length).toBeGreaterThanOrEqual(4);
+
+    const ladderDescending = [...ladderAscending].reverse();
+    const shared = ladderDescending.filter((role) => precedence.includes(role));
+    expect(shared).toEqual(precedence);
+    // The ladder may extend the ordering downward (it adds `student`, which has no
+    // audit-provenance meaning), but it may not REORDER what provenance already
+    // ranks. Any disagreement is a real defect in one of the two files.
   });
 
   it('no production file imports a *.spec.ts — an excluded file decides no real audit row', () => {
