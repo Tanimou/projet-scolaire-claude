@@ -93,6 +93,22 @@ const NEW_ROUTES = [
 const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
   stripCommentsPreservingLines: (source: string) => string;
 };
+/**
+ * TOOL-17 — the shared walk-then-read seam, required unguarded for the same
+ * reason as the stripper above. It tolerates exactly one thing: a path that
+ * `walk()` listed and that is CONFIRMED absent by the time it is read. Any other
+ * errno, and any missing NAMED file, still fails loudly.
+ */
+const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+  join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
+) as {
+  mapWalkedFiles: (
+    paths: string[],
+    build: (path: string, source: string) => [string, string],
+  ) => { entries: [string, string][]; skipped: string[] };
+  warnSkipped: (label: string, skipped: string[]) => boolean;
+  MAX_VANISHED_FILES: number;
+};
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 function raw(path: string): string {
@@ -137,10 +153,33 @@ function walk(root: string): string[] {
 const WEB_SRC_FILES = walk(WEB_SRC);
 const WEB_TEST_FILES = walk(WEB_TESTS);
 
-/** The whole app, comment-stripped, keyed by repo-relative path. */
-const EXECUTABLE_SRC = new Map<string, string>(
-  WEB_SRC_FILES.map((file) => [file.slice(REPO_ROOT.length + 1).split('\\').join('/'), stripCommentsPreservingLines(readFileSync(file, 'utf8'))]),
+/**
+ * The whole app, comment-stripped, keyed by repo-relative path.
+ *
+ * TOOL-17: routed through the shared seam — `csv-escape-gate.spec.ts:493` plants
+ * and deletes a probe inside this walk root, which used to take this suite down
+ * at LOAD under parallel jest. Accounting identity + cap in the floor below.
+ */
+const { entries: EXECUTABLE_SRC_ENTRIES, skipped: VANISHED_WEB_SRC } = mapWalkedFiles(
+  WEB_SRC_FILES,
+  (file, source) => [
+    file.slice(REPO_ROOT.length + 1).split('\\').join('/'),
+    stripCommentsPreservingLines(source),
+  ],
 );
+warnSkipped('portal-landing-gate / apps/web/src', VANISHED_WEB_SRC);
+const EXECUTABLE_SRC = new Map<string, string>(EXECUTABLE_SRC_ENTRIES);
+
+/**
+ * The Playwright corpus, read the same way (site 2). The F16 rule below iterates
+ * it, and its own `readFileSync` had the identical race.
+ */
+const { entries: WEB_TEST_ENTRIES, skipped: VANISHED_WEB_TESTS } = mapWalkedFiles(
+  WEB_TEST_FILES,
+  (file, source) => [file, stripCommentsPreservingLines(source)],
+);
+warnSkipped('portal-landing-gate / apps/web/tests', VANISHED_WEB_TESTS);
+const EXECUTABLE_TESTS = new Map<string, string>(WEB_TEST_ENTRIES);
 
 const reviewedRoutes: string[] =
   (
@@ -168,7 +207,14 @@ describe('the guard is not vacuous (run-10)', () => {
   it('walked apps/web/src and apps/web/tests, and found real files', () => {
     expect(WEB_SRC_FILES.length).toBeGreaterThanOrEqual(300);
     expect(WEB_TEST_FILES.length).toBeGreaterThanOrEqual(1);
-    expect(EXECUTABLE_SRC.size).toBe(WEB_SRC_FILES.length);
+    // TOOL-17 accounting. Both floors above are asserted on the walk LISTS, and a
+    // tolerated skip shrinks the MAPS — so the identities are restated with the
+    // skips added back, and the skips are capped. Deliberately not `toBe(0)`,
+    // which would move the flake from LOAD to assert time and fix nothing.
+    expect(EXECUTABLE_SRC.size + VANISHED_WEB_SRC.length).toBe(WEB_SRC_FILES.length);
+    expect(EXECUTABLE_TESTS.size + VANISHED_WEB_TESTS.length).toBe(WEB_TEST_FILES.length);
+    expect(VANISHED_WEB_SRC.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    expect(VANISHED_WEB_TESTS.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
   });
 
   it('the stripper it borrows really strips, and really preserves', () => {
@@ -247,8 +293,10 @@ describe('P-2 — AC-2: the landing map is declared ONCE and read everywhere', (
     // The duplication AC-2 forbids already existed once, outside `src`: the
     // Playwright fixture used to MIRROR the four literals with a comment saying so.
     // A guard scoped to `src` would have missed it, so this one is not.
-    for (const file of WEB_TEST_FILES) {
-      const source = stripCommentsPreservingLines(readFileSync(file, 'utf8'));
+    // TOOL-17: reads the corpus built once at module level through the shared
+    // seam, instead of re-reading each file here. One read, one race window,
+    // one place where a vanished path is accounted for.
+    for (const [, source] of EXECUTABLE_TESTS) {
       expect(source).not.toMatch(/(?:export\s+)?const PORTAL_LANDING\b[^=]*=/);
     }
   });

@@ -1,9 +1,91 @@
 # Next story
 
-_Restored as the single NEXT file when the S3 parallel tracks were reverted (2026-08-12)._
-_The three per-track files below were the last state of each track before the revert._
+_Rewritten by run 46 (`TOOL-17`), 2026-08-13. Read this section first; everything below it is older and kept for content._
 
 ---
+
+# NEXT — written by run 46 (`TOOL-17`), 2026-08-13 — **this section supersedes every section below**
+
+## ✅ Closed by run 46 — a vanishing probe file no longer takes an unrelated suite down at LOAD
+
+`TOOL-17`'s **walked-read half** is closed. All five spec-side walkers now go through one seam,
+`scripts/lib/walk-read.js`, which tolerates exactly one thing: a path that `walk()` listed and that is **confirmed
+absent** when re-checked. Any other errno rethrows the original object unwrapped; an `ENOENT` on a path that is
+**present again** rethrows too; only then is the path recorded as skipped.
+
+**Two things that were nearly shipped wrong, and are worth carrying forward:**
+
+- **The floors were guarding the wrong quantity.** Every existing floor asserts on the walk **list**
+  (`WEB_SRC_FILES.length >= 300`, `API_FILES.length >= 200`, `WRITER_FILES.length >= 120`), but a tolerated skip
+  shrinks the **map**. So the obvious `AC-4` — "keep the floors" — would have passed with 250 files skipped and a
+  corpus that was effectively empty. Each floor is now an accounting identity (`map.size + skipped.length ===
+  list.length`) plus a cap of `MAX_VANISHED_FILES = 5`, which transports the walk floor onto the read map. The cap is
+  deliberately **not** `toBe(0)`: that would merely move the flake from load time to assert time.
+- **WALKED paths and NAMED paths had to be split.** In `audit-vocabulary-gate.spec.ts`, `SEED_PATH` is a fixed
+  constant, so it keeps its bare `readFileSync` and keeps failing at LOAD. A missing seed is the *missing-file* seam,
+  not the *vanishing-walked-file* seam. Every deliberate unguarded `require()` at the top of these specs is untouched
+  for the same reason.
+
+The helper landed at `scripts/lib/walk-read.js` — **not** where the story spec first mandated. `apps/api/src/**` would
+have made it an input to three of the five gates it repairs, and `apps/api/test/` would have been a new top-level
+directory with no precedent (an ADR-shaped decision). `scripts/lib/ratchet-core.js` is the standing precedent: same
+shape, same computed `require(join(REPO_ROOT, …))`, landed in #231. The story doc records the correction rather than
+pretending it always said so.
+
+## ⛔ `TOOL-18` — the same race lives in the CHECK SCRIPTS, and it is why the gate is STILL not reproducible
+
+**Measured by this run's own gate, twice, on one unchanged tree** (`ci/2026-08-13-v3-e02-tool17`):
+
+| Gate run | Verdict | api ratchet |
+|---|---|---|
+| 1 | **`GATE: FAIL (1 stage)`** | `2514/2532 · 13 failing · 11 known` — 2 NEW: `link-integrity-gate::the CLI verdict is the classifier verdict`, `csv-escape-gate::AC-7` |
+| 2 | **`GATE: PASS (fast)`** | `2516/2532 · 11 failing · 11 known` — **no drift** |
+
+**The denominator is 2532 in both runs**, so nothing stopped running and exactly two tests flipped. Both specs pass
+**228/228 standalone**. Neither is in run 46's diff.
+
+`scripts/link-integrity-check.js:1060-1061` walks `apps/web/src` and reads each file with a **bare `readFileSync` and
+no `try`** — and `apps/web/src/lib/__csv_escape_probe.tsx` is planted and deleted inside that root by
+`csv-escape-gate.spec.ts:493`. The CLI dies on an uncaught `ENOENT` and prints a stack trace instead of its verdict
+line; `link-integrity-gate.spec.ts:1899-1900` then compares that CLI's exit status against an **in-process**
+`classifyAll` that read the tree at a **different instant**.
+
+**Do NOT "fix" this by routing the check scripts through `scripts/lib/walk-read.js`.** That module's own docblock
+argues the divergence: a check script **is** the verdict, it runs once and alone, and an input it cannot read is a
+verdict it cannot pronounce — tolerating the vanish there is `DNC-08` proper. The correct repair is **hermetic
+writers (`TOOL-15`)**: stop planting probes in the shared checkout at all. `TOOL-18` is the second independent piece
+of evidence that this design call has to be taken.
+
+## ▶ Recommended next story
+
+1. **`TOOL-15` + `TOOL-18` together (P1)** — the hermetic-writer decision. It is now blocking measurably rather than
+   theoretically: it is the sole remaining reason `AUTO-LAND` cannot discharge `green` from a single gate run. Settle
+   the contract question first (scratch-tree copy vs. serialising the two writer specs vs. a rule-scoped AC-7) — that
+   is an `open-decisions.md` entry, not a side effect of a slice.
+2. **Populate the skipped-count baselines.** Both ratchets printed `⚠ this baseline records no skipped counts. The
+   skip ratchet is INACTIVE`. `TOOL-13` shipped the mechanism disarmed **on purpose**; it stays disarmed until an
+   operator runs, from a COMPLETE run, `node scripts/test-ratchet.js api --update` and `… worker --update`. Had it
+   been armed, it would have spoken to the run-1/run-2 divergence directly. **Never hand-write those numbers.**
+3. **`S-E01-2b` (RLS)** — still blocked on the same precondition for the seventh run running: it writes migrations, so
+   `schema drift` will not be skipped, and it needs a reachable PostgreSQL on `127.0.0.1:5433`.
+
+## State of the world at the end of run 46
+
+- **The gate can pass, and it can fail, on the same tree.** Run the gate **twice** before concluding anything about a
+  gate-machinery diff. Read the printed `GATE:` line, never `$?` — run 1 printed `GATE: FAIL` and **exited 0**, which
+  is `R-23` in its purest form and would have been merged silently by anyone reading the exit code.
+- **No Docker was started and no container was rebuilt.** Nothing in this slice needed a running artefact — the AC-5/
+  AC-6 fixture is a `mkdtempSync(tmpdir())` scratch tree. The stack was **not** touched, so its health is unknown and
+  unchanged from run 45's report (`docker ps` unresponsive, orphaned CLI processes dated Aug 10). Do not assume it is
+  healthy; check before any story that needs it.
+- **`pnpm --filter @pilotage/api build` — exit 0.** That was the run's single build.
+- **The two held PRs that wedged the routine are gone** — the operator merged #231 and closed #232 before this run, and
+  the gate's cleanup reaped both `ci/` branches. `INFLIGHT` was 0 at Step 0.
+
+
+---
+
+## (previous NEXT, run 45 and earlier — kept for content)
 
 # NEXT — written by run 45 (`TOOL-13`), 2026-08-12 — **this section supersedes the three track sections below**
 
