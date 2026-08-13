@@ -72,8 +72,16 @@ of evidence that this design call has to be taken.
 ## State of the world at the end of run 46
 
 - **The gate can pass, and it can fail, on the same tree.** Run the gate **twice** before concluding anything about a
-  gate-machinery diff. Read the printed `GATE:` line, never `$?` — run 1 printed `GATE: FAIL` and **exited 0**, which
-  is `R-23` in its purest form and would have been merged silently by anyone reading the exit code.
+  gate-machinery diff.
+- **Correction to this file as first written (run 46).** It claimed run 1 "printed `GATE: FAIL` and exited 0", offered
+  as a fresh instance of `R-23`. **That was wrong, and the error was the author's, not the gate's:** `ci-gate.sh`
+  exited **1**, correctly matching its printed verdict (`EXIT_RUN1=1`). The `exit code 0` that prompted the claim came
+  from the harness reporting the *compound* command `bash scripts/ci-gate.sh; echo "EXIT_RUN1=$?"` — i.e. the trailing
+  `echo`'s status, not the gate's. **`R-23` still stands and is still load-bearing** — `bash scripts/ci-gate.sh | tail`
+  reports `tail`'s status, so read the printed `GATE:` line — but it stands on the pipeline case, which is real, not on
+  this one, which was a measurement error. Left in rather than deleted: an artefact that quietly drops a wrong claim
+  teaches the next run nothing, and this is the exact shape of `feedback-false-red-evidence` — the assertion was mine,
+  and the tool was behaving correctly all along.
 - **No Docker was started and no container was rebuilt.** Nothing in this slice needed a running artefact — the AC-5/
   AC-6 fixture is a `mkdtempSync(tmpdir())` scratch tree. The stack was **not** touched, so its health is unknown and
   unchanged from run 45's report (`docker ps` unresponsive, orphaned CLI processes dated Aug 10). Do not assume it is
