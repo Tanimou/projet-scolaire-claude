@@ -99,7 +99,7 @@ const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
  * `walk()` listed and that is CONFIRMED absent by the time it is read. Any other
  * errno, and any missing NAMED file, still fails loudly.
  */
-const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+const { mapWalkedFiles, warnSkipped, maxVanishedFor, namedReader } = require(
   join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
 ) as {
   mapWalkedFiles: (
@@ -107,7 +107,8 @@ const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
     build: (path: string, source: string) => [string, string],
   ) => { entries: [string, string][]; skipped: string[] };
   warnSkipped: (label: string, skipped: string[]) => boolean;
-  MAX_VANISHED_FILES: number;
+  maxVanishedFor: (n: number) => number;
+  namedReader: (label: string, map: Map<string, string>) => (key: string) => string;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -169,6 +170,16 @@ const { entries: EXECUTABLE_SRC_ENTRIES, skipped: VANISHED_WEB_SRC } = mapWalked
 );
 warnSkipped('portal-landing-gate / apps/web/src', VANISHED_WEB_SRC);
 const EXECUTABLE_SRC = new Map<string, string>(EXECUTABLE_SRC_ENTRIES);
+/**
+ * TOOL-17b — reads out of the corpus map THROW on an absent key instead of
+ * yielding `''`, which would satisfy every downstream assertion vacuously.
+ *
+ * The single site converted here (`AC-14`'s loop) keys the map from
+ * `[...EXECUTABLE_SRC.entries()]`, so it can never take the throw branch — that
+ * is not an exception to carve out, it is the proof that the throw is reachable
+ * only via the walk/read skip path. Recorded so nobody re-derives it.
+ */
+const namedExecutableSrc = namedReader('portal-landing-gate / EXECUTABLE_SRC', EXECUTABLE_SRC);
 
 /**
  * The Playwright corpus, read the same way (site 2). The F16 rule below iterates
@@ -213,8 +224,12 @@ describe('the guard is not vacuous (run-10)', () => {
     // which would move the flake from LOAD to assert time and fix nothing.
     expect(EXECUTABLE_SRC.size + VANISHED_WEB_SRC.length).toBe(WEB_SRC_FILES.length);
     expect(EXECUTABLE_TESTS.size + VANISHED_WEB_TESTS.length).toBe(WEB_TEST_FILES.length);
-    expect(VANISHED_WEB_SRC.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
-    expect(VANISHED_WEB_TESTS.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    // TOOL-17b: the caps are PROPORTIONAL. The flat budget of 5 was the defect
+    // here specifically — `apps/web/tests` holds ~10 files, so half the corpus
+    // could vanish and this floor still passed. Never 0 (that only relocates the
+    // flake), never above `MAX_VANISHED_FILES` (which stays the ceiling).
+    expect(VANISHED_WEB_SRC.length).toBeLessThanOrEqual(maxVanishedFor(WEB_SRC_FILES.length));
+    expect(VANISHED_WEB_TESTS.length).toBeLessThanOrEqual(maxVanishedFor(WEB_TEST_FILES.length));
   });
 
   it('the stripper it borrows really strips, and really preserves', () => {
@@ -517,7 +532,7 @@ describe('P-6 — AC-4: no navigation entry points at a route that does not exis
       'apps/web/src/app/teacher/settings/page.tsx',
     ]);
     for (const path of withLabel) {
-      const source = EXECUTABLE_SRC.get(path) ?? '';
+      const source = namedExecutableSrc(path);
       expect(source).toContain('<TabsTrigger value="profile">Mon profil</TabsTrigger>');
       expect(source).toContain('ProfilePanel');
       // …and it is a tab, not a link: no href goes with it.

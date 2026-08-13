@@ -145,7 +145,7 @@ const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
  * reason: a MISSING MODULE is a different seam from a VANISHING WALKED FILE.
  * Only the second is tolerated, and only after the absence is CONFIRMED.
  */
-const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+const { mapWalkedFiles, warnSkipped, maxVanishedFor, namedReader } = require(
   join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
 ) as {
   mapWalkedFiles: (
@@ -153,7 +153,8 @@ const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
     build: (path: string, source: string) => [string, string],
   ) => { entries: [string, string][]; skipped: string[] };
   warnSkipped: (label: string, skipped: string[]) => boolean;
-  MAX_VANISHED_FILES: number;
+  maxVanishedFor: (n: number) => number;
+  namedReader: (label: string, map: Map<string, string>) => (key: string) => string;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -192,6 +193,16 @@ const { entries: EXECUTABLE_ENTRIES, skipped: VANISHED_API_FILES } = mapWalkedFi
 );
 warnSkipped('audit-provenance-gate / apps/api/src', VANISHED_API_FILES);
 const EXECUTABLE = new Map<string, string>(EXECUTABLE_ENTRIES);
+/**
+ * TOOL-17b — the accessor every NAMED (hard-coded) path goes through.
+ *
+ * `EXECUTABLE.get('<literal>') ?? ''` reads a named path out of a TOLERANT map:
+ * if the file was skipped by the walk/read tolerance the site yields `''`, and
+ * `''` contains nothing, matches nothing, and satisfies every `.not.` below for
+ * ever. This accessor THROWS instead, naming the key. Walked is tolerated;
+ * named is total.
+ */
+const namedExecutable = namedReader('audit-provenance-gate / EXECUTABLE', EXECUTABLE);
 const PRODUCTION = [...EXECUTABLE].filter(([path]) => !path.endsWith('.spec.ts'));
 
 /* ================================================================== *
@@ -312,7 +323,9 @@ describe('G-1 — the guard is not vacuous', () => {
     // identity being deleted — and they are capped, because the two floors above
     // are asserted on the walk LIST and a skip shrinks only the MAP.
     expect(EXECUTABLE.size + VANISHED_API_FILES.length).toBe(API_FILES.length);
-    expect(VANISHED_API_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    // TOOL-17b: the cap is PROPORTIONAL to the walked list. A flat budget of 5
+    // is small against 210 api files and half the corpus against a 10-file one.
+    expect(VANISHED_API_FILES.length).toBeLessThanOrEqual(maxVanishedFor(API_FILES.length));
   });
 
   it('the stripper it borrows really strips, and really preserves length', () => {
@@ -429,7 +442,7 @@ describe('G-3 / AC-1 — exactly one file in apps/api/src decides an actor role 
     // If one stopped tripping it, the exclusion would be silently protecting
     // nothing and could be deleted; if ALL stopped, the matcher itself is broken.
     for (const path of G3_EXCLUSIONS) {
-      expect(declaresRolePrecedenceOrdering(EXECUTABLE.get(path) ?? '')).toBe(true);
+      expect(declaresRolePrecedenceOrdering(namedExecutable(path))).toBe(true);
     }
     expect(G3_EXCLUSIONS).toHaveLength(3);
   });
@@ -441,10 +454,14 @@ describe('G-3 / AC-1 — exactly one file in apps/api/src decides an actor role 
     //
     // Both are read from the real sources, never re-listed here: re-listing is the
     // exact failure this whole rule exists to prevent.
-    const provenanceSource = EXECUTABLE.get(PROVENANCE_REL) ?? '';
-    const ladderSource = EXECUTABLE.get(ROLE_LADDER_REL) ?? '';
-    expect(provenanceSource).not.toBe('');
-    expect(ladderSource).not.toBe('');
+    // Read through `namedExecutable`, NOT `EXECUTABLE.get(…) ?? ''`. TOOL-21 shipped
+    // the bare form, and that is precisely the defect TOOL-17(b) closes: a NAMED
+    // path served as `''` when it vanishes, and `''` satisfies every `.not.` and
+    // every comparison below for ever — this case would have passed vacuously with
+    // both files absent. `namedReader` throws instead, which is why the two
+    // `not.toBe('')` guards that used to sit here are gone: they are now structural.
+    const provenanceSource = namedExecutable(PROVENANCE_REL);
+    const ladderSource = namedExecutable(ROLE_LADDER_REL);
 
     const captureList = (source: string, name: string): string[] => {
       const body = new RegExp(`${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(source)?.[1] ?? '';
@@ -547,9 +564,9 @@ describe('G-3 / AC-1 — exactly one file in apps/api/src decides an actor role 
     expect(declaresRolePrecedenceOrdering(alerts)).toBe(true);
 
     // …and all three are gone from the working tree.
-    expect(declaresRolePrecedenceOrdering(EXECUTABLE.get('apps/api/src/modules/analytics/analytics.controller.ts') ?? '')).toBe(false);
-    expect(declaresRolePrecedenceOrdering(EXECUTABLE.get('apps/api/src/modules/grades/grades.controller.ts') ?? '')).toBe(false);
-    expect(declaresInlinePortalDecision(EXECUTABLE.get('apps/api/src/modules/grades/grades.controller.ts') ?? '')).toBe(false);
+    expect(declaresRolePrecedenceOrdering(namedExecutable('apps/api/src/modules/analytics/analytics.controller.ts'))).toBe(false);
+    expect(declaresRolePrecedenceOrdering(namedExecutable('apps/api/src/modules/grades/grades.controller.ts'))).toBe(false);
+    expect(declaresInlinePortalDecision(namedExecutable('apps/api/src/modules/grades/grades.controller.ts'))).toBe(false);
   });
 });
 
@@ -639,7 +656,7 @@ describe('G-5 / AC-9 — the old homes do not exist, and nothing re-exports them
     // transaction it audits), and the old per-call-site header reads are GONE —
     // asserted in the negative, because a leftover `@Ip()` beside the seam would
     // be a second, contradicting capture.
-    const controller = EXECUTABLE.get('apps/api/src/modules/calendar/calendar.controller.ts') ?? '';
+    const controller = namedExecutable('apps/api/src/modules/calendar/calendar.controller.ts');
     expect(controller).not.toBe('');
     expect(controller).toMatch(/extractAuditClientHints\(req\)/);
     expect(controller).toMatch(/from '\.\.\/\.\.\/shared\/audit\/client-hints'/);
@@ -657,7 +674,7 @@ describe('G-5 / AC-9 — the old homes do not exist, and nothing re-exports them
     // seam, with the demo admin credentials and no new UI — so AC-4's "UI-driven
     // audited write" is reachable by a human, not only by a test.
     const subjects =
-      EXECUTABLE.get('apps/api/src/modules/school-structure/subjects.controller.ts') ?? '';
+      namedExecutable('apps/api/src/modules/school-structure/subjects.controller.ts');
     expect(subjects).not.toBe('');
     expect(subjects).toMatch(/extractAuditClientHints\(req\)/);
     expect(subjects).toMatch(/deriveAuditProvenance\(\s*jwt,/);
@@ -677,7 +694,7 @@ describe('G-5 / AC-9 — the old homes do not exist, and nothing re-exports them
  * ================================================================== */
 
 describe('G-6 / AC-6 / DNC-10 — nothing can change what deriveAuditProvenance returns', () => {
-  const source = () => EXECUTABLE.get(PROVENANCE_REL) ?? '';
+  const source = () => namedExecutable(PROVENANCE_REL);
 
   it.each(['process.env', 'ConfigService', 'NODE_ENV', 'featureFlag', 'getFlag('])(
     'provenance.ts contains no %s read',
@@ -789,11 +806,11 @@ describe('G-AUDIT — the touched write sites still write their audit row, with 
   ];
 
   it.each(WRITE_SITES)('%s still writes an audit row', (path, needle) => {
-    expect(EXECUTABLE.get(path) ?? '').toMatch(needle);
+    expect(namedExecutable(path)).toMatch(needle);
   });
 
   it('roles.controller.ts still writes THREE audit rows (create / update / delete)', () => {
-    const source = EXECUTABLE.get('apps/api/src/modules/identity/roles.controller.ts') ?? '';
+    const source = namedExecutable('apps/api/src/modules/identity/roles.controller.ts');
     // S-E04-7: three rows, each now INSIDE the transaction that performs the
     // mutation. The direct spelling is gone from this file entirely, and that is
     // asserted in the negative so a regression to two statements is loud.
@@ -814,7 +831,7 @@ describe('G-AUDIT — the touched write sites still write their audit row, with 
       'apps/api/src/modules/grades/grades.controller.ts',
     ];
     for (const path of CONSUMERS) {
-      expect(EXECUTABLE.get(path) ?? '').toMatch(/from '\.\.\/\.\.\/shared\/audit\/provenance'/);
+      expect(namedExecutable(path)).toMatch(/from '\.\.\/\.\.\/shared\/audit\/provenance'/);
     }
   });
 
@@ -826,7 +843,7 @@ describe('G-AUDIT — the touched write sites still write their audit row, with 
       'apps/api/src/modules/imports/imports.service.ts',
       'apps/api/src/modules/integrations/integrations.service.ts',
     ]) {
-      const source = EXECUTABLE.get(path) ?? '';
+      const source = namedExecutable(path);
       expect(source).toMatch(/&\s*AuditActorProvenance/);
       expect(source).not.toMatch(/AuditActorProvenance\s*\|\s*undefined/);
       expect(source).not.toMatch(/Partial<AuditActorProvenance>/);
@@ -834,13 +851,13 @@ describe('G-AUDIT — the touched write sites still write their audit row, with 
   });
 
   it('snapshot-ops.service.ts takes portal as a threaded argument, not a literal', () => {
-    const source = EXECUTABLE.get('apps/api/src/modules/analytics/snapshot-ops.service.ts') ?? '';
+    const source = namedExecutable('apps/api/src/modules/analytics/snapshot-ops.service.ts');
     expect(source).toMatch(/portal: string \| null;/);
     expect(HARDCODED_PORTAL.test(source)).toBe(false);
     // No system-provenance constant was introduced: the brief's "no JWT in scope"
     // caveat was falsified — `enqueueRebuild` has exactly one caller and it is an
     // HTTP handler carrying `@CurrentJwt()`.
-    expect(EXECUTABLE.get(PROVENANCE_REL) ?? '').not.toContain('SYSTEM_AUDIT_PROVENANCE');
+    expect(namedExecutable(PROVENANCE_REL)).not.toContain('SYSTEM_AUDIT_PROVENANCE');
   });
 });
 
@@ -890,7 +907,7 @@ describe('ADR-036 — pinned hop count, blanket XFF refused, S-E04-3 named as ow
     // absence was standing in for: the hop count is never chosen HERE. `main.ts`
     // calls the one exported applier, which reads the declared key; it holds no
     // literal, no `true`, no `'*'`.
-    const main = EXECUTABLE.get('apps/api/src/main.ts') ?? '';
+    const main = namedExecutable('apps/api/src/main.ts');
     expect(main).not.toBe('');
     expect(main).toMatch(/applyTrustProxy\(app, process\.env\)/);
     expect((main.match(/applyTrustProxy\(/g) ?? []).length).toBe(1);
@@ -900,9 +917,9 @@ describe('ADR-036 — pinned hop count, blanket XFF refused, S-E04-3 named as ow
   });
 
   it('AC-6 — the hop count is read from a DECLARED, boot-refusing key, never coerced', () => {
-    const preflight = EXECUTABLE.get('apps/api/src/shared/config/config-preflight.ts') ?? '';
+    const preflight = namedExecutable('apps/api/src/shared/config/config-preflight.ts');
     expect(preflight).toMatch(/'TRUST_PROXY_HOPS'/);
-    const parser = EXECUTABLE.get('apps/api/src/shared/config/trust-proxy.ts') ?? '';
+    const parser = namedExecutable('apps/api/src/shared/config/trust-proxy.ts');
     expect(parser).not.toBe('');
     // ADR-036 D3's forbidden shape, in every spelling it could take.
     for (const forbidden of [
@@ -928,11 +945,11 @@ describe('ADR-036 — pinned hop count, blanket XFF refused, S-E04-3 named as ow
 describe('S-E04-3 / DNC-10 — client-hints.ts is the ONE seam, and it has no off switch', () => {
   const CLIENT_HINTS_REL = 'apps/api/src/shared/audit/client-hints.ts';
   const TRUST_PROXY_REL = 'apps/api/src/shared/config/trust-proxy.ts';
-  const seam = () => EXECUTABLE.get(CLIENT_HINTS_REL) ?? '';
+  const seam = () => namedExecutable(CLIENT_HINTS_REL);
 
   it('exists and is not empty — the vacuity floor for every rule below', () => {
     expect(seam().length).toBeGreaterThan(500);
-    expect((EXECUTABLE.get(TRUST_PROXY_REL) ?? '').length).toBeGreaterThan(500);
+    expect(namedExecutable(TRUST_PROXY_REL).length).toBeGreaterThan(500);
   });
 
   it.each(['process.env', 'ConfigService', 'NODE_ENV', 'featureFlag', 'getFlag(', 'SKIP_', 'ALLOW_', 'BYPASS_', 'FORCE_'])(
@@ -990,7 +1007,7 @@ describe('S-E04-3 / DNC-10 — client-hints.ts is the ONE seam, and it has no of
     expect(s).toMatch(/timingSafeEqual/);
     // main.ts logs the PRESENCE, never the value: the raw token is read at
     // exactly one place, and that place is the argument of the configure call.
-    const main = EXECUTABLE.get('apps/api/src/main.ts') ?? '';
+    const main = namedExecutable('apps/api/src/main.ts');
     expect(main).not.toMatch(/\$\{[^}]*AUDIT_FORWARD_TOKEN[^}]*\}/);
     expect((main.match(/process\.env\[AUDIT_FORWARD_TOKEN_ENV\]/g) ?? []).length).toBe(1);
     expect(main).toMatch(/forwardToken: process\.env\[AUDIT_FORWARD_TOKEN_ENV\],/);

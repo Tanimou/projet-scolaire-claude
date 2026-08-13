@@ -55,13 +55,14 @@ const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
  * second one is tolerated. See `scripts/lib/walk-read.js` for the four-step
  * tolerance and why it is not a blanket catch.
  */
-const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(WALK_READ_PATH) as {
+const { mapWalkedFiles, warnSkipped, maxVanishedFor, namedReader } = require(WALK_READ_PATH) as {
   mapWalkedFiles: (
     paths: string[],
     build: (path: string, source: string) => [string, string],
   ) => { entries: [string, string][]; skipped: string[] };
   warnSkipped: (label: string, skipped: string[]) => boolean;
-  MAX_VANISHED_FILES: number;
+  maxVanishedFor: (n: number) => number;
+  namedReader: (label: string, map: Map<string, string>) => (key: string) => string;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -94,6 +95,14 @@ const { entries: EXECUTABLE_ENTRIES, skipped: VANISHED_API_FILES } = mapWalkedFi
 );
 warnSkipped('trust-proxy-dnc10-gate / apps/api/src', VANISHED_API_FILES);
 const EXECUTABLE = new Map<string, string>(EXECUTABLE_ENTRIES);
+/**
+ * TOOL-17b — every NAMED (hard-coded) path is served through this accessor,
+ * which THROWS on an absent key instead of yielding `''`. `MAP.get(x) ?? ''`
+ * over a tolerant map turns a skipped file into an empty string, and an empty
+ * string satisfies every `.not.` below forever. The tolerance is for WALKED
+ * paths only; a named path stays total.
+ */
+const namedExecutable = namedReader('trust-proxy-dnc10-gate / EXECUTABLE', EXECUTABLE);
 /**
  * Specs are excluded from the source rules on purpose and bounded the same way
  * `audit-provenance-gate.spec.ts` bounds its own exclusions: the two specs that
@@ -149,15 +158,16 @@ describe('G-1 — this guard is not vacuous', () => {
     // a tolerated skip shrinks the MAP, not the list — so on their own they would
     // still pass over a corpus that had silently emptied. These two lines carry
     // the floors onto the read map: nothing is lost except a confirmed-vanished
-    // file, and at most `MAX_VANISHED_FILES` of those. Deliberately NOT
+    // file, and at most the corpus-scaled budget of those. Deliberately NOT
     // `toBe(0)` — that would move the flake from LOAD to assert time.
     expect(EXECUTABLE.size + VANISHED_API_FILES.length).toBe(API_FILES.length);
-    expect(VANISHED_API_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    // TOOL-17b: proportional to the walked list, capped by MAX_VANISHED_FILES.
+    expect(VANISHED_API_FILES.length).toBeLessThanOrEqual(maxVanishedFor(API_FILES.length));
   });
 
   it('the file it exists to guard is present and non-trivial', () => {
-    expect((EXECUTABLE.get(TRUST_PROXY_REL) ?? '').length).toBeGreaterThan(500);
-    expect((EXECUTABLE.get(MAIN_REL) ?? '').length).toBeGreaterThan(500);
+    expect(namedExecutable(TRUST_PROXY_REL).length).toBeGreaterThan(500);
+    expect(namedExecutable(MAIN_REL).length).toBeGreaterThan(500);
   });
 
   it('no production file imports a *.spec.ts — an excluded file configures nothing real', () => {
@@ -216,7 +226,7 @@ describe('AC-7 / ADR-036 D1 — the blanket forms appear NOWHERE in apps/api', (
     for (const path of quoting) {
       expect(EXECUTABLE.has(path)).toBe(true);
     }
-    expect(declaresBlanketProxyTrust(EXECUTABLE.get(quoting[0] as string) ?? '')).toBe(true);
+    expect(declaresBlanketProxyTrust(namedExecutable(quoting[0] as string))).toBe(true);
   });
 });
 
@@ -229,7 +239,7 @@ describe('AC-6 — `trust proxy` is applied exactly once, from a refusing key', 
   });
 
   it('main.ts delegates — it holds no hop count of its own', () => {
-    const main = EXECUTABLE.get(MAIN_REL) ?? '';
+    const main = namedExecutable(MAIN_REL);
     expect(main).toMatch(/applyTrustProxy\(app, process\.env\)/);
     expect((main.match(/applyTrustProxy\(/g) ?? []).length).toBe(1);
     expect(declaresHopCountLiteral(main)).toBe(false);
@@ -237,7 +247,7 @@ describe('AC-6 — `trust proxy` is applied exactly once, from a refusing key', 
   });
 
   it('the parser is strict AND bounded — an unbounded count is `true` by another name', () => {
-    const parser = EXECUTABLE.get(TRUST_PROXY_REL) ?? '';
+    const parser = namedExecutable(TRUST_PROXY_REL);
     expect(parser).toMatch(/\/\^\\d\+\$\//);
     expect(parser).toMatch(/const MAX_TRUST_PROXY_HOPS = \d+;/);
     expect(parser).toMatch(/hops > MAX_TRUST_PROXY_HOPS/);
@@ -248,15 +258,15 @@ describe('AC-6 — `trust proxy` is applied exactly once, from a refusing key', 
 
   it('no escape hatch exists in either file — DNC-10 as an ABSENCE', () => {
     for (const path of [TRUST_PROXY_REL, MAIN_REL]) {
-      const source = EXECUTABLE.get(path) ?? '';
+      const source = namedExecutable(path);
       for (const needle of ['SKIP_', 'ALLOW_', 'BYPASS_', 'FORCE_TRUST', 'TRUST_PROXY_OVERRIDE']) {
         expect(source).not.toContain(needle);
       }
     }
     // NODE_ENV is read in main.ts (Swagger + CSP, S-E06-2) but must never gate
     // the hop count — so the rule is stated where it can be absolute.
-    expect(EXECUTABLE.get(TRUST_PROXY_REL) ?? '').not.toContain('NODE_ENV');
-    expect(EXECUTABLE.get(TRUST_PROXY_REL) ?? '').not.toContain('process.env');
+    expect(namedExecutable(TRUST_PROXY_REL)).not.toContain('NODE_ENV');
+    expect(namedExecutable(TRUST_PROXY_REL)).not.toContain('process.env');
   });
 });
 

@@ -154,7 +154,7 @@ const { stripCommentsPreservingLines } = require(LINK_INTEGRITY_SCRIPT) as {
  * What the helper tolerates is narrower and different — a path that `walk()`
  * listed and that is CONFIRMED gone by the time it is read.
  */
-const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+const { mapWalkedFiles, warnSkipped, maxVanishedFor } = require(
   join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
 ) as {
   mapWalkedFiles: (
@@ -162,7 +162,7 @@ const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
     build: (path: string, source: string) => [string, string],
   ) => { entries: [string, string][]; skipped: string[] };
   warnSkipped: (label: string, skipped: string[]) => boolean;
-  MAX_VANISHED_FILES: number;
+  maxVanishedFor: (n: number) => number;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -400,7 +400,8 @@ describe('PF-102 — the guard is not vacuous', () => {
     // because the floor above is asserted on the walk LIST while a skip shrinks
     // only the MAP. Not `toBe(0)`: that would relocate the flake, not remove it.
     expect(EXECUTABLE_SRC.size + VANISHED_WEB_FILES.length).toBe(WEB_SRC_FILES.length);
-    expect(VANISHED_WEB_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    // TOOL-17b: proportional to the walked list, `MAX_VANISHED_FILES` the ceiling.
+    expect(VANISHED_WEB_FILES.length).toBeLessThanOrEqual(maxVanishedFor(WEB_SRC_FILES.length));
   });
 
   it('the stripper it borrows really strips, and really preserves length', () => {

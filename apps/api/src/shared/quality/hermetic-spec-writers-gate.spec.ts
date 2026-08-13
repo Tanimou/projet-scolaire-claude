@@ -100,6 +100,7 @@ const SPEC_FILE = /\.(spec|test)\.tsx?$/;
 // LOAD rather than degrade into "nothing to check, therefore pass".
 const walkRead = require(WALK_READ_PATH) as {
   MAX_VANISHED_FILES: number;
+  maxVanishedFor: (n: number) => number;
   mapWalkedFiles: <V>(
     paths: string[],
     build: (path: string, source: string) => [string, V],
@@ -379,13 +380,21 @@ describe('the corpus this ratchet judged is the corpus it walked', () => {
     expect(CLASSIFIED.size + skipped.length).toBe(SPEC_FILES.length);
   });
 
-  it('lost no more than MAX_VANISHED_FILES to the walk/read race', () => {
-    expect(skipped.length).toBeLessThanOrEqual(walkRead.MAX_VANISHED_FILES);
+  it('lost no more than the corpus-scaled budget to the walk/read race', () => {
+    // TOOL-17b: the budget scales with the walked list — a flat 5 is negligible
+    // against 108 spec files but was half the corpus at `portal-landing-gate`'s
+    // 10-file walk. `MAX_VANISHED_FILES` stays the ceiling.
+    expect(skipped.length).toBeLessThanOrEqual(walkRead.maxVanishedFor(SPEC_FILES.length));
   });
 
   it('has a FLOOR — an empty walk is never a pass', () => {
     expect(SPEC_FILES.length).toBeGreaterThanOrEqual(MIN_SPEC_FILES);
-    expect(CLASSIFIED.size).toBeGreaterThanOrEqual(MIN_SPEC_FILES - walkRead.MAX_VANISHED_FILES);
+    // The map floor tightens with the same scaled budget: it is a SUBTRACTION,
+    // not a comparison, so it must move together with the cap above or the two
+    // halves of the same accounting drift apart.
+    expect(CLASSIFIED.size).toBeGreaterThanOrEqual(
+      MIN_SPEC_FILES - walkRead.maxVanishedFor(SPEC_FILES.length),
+    );
   });
 
   it('actually RECOGNISED write calls — a matcher that sees none is green for the worst reason', () => {

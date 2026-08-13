@@ -88,8 +88,69 @@
  * `test-ratchet.spec.ts:307`: if this file disappears, the five suites must
  * still fail at LOAD.
  *
+ * TOOL-17b — WHAT A TOLERATED SKIP MUST STILL NOT BUY YOU
+ * -------------------------------------------------------
+ * The tolerance above is correct and stays. What it opened is `DNC-08` one layer
+ * up, at the READING sites, and both leaks have the same sentence: *a file that
+ * was skipped must never satisfy a rule.*
+ *
+ * 1. THE NAMED-PATH LEAK. The victims build their corpus `Map` through the
+ *    tolerant seam and then read FIXED, hard-coded paths back out of it with
+ *    `MAP.get('<literal>') ?? ''`. If that named file was skipped, the accessor
+ *    yields `''` — and every negative assertion downstream passes VACUOUSLY: an
+ *    empty string contains nothing, matches no `toMatch`, and satisfies every
+ *    `.not.` in the file forever. This is the rule stated above ("every fixed,
+ *    named path keeps its bare `readFileSync` and keeps failing at load") being
+ *    violated by reading a NAMED path out of a TOLERANT map. `namedReader()`
+ *    below restores it at the only place it can be restored: the accessor
+ *    THROWS on an absent key rather than serving `''`. Named is total; walked is
+ *    tolerated. Nothing in between.
+ *
+ *    Consequence, and it is intended rather than a regression: if a named file
+ *    is legitimately deleted by a future slice, the spec goes RED at the
+ *    assertion that names the file, instead of passing on nothing.
+ *
+ *    One of the 48 converted call sites (`portal-landing-gate.spec.ts:520`) keys
+ *    the map with a MAP-DERIVED key (`[...EXECUTABLE_SRC.entries()]`), so it can
+ *    never take the throw branch. That is not an exception to carve out — it is
+ *    the proof that the throw is reachable ONLY via the skip path. Recorded here
+ *    so no reviewer has to re-derive it.
+ *
+ * 2. THE FLAT CAP. `MAX_VANISHED_FILES` is a budget of FIVE files, and it was
+ *    applied unchanged to a corpus of TEN (`apps/web/tests`, measured on HEAD,
+ *    asserted at `portal-landing-gate.spec.ts:217`): half the corpus could
+ *    vanish and the gate still passed. A budget only transports a floor when it
+ *    is small relative to the list, so `maxVanishedFor(n)` scales it and keeps
+ *    `MAX_VANISHED_FILES` as the CEILING for large corpora — the large-corpus
+ *    assertions keep their exact meaning. It never returns 0 for a non-empty
+ *    corpus, for the same reason the constant is not 0: `toBe(0)` relocates the
+ *    flake from load time to assert time, which is the defect this module exists
+ *    to remove.
+ *
  * RESIDUALS — recorded, NOT fixed here
  * -----------------------------------
+ * • ~~The FR-4 named-path leak: `MAP.get('<literal>') ?? ''` served a skipped
+ *   NAMED file as `''`.~~ **CLOSED by TOOL-17b** — `namedReader()` throws a
+ *   greppable `DNC-08 (TOOL-17b)` error carrying the key; all 48 sites across
+ *   `audit-provenance`, `audit-vocabulary`, `trust-proxy-dnc10` and
+ *   `portal-landing` converted.
+ * • ~~The shared cap of 5 applied to a 10-file corpus.~~ **CLOSED by TOOL-17b** —
+ *   `maxVanishedFor(n)` at all twelve comparison sites.
+ * • ~~A sixth victim: the bare `readFileSync` over a WALKED list inside
+ *   `apps/api/src/shared/audit/write-audit.spec.ts:416` (AC-9).~~ **CLOSED by
+ *   TOOL-17b** — routed through this seam, with the identity and the scaled cap
+ *   asserted in the same `it()`; the five NAMED reads in that file
+ *   (`:312/:327/:351/:360/:370`) deliberately keep their bare `readFileSync`,
+ *   and a test now asserts they do.
+ * • NEW (TOOL-17b, measured): the R1 half of the parsed ratchet — "no spec reads
+ *   a WALK-DERIVED path with a bare `readFileSync`" — is NOT implemented. R2
+ *   (no `.get(…) ?? ''` on a corpus map) is, and is enforced by a compiler-parsed
+ *   classifier over every `*.spec.ts` under `apps/**`. R1 needs local
+ *   call-graph reachability (`readdirSync` transitively, through locally-declared
+ *   functions, then dataflow from that binding into a `readFileSync` argument);
+ *   that is a second classifier of comparable size to this whole slice, and the
+ *   honest cost is a slice of its own. Until it exists, a NEW bare walked read
+ *   is caught by review, not by a gate.
  * • `readdirSync` inside each `walk()` can also throw ENOENT if a DIRECTORY
  *   vanishes mid-walk. Neither probe writes a directory; same family, later
  *   finding. `walk()` bodies are untouched by this slice.
@@ -125,6 +186,38 @@ const DEFAULT_ENCODING = 'utf8';
  * failure to an assertion failure, which is the defect this module removes.
  */
 const MAX_VANISHED_FILES = 5;
+
+/**
+ * The share of a walked list that may vanish before the corpus stops being
+ * believable — 2 %.
+ *
+ * Not a measurement either: it is the smallest fraction that still leaves the
+ * observed ceiling (two writer specs, one probe each) inside the budget for the
+ * corpora that are actually raced (`apps/api/src` ≈ 210 files → 5), while
+ * pulling the budget down to ONE for the small corpus that exposed the defect
+ * (`apps/web/tests` ≈ 10 files, where the flat 5 let half the corpus disappear).
+ * Pinned by BOUNDARIES in `walk-read-gate.spec.ts`, never by this literal — the
+ * formula is free to change as long as the boundaries hold.
+ */
+const VANISHED_FRACTION = 0.02;
+
+/**
+ * The most files a walk of `n` paths may lose to the tolerance.
+ *
+ * Two non-negotiable properties, both inherited from the constant above:
+ *   • it NEVER returns 0 for a non-empty corpus — a zero budget is
+ *     `expect(skipped).toBe(0)`, i.e. the flake moved from load to assert time;
+ *   • it NEVER exceeds `MAX_VANISHED_FILES`, which stays the ceiling — so every
+ *     large-corpus assertion written against the constant keeps its meaning.
+ *
+ * @param {number} n the length of the WALK LIST (not of the read map)
+ * @returns {number} the cap to compare `skipped.length` against
+ */
+function maxVanishedFor(n) {
+  const size = Number.isFinite(n) && n > 0 ? n : 0;
+  if (size === 0) return 0;
+  return Math.min(MAX_VANISHED_FILES, Math.max(1, Math.ceil(size * VANISHED_FRACTION)));
+}
 
 /**
  * The default IO seam.
@@ -231,10 +324,47 @@ function warnSkipped(label, skipped) {
   return true;
 }
 
+/**
+ * Serve a NAMED (fixed, hard-coded) path out of a corpus Map built by the
+ * tolerant seam — by THROWING when the key is absent, never by yielding `''`.
+ *
+ * This is the other end of the rule stated at the top of this file: the
+ * tolerance is for WALKED paths, and a named path read out of a tolerant map
+ * must behave like the bare `readFileSync` it replaced — it must FAIL, loudly,
+ * naming the file. Serving `''` instead is a vacuous PASS: every `.not.` and
+ * every `toMatch` downstream is satisfied by the empty string.
+ *
+ * The message is deliberately greppable (`DNC-08 (TOOL-17b)`) against both the
+ * skip warning above and the check scripts' own `DNC-08 —` vocabulary, and it
+ * CARRIES THE KEY: a count with no identity is the same "cannot tell" failure
+ * DNC-08 exists to refuse.
+ *
+ * @param {string} label the reading site, for the message
+ * @param {Map<string, string>} map the corpus
+ * @returns {(key: string) => string} a total accessor
+ */
+function namedReader(label, map) {
+  return (key) => {
+    const source = map.get(key);
+    if (source === undefined) {
+      throw new Error(
+        `DNC-08 (TOOL-17b) — ${label}: named path '${key}' is absent from the corpus.\n` +
+          'A named path is never tolerated: it was skipped by the walk/read tolerance, ' +
+          'or never walked.\n' +
+          "Refusing to serve '' — a vacuous PASS is not a PASS.",
+      );
+    }
+    return source;
+  };
+}
+
 module.exports = {
   DEFAULT_ENCODING,
   MAX_VANISHED_FILES,
+  VANISHED_FRACTION,
   mapWalkedFiles,
+  maxVanishedFor,
+  namedReader,
   readWalkedFile,
   readWalkedFiles,
   warnSkipped,

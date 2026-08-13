@@ -126,7 +126,7 @@ const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
  * `CONSUMER_SOURCES` walks `apps/web/src` too, where `csv-escape-gate.spec.ts:493`
  * plants the other one.
  */
-const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+const { mapWalkedFiles, warnSkipped, maxVanishedFor, namedReader } = require(
   join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
 ) as {
   mapWalkedFiles: <V>(
@@ -134,7 +134,8 @@ const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
     build: (path: string, source: string) => [string, V],
   ) => { entries: [string, V][]; skipped: string[] };
   warnSkipped: (label: string, skipped: string[]) => boolean;
-  MAX_VANISHED_FILES: number;
+  maxVanishedFor: (n: number) => number;
+  namedReader: (label: string, map: Map<string, string>) => (key: string) => string;
 };
 
 /**
@@ -669,10 +670,14 @@ describe('V-0 — the gate is not vacuous', () => {
     // tolerated skip shrinks the MAP — so state the identity on the map and cap
     // the skips, or a corpus that emptied itself would keep this green. Not
     // `toBe(0)`: that relocates the flake instead of removing it.
+    // TOOL-17b: the cap scales with the walked list — a flat 5 is a small budget
+    // against 120 writer files and half the corpus against a 10-file one.
     expect(SOURCES.size + VANISHED_WRITER_FILES.length).toBe(WRITER_FILES.length);
-    expect(VANISHED_WRITER_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    expect(VANISHED_WRITER_FILES.length).toBeLessThanOrEqual(maxVanishedFor(WRITER_FILES.length));
     expect(CONSUMER_SOURCES.size + VANISHED_CONSUMER_FILES.length).toBe(CONSUMER_FILES.length);
-    expect(VANISHED_CONSUMER_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    expect(VANISHED_CONSUMER_FILES.length).toBeLessThanOrEqual(
+      maxVanishedFor(CONSUMER_FILES.length),
+    );
     expect(EXTRACTED.seams).toBeGreaterThanOrEqual(30);
     expect(WRITTEN_ACTIONS.size).toBeGreaterThanOrEqual(40);
     expect(WRITTEN_RESOURCE_TYPES.size).toBeGreaterThanOrEqual(20);
@@ -1102,6 +1107,18 @@ const { entries: CONSUMER_ENTRIES, skipped: VANISHED_CONSUMER_FILES } = mapWalke
 );
 warnSkipped('audit-vocabulary-gate / consumer roots', VANISHED_CONSUMER_FILES);
 const CONSUMER_SOURCES = new Map<string, string>(CONSUMER_ENTRIES);
+/**
+ * TOOL-17b — the accessor for every NAMED (hard-coded) consumer path.
+ *
+ * `CONSUMER_SOURCES.get('<literal>') ?? ''` served a file skipped by the
+ * walk/read tolerance as `''`, and `''` satisfies every `.not.` and matches no
+ * `toMatch` — a vacuous PASS. This throws instead, naming the key. The
+ * tolerance covers WALKED paths; a NAMED path stays total.
+ */
+const namedConsumerSource = namedReader(
+  'audit-vocabulary-gate / CONSUMER_SOURCES',
+  CONSUMER_SOURCES,
+);
 
 /* ------------------------------------------------------------------ *
  * The recorded pre-fix bytes — AC-1's positive control
@@ -1131,7 +1148,7 @@ function preFixBytes(): string {
 describe('V-3 / AC-1 — the audit vocabulary is declared exactly once', () => {
   it('the declaration exists, and is the file the exclusion names', () => {
     expect(existsSync(join(REPO_ROOT, DECLARATION_REL))).toBe(true);
-    expect(auditLabelAssociations(CONSUMER_SOURCES.get(DECLARATION_REL) ?? '').length).toBeGreaterThan(
+    expect(auditLabelAssociations(namedConsumerSource(DECLARATION_REL)).length).toBeGreaterThan(
       40,
     );
   });
@@ -1167,7 +1184,7 @@ describe('V-3 / AC-1 — the audit vocabulary is declared exactly once', () => {
 
   it('BOTH exclusions really DO trip the matcher — the exclusion is load-bearing', () => {
     for (const path of SINGLE_DECLARATION_EXCLUSIONS) {
-      expect(auditLabelAssociations(CONSUMER_SOURCES.get(path) ?? '').length).toBeGreaterThanOrEqual(
+      expect(auditLabelAssociations(namedConsumerSource(path)).length).toBeGreaterThanOrEqual(
         2,
       );
     }
@@ -1175,7 +1192,7 @@ describe('V-3 / AC-1 — the audit vocabulary is declared exactly once', () => {
   });
 
   it('the permission-label exclusion is not an audit consumer — it reads nothing from the module', () => {
-    const roleBuilder = CONSUMER_SOURCES.get('apps/web/src/app/admin/roles/RoleBuilderForm.tsx') ?? '';
+    const roleBuilder = namedConsumerSource('apps/web/src/app/admin/roles/RoleBuilderForm.tsx');
     expect(roleBuilder).not.toBe('');
     expect(roleBuilder).not.toMatch(/classifyAudit/);
     expect(roleBuilder).not.toMatch(/audit-labels/);
@@ -1203,7 +1220,7 @@ describe('V-3 / AC-1 — the audit vocabulary is declared exactly once', () => {
 
   it('AC-1 — and the SAME matcher is now clean on the current audit-labels.ts', () => {
     expect(
-      auditLabelAssociations(CONSUMER_SOURCES.get(PRE_FIX_SOURCE.from) ?? ''),
+      auditLabelAssociations(namedConsumerSource(PRE_FIX_SOURCE.from)),
     ).toEqual([]);
   });
 
@@ -1279,7 +1296,7 @@ describe('V-4 / AC-6 / G-TRUTH — one fixture, identical labels from every cons
   });
 
   it('AC-6 — no consumer holds a local copy of either deleted map', () => {
-    const webLabels = CONSUMER_SOURCES.get(PRE_FIX_SOURCE.from) ?? '';
+    const webLabels = namedConsumerSource(PRE_FIX_SOURCE.from);
     expect(webLabels).not.toBe('');
     expect(webLabels).not.toMatch(/RESOURCE_TYPE_LABELS/);
     expect(webLabels).not.toMatch(/PORTAL_LABELS/);
@@ -1332,7 +1349,7 @@ describe('V-5 / AC-4 — a legacy value is marked, not relabelled, not hidden', 
       'apps/web/src/app/admin/audit/AuditTable.tsx',
       'apps/web/src/app/admin/audit/AuditDetailDrawer.tsx',
     ]) {
-      const source = CONSUMER_SOURCES.get(rel) ?? '';
+      const source = namedConsumerSource(rel);
       expect(source).not.toBe('');
       expect(source).toMatch(/vocabulary/);
       // Neutral tone, never alert semantics: these rows are older than the
@@ -1414,7 +1431,7 @@ describe('V-6 / AC-3 / G-PORTAL — four audit portals, and PORTALS is NOT widen
  * audit surface, not about a 3 400-line service that also aggregates grades.
  */
 function auditKpiRegion(): string {
-  const source = CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+  const source = namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
   const start = source.indexOf('export function auditCriticalActionCodes');
   const auditList = source.indexOf('async auditList(');
   const end = source.indexOf('async auditFacets(');
@@ -1451,7 +1468,7 @@ describe('V-7 / DNC-08 — an unclassifiable code is never dropped, bucketed or 
         'apps/web/src/app/admin/audit/AuditTable.tsx',
         'apps/web/src/app/admin/audit/AuditDetailDrawer.tsx',
         'apps/web/src/app/admin/audit/page.tsx',
-      ].map((rel): [string, string] => [rel, CONSUMER_SOURCES.get(rel) ?? '']),
+      ].map((rel): [string, string] => [rel, namedConsumerSource(rel)]),
       // Scoped to the audit KPI region rather than the whole 3 400-line
       // service: `analytics.service.ts:2329` carries `label: 'Autre'` for an
       // unrelated grade-level bucket, and reddening on it would be PF-83 — a
@@ -1481,7 +1498,7 @@ describe('V-7 / DNC-08 — an unclassifiable code is never dropped, bucketed or 
   });
 
   it('the facet builder maps every observed value — no filter between the array and its map', () => {
-    const page = CONSUMER_SOURCES.get('apps/web/src/app/admin/audit/page.tsx') ?? '';
+    const page = namedConsumerSource('apps/web/src/app/admin/audit/page.tsx');
     expect(page).not.toBe('');
     expect(page).not.toMatch(/facets\.resourceTypes[^\n;]*\.filter\(/);
     expect(page).not.toMatch(/facets\.portals[^\n;]*\.filter\(/);
@@ -1489,7 +1506,7 @@ describe('V-7 / DNC-08 — an unclassifiable code is never dropped, bucketed or 
   });
 
   it('the facets themselves still return raw distinct codes (S-E04-7 is not pre-empted)', () => {
-    const analytics = CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+    const analytics = namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
     expect(analytics).toMatch(/distinct: \['resourceType'\]/);
     expect(analytics).toMatch(/distinct: \['portal'\]/);
   });
@@ -1524,7 +1541,7 @@ describe('V-8 / DNC-09 / AC-8 — every populated KPI can match, and the empty o
     expect(exports).toContain('export.bulletin.request');
     expect(exports).toContain('Export');
     expect(AUDIT_EXPORT_ACTIONS.length).toBeGreaterThan(0);
-    const analytics = CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+    const analytics = namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
     expect(analytics).not.toMatch(/contains:\s*'Export'/);
     expect(analytics).not.toMatch(/contains:\s*'login'/);
   });
@@ -1548,7 +1565,7 @@ describe('V-8 / DNC-09 / AC-8 — every populated KPI can match, and the empty o
     expect(AUDIT_LOGIN_ACTIONS).toHaveLength(0);
     expect(auditLoginActionCodes()).toEqual([]);
 
-    const analytics = CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+    const analytics = namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
     const region = auditKpiRegion();
     expect(region.length).toBeGreaterThan(200);
 
@@ -1595,8 +1612,8 @@ describe('V-8 / DNC-09 / AC-8 — every populated KPI can match, and the empty o
     // is unchanged and stronger: three states must be declared and
     // non-overlapping, the outage state must be named and must render a dash,
     // and an absent response must never render as a `0`.
-    const page = CONSUMER_SOURCES.get('apps/web/src/app/admin/audit/page.tsx') ?? '';
-    const state = CONSUMER_SOURCES.get('apps/web/src/app/admin/audit/audit-kpi-state.ts') ?? '';
+    const page = namedConsumerSource('apps/web/src/app/admin/audit/page.tsx');
+    const state = namedConsumerSource('apps/web/src/app/admin/audit/audit-kpi-state.ts');
     // Unguarded (DNC-08): a moved or renamed file must fail here, never degrade
     // into an empty string that satisfies every `not.toMatch` below.
     expect(page).not.toBe('');
@@ -1639,7 +1656,7 @@ describe('V-8 / DNC-09 / AC-8 — every populated KPI can match, and the empty o
   });
 
   it('the KPI predicates hold NO inline vocabulary of their own', () => {
-    const analytics = CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+    const analytics = namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
     expect(analytics).toMatch(/AUDIT_CRITICAL_ACTIONS/);
     expect(analytics).toMatch(/LEGACY_AUDIT_CRITICAL_ALIASES/);
     expect(analytics).toMatch(/from '@pilotage\/contracts'/);
@@ -1787,7 +1804,7 @@ describe('V-11 / PF-134 — the action tone is derived from the declaration, nev
   });
 
   it('the FOURTH vocabulary is gone: AuditTable no longer substring-matches the action', () => {
-    const table = CONSUMER_SOURCES.get('apps/web/src/app/admin/audit/AuditTable.tsx') ?? '';
+    const table = namedConsumerSource('apps/web/src/app/admin/audit/AuditTable.tsx');
     expect(table).not.toBe('');
     expect(table).not.toMatch(/function pickActionTone/);
     expect(table).not.toMatch(/\.includes\(/);
@@ -1810,7 +1827,7 @@ describe('V-11 / PF-123 — « Sans portail » is a reserved sentinel, decoded s
 
   it('the facet stopped excluding nulls, and the decode happens in the service', () => {
     const analytics =
-      CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+      namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
     expect(analytics).not.toMatch(/portal: \{ not: null \}/);
     // Still a distinct portal facet — S-E04-7 is not pre-empted.
     expect(analytics).toMatch(/distinct: \['portal'\]/);
@@ -1822,11 +1839,11 @@ describe('V-11 / PF-123 — « Sans portail » is a reserved sentinel, decoded s
 describe('V-11 / AC-1, AC-6, AC-7 — one window helper, one timezone source, no date library', () => {
   it('both consumers resolve both bounds through the SAME helper', () => {
     const analytics =
-      CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+      namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
     const generator =
-      CONSUMER_SOURCES.get(
+      namedConsumerSource(
         'apps/worker/src/modules/exports/generators/audit-csv.generator.ts',
-      ) ?? '';
+      );
     expect(generator).not.toBe('');
     for (const [name, source] of [
       ['analytics.service.ts', analytics],
@@ -1847,7 +1864,7 @@ describe('V-11 / AC-1, AC-6, AC-7 — one window helper, one timezone source, no
   });
 
   it('the helper uses Intl only — no date library entered apps/api (pinned stack)', () => {
-    const windowSource = CONSUMER_SOURCES.get('packages/contracts/src/audit/window.ts') ?? '';
+    const windowSource = namedConsumerSource('packages/contracts/src/audit/window.ts');
     expect(windowSource).not.toBe('');
     for (const lib of ['luxon', 'date-fns', 'dayjs', '@js-temporal', 'moment']) {
       expect({ lib, present: windowSource.includes(lib) }).toEqual({ lib, present: false });
@@ -1879,7 +1896,7 @@ describe('V-11 / AC-1, AC-6, AC-7 — one window helper, one timezone source, no
     expect(controller).not.toMatch(/cookies?\[[^\]]*timezone/i);
     // It is read from the tenant row instead, by primary key.
     const analytics =
-      CONSUMER_SOURCES.get('apps/api/src/modules/analytics/analytics.service.ts') ?? '';
+      namedConsumerSource('apps/api/src/modules/analytics/analytics.service.ts');
     expect(analytics).toMatch(/tenant\.findUnique\(\{[\s\S]{0,120}select: \{ timezone: true \}/);
   });
 
@@ -1934,7 +1951,7 @@ describe('V-11 / AC-1, AC-6, AC-7 — one window helper, one timezone source, no
     );
     warnSkipped('audit-vocabulary-gate / PF-149 Tenant.timezone scan', vanished);
     expect(scanned.length + vanished.length).toBe(files.length);
-    expect(vanished.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    expect(vanished.length).toBeLessThanOrEqual(maxVanishedFor(files.length));
 
     const offenders: string[] = [];
     let writersSeen = 0;

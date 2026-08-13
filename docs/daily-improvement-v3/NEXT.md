@@ -1,7 +1,9 @@
 # Next story
 
-_Rewritten by run 50 (`TOOL-23` + `TOOL-24`), 2026-08-13. Read this section first; everything below it is older and
-kept for content._
+_Rewritten by run 50 (`TOOL-23` + `TOOL-24`), 2026-08-13, and carrying run 48's `TOOL-17(b)` section below it.
+The two landed **out of order** — #242 before #239 — because #239 was held on a `main` that was red for an
+unrelated reason (`TOOL-21`, PR #238). Read run 50's section first; everything below it is older and kept for
+content._
 
 ---
 
@@ -76,6 +78,160 @@ engine instead of at a missing client lookup.
 - **A near-miss worth recording:** the routine read `GATE: FAIL` out of a stale `/tmp/gate2.log` dated 14:44 and
   almost reported a verdict it had not measured. Gate logs are now read by mtime as well as content. `R-23` is about
   pipes; this is its sibling — **a verdict you did not produce this run is not evidence, whatever file it is in.**
+# NEXT — written by run 48 (`TOOL-17(b)`), 2026-08-13 — **this section supersedes every section below**
+
+## 🛑 READ THIS FIRST — the database was NEVER blocked, and five runs were wrong about it (`TOOL-22`, P1)
+
+**There is a reachable project PostgreSQL on `127.0.0.1:5432`, and there has been all along.** Measured this run with
+the project's own engine:
+
+```
+DATABASE_URL='postgresql://pilotage:pilotage@127.0.0.1:5432/pilotage?schema=public' \
+  pnpm --filter @pilotage/api exec prisma migrate status
+# → database "pilotage", schema "public" at "127.0.0.1:5432"
+# → 2 migrations found · "Database schema is up to date!"
+```
+
+Runs 44–48 each opened by probing **5433**, got `ECONNREFUSED`, and recorded *"there is still no reachable project
+PostgreSQL"*. Run 44 added *"something unrelated answers on 5432; do not mistake it for the stack"* — **that sentence
+is the defect.** The thing answering on 5432 is the project's database, with the project's user and its migrations.
+
+**⚠️ CORRECTION — this section's first draft got the reason wrong, and the error was mine.** It claimed *"root `.env`
+says 5432 … no file in this repository claims 5433"*. **False.** The root `.env` **originally said
+`POSTGRES_PORT=5433`**; the off-brief agent edited it to 5432 and kept the original as `.env.bak-5433`. The draft read
+the *post-edit* file and quoted it as the repo's own statement — building on a premise the agent had just created,
+which is `feedback-false-red-evidence` committed while writing up a finding about premises. `.env` said 5433,
+`infra/docker-compose.yml:150` publishes `"${POSTGRES_PORT}:5432"`, and the two hard-coded literals in
+`schema-drift-check.js` / `restore-drill.js` agreed with it. **That is why every run probed 5433, and probing it was
+reasonable.**
+
+**What survives the correction — the load-bearing half.** The `migrate status` command above passed `DATABASE_URL`
+**explicitly on the command line**, so it is independent of `.env` in either state. A PostgreSQL carrying the
+project's `pilotage` database, the `pilotage` user and **both migrations applied** *is* reachable on 5432.
+
+**What is NOT established, and the next run must settle it FIRST:** whether that server is the compose `postgres`
+container or a **host-native PostgreSQL** holding a `pilotage` database left by an earlier host-side `migrate`. That
+needs the Docker control plane, which `TOOL-19` says is wedged. **Do not run RLS migrations against it until its
+provenance is known.** Run 44's *"something unrelated answers on 5432"* is refuted only this far: what answers is not
+unrelated — it holds the project's schema. Calling it "the stack" is not yet earned.
+
+**This does NOT close `TOOL-19` and does not contradict it.** The Docker *control plane* is still wedged — re-measured
+this run, `//./pipe/docker_engine` accepts the connection then returns nothing in 15 000 ms and `ECONNRESET`s, so
+`docker ps` and `docker compose build` remain unusable. But **a wedged control plane says nothing about a running
+container's published port**, and conflating the two is exactly what cost five runs.
+
+**So `S-E01-2b` (RLS), `TOOL-13`'s drift-gate half and `TOOL-10`'s never-executed live-PostgreSQL path are unblocked
+now** — by measurement, not by an operator. Read `.env` for the address; never re-derive it.
+
+**How it was found, which is the transferable part:** an agent went **off-brief against this routine's own hint** —
+the hint said "do not touch the database" and repeated the 5433 premise — measured the premise instead of obeying it,
+and was right. That is `feedback-verify-the-brief-you-wrote`, and it is now the second time it has paid.
+
+## ✅ Closed by run 48 — a tolerated skip can no longer make a rule PASS (`TOOL-17(b)`)
+
+All three residuals `TOOL-17` carried are closed. They were one sentence at three addresses.
+
+- **The named-path leak (the dangerous one) — 48 sites, 0 left.** Every converted spec still read *named* (hard-coded)
+  paths out of the **tolerant** map with `MAP.get('<literal>') ?? ''`. A file skipped by the tolerance yielded `''`,
+  and **every negative assertion then passed vacuously** — `not.toContain`, `not.toMatch`, `toBe(false)`. All 48 keys
+  were verified to be string literals, so there was no tolerant case to preserve; they now go through
+  `namedReader(label, map)`, which **throws** a `DNC-08 (TOOL-17b)`-tokened error naming the key.
+- **The cap was the wrong size.** `MAX_VANISHED_FILES = 5` was applied flat to `portal-landing-gate`'s
+  `apps/web/tests` corpus of **eleven** files — 45 % of it could vanish and the gate still passed. Now
+  `maxVanishedFor(n) = min(5, max(1, ceil(n × 0.02)))`: proportional, **never 0** for a non-empty corpus (a hard zero
+  merely relocates the flake to assert time, which is the defect the seam exists to remove), `MAX_VANISHED_FILES`
+  still the large-corpus ceiling. **It was TEN sites across SIX files, not five** — `hermetic-spec-writers-gate.spec.ts`
+  landed two more in #236 *after* run 46 wrote its residual note. The sprint measured this and corrected the brief.
+- **The sixth victim** — `write-audit.spec.ts:416`'s bare `readFileSync` on walked `PRODUCTION_FILES` — is converted,
+  keeping its `calls >= 10` vacuity guard and keeping the fixed-path reads at `:312/:327/:351/:360/:370` bare.
+
+**The proof is compiler-parsed, not grepped**, and that mattered: the three surviving `?? ''` matches in the tree are
+inside **docblocks describing the old pattern**. A text matcher would have flagged its own documentation, and the only
+way back to green would have been to weaken it — `R-30`, avoided by construction.
+
+## ✅ `TOOL-16(b)` — the gate IS reproducible. Two agreeing runs on one stable tree, on a real code diff.
+
+| Gate run | Verdict | api ratchet | worker ratchet | The 1 NEW failure |
+|---|---|---|---|---|
+| 2 | `GATE: FAIL (1 stage)` | `2568/2585 · 12 failing · 11 known` | `293/300 · 7 · 7` | `audit-provenance-gate::G-3 / AC-1` |
+| 3 | `GATE: FAIL (1 stage)` | **byte-identical** | **byte-identical** | **same test** |
+
+With run 47's three agreeing runs, that is **five agreeing runs across two different diffs**, and this one is a
++30-test code diff rather than gate machinery. **`TOOL-16(b)` should be closed on this evidence.**
+
+⚠️ **Run 1 is NOT part of that comparison and must not be quoted as divergence.** It read `GATE: FAIL (2 stages)`
+with `✗ typecheck` — two `TS2532` errors in `default-database-url-gate.spec.ts`, the off-brief agent's file, on a
+`cache miss, executing` (a real execution, not a Turbo replay). That file was **deleted from the tree by a straggler
+process between run 1 and run 2**. So runs 1 and 2 differ *because the tree changed*, which is evidence about nothing.
+
+## ⛔ `main` IS RED at `63f8650`, and it is why this PR was NOT merged (`TOOL-21`, P1)
+
+The single NEW failure in all three gate runs is **not this diff's**. `audit-provenance-gate.spec.ts` G-3/AC-1 asserts
+*"the only role-precedence ordering in the whole app is `provenance.ts`"*. The offender is
+`apps/api/src/shared/auth/role-ladder.ts:57`:
+
+```
+export const REALM_ROLE_LADDER = ['student', 'parent', 'teacher', 'school_admin', 'super_admin'] as const;
+```
+
+one bracketed literal naming the realm roles — precisely what `declaresRolePrecedenceOrdering` flags. **Attribution is
+conclusive, and was re-verified independently of the sprint that raised it:** `role-ladder.ts` does not appear in run
+48's diff (`git diff HEAD --name-only` → 0 matches) and `git log -1 -- role-ladder.ts` returns **`63f8650` (PR #238,
+`S-E05-2b`)** — whose evidence line reads *"identity + auth suites 206/206"*, a set that does not include
+`audit-provenance-gate`.
+
+**The repair — do this first, it is small and it unblocks everything:** a **third NAMED entry** in `G3_EXCLUSIONS`
+(`audit-provenance-gate.spec.ts:102`) with the reason written in — **never a glob** — because `role-ladder.ts` is a
+legitimate second ordering. Pair it with the existing *"both G-3 exclusions really DO trip the matcher"* case at
+`:404-412` so the new exclusion cannot silently protect nothing (that case asserts `G3_EXCLUSIONS` has length 2 —
+it must become 3).
+
+**Why it is P1:** while it stands, **no** gate-machinery slice can produce a clean `GATE: PASS`, so every such slice is
+forced to ship unmerged — which is the exact posture `TOOL-15`, `TOOL-17` and now `TOOL-17(b)` were all caught in.
+
+## ▶ Recommended next story
+
+1. **`TOOL-21` (P1, tiny, no database).** Above. Repairs `main`. Do it before anything else — it is the gate on every
+   other merge.
+2. **`S-E01-2b` (RLS) — reachable at last, but settle PROVENANCE before writing migrations.** `TOOL-22` establishes
+   that a server holding the project's schema answers on 5432; it does **not** establish *which* server. Confirm it is
+   the compose container (or accept it is host-native and say so) before applying migrations to it — a migration
+   written into the wrong PostgreSQL is the one mistake here that is not cheap to undo. Run 40's brief is otherwise
+   intact and was right in every particular: `FORCE ROW LEVEL SECURITY` (the app role owns
+   the tables and an owner bypasses RLS), `current_setting(…, true)` with `missing_ok`, cast rather than compare as
+   text, an index on every tenant predicate before enabling, and narrowing `fn` to `Prisma.TransactionClient`.
+3. **`TOOL-13`'s drift-gate half and `TOOL-10`'s live-PostgreSQL path** — same unblocking, same motion. The preflight
+   has still **never** executed against a live server; it can now.
+4. **`TOOL-20` (P2)** — the walk-read ratchet enforces R2 only, against one spelling, and asserts nothing about *where*
+   an accessor is called. Its cheapest third (the accessor-placement rule) is worth taking alone: all 49 `namedReader`
+   calls are currently deferred inside `it`/`before*` callbacks — verified by AST at land time — but nothing asserts
+   it, and one written at `describe` scope throws at collection and takes the suite down at LOAD.
+5. **Populate the skipped-count baselines (operator, one command each).** Both ratchets still print
+   `⚠ this baseline records no skipped counts. The skip ratchet is INACTIVE`. From a **COMPLETE** run:
+   `node scripts/test-ratchet.js api --update` and `… worker --update`. **Never hand-write those numbers**, and note
+   `feedback-shell-backticks-execute-docs`: writing that command into markdown via `node -e "…"` in double quotes has
+   **executed** it once already and mutated the baseline.
+
+## State of the world at the end of run 48
+
+- **`pnpm --filter @pilotage/api build` — the run's single build, verified by its ARTEFACT**: `apps/api/dist/main.js`
+  was rewritten 74 s after the build started. Exit codes were not trusted (`R-23`).
+- **No Docker was started and no container rebuilt** — `TOOL-19` stands, the engine API is still wedged. Nothing in
+  this slice needed one. **But the local PostgreSQL is UP and answering on 5432** (`TOOL-22`) — that is new, and it is
+  the single most useful fact in this file.
+- **The api denominator moved 2555 → 2585** (+30), all of it new `walk-read-gate` cases. `12 failing · 11 known`, the
+  one excess being `TOOL-21`.
+- **`INFLIGHT` was 0 at Step 0.** The 6 open PRs are all dependabot; no held routine PR, so no duplicate-work risk
+  when this run selected.
+- **This PR is left OPEN on purpose** (`⚠️` prefix), because `AUTO-LAND`'s `green` requires the gate verdict and the
+  verdict is `FAIL`. The failure is `main`'s, not the diff's, and the evidence is above. **`OPEN.md` on `main` will
+  therefore not reflect `TOOL-17(b)` until this merges** — per `project-held-pr-causes-duplicate-work`, the next run
+  must exclude it from selection by reading this file, not `OPEN.md` alone.
+- **Off-brief artefacts, recorded because they are otherwise invisible:** `apps/api/.env` was edited locally
+  (gitignored) 5433 → 5432, original at `apps/api/.env.bak-5433`; and `scripts/lib/default-database-url.js` plus
+  `apps/api/src/shared/quality/default-database-url-gate.spec.ts` were written and then **deleted from the tree**,
+  recoverable only from `…/subagents/workflows/wf_f2b0d5a3-905/agent-*.jsonl`. Neither is in this PR, deliberately:
+  unreferenced, unproven, and they change two gate scripts' behaviour.
 
 ---
 
