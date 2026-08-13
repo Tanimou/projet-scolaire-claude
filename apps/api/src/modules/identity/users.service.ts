@@ -3,6 +3,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { type AuditProvenance } from '../../shared/audit/provenance';
 import { writeAudit } from '../../shared/audit/write-audit';
 import { assertWithinCeiling } from '../../shared/auth/privilege-ceiling';
+import { assertMayConferRealmRole, isLadderRole } from '../../shared/auth/role-ladder';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 export interface UserListItem {
@@ -101,6 +102,7 @@ export class UsersService {
     tenantId: string,
     provenance: AuditProvenance,
     grantorPermissions: ReadonlySet<string>,
+    grantorRealmRoles: readonly string[] = [],
   ) {
     const user = await this.prisma.userProfile.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
@@ -120,10 +122,18 @@ export class UsersService {
 
     // S-E05-2 / AC-4 — the ceiling, before the idempotency return and before the
     // transaction (see posture 1 above).
-    assertWithinCeiling(
-      grantorPermissions,
-      role.rolePermissions.map((rp) => rp.permission.code),
-    );
+    if (role.isSystem && isLadderRole(role.slug)) {
+      // ADR-040 — a seeded role is an IDENTITY, bounded by the grantor's rung.
+      assertMayConferRealmRole(grantorRealmRoles, role.slug, grantedById, userId);
+    } else {
+      // A custom role is an arbitrary PERMISSION SET, bounded by what the grantor
+      // holds. `isSystem` is required as well as the slug: a tenant-authored role
+      // named `teacher` must not reach the ladder.
+      assertWithinCeiling(
+        grantorPermissions,
+        role.rolePermissions.map((rp) => rp.permission.code),
+      );
+    }
 
     // Check if already assigned (and not revoked)
     const existing = await this.prisma.userRole.findFirst({
