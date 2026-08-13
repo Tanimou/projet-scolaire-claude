@@ -1,5 +1,120 @@
 # Next story
 
+# NEXT — written by run 51 (`TOOL-25`), 2026-08-13 — **this section supersedes every section below**
+
+## ✅ The drift gate's end-to-end block EXECUTED, for the first time in this programme
+
+`schema-drift-gate.spec.ts`, same command, before and after:
+
+```
+BEFORE:  Tests: 5 skipped, 119 passed, 124 total   (27.1 s)   ← Test Suites: 1 passed, exit 0
+AFTER:   Tests:            135 passed, 135 total   (143.5 s)  ← 0 skipped
+```
+
+All five formerly-skipped cases ran **and passed**, including *"the unmodified repository PASSES — the gate is not red
+on correct code"* (57.1 s) and *"a migration that does not execute on PostgreSQL FAILS"* (13.3 s). A real
+`CREATE DATABASE` → `prisma migrate deploy` → `migrate diff` → `DROP DATABASE … WITH (FORCE)` journey ran against the
+live PostgreSQL. **`G-MIGRATION` is now discharged by execution rather than by assertion** — the whole point of V3.
+
+`AC-11` was checked **independently of the spec that asserts it**, because a self-asserted cleanup claim is the exact
+shape of the defect being closed: `select datname from pg_database where datname like 'schema_drift%'` → `(none)`.
+
+**The sprint declined this measurement and said so** — agents do not run jest (GUARDRAILS §4), and it wrote
+*"AC-5, the slice's own closing measurement, is UNTAKEN"* into `bmad/roadmap.md`, recommending a hold. The **routine**
+took it, from the main checkout, and it passed. Its roadmap note also parks `S-E01-2b`/`VAL-03` behind `TOOL-26`
+*"because the evidence they need is a live run of exactly the block `TOOL-26` is about"* — **that live run has now
+happened and it is green, so that particular reason is spent.** The note is left in place rather than rewritten: it was
+correct when written.
+
+## 🛑 The finding's recorded CAUSE was false, and this routine propagated it into its own brief
+
+`TOOL-25` was recorded — by run 50, in `OPEN.md`, and in this file — as *"two individually-correct gates jointly
+produce a false green"*: rule **A6** of `production-artefact-check.js` supposedly **forced** the drift spec onto port
+5433. **There was only ever one gate. The second was a comment.**
+
+```
+scripts/production-artefact-check.js:105   EXCLUDED_FILE = /\.(spec|test)\.(ts|tsx|js|jsx|mjs|cjs)$/
+scripts/production-artefact-check.js:319   if (EXCLUDED_FILE.test(entry.name)) continue;   ← inside walk()
+```
+
+A6 has **never been able to read a `*.spec.ts` file**. Measured independently by the routine: the scanner's own banner
+reports **597** files across its three scan roots; the same walk without the spec exclusion yields **701** — so
+**104 spec files are structurally invisible to A6**, including the one whose comment blamed it. The address was simply
+diverging in silence, and a comment asserting a constraint that did not exist carried that divergence through
+`TOOL-22`, `TOOL-23` **and** `TOOL-24`.
+
+**The routine wrote that false premise into the sprint's brief verbatim.** The sprint measured it instead of obeying it
+and was right. That is `feedback-verify-the-brief-you-wrote` paying out for the **third** time, and it is now a
+pattern with a name:
+
+> **Run 50 said it once — *"a comment is not a measurement, and it decays into a claim."* This is its third address in
+> two runs:** a port held by a comment (`TOOL-22`), a host capability held by a comment (`TOOL-23`), and now a **gate
+> rule's reach** held by a comment. Each cost multiple runs. Each was one command away.
+> **A comment explaining why a value must be wrong is a claim. A claim that has survived three slices is overdue.**
+
+**Consequence for the repair, and it is not cosmetic:** "A6 by construction" could never have been the anti-recurrence
+ratchet, so it is not what shipped. The ratchet is a **consumer enumeration** in `default-database-url-gate.spec.ts` —
+three call-site-anchored entries matched against **comment-blanked** source, so a header mention cannot satisfy it.
+
+## ⚠️ The CLASS is still open — the ratchet built for exactly this is still disarmed
+
+Both apps still print `⚠ this baseline records no skipped counts. The skip ratchet is INACTIVE`. `TOOL-13` built that
+mechanism precisely to catch "a suite that stops existing reads as green", and it **could not have caught `TOOL-25`**.
+A human reading jest's tail did. This run repaired the **instance**, not the class.
+
+Deliberately **not** armed inside this PR: it mutates a baseline that gates every future run, it belongs in its own
+change rather than riding a slice about something else, and — the real reason — arming it now would freeze **whatever
+other suites are currently skipping** as acceptable, and `TOOL-25` is proof that a skip can be a defect wearing a
+green hat. **Look at what would be baselined before baselining it.**
+
+## ▶ Recommended next story
+
+1. **`S-E01-2b` (RLS) — take it now. It is unblocked *and*, for the first time, the gate that guards it is real.**
+   This is the actual unlock from this run: RLS writes migrations, so `schema drift` will not be skipped — and until
+   today the drift gate's five end-to-end cases were skipping, so RLS would have landed under a gate that could not
+   have failed. `PF-02` ("RLS claimed, not implemented") is the oldest open L0 trust finding. Run 40's brief is intact
+   and was right in every particular: `FORCE ROW LEVEL SECURITY` (the app role owns the tables and an owner bypasses
+   RLS), `current_setting(…, true)` with `missing_ok`, cast rather than compare as text, an index on every tenant
+   predicate before enabling, and narrowing `fn` to `Prisma.TransactionClient`. Provenance is **settled** — the server
+   is the native Windows service `postgresql-x64-15` on `127.0.0.1:5432`, not a container.
+2. **`TOOL-26` (P1, five residuals) — batch its item (1) with the above.** The largest is that `pnpm test` is now a
+   **DDL-executing** operation bounded by `loopback` rather than by `disposable`. `TOOL-25` *tightened* this (the bound
+   was the `schema_drift_%` name alone; it is now name **and** loopback, on the TCP preflight before any credentialed
+   probe), so the direction is right — but `.env.prod.example:50` binds a deployment to loopback too, so what owes is
+   an **`ADR-027` addendum** stating the limit honestly. **Do not "fix" it by re-disabling the block** — that restores
+   the false green this run closed. Item (2), the unasserted port clause at `schema-drift-check.js:1312`, is the
+   cheapest and is squarely `TOOL-21`'s shape.
+3. **Arm the skipped-count ratchet (operator, one command per app), but survey first.** From a COMPLETE run:
+   `node scripts/test-ratchet.js api --update` and `… worker --update`. **Never hand-write those numbers**, and note
+   `feedback-shell-backticks-execute-docs` — writing that command into markdown via `node -e "…"` in double quotes has
+   **executed** it once already and mutated the baseline. `scripts/known-test-failures.json` was verified untouched by
+   this run.
+4. **`VAL-03` (restore rehearsal) — unblocked and still never executed.** `restore-drill.js` discovers
+   `pg_dump`/`pg_restore` through `postgres-client-path.js` and takes its address from the same shared module.
+
+## State of the world at the end of run 51
+
+- **`GATE: PASS (fast)` twice on the code tree, byte-identical**, verdict line read rather than `$?` of a pipeline
+  (`R-23`): `test-ratchet[api] 2635/2646 · 11 failing · 11 known-failing`, `test-ratchet[worker] 293/300 · 7 · 7` in
+  both runs. **No excess failure**, which independently confirms **`TOOL-21` is genuinely repaired on `main`** (#240) —
+  the condition that forced runs 46, 47 and 48 to ship unmerged. api denominator **2585 → 2646** (+61).
+- **`pnpm --filter @pilotage/api build` — the run's single build, verified by its ARTEFACT** (`apps/api/dist/main.js`
+  mtime 10 s before the check), not by an exit code.
+- **No Docker was started and no container rebuilt.** None was needed: this host's database is the **native Windows
+  service** `postgresql-x64-15` on 5432. **`TOOL-19` (wedged Docker engine) is untouched and was never relevant to this
+  work** — the local Docker stack's health remains **unknown**; do not assume it is healthy.
+- **The local PostgreSQL was written to, deliberately and repeatedly** — scratch databases created, migrated and
+  dropped by the now-live end-to-end block. That is Step −1 working as designed (local data is expendable). The server
+  was left clean: `schema_drift_%` → `(none)`.
+- **`INFLIGHT` was 0 at Step 0.** The 6 open PRs are all dependabot; no held routine PR, so no duplicate-work risk.
+- **Two files carry corrections rather than rewrites**: this file's run-50 section still states the A6 premise that is
+  now refuted, and `bmad/roadmap.md`'s run-51 row still recommends a hold on an `AC-5` the routine has since taken.
+  Both were correct when written; an artefact that silently drops a wrong claim teaches the next run nothing.
+
+---
+
+# Next story
+
 _Rewritten by run 50 (`TOOL-23` + `TOOL-24`), 2026-08-13, and carrying run 48's `TOOL-17(b)` section below it.
 The two landed **out of order** — #242 before #239 — because #239 was held on a `main` that was red for an
 unrelated reason (`TOOL-21`, PR #238). Read run 50's section first; everything below it is older and kept for

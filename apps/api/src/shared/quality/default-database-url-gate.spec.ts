@@ -98,29 +98,96 @@ describe('defaultDatabaseUrl — the project config decides, not a literal', () 
   });
 });
 
-describe('DNC-10 — the two scripts share ONE default, and it is not a bypass', () => {
+/**
+ * EVERY consumer of the shared default, with the call site each one must carry.
+ *
+ * The list lives HERE, next to the seam, and is enumerated exactly once — the
+ * shape `walk-read-gate.spec.ts` already uses for its own victims. Two
+ * enumerations of "who shares the address" would be the same class of defect as
+ * two literals of the address.
+ *
+ * TOOL-25 added the third entry. TOOL-22 fixed the two scripts and left the drift
+ * gate's own SPEC on a divergent literal, where it survived TOOL-23 and TOOL-24 —
+ * three slices — because a comment in it claimed `production-artefact-check.js`
+ * rule A6 forced the wrong port. It never did: `production-artefact-check.js:105`
+ * defines a `*.spec.ts` / `*.test.ts` exclusion and `:319` applies it inside
+ * `walk()`, so A6 has never been able to read that file (measured 2026-08-13: the
+ * scanner reports 597 files, the same walk WITHOUT the spec exclusion yields
+ * 701). The address was simply diverging in silence, and the drift gate's five
+ * end-to-end cases printed `○ skipped` while the suite reported green — DNC-08.
+ * THIS enumeration, not A6, is what makes a fourth instance impossible.
+ */
+/** The two scripts sit beside `scripts/lib/`, so they require it by relative path. */
+const RELATIVE_REQUIRE = /require\(\s*'\.\/lib\/default-database-url'\s*\)/;
+/** The spec is five directories away, so it requires the SAME file by a path
+ * computed from its own `REPO_ROOT` — the convention `test-ratchet.spec.ts:307`
+ * established for `scripts/lib/ratchet-core.js`. */
+const COMPUTED_REQUIRE = /require\(\s*DEFAULT_DB_URL_PATH\s*\)/;
+
+const CONSUMERS: Array<[string, RegExp]> = [
+  ['scripts/schema-drift-check.js', RELATIVE_REQUIRE],
+  ['scripts/restore-drill.js', RELATIVE_REQUIRE],
+  ['apps/api/src/shared/quality/schema-drift-gate.spec.ts', COMPUTED_REQUIRE],
+];
+
+/** The literal that used to be copied into each consumer. */
+const RETIRED_LITERAL = 'postgresql://pilotage:pilotage@127.0.0.1:5433/pilotage?schema=public';
+
+/**
+ * Blank `//` and block comments, length preserved — the helper the gate specs in
+ * this directory carry. Without it, `toContain('default-database-url')` is
+ * satisfied by a file that merely MENTIONS the module in its header, and all
+ * three of these files have a header that does exactly that. Verified in the
+ * failing direction: deleting the require from a copy of `restore-drill.js` while
+ * leaving its `:140` header sentence in place turns the case red.
+ */
+function executableJs(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+}
+
+describe('DNC-10 — every consumer shares ONE default, and it is not a bypass', () => {
   const read = (rel: string): string =>
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     (require('node:fs') as typeof import('node:fs')).readFileSync(join(REPO_ROOT, rel), 'utf8');
 
-  it.each(['scripts/schema-drift-check.js', 'scripts/restore-drill.js'])(
-    '%s takes its default from the shared module, not from its own literal',
-    (file) => {
-      const source = read(file);
-      expect(source).toContain('default-database-url');
-      // The whole point: the 5433 literal must no longer appear as this script's
-      // own default. It lives in exactly one place now.
-      expect(source).not.toContain("'postgresql://pilotage:pilotage@127.0.0.1:5433/pilotage?schema=public'");
-    },
-  );
+  it('the enumeration is not empty, and it names the drift gate SPEC too', () => {
+    // Non-vacuity before content: an emptied list would make every case below
+    // pass without reading a single file.
+    expect(CONSUMERS).toHaveLength(3);
+    expect(CONSUMERS.map(([file]) => file)).toContain('apps/api/src/shared/quality/schema-drift-gate.spec.ts');
+  });
+
+  it('a header MENTION does not satisfy the call-site anchor (the failing direction)', () => {
+    const mentionOnly = '/* reads scripts/lib/default-database-url.js */\nconst x = 1;\n';
+    expect(executableJs(mentionOnly)).not.toMatch(RELATIVE_REQUIRE);
+    expect(executableJs("const { defaultDatabaseUrl } = require('./lib/default-database-url');")).toMatch(
+      RELATIVE_REQUIRE,
+    );
+    // …and the same in the failing direction for the computed form.
+    expect(executableJs('// const m = require(DEFAULT_DB_URL_PATH);\n')).not.toMatch(COMPUTED_REQUIRE);
+    expect(executableJs('const m = require(DEFAULT_DB_URL_PATH);\n')).toMatch(COMPUTED_REQUIRE);
+  });
+
+  it.each(CONSUMERS)('%s takes its default from the shared module, not from its own literal', (file, anchor) => {
+    const source = read(file);
+    // Anchored to a CALL SITE, on comment-blanked source: a require deleted while
+    // its explanatory comment survives is exactly how this list would rot.
+    expect(executableJs(source)).toMatch(anchor);
+    // The whole point: the retired literal must no longer appear as this
+    // consumer's own default. It lives in exactly one place now.
+    expect(source).not.toContain(`'${RETIRED_LITERAL}'`);
+    expect(source).not.toContain(`"${RETIRED_LITERAL}"`);
+  });
 
   it('an explicit DATABASE_URL still wins — the module supplies a DEFAULT only', () => {
-    // Both call sites keep the `process.env.DATABASE_URL || default` shape, so an
+    // Every call site keeps the `process.env.DATABASE_URL || default` shape, so an
     // exported variable overrides as before. DNC-10 is unchanged: the variable
     // names WHERE the scratch database is built, never WHETHER the ledger
     // reproduces the schema.
-    for (const file of ['scripts/schema-drift-check.js', 'scripts/restore-drill.js']) {
-      expect(read(file)).toMatch(/process\.env\.DATABASE_URL\s*\|\|/);
+    for (const [file] of CONSUMERS) {
+      expect(executableJs(read(file))).toMatch(/process\.env\.DATABASE_URL\s*\|\|/);
     }
   });
 });

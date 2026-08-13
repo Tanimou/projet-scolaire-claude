@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 /**
  * S-E02-5 / PF-03 (residual half) — guard for the schema-drift gate.
@@ -70,6 +70,29 @@ import { join, resolve } from 'node:path';
  * effect: this suite runs inside `pnpm test` on every developer's machine, and a
  * bare `main()` would create and drop a database as a side effect of an import.
  *
+ * That sentence is still true of the REQUIRE, and since TOOL-25 it is no longer
+ * true of the SUITE. Before TOOL-25 the end-to-end block below could only ever
+ * address a port nothing on this project listens on, so it had never executed
+ * anywhere; now that the address is resolved from the project's own
+ * configuration, `pnpm test` on a configured machine really does `CREATE
+ * DATABASE` / `DROP DATABASE` — reaching parity with `schema-drift-check.js:204`
+ * and `restore-drill.js:145`, which have resolved the address that way since
+ * #241. The blast radius is bounded on TWO axes, neither of them trust.
+ *
+ * By NAME — WHAT it may touch: `SCRATCH_NAME_PATTERN` is `^schema_drift_\d+$`,
+ * `isSafeScratchTarget` is re-checked inside `dropScratch`, `buildChildEnv`
+ * re-validates immediately before every spawn, and the drop runs on `SIGINT` /
+ * `SIGTERM` / `uncaughtException` / `finally`. The suite can create and destroy
+ * `schema_drift_%` and nothing else.
+ *
+ * By ADDRESS — WHERE it may touch it: `describeWithDb` requires the resolved
+ * address to be BOTH reachable and on the loopback interface
+ * (`gate.probeAddress(...).loopback`), so a checkout whose `.env` names a
+ * production or shared-staging server skips with a reason instead of running DDL
+ * there. Section 5f owns that guard and drives it in both directions. A name
+ * bound alone answers "what", never "where", and `.env` is untracked — on a
+ * deployed checkout it is a production DSN.
+ *
  * The exports are those the story pins plus four the implementation needed:
  * `buildChildEnv` (the target guard above), `deriveMaintenanceUrl`,
  * `redactConnectionUrl` (G-TENANT, reused rather than re-implemented) and
@@ -88,15 +111,91 @@ const ADR_025_PATH = join(REPO_ROOT, 'docs', 'adr', 'ADR-025-operator-drill-outs
 
 const SCRIPT_REF = 'scripts/schema-drift-check.js';
 
-/** The local Docker stack. Port 5433, never 5432: `production-artefact-check.js`
- * rule A6 matches `(localhost|127.0.0.1):(8025|9000|9001|5432|6379)` on string
- * literals inside `apps/api/src`, so the CI DSN written out here would turn
- * stage 0b red. `restore-drill-gate.spec.ts:659` gets away with the same literal
- * for the same reason. */
-const LOCAL_URL = 'postgresql://pilotage:pilotage@127.0.0.1:5433/pilotage?schema=public';
+/**
+ * THE DEFECT TOOL-25 REMOVED, AND THE FALSE PREMISE THAT KEPT IT ALIVE.
+ *
+ * Until TOOL-25 this file pinned a literal base address on a port nothing in this
+ * project listens on, with a comment asserting the port was forced:
+ * "`production-artefact-check.js` rule A6 matches a dev-service address on string
+ * literals inside `apps/api/src`, so the CI DSN written out here would turn stage
+ * 0b red."
+ *
+ * **That claim was false, and it was measured false on 2026-08-13.** A6 has never
+ * been able to see this file: `production-artefact-check.js:105` defines
+ * `EXCLUDED_FILE = /\.(spec|test)\.(ts|tsx|js|jsx|mjs|cjs)$/` and `:319` applies
+ * it inside `walk()`, so every `*.spec.ts` is skipped before any rule runs. The
+ * scanner's own banner reports 597 files across the three scan roots; walking
+ * those roots with the same extensions and excluded directories but WITHOUT the
+ * spec exclusion yields 701. 597 = the spec-excluded count. Conclusive, not
+ * inferential.
+ *
+ * The cost of the false comment was three slices long: the wrong port survived
+ * TOOL-22, TOOL-23 and TOOL-24 because each read a constraint that does not
+ * exist. Meanwhile `schema-drift-check.js`, three directories away, ran the
+ * identical journey against the address the project is actually configured for
+ * and returned PASS, while the five end-to-end cases below printed `○ skipped`
+ * and the suite reported green — DNC-08, committed inside the DNC-08 enforcer.
+ *
+ * So the address is now RESOLVED AT RUNTIME from the one module that decides it,
+ * `scripts/lib/default-database-url.js` — the same module `schema-drift-check.js`
+ * and `restore-drill.js` have used since #241. No literal is deleted "because a
+ * gate forbade it"; it is deleted because a second copy of an address is the
+ * defect, and one resolver is the repair.
+ *
+ * A6 is untouched, unweakened and un-excluded (R-30). Note what AC-2's evidence
+ * therefore is and is not: re-running the scanner proves this diff did not
+ * disturb the shipped-source scan. It is a NON-REGRESSION check. It provides zero
+ * protection against a future author re-planting an address here, because the
+ * scanner cannot read this file at all. The ratchet that does is the consumer
+ * enumeration in `default-database-url-gate.spec.ts`.
+ */
+const DEFAULT_DB_URL_PATH = join(REPO_ROOT, 'scripts', 'lib', 'default-database-url.js');
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+// Deliberately unguarded, exactly as `require(SCRIPT_PATH)` below and
+// `test-ratchet.spec.ts:307/:356` are. If the shared resolver disappears, this
+// suite must go red AT LOAD rather than fall back to a literal of its own —
+// falling back is how the divergence this slice closes was born.
+const {
+  ENV_FILES,
+  defaultDatabaseUrl,
+  readDatabaseUrlFrom,
+} = require(DEFAULT_DB_URL_PATH) as {
+  ENV_FILES: string[];
+  defaultDatabaseUrl: () => string;
+  readDatabaseUrlFrom: (file: string) => string | undefined;
+};
+/* eslint-enable @typescript-eslint/no-require-imports */
+
+/**
+ * The base address this checkout is configured for.
+ *
+ * NOT named `LOCAL_URL` any more, and the rename is load-bearing: `LOCAL_URL`
+ * meant "a local address that is dead", and every assertion written against it
+ * could safely be VALUE-shaped. This constant means "the live base this host
+ * answers on", which an untracked `.env` chooses — so it is an INPUT, and it may
+ * only ever appear on the left-hand side of an INVARIANCE ("the derived URL keeps
+ * the base's host and port"). No assertion's MEANING may depend on its value.
+ * Cases that need "a different server" or "these credentials" use the fixed
+ * synthetic literals below instead.
+ */
+const RESOLVED_BASE_URL: string = defaultDatabaseUrl();
+
 /** A closed port on the loopback interface. Used to prove that an unreachable
  * address FAILS rather than skips, and that no environment variable changes that. */
 const DEAD_URL = 'postgresql://pilotage:pilotage@127.0.0.1:59999/pilotage?schema=public';
+/** A FIXED address on a DIFFERENT server from `DEAD_URL` — different host AND
+ * port. Every case whose MEANING is "these are two servers" uses this pair and
+ * never the resolved base: an untracked `.env` could point the base at
+ * `DEAD_URL`'s own host, and the case would silently stop meaning anything. */
+const OTHER_SERVER_URL = 'postgresql://u:p@10.255.255.1:5432/other?schema=public';
+/** A FIXED synthetic DSN for the redaction cases (G-TENANT).
+ * `redactConnectionUrl` is a pure string transform, and an assertion phrased
+ * against the resolved base would be satisfied by a redactor that does NOTHING on
+ * any checkout whose credentials differ — or on one whose password is empty. A
+ * credential-redaction guard is the last place in this file allowed to depend on
+ * the host. `db.example` resolves nowhere and is contacted by nothing. */
+const REDACTION_SAMPLE_URL = 'postgresql://u:s3cr3t@db.example:5433/x?schema=public';
 
 type DiffClass = 'in-sync' | 'drift' | 'tooling-error';
 
@@ -527,19 +626,24 @@ describe('scratch-target safety — the only destructive path in the file', () =
   });
 
   it('buildScratchUrl replaces ONLY the database segment', () => {
-    const url = new URL(buildScratchUrl(LOCAL_URL, 'schema_drift_7'));
+    // REPLACED, never deleted (TOOL-21's lesson). The two lines that stood here
+    // asserted `hostname === '127.0.0.1'` and `port === '5433'`; what they were
+    // DEFENDING is that the builder moves the database segment and nothing else.
+    // That property is asserted against the RESOLVED base, in the same idiom the
+    // TOOL-11 invariance case below already uses, so it survives a checkout
+    // configured for any address instead of pinning one.
+    const base = new URL(RESOLVED_BASE_URL);
+    const url = new URL(buildScratchUrl(RESOLVED_BASE_URL, 'schema_drift_7'));
     expect(url.pathname).toBe('/schema_drift_7');
-    expect(url.hostname).toBe('127.0.0.1');
-    expect(url.port).toBe('5433');
-    expect(url.username).toBe('pilotage');
-    expect(url.password).toBe('pilotage');
-    expect(url.search).toBe('?schema=public');
+    expect([url.hostname, url.port]).toEqual([base.hostname, base.port]);
+    expect([url.username, url.password]).toEqual([base.username, base.password]);
+    expect(url.search).toBe(base.search);
   });
 
   it('buildScratchUrl refuses to address anything that is not a scratch database', () => {
-    expect(() => buildScratchUrl(LOCAL_URL, 'pilotage')).toThrow();
-    expect(() => buildScratchUrl(LOCAL_URL, '')).toThrow();
-    expect(() => buildScratchUrl(LOCAL_URL, 'schema_drift_')).toThrow();
+    expect(() => buildScratchUrl(RESOLVED_BASE_URL, 'pilotage')).toThrow();
+    expect(() => buildScratchUrl(RESOLVED_BASE_URL, '')).toThrow();
+    expect(() => buildScratchUrl(RESOLVED_BASE_URL, 'schema_drift_')).toThrow();
   });
 
   it('the migration tools are never handed the resolved base URL (FR-7)', () => {
@@ -548,19 +652,24 @@ describe('scratch-target safety — the only destructive path in the file', () =
     // against the seeded local database, and for the "a migration that does not
     // execute" case that means broken DDL against real child records. So the
     // overlay is re-validated immediately before every spawn.
-    const env = buildChildEnv(buildScratchUrl(LOCAL_URL, 'schema_drift_7'));
+    const env = buildChildEnv(buildScratchUrl(RESOLVED_BASE_URL, 'schema_drift_7'));
     expect(new URL(env.DATABASE_URL).pathname).toBe('/schema_drift_7');
-    expect(() => buildChildEnv(LOCAL_URL)).toThrow(/schema_drift/);
-    expect(() => buildChildEnv(deriveMaintenanceUrl(LOCAL_URL))).toThrow();
+    expect(() => buildChildEnv(RESOLVED_BASE_URL)).toThrow(/schema_drift/);
+    expect(() => buildChildEnv(deriveMaintenanceUrl(RESOLVED_BASE_URL))).toThrow();
   });
 
   it('the maintenance URL is DERIVED, never supplied', () => {
     // `CREATE DATABASE` cannot run from inside the database being created, and an
     // operator-supplied maintenance address would be a second address every
     // safety check would have to trust.
-    const url = new URL(deriveMaintenanceUrl(LOCAL_URL));
+    //
+    // The port line here was the second of the two TOOL-25 replacements: it read
+    // `expect(url.port).toBe('5433')`, which defended "the derivation does not
+    // move the server". Same property, asserted against the resolved base.
+    const base = new URL(RESOLVED_BASE_URL);
+    const url = new URL(deriveMaintenanceUrl(RESOLVED_BASE_URL));
     expect(url.pathname).toBe('/postgres');
-    expect(url.port).toBe('5433');
+    expect([url.hostname, url.port]).toEqual([base.hostname, base.port]);
     expect(EXECUTABLE_SCRIPT).not.toMatch(/--maintenance|--admin-url/);
   });
 
@@ -579,8 +688,16 @@ describe('scratch-target safety — the only destructive path in the file', () =
   });
 
   it('no connection string is ever printed unredacted (G-TENANT)', () => {
-    expect(gate.redactConnectionUrl(LOCAL_URL)).not.toContain('pilotage:pilotage');
-    expect(gate.redactConnectionUrl(LOCAL_URL)).toContain('***');
+    // FIXED synthetic input, deliberately NOT the resolved base. These assertions
+    // are VALUE-shaped — they only mean anything because the input really carries
+    // `u:s3cr3t` — so pointing them at an address an untracked `.env` chooses
+    // would let a redactor that does nothing satisfy them on any checkout with
+    // different credentials, and would make them meaningless on one with an empty
+    // password. That is the failure mode this whole slice is repairing, and it is
+    // not worth re-creating on the one tenant-adjacent guard in the file.
+    expect(gate.redactConnectionUrl(REDACTION_SAMPLE_URL)).not.toContain('u:s3cr3t');
+    expect(gate.redactConnectionUrl(REDACTION_SAMPLE_URL)).not.toContain('s3cr3t');
+    expect(gate.redactConnectionUrl(REDACTION_SAMPLE_URL)).toContain('***');
     expect(gate.redactConnectionUrl('could not connect to postgres://u:s3cr3t@h:5433/db')).not.toContain(
       's3cr3t',
     );
@@ -1140,8 +1257,16 @@ describe('the TCP preflight settles the route ladder in milliseconds (TOOL-10)',
     // TOOL-11 changed the SHAPE of the refusal, never the rule: it returns
     // `{ ok:false, detail }` instead of throwing. The refusal itself is asserted
     // exactly as before — see the TOOL-11 block below for why the shape matters.
+    //
+    // TOOL-25: this case used to hand `exec` the base URL, which MEANT "another
+    // server" only because the pinned literal named a different port from
+    // `DEAD_URL`. Wiring it to the resolved base would make its meaning depend on
+    // an untracked file — a checkout whose `.env` named `DEAD_URL`'s own host
+    // would turn it vacuous. Two FIXED addresses instead, with the premise
+    // asserted before the behaviour.
+    expect(new URL(OTHER_SERVER_URL).host).not.toBe(new URL(DEAD_URL).host);
     const routes = gate.openSqlRoutes(DEAD_URL);
-    expect(routes.exec(LOCAL_URL, 'SELECT 1;')).toEqual({
+    expect(routes.exec(OTHER_SERVER_URL, 'SELECT 1;')).toEqual({
       ok: false,
       detail: expect.stringMatching(/one server/),
     });
@@ -1221,8 +1346,9 @@ describe('the TCP preflight settles the route ladder in milliseconds (TOOL-10)',
  * mean evidence that can only run where the bug cannot.
  * ================================================================== */
 
-/** A URL on a DIFFERENT server from `DEAD_URL` — different host AND port. */
-const OTHER_SERVER_URL = 'postgresql://u:p@10.255.255.1:5432/other?schema=public';
+/* `OTHER_SERVER_URL` — a URL on a DIFFERENT server from `DEAD_URL`, different
+ * host AND port — is declared with the other fixed fixtures at the head of the
+ * file since TOOL-25, because the cross-server case in §5 needs it too. */
 /** The same server as `DEAD_URL`, a different database. The negative control. */
 const SAME_SERVER_OTHER_DB_URL = 'postgresql://pilotage:pilotage@127.0.0.1:59999/postgres?schema=public';
 
@@ -1289,9 +1415,9 @@ describe('schema-drift-check: cleanup returns its refusal instead of throwing it
     // does describe every URL `exec` is handed today. `buildScratchUrl` is pinned
     // elsewhere; the maintenance URL's HOST was not, and that is the fact this
     // whole guard rests on.
-    const base = new URL(LOCAL_URL);
-    const maintenance = new URL(gate.deriveMaintenanceUrl(LOCAL_URL));
-    const scratch = new URL(gate.buildScratchUrl(LOCAL_URL, 'schema_drift_11'));
+    const base = new URL(RESOLVED_BASE_URL);
+    const maintenance = new URL(gate.deriveMaintenanceUrl(RESOLVED_BASE_URL));
+    const scratch = new URL(gate.buildScratchUrl(RESOLVED_BASE_URL, 'schema_drift_11'));
     expect([maintenance.hostname, maintenance.port]).toEqual([base.hostname, base.port]);
     expect([scratch.hostname, scratch.port]).toEqual([base.hostname, base.port]);
     expect(maintenance.pathname).toBe('/postgres');
@@ -1545,6 +1671,276 @@ describe('schema-drift-check: a client failure is not an absent server (TOOL-24)
 });
 
 /* ================================================================== *
+ * 5d. TOOL-25 — the address is RESOLVED, and the resolver is the same file the
+ *     two gate scripts load
+ *
+ * PLACEMENT IS LOAD-BEARING, for the third time in this file and for the same
+ * reason spelled out at the TOOL-11 block: everything below `describeWithDb`
+ * becomes `describe.skip` on a machine with no reachable PostgreSQL, and this
+ * slice is ABOUT the machine that was wrongly classified that way. Evidence for
+ * it may not live somewhere it can only run once the bug is gone.
+ * ================================================================== */
+
+const SPEC_PATH = join(REPO_ROOT, 'apps', 'api', 'src', 'shared', 'quality', 'schema-drift-gate.spec.ts');
+const SPEC_SOURCE = readFileSync(SPEC_PATH, 'utf8');
+
+/**
+ * Which source decided the address — for the skip warning, and nothing else.
+ *
+ * DNC-08 in one line: « 5433 refused » is useless, « 5433, from the built-in
+ * fallback because no `.env` was found » tells the reader the host was never
+ * configured. Both arguments are REQUIRED and neither has a default: this is a
+ * narration helper, it decides no verdict, and it must not read like a knob
+ * (DNC-10). It is pure, so the cases below exercise the very code the warning
+ * runs — a message that only executes on an unreachable host would otherwise ship
+ * unexecuted, which is a fresh DNC-08 at the address of the DNC-08 guard.
+ */
+function describeAddressSource(env: NodeJS.ProcessEnv, files: string[]): string {
+  if (env.DATABASE_URL) return 'the exported DATABASE_URL';
+  for (const file of files) {
+    if (readDatabaseUrlFrom(file)) return relative(REPO_ROOT, file).replace(/\\/g, '/');
+  }
+  return "the built-in fallback — no .env on this checkout supplies DATABASE_URL, so this host was never configured";
+}
+
+describe('the address is resolved through the shared module, and cannot diverge again (TOOL-25)', () => {
+  it('the spec loads THE SAME FILE the two gate scripts load — asserted on identity, not on value', () => {
+    // NOT `expect(RESOLVED_BASE_URL).toBe(defaultDatabaseUrl())`: that compares a
+    // value to the call that produced it and is green by construction on every
+    // host forever — the exact shape of check this slice exists to abolish. The
+    // property that matters is MODULE IDENTITY.
+    // Separators normalised and nothing else: both sides stay absolute paths, so
+    // this remains an identity assertion and not a substring one.
+    const norm = (path: string): string => resolve(path).replace(/\\/g, '/');
+    expect(norm(require.resolve(DEFAULT_DB_URL_PATH))).toBe(
+      norm(resolve(REPO_ROOT, 'scripts', 'lib', 'default-database-url.js')),
+    );
+    // …and the resolver really is what this file consulted: a base that came from
+    // anywhere else would not be a string of the shape the module returns.
+    expect(typeof RESOLVED_BASE_URL).toBe('string');
+    expect(RESOLVED_BASE_URL).toMatch(/^postgres(?:ql)?:\/\//);
+  });
+
+  it('the module is really the decider — the negative control', () => {
+    // Proof the seam is load-bearing rather than decorative: point the reader at a
+    // fixture and it returns THAT value. If this file had its own resolution path,
+    // this case would be about a function nothing consults.
+    const dir = mkdtempSync(join(tmpdir(), 'drift-dburl-'));
+    const file = join(dir, '.env');
+    writeFileSync(file, 'DATABASE_URL=postgresql://fixture:pw@fixture.invalid:1/d\n', 'utf8');
+    expect(readDatabaseUrlFrom(file)).toBe('postgresql://fixture:pw@fixture.invalid:1/d');
+    expect(readDatabaseUrlFrom(join(dir, 'absent'))).toBeUndefined();
+  });
+
+  it('this spec carries NO second resolution path', () => {
+    // One `DATABASE_URL` read, the module for everything else. A second env var,
+    // or a second literal default, is how the divergence TOOL-22 fixed in the
+    // scripts survived here for three more slices.
+    // Non-vacuity: SPEC_SOURCE really is this file.
+    expect(SPEC_SOURCE).toContain('the address is resolved through the shared module');
+    // The same idiom the script's own case above uses, on the comment-blanked
+    // text so a variable merely NAMED in prose cannot satisfy or break it.
+    const reads = executableJs(SPEC_SOURCE).match(/process\.env\.[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+    expect(reads.length).toBeGreaterThan(0);
+    expect([...new Set(reads)]).toEqual(['process.env.DATABASE_URL']);
+  });
+
+  it('no DSN literal left in this file addresses the resolved base', () => {
+    // A relationship, not a text pattern. A regex for one loopback spelling walks
+    // straight past `localhost:5432` or `[::1]:5432`; "no literal in here names the
+    // live server" is the actual property, and it holds because every literal that
+    // survives exists to prove a FAILURE direction — `DEAD_URL`, `OTHER_SERVER_URL`,
+    // `SAME_SERVER_OTHER_DB_URL`, `LIVE_PREFLIGHT_URL`, `REDACTION_SAMPLE_URL`.
+    const dsns = (SPEC_SOURCE.match(/postgres(?:ql)?:\/\/[^\s'"`]+/g) ?? []).filter(
+      (dsn) => !dsn.includes('${'),
+    );
+    // Non-vacuity first: a regex that found nothing would make the loop pass
+    // without reading a single literal.
+    expect(dsns.length).toBeGreaterThanOrEqual(4);
+    const baseHost = new URL(RESOLVED_BASE_URL).host;
+    for (const dsn of dsns) {
+      expect([dsn, new URL(dsn).host === baseHost]).toEqual([dsn, false]);
+    }
+  });
+
+  it('the skip warning names WHICH source resolved the address (DNC-08)', () => {
+    // The warning text is only built on an unreachable host, so its builder is
+    // exercised here instead — otherwise the P0-5 message ships unexecuted.
+    expect(describeAddressSource({ DATABASE_URL: 'postgresql://u:p@h:1/d' }, [])).toContain(
+      'exported DATABASE_URL',
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), 'drift-src-'));
+    const file = join(dir, '.env');
+    writeFileSync(file, 'DATABASE_URL=postgresql://u:p@h:1/d\n', 'utf8');
+    expect(describeAddressSource({}, [file])).toContain('.env');
+    expect(describeAddressSource({}, [join(dir, 'absent')])).toContain('built-in fallback');
+
+    // The three branches are DISTINCT — a helper that returned one sentence for
+    // everything would satisfy the three assertions above only by accident.
+    const answers = new Set([
+      describeAddressSource({ DATABASE_URL: 'x' }, [file]),
+      describeAddressSource({}, [file]),
+      describeAddressSource({}, []),
+    ]);
+    expect(answers.size).toBe(3);
+  });
+});
+
+/* ================================================================== *
+ * 5f. The end-to-end block is bounded by ADDRESS as well as by NAME
+ *
+ * WHY THIS EXISTS. TOOL-25 replaced the dead 5433 literal with the project's own
+ * resolver, and in doing so turned the end-to-end block below from a block that
+ * had never executed anywhere into one that really runs `CREATE DATABASE`,
+ * `prisma migrate deploy`, `DROP DATABASE … WITH (FORCE)` and a `pg_database`
+ * scan on the maintenance database of whatever host the untracked `.env` names.
+ * The containment argument written at the head of this file is stated purely in
+ * terms of the NAME — `SCRATCH_NAME_PATTERN`, `isSafeScratchTarget`,
+ * `buildChildEnv` — and that half is true and unchanged: this suite can create
+ * and destroy `schema_drift_%` and nothing else. But a name bound says nothing
+ * about WHERE, and `.env` on a deployed checkout (the Hostinger VPS is the
+ * concrete instance) is a production DSN with production credentials. `pnpm test`
+ * there would have run the ledger against the live server.
+ *
+ * THE REPAIR IS A NARROWING OF THE GUARD THAT ALREADY EXISTED, not a new option.
+ * `describeWithDb` asked one question — "does a server answer?" — and it now asks
+ * two: does a server answer, AND is the address this machine. Both answers come
+ * from seams the gate already exports and this file already drives:
+ * `gate.probeAddress(...).loopback` (pinned at AC-1 above) and `gate.probeServer`.
+ * No flag, no environment knob, no `.env` key — DNC-10 is untouched. A
+ * non-loopback address SKIPS with a reason that names the address, exactly as an
+ * unreachable one already did; the gate itself (stage 0d of `ci-gate.sh`) is
+ * unaffected and still fails rather than skipping (ADR-027).
+ *
+ * PLACEMENT, for the fourth time in this file and for the same reason: these
+ * cases are a plain `describe`, defined ABOVE `describeWithDb`, and they inject
+ * both probes. Evidence for a guard whose whole job is to decide whether the
+ * destructive block runs may not itself live inside the destructive block.
+ * ================================================================== */
+
+type AddressProbe = ReturnType<SchemaDriftModule['probeAddress']>;
+
+/**
+ * Reachable AND loopback, or a named reason. Pure with respect to this file: the
+ * two probes are injected so both directions can be driven deterministically on
+ * any host, and the defaults are the gate's own exports — the same "a function
+ * seam, never a CLI flag" idiom `deployMigrations` uses.
+ *
+ * ORDER IS LOAD-BEARING. The address is classified BEFORE `probeServer`, because
+ * `probeServer` opens a credentialed `SELECT 1;` through the Prisma CLI. On a
+ * production DSN even that is a connection this suite has no business making, so
+ * a non-loopback target is refused on the TCP preflight alone.
+ */
+function classifyEndToEndTarget(
+  url: string,
+  probeAddress: (host: string, port: string) => AddressProbe = (host, port) => gate.probeAddress(host, port),
+  probeServer: (target: string) => boolean = (target) => gate.probeServer(target),
+): { runnable: boolean; why: string } {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return { runnable: false, why: 'DATABASE_URL is not a usable connection string' };
+  }
+  const host = target.hostname;
+  const port = target.port || '5432';
+  const probe = probeAddress(host, port);
+  const where = `${host}:${port} — ${probe.state}: ${probe.detail} (after ${probe.elapsedMs} ms)`;
+  if (!probe.loopback) {
+    // `loopback` is `addresses.length > 0 && addresses.every(isLoopbackAddress)`,
+    // so a probe that could not answer at all (no addresses) lands HERE, on the
+    // safe side. That is deliberate: this block is destructive, and "I could not
+    // tell where this is" must not be read as "it is local".
+    return {
+      runnable: false,
+      why:
+        `${where}; it resolves to ${probe.addresses.join(', ') || 'no address'}, which is NOT the loopback ` +
+        `interface — this block CREATEs and DROPs databases, so it only ever addresses this machine`,
+    };
+  }
+  if (!probeServer(url)) return { runnable: false, why: where };
+  return { runnable: true, why: where };
+}
+
+describe('the destructive end-to-end block is bounded by ADDRESS, not only by NAME', () => {
+  const answer = (over: Partial<AddressProbe>): AddressProbe => ({
+    open: true,
+    state: 'open',
+    detail: 'connected',
+    addresses: ['127.0.0.1'],
+    loopback: true,
+    elapsedMs: 1,
+    ...over,
+  });
+
+  it('a REACHABLE non-loopback target is refused, and nothing is sent to it', () => {
+    // The defect in one case: before this guard, `probeServer` said "yes" on a
+    // remote production DSN and the block below ran its DDL there.
+    let serverProbes = 0;
+    const verdict = classifyEndToEndTarget(
+      OTHER_SERVER_URL,
+      () => answer({ addresses: ['10.255.255.1'], loopback: false }),
+      () => {
+        serverProbes += 1;
+        return true;
+      },
+    );
+    expect(verdict.runnable).toBe(false);
+    expect(verdict.why).toContain('10.255.255.1');
+    expect(verdict.why).toContain('NOT the loopback');
+    // …and the credentialed `SELECT 1;` never left this machine (see the order
+    // note above). A guard that skipped only AFTER connecting would satisfy the
+    // three assertions above and still touch the production server.
+    expect(serverProbes).toBe(0);
+  });
+
+  it('THE POSITIVE CONTROL — a loopback target that answers still RUNS', () => {
+    // Without this case the guard is satisfied by returning `false` always, which
+    // would silently retire every end-to-end case in this file — the DNC-08 this
+    // whole section exists to prevent, committed while preventing it.
+    expect(classifyEndToEndTarget(DEAD_URL, () => answer({}), () => true).runnable).toBe(true);
+  });
+
+  it('a loopback target that does NOT answer is refused, with the probe detail carried', () => {
+    const verdict = classifyEndToEndTarget(
+      DEAD_URL,
+      () => answer({ open: false, state: 'refused', detail: 'ECONNREFUSED' }),
+      () => false,
+    );
+    expect(verdict.runnable).toBe(false);
+    expect(verdict.why).toContain('ECONNREFUSED');
+  });
+
+  it('a probe that could not answer is refused — unknown is not local', () => {
+    const verdict = classifyEndToEndTarget(
+      DEAD_URL,
+      () => answer({ open: false, state: 'indeterminate', detail: 'ENOTFOUND', addresses: [], loopback: false }),
+      () => true,
+    );
+    expect(verdict.runnable).toBe(false);
+    expect(verdict.why).toContain('no address');
+  });
+
+  it('an unusable connection string is refused rather than probed', () => {
+    const verdict = classifyEndToEndTarget('not a connection string', () => answer({}), () => true);
+    expect(verdict.runnable).toBe(false);
+    expect(verdict.why).toContain('not a usable connection string');
+  });
+
+  it('the REAL probe distinguishes the two directions — the injected cases are not vacuous', () => {
+    // AC-1 above already pins `loopback === true` for `127.0.0.1`. The negative
+    // direction is what this guard turns on, and a `loopback` field that were
+    // always true would make every assertion above pass against fixtures while
+    // the shipped guard let a remote address through. RFC 5737 TEST-NET-1:
+    // routable-looking, never routed, and bounded so it costs 400 ms.
+    const remote = gate.probeAddress('192.0.2.1', 5432, 400);
+    expect(remote.addresses).toContain('192.0.2.1');
+    expect(remote.loopback).toBe(false);
+  }, 30000);
+});
+
+/* ================================================================== *
  * 6. One agreement against a real PostgreSQL — guarded, never silent
  *
  * ORDERING NOTE, load-bearing: the full-CLI cases run FIRST, because the CLI
@@ -1553,8 +1949,18 @@ describe('schema-drift-check: a client failure is not an absent server (TOOL-24)
  * only after the CLI has finished.
  * ================================================================== */
 
-const PROBE_URL = process.env.DATABASE_URL || LOCAL_URL;
-const reachable = gate.probeServer(PROBE_URL);
+/**
+ * The ONE resolution expression in this file. Shape unchanged from before
+ * TOOL-25 — an explicitly exported `DATABASE_URL` still wins, identically to
+ * `schema-drift-check.js:204` and `restore-drill.js:145` — only the fallback
+ * moved from a literal to the shared resolver. Hoisted and reused by the
+ * end-to-end blocks below: three copies of the address expression inside the file
+ * whose slice is about having ONE would be the joke telling itself.
+ */
+const PROBE_URL = process.env.DATABASE_URL || RESOLVED_BASE_URL;
+/** Reachable AND loopback — see §5f for why the second half is not optional. */
+const endToEndTarget = classifyEndToEndTarget(PROBE_URL);
+const reachable = endToEndTarget.runnable;
 const describeWithDb = reachable ? describe : describe.skip;
 
 if (!reachable) {
@@ -1568,19 +1974,15 @@ if (!reachable) {
   // unmodified repository PASSES", into `describe.skip` and reports green. That
   // is DNC-08 committed at the address of the DNC-08 guard, so the reason has to
   // be readable without re-running anything.
-  let why = 'the probe could not describe itself';
-  try {
-    const target = new URL(PROBE_URL);
-    const probe = gate.probeAddress(target.hostname, target.port || '5432');
-    why =
-      `${target.hostname}:${target.port || '5432'} — ${probe.state}: ${probe.detail} ` +
-      `(after ${probe.elapsedMs} ms)`;
-  } catch {
-    why = 'DATABASE_URL is not a usable connection string';
-  }
+  //
+  // The reason is CARRIED from the one classification, never re-measured here: a
+  // second probe can disagree with the first, and the run would then print one
+  // truth about the address while having acted on another — the mistake
+  // `error.preflightState` was introduced to stop in `check()` (TOOL-24).
   console.warn(
-    `[schema-drift-gate] no PostgreSQL server answered at ${why} — ` +
-      `the end-to-end cases are skipped. Every classifier, verdict, safety, wiring and DNC case in ` +
+    `[schema-drift-gate] the end-to-end cases are skipped: ${endToEndTarget.why} ` +
+      `(address resolved from ${describeAddressSource(process.env, ENV_FILES)}). ` +
+      `Every classifier, verdict, safety, wiring and DNC case in ` +
       `this file is deterministic and ran. The gate itself is stage 0d of ci-gate.sh, which DOES ` +
       `require a database and fails rather than skipping (ADR-027).`,
   );
@@ -1595,14 +1997,14 @@ describeWithDb('the CLI, executed against a real PostgreSQL', () => {
 
   it('leaves no scratch database behind (AC-11)', () => {
     const rows = gate
-      .openSqlRoutes(process.env.DATABASE_URL || LOCAL_URL)
+      .openSqlRoutes(PROBE_URL)
       .query('postgres', "SELECT datname::text FROM pg_database WHERE datname LIKE 'schema\\_drift\\_%';");
     expect(rows.map((r) => r[0])).toEqual([]);
   }, 180000);
 });
 
 describeWithDb('the diff and the deploy, driven through the exported seams', () => {
-  const baseUrl = process.env.DATABASE_URL || LOCAL_URL;
+  const baseUrl = PROBE_URL;
   const routes = gate.openSqlRoutes(baseUrl);
   const maintenanceUrl = deriveMaintenanceUrl(baseUrl);
   const scratchName = `schema_drift_${Date.now()}${process.pid}`;

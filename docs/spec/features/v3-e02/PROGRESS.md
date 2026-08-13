@@ -2,7 +2,7 @@
 
 **Layer** L0 · **Closes** PF-03, PF-55, PF-56, VAL-01, VAL-03, VAL-10 (+ PF-58, PF-59, PF-60, PF-61 discovered in flight)
 **Spec** the story contracts in `docs/daily-improvement-v3/stories/sprint-01.md` are the spec-kit for this epic.
-**Status (2026-08-13, after `TOOL-15`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
+**Status (2026-08-13, after `TOOL-25`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
 `S-E02-18` and `S-E02-19` are all ✅ done. `S-E02-18` closed the seven findings `S-E02-17` queued (`PF-104`…`PF-110`,
 plus the `PF-112` register renumber): the gate that slice made blocking **can now fail**, its wiring is **executed** by
 a test rather than asserted, and the dashboard stops under-reporting a stalled worker. `S-E02-19` then closed the
@@ -27,7 +27,12 @@ two probe writers become hermetic, so the race those readers were taught to surv
 `DNC-08` legibility half in `scripts/link-integrity-check.js` and a parsed ratchet that stops a third writer being
 written; `ADR-039`) and **`TOOL-17(b)`** (run 48, the tolerance stops being able to buy a PASS — a *named* path read out of a
 tolerant map throws instead of yielding `''`, and the vanish budget scales with the corpus; all three `TOOL-17`
-residuals closed, `R1` of its ratchet recorded as the new open `TOOL-20`). Those slices repair the machinery
+residuals closed, `R1` of its ratchet recorded as the new open `TOOL-20`), then **`TOOL-21`** (run 49, the two role
+orderings are compared instead of excluded — `main` green again), **`TOOL-22`** (#241, the default database address
+comes from the project config), **`TOOL-23`/`TOOL-24`** (run 50, the gate reaches the PostgreSQL that IS running) and
+now **`TOOL-25`** (run 51, the drift gate's own SPEC stops carrying a second copy of that address — the last consumer
+`TOOL-22` missed — and the A6 comment that justified the divergence is measured **false** and written down; raises the
+five residuals carried as `TOOL-26`). Those slices repair the machinery
 this epic built rather than extending it, so they move the epic's *reliability*, never its status: `code-complete` is
 unchanged and `PF-111` / `PF-113` are still its two residuals. **One thing `TOOL-13` leaves for an operator, and it is
 not a detail:** the skip ratchet ships **disarmed** — `apps.<app>.skipped` is absent from `known-test-failures.json` on
@@ -2813,3 +2818,158 @@ gate-machinery slice, so it should be picked before `TOOL-20`.
 
 **The `S-E01-2b` pointer from runs 44–47 is still not spent.** Its precondition is unchanged and still unmet: a working
 PostgreSQL on `127.0.0.1:5433`.
+
+## `TOOL-25` — the drift gate's own spec stops carrying a second copy of the address (run 51, 2026-08-13)
+
+> **The run-50 pointer, followed exactly.** It named this defect — *"Also still open, and now cheap:
+> `schema-drift-gate.spec.ts:96` still hard-codes `LOCAL_URL` … it is a sibling defect worth its own `TOOL` row, and it
+> must NOT be fixed by pointing that literal at 5432 as a side effect of another slice: doing so arms the destructive
+> end-to-end block against the operator's live database."* Both halves were honoured: the literal is **resolved**, not
+> repointed, and the arming the pointer warned about is met head-on by §5f rather than shipped unremarked. **That
+> paragraph is now closed.**
+
+### The one sentence
+
+A merge gate that reports **green by not executing** is the one direction a merge gate may never be wrong in, and this
+file did it for three slices — because a **comment** asserted a constraint that does not exist.
+
+### What was measured, before anything was written
+
+| Measurement | Result |
+|---|---|
+| `npx jest src/shared/quality/schema-drift-gate.spec.ts` from `apps/api` (BASELINE) | `5 skipped, 119 passed, 124 total`, **exit 0** |
+| the five skipped cases, by name | *"the unmodified repository PASSES — the gate is not red on correct code (AC-2)"*, *"leaves no scratch database behind (AC-11)"*, *"the ledger really builds the schema the datamodel describes (AC-2)"*, *"a datamodel the ledger does not build FAILS (AC-1)"*, *"a migration that does not execute on PostgreSQL FAILS (AC-3)"* |
+| `defaultDatabaseUrl()` | `127.0.0.1`, port **5432** — reachable, loopback |
+| the port the spec pinned | **5433** — nothing has listened on it for weeks |
+| `node scripts/schema-drift-check.js`, three directories away | **PASS**, against the address the project is actually configured for |
+| `production-artefact-check.js` banner | **597** files scanned |
+| the same walk, same roots, same extensions, **without** the `*.spec.ts` exclusion | **701** files |
+
+The last two rows are the whole story. `production-artefact-check.js:105` defines
+`EXCLUDED_FILE = /\.(spec|test)\.(ts|tsx|js|jsx|mjs|cjs)$/` and `:319` applies it inside `walk()`. **597 is the
+spec-excluded count.** Rule A6 has never been able to read `schema-drift-gate.spec.ts`, so the comment that said A6
+*forced* the wrong port was false — and three agents (`TOOL-22`, `TOOL-23`, `TOOL-24`) read it, believed it, and left
+the address diverging. This is the `feedback_verify_the_brief_you_wrote` failure mode with a three-slice cost attached.
+
+### What landed
+
+| Piece | Why it is that and not something cheaper |
+|---|---|
+| `LOCAL_URL` deleted; `RESOLVED_BASE_URL = defaultDatabaseUrl()` loaded from `scripts/lib/default-database-url.js` by a **computed require**, **unguarded on purpose** | The `test-ratchet.spec.ts:307` → `ratchet-core.js` precedent, followed exactly. Unguarded because a `try/catch` fallback to a literal is **how the divergence was born**: if the resolver disappears this suite must go red **at LOAD**, not quietly re-invent an address |
+| The two `expect(url.port).toBe('5433')` lines **REPLACED**, never deleted (AC-3) | `TOOL-21`'s lesson. What those lines *defended* is that `buildScratchUrl` and `deriveMaintenanceUrl` move the **database segment and nothing else**. That property is now asserted as an **invariance against the resolved base** (`[url.hostname, url.port]` vs `[base.hostname, base.port]`), in the idiom the TOOL-11 case at `:1418` already used — so it survives any host instead of pinning one |
+| The **INPUT vs INVARIANT** rule, written into the constant's own doc comment | The rename is load-bearing: `LOCAL_URL` meant *"a local address that is dead"*, so value-shaped assertions against it were safe. `RESOLVED_BASE_URL` means *"whatever this host answers on"*, which an **untracked** `.env` chooses — so it may only ever appear on the left of an invariance. **No assertion's meaning may depend on its value** |
+| Fixed synthetic fixtures for every case whose meaning *is* a value: `OTHER_SERVER_URL` (cross-server), `REDACTION_SAMPLE_URL = 'postgresql://u:s3cr3t@db.example:…'` (**G-TENANT**) | The redaction case is the sharpest instance. Phrased against the resolved base, a redactor that does **nothing** would pass on any checkout whose credentials differ, and would be meaningless on one with an empty password — the exact defect class this slice repairs, re-created on the one tenant-adjacent guard in the file. It got **stronger**, not weaker |
+| The anti-divergence ratchet is a **consumer enumeration** in `default-database-url-gate.spec.ts` — three entries, `it.each`, anchored on a **call site** in **comment-blanked** source | AC-4 asked for the assertion in the drift spec; it is better **beside the seam**, enumerated **once** (the `walk-read-gate.spec.ts` shape). Two enumerations of *"who shares the address"* would be the same defect as two literals of the address. Comment-blanked because all three files **mention** the module in their header, so `toContain('default-database-url')` would be satisfied by prose — verified in the failing direction against a copy of `restore-drill.js` |
+| **§5f — the end-to-end block is bounded by ADDRESS as well as by NAME** | Resolving the address turned a block that had **never executed anywhere** into one that really runs `CREATE DATABASE` / `prisma migrate deploy` / `DROP DATABASE … WITH (FORCE)` plus a credentialed `pg_database` scan. The pre-existing containment argument is stated purely in terms of the **name** (`SCRATCH_NAME_PATTERN`, `isSafeScratchTarget`, `buildChildEnv`) — a bound on *what*, never on *where*. `describeWithDb` now asks **both** questions. **Order is load-bearing and asserted:** the address is classified on the TCP preflight **before** `probeServer`, because `probeServer` opens a credentialed `SELECT 1;` through the Prisma CLI, and on a production DSN even that is a connection this suite has no business making. `loopback` is `addresses.length > 0 && addresses.every(isLoopbackAddress)`, so *"I could not tell where this is"* lands on the **safe** side |
+| Six deterministic §5f cases with **injected** probes, including a **positive control** and a real TEST-NET-1 probe | Without the positive control (*"a loopback target that answers still RUNS"*) the guard is satisfied by returning `false` always, which would silently retire every end-to-end case in the file — DNC-08 committed while preventing DNC-08. The real `gate.probeAddress('192.0.2.1', 5432, 400)` case exists because the suite only ever pinned `loopback === true`; a field that were always `true` would make every fixture case pass while the shipped guard let a remote address through |
+| The skip warning **carries** the one classification's reason instead of re-probing | A second probe can disagree with the first, and the run would then print one truth about the address while having acted on another — the mistake `error.preflightState` was introduced to stop in `check()` (`TOOL-24`) |
+
+**Not edited, by rule:** `scripts/production-artefact-check.js` (A6 is **untouched, unweakened, un-excluded** — R-30),
+`scripts/ci-gate.sh`, `scripts/schema-drift-check.js`, `scripts/restore-drill.js`, `scripts/lib/default-database-url.js`,
+`apps/api/src/shared/quality/restore-drill-gate.spec.ts` (AC-7 — its 5433 literal is a pure **redaction fixture** with no
+`describeWithDb` / `probeServer`; out of scope, and the reason is *not* A6). No new environment variable, no new CLI
+flag, no `.env` key — **DNC-10 untouched**. No ADR is owed for the address seam: it is `ADR-027` (as amended by
+`TOOL-23`/`TOOL-24`) applied to the one consumer `TOOL-22` missed. **§5f is a different matter — see item 1 below.**
+
+### What AC-2's evidence actually is, so nobody re-derives it
+
+Re-running `node scripts/production-artefact-check.js` proves this diff did **not disturb the shipped-source scan**. It
+is a **NON-REGRESSION** check. It provides **zero** protection against a future author re-planting an address in this
+file, because the scanner **cannot read this file at all**. The ratchet that does is the consumer enumeration in
+`default-database-url-gate.spec.ts`. Stated here because the story's first draft said the opposite, and a false
+constraint in a story doc is exactly what cost three slices.
+
+### Evidence status — stated the way this file states it, including the gap
+
+- **`pnpm typecheck` 13/13, exit 0**, `@pilotage/api` a real cache **miss** executed fresh, so **both** edited specs
+  really compiled. `git diff --check` exit 0.
+- **⚠️ No jest run by any agent** (GUARDRAILS §4). Every new assertion was pre-verified by executing the same
+  predicates in plain `node` against the real files: the `process.env` enumeration returns `["process.env.DATABASE_URL"]`,
+  the DSN self-scan finds 10 literals and none of them resolves to the base host, `executableJs` and `probeAddress`'s
+  declared signature both exist at the lines the new code targets.
+- **AC-5, this slice's own closing measurement, is UNTAKEN — and that is the honest headline.** The five named cases
+  are *expected* to run here (`defaultDatabaseUrl()` → loopback, answering), but **nobody observed them run**. The PR
+  therefore asserts a behaviour change it has not witnessed. §6 of `stories/TOOL-25.md` carries the gap rather than a
+  number, and the first operator to run `npx jest src/shared/quality/schema-drift-gate.spec.ts` from `apps/api` owns
+  three readings: the tail compared to `5 skipped, 119 passed, 124 total`; a reachable **non-loopback** control
+  (`DATABASE_URL=postgresql://u:p@10.255.255.1:5432/x npx jest …` must **skip** with its reason printed); and
+  `SELECT datname FROM pg_database WHERE datname LIKE 'schema\_drift\_%'` **empty** afterwards, with `git status
+  --porcelain` clean. **A failure among the five is a REAL FINDING about the drift gate against a live database —
+  report it, do not re-skip it** (R-30).
+
+### The five residuals — all open, all carried as `TOOL-26`
+
+1. **§5f is un-specced, and `loopback` ≠ `non-production`.** The guard is well built and I am not asking for it to be
+   reverted — but the story's `D5` said the reachability guard *"is CORRECT and stays; only its address was wrong"*, and
+   §5f **narrows** it, which changes which tests run. Worse, its containment argument has a counterexample **inside this
+   project**: `.env.prod.example:50` binds production PostgreSQL to the **loopback** interface, so a host-side checkout
+   on the Hostinger VPS with a root `.env` — or a developer with an SSH port-forward of the production database onto
+   `127.0.0.1` — is `runnable`. Blast radius stays bounded by **name** (`schema_drift_%`, re-checked in `dropScratch`
+   and `buildChildEnv`), so **child data is not at risk**; what is at risk is that `pnpm test` has quietly become a
+   **DDL-executing** operation against whatever answers on localhost, and the header comment promises a stronger
+   guarantee than the code delivers. **The ask:** either accept §5f and record it as an **`ADR-027` addendum** with the
+   limitation written down honestly (recommended — the safety property is worth more than the scope purity), or split it
+   into its own slice with its own ACs. A **second discriminator** (`NODE_ENV`, or the presence of `.env.prod`) is the
+   non-knob option; a bypass flag is **DNC-10** and is refused. *A false containment comment is precisely the defect
+   class this story exists to close — shipping a fresh one inside the fix would be the joke telling itself.*
+2. **The port half of the cross-server guard lost its only coverage.** `schema-drift-check.js:1312` refuses on
+   `target.host !== source.host || String(target.port) !== String(source.port)`. Before this diff the case ran
+   `openSqlRoutes(DEAD_URL).exec(LOCAL_URL, …)` = `127.0.0.1:59999` vs `127.0.0.1:5433` — **same hostname, different
+   port** — so only the **port** clause could fire. It now runs against `OTHER_SERVER_URL` (`10.255.255.1:5432`), where
+   the **host** clause short-circuits first, and grep confirms **no assertion in the file now pairs an equal hostname
+   with an unequal port**. That is the same class AC-3 forbade for the two port assertions (*"REPLACED, never merely
+   deleted"*), applied by accident to a third. **Fix:** keep the different-host case **and** add back a fixed
+   `SAME_HOST_OTHER_PORT_URL`, with `new URL(…).hostname === new URL(DEAD_URL).hostname` asserted first so it cannot go
+   vacuous.
+3. **`leaves no scratch database behind (AC-11)` is now a reachable flake.** It asserts the **server-wide**
+   `schema_drift_%` list is empty, while the creating block names its scratch `schema_drift_${Date.now()}${process.pid}`
+   and drops it only in `afterAll` — the script registers `SIGINT`/`SIGTERM` handlers, the **suite does not**. One
+   killed jest worker leaves an orphan that reds this case **for ever** until an operator drops it by hand; two
+   overlapping runs (this repo's routine runs hourly with `MAX_INFLIGHT=2`) red each other. Unreachable while the block
+   never executed; reachable as of this diff. **Fix:** scope the assertion to this process's own scratch, or to rows
+   older than the run's start, and register the drop on the signals too.
+4. **Two assertions print the raw resolved DSN on failure.** `expect([url.username, url.password]).toEqual([base.username, base.password])`
+   and `expect(RESOLVED_BASE_URL).toMatch(/^postgres(?:ql)?:\/\//)` emit expected/received **verbatim** — i.e. the
+   checkout's real database password in cleartext. `default-database-url.js:43-44` states the opposite invariant (*"the
+   value is never logged here"*), every printing call site in `schema-drift-check.js` routes through
+   `redactConnectionUrl`, and AC-5 instructs pasting the jest tail into a report **this routine publishes into PR
+   bodies**. The path from *"an assertion went red"* to *"a production password in a PR body"* is short. **Fix:**
+   compare redacted forms, or reduce the credential half to a boolean so no value is printed.
+5. **The fix is inert in a linked worktree, which is how this routine runs.** `.env` and `apps/api/.env` are gitignored
+   and absent from `.claude/worktrees/…`, so `defaultDatabaseUrl()` falls back to the same dead `127.0.0.1:5433`, the
+   probe fails, and the five cases print `○ skipped` while the suite reports green — **the exact DNC-08 shape the slice
+   exists to close, relocated**. AC-5's *"the five must RUN"* is true **only from the main checkout**. Related, and
+   worth naming in the same breath: any environment that reaches Postgres by **service name** (docker compose, a CI
+   service container) now skips the same five cases, and the stated backstop — stage 0d of `ci-gate.sh` — is
+   **conditional** (`scripts/ci-gate.sh:247` guards it with `if changed_match '^apps/api/prisma/'`), so on a diff that
+   touches no migration such a host has **zero** end-to-end drift coverage and a green suite.
+
+**Two smaller notes, non-blocking but recorded so they are not re-derived.** (a) `executableJs` is now the **fifth**
+byte-similar copy in this directory (`link-integrity-gate`, `postgres-client-path-gate`, `schema-drift-gate`,
+`test-ratchet`, and now `default-database-url-gate`) — in a slice whose thesis is that a second copy of a thing is the
+defect. `scripts/lib/` is the established home and `test-ratchet.spec.ts:307` is the precedent; a sixth copy should
+collapse them. (b) The `CLOSED_PORT` comment at `:1002` still repeats the **false A6 premise** the file spends 38 lines
+refuting at `:104-141`; a reader who lands there gets exactly the misdiagnosis that cost three slices.
+
+`V3-E02` remains **`code-complete`** — a gate-hardening slice moves the epic's *reliability*, never its status.
+`PF-111` and `PF-113` are still its two residuals; `S-E02-1`'s hosted half is still the one open row.
+
+### The pointer, as of 2026-08-13 (run 51) — supersedes run 50's
+
+**Next slice → `TOOL-26`** — the five residuals above, in that order, because the first two are about a guard that is
+now **live** and a coverage hole that is now **open**, and because `TOOL-25` shipped a claim (*"the five cases run"*)
+that nobody has observed. It is small: an `ADR-027` addendum plus a second discriminator, one restored fixture, one
+scoped assertion, two redacted expectations, one recorded precondition. It is the same shape `TOOL-17(b)` had after
+`TOOL-17` — a slice closing its own predecessor's residuals — and that shape has a good record in this epic.
+
+**Then `S-E01-2b`** (RLS / tenant-context hardening) — its precondition has been met since run 50 and is **not** the
+thing holding it now. What holds it is that the evidence it needs is a **live** run of exactly the block `TOOL-26` is
+about: until the loopback bound is either specced or replaced, and until AC-11 stops asserting a server-wide property,
+a live run produces evidence nobody can grade. One run of delay, for evidence that means something.
+
+**Then `TOOL-20`** — `R1` of the walk-read ratchet, plus the accessor-placement rule and the narrowing of R2's receiver.
+
+> **On the stale `127.0.0.1:5433` precondition sentences at `:2134`, `:2236` and `:2358`.** They are historical pointers
+> from runs 44–47 and they are **wrong**: nothing listens on 5433. They are left standing, as this file's convention
+> requires — *named rather than overwritten* — and the correction is here and in the run-50 pointer above. A reader who
+> lands on one of them should read this section instead.
