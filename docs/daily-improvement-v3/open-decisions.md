@@ -154,7 +154,7 @@ policy is being finalised and provides a contact route; it may not author terms.
 
 ---
 
-## D-09 — Canonical KPI definitions · `open` · shapes V3-E03
+## D-09 — Canonical KPI definitions · **`resolved` 2026-08-13** · unblocks V3-E03
 
 **Question.** For each contested metric, which definition is authoritative?
 
@@ -168,7 +168,18 @@ cannot decide which meaning the school intends.
 **Recommendation.** Adopt the A2 Appendix D "required contract" column as the default and confirm each with a school
 user; publish each definition in-product as a KPI tooltip.
 
-**Decision:** — · **Decided by:** — · **Date:** —
+**Decision:** **Adopted — the canonical KPI contract, `ADR-041`.** One default rule from which every KPI inherits:
+computed over the **current academic year**, counting only records **visible to the requesting role**, and **excluding
+drafts and applicants** unless the KPI's own label says otherwise. The seven contested metrics are each settled in the
+ADR (student = enrolled **and** active; teacher = holds an active assignment, not a bare profile; assessment and grade
+= published only on the parent and student portals; alert = open instances, with configured rules a separate labelled
+KPI; calendar = role-scoped and always labelled; roster = effective-dated as of today). Definitions live in **one**
+registry in `packages/contracts`; portals import the predicate and never re-derive it; `G-TRUTH` is discharged by a
+four-portal fixture. **Scoped honestly:** these are defensible defaults chosen to unblock an XL epic, **not**
+definitions ratified by a school user — every registry entry carries `confirmed: false` until one does, which makes a
+later change a one-line registry edit plus a fixture update. · **Decided by:** routine V3 (run 47), under the
+operator's explicit 2026-08-13 mandate to decide rather than wait · **Date:** 2026-08-13 · **ADR:** `ADR-041` ·
+**Unblocks:** the whole of `V3-E03` (9 findings, XL)
 
 ---
 
@@ -216,7 +227,7 @@ terminal in-product and document the DBA procedure — in which case that proced
 
 ---
 
-## D-12 — How does an administrator legitimately onboard a teacher? · `open` · raised by `S-E05-2` (`PF-178`) · **blocks `S-E05-2b`, and `PF-09`'s residual cannot close without it**
+## D-12 — How does an administrator legitimately onboard a teacher? · **`resolved` 2026-08-13** · raised by `S-E05-2` (`PF-178`) · **unblocks `S-E05-2b` and `PF-09`'s residual**
 
 **Question.** Now that no grantor may hand out a permission they do not themselves hold, by what mechanism does a
 `school_admin` provision a teacher, a parent or a student?
@@ -255,7 +266,22 @@ it hands every admin `grades.revise` in order to let them *name* a teacher, whic
 the workaround and the vulnerability are the same door. Compounding it, `/admin/users` renders the refusal as **silence**
 (`PF-174`), so the blocked path currently reports nothing at all.
 
-**Decision:** — · **Decided by:** — · **Date:** —
+**Decision:** **Option (b) — a grantor-relative realm-role ladder, `ADR-040`.** Ordered
+`super_admin > school_admin > teacher > parent > student`; a grantor may confer a realm role **strictly below their own
+rung**. So `school_admin → teacher | parent | student` is permitted, `teacher → school_admin` is refused, and
+`school_admin → school_admin` is refused (only a `super_admin` mints an admin). **Three properties make it safe rather
+than an escalation in disguise:** (1) **no self-grant, at any rung** — without this a `school_admin` grants themselves
+`teacher`, re-authenticates and holds `grades.revise`, which is exactly what `S-E05-2` closed, reached by a longer
+path; (2) the permission ceiling is **not weakened, it is scoped** — it still governs custom-role and direct-permission
+grants unchanged, and the ladder governs seeded realm roles only, because conferring the *identity* "teacher" on
+another person is a different act from awarding oneself the *capability* `grades.revise`; (3) a role absent from the
+ladder is **unrankable and therefore ungrantable** (`DNC-08`, fail-closed). `POST /users/invite`'s `realmRole` channel
+passes through the same predicate, which is what closes **`PF-09`'s residual** — the workaround and the vulnerability
+stop being the same door. Every grant, refusals included, writes an audit row in the grant's own transaction.
+Option (c) rejected: widening `school_admin`'s codes hands every admin `grades.revise` in order to let them *name* a
+teacher. Option (a) deferred as premature, not wrong. · **Decided by:** routine V3 (run 47), under the operator's
+explicit 2026-08-13 mandate to decide rather than wait · **Date:** 2026-08-13 · **ADR:** `ADR-040` ·
+**Unblocks:** `S-E05-2b`, `PF-178`, and `PF-09`'s residual
 
 ---
 
