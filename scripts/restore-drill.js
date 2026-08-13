@@ -144,6 +144,22 @@ const MIGRATIONS_DIR = join(REPO_ROOT, 'apps', 'api', 'prisma', 'migrations');
  */
 const { defaultDatabaseUrl } = require('./lib/default-database-url');
 
+/**
+ * TOOL-23 — the same discipline for the CLIENT that TOOL-22 gave the ADDRESS, and
+ * shared with `schema-drift-check.js` STRUCTURALLY rather than by a comment.
+ *
+ * `psql`, `pg_dump` and `pg_restore` used to be spawned as bare names, i.e.
+ * through the inherited PATH and nothing else, and this file printed
+ * « not found on PATH » as if that settled it. Measured 2026-08-13: the local
+ * Windows machine has a complete PostgreSQL 15 client set at
+ * `C:\Program Files\PostgreSQL\15\bin`, and only the inherited environment block
+ * was stale. `postgresClient()` walks the PATH first (returning the bare name, so
+ * nothing that works today changes) and then the well-known install roots — with
+ * no variable and no flag that could substitute the client a gate reaches its
+ * verdict with (DNC-10).
+ */
+const { postgresClient } = require('./lib/postgres-client-path');
+
 const DEFAULT_SOURCE = defaultDatabaseUrl();
 const DEFAULT_CONTAINER = 'pilotage_postgres';
 
@@ -774,6 +790,25 @@ function run(command, argv, options = {}) {
 }
 
 /**
+ * A `run()`-SHAPED result for a client that could not be located (TOOL-23).
+ *
+ * Shaped rather than thrown, and shaped rather than a new branch at each caller:
+ * every host-route call site already reports a non-zero `status` with its
+ * `stderr`, so this makes the run describe the real reason — WHAT was searched —
+ * with no new control flow and no broadened catch. A route that cannot be found
+ * is still a FAILURE with a verdict (DNC-08); it is simply an actionable one.
+ */
+function unavailableClient(name, client) {
+  return {
+    status: -1,
+    stdout: '',
+    stderr:
+      `${name} was not found on PATH nor at any well-known PostgreSQL install root. Searched:\n` +
+      client.tried.map((line) => `      ${line}`).join('\n'),
+  };
+}
+
+/**
  * One SQL round trip. SQL travels on **stdin**, never as a `-c` argument and
  * never through a shell: `docker exec sh -c` with a heredoc breaks on CRLF —
  * which has already bitten this repository once — and Windows `spawnSync`
@@ -800,8 +835,12 @@ function makeRunner(source, args) {
       });
     }
     // Host route. The password goes through the environment, never argv:
-    // `docker inspect` and the process table both publish argv.
-    return run('psql', ['-h', source.host, '-p', source.port, '-U', source.user, ...flags], {
+    // `docker inspect` and the process table both publish argv. TOOL-23 changed
+    // WHICH binary is spawned — discovered rather than assumed to be on PATH —
+    // and deliberately nothing about HOW the credential travels (ADR-025 D6).
+    const psqlClient = postgresClient('psql');
+    if (!psqlClient.command) return unavailableClient('psql', psqlClient);
+    return run(psqlClient.command, ['-h', source.host, '-p', source.port, '-U', source.user, ...flags], {
       input: body,
       env: source.password ? { PGPASSWORD: source.password } : undefined,
     });
@@ -1201,10 +1240,23 @@ function checkTooling(args) {
     console.error(`    2. a host-side pg client — not attempted (use --mode host)`);
     return false;
   }
-  const host = run('pg_dump', ['--version']);
+  // TOOL-23: the client is DISCOVERED before it is probed. The message that used
+  // to stand here — "not found on PATH" — was, on this machine, a false statement
+  // printed to an operator: a complete client set sat at
+  // `C:\Program Files\PostgreSQL\15\bin` the whole time. A route that cannot be
+  // found is still a failure, but the failure now names everything it searched so
+  // the operator can act on it.
+  const pgDumpClient = postgresClient('pg_dump');
+  const host = pgDumpClient.command
+    ? run(pgDumpClient.command, ['--version'])
+    : unavailableClient('pg_dump', pgDumpClient);
   if (host.status === 0) return true;
   console.error('✗ no dump route available. Tried:');
-  console.error(`    1. a host-side pg_dump — ${host.stderr.trim() || 'not found on PATH'}`);
+  console.error(
+    `    1. a host-side pg_dump — ${
+      host.stderr.trim() || 'not found on PATH nor at any well-known PostgreSQL install root'
+    }`,
+  );
   console.error('    2. docker exec — not attempted (drop --mode host)');
   return false;
 }
@@ -1248,7 +1300,9 @@ function pgDump(args, source, dumpPath) {
   if (args.mode === 'docker') {
     return run('docker', ['exec', args.container, 'pg_dump', '-U', source.user, ...flags]);
   }
-  return run('pg_dump', ['-h', source.host, '-p', source.port, '-U', source.user, ...flags], {
+  const pgDumpClient = postgresClient('pg_dump');
+  if (!pgDumpClient.command) return unavailableClient('pg_dump', pgDumpClient);
+  return run(pgDumpClient.command, ['-h', source.host, '-p', source.port, '-U', source.user, ...flags], {
     env: source.password ? { PGPASSWORD: source.password } : undefined,
   });
 }
@@ -1263,7 +1317,9 @@ function pgRestore(args, source, scratchName, dumpPath) {
   if (args.mode === 'docker') {
     return run('docker', ['exec', args.container, 'pg_restore', '-U', source.user, ...flags]);
   }
-  return run('pg_restore', ['-h', source.host, '-p', source.port, '-U', source.user, ...flags], {
+  const pgRestoreClient = postgresClient('pg_restore');
+  if (!pgRestoreClient.command) return unavailableClient('pg_restore', pgRestoreClient);
+  return run(pgRestoreClient.command, ['-h', source.host, '-p', source.port, '-U', source.user, ...flags], {
     env: source.password ? { PGPASSWORD: source.password } : undefined,
   });
 }

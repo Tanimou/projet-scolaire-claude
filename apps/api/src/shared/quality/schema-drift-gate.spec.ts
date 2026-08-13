@@ -1312,9 +1312,20 @@ describe('schema-drift-check: routes A and B are bounded, data-plane sized (TOOL
 
     // NON-VACUITY FIRST, on the comment-blanked source: a bound merely NAMED in a
     // comment must not satisfy this. TOOL-07 and TOOL-08 were made of exactly that.
-    const sites = callSites(EXECUTABLE_SCRIPT, /run\(\s*'psql'/);
+    //
+    // TOOL-23 moved the ANCHOR and nothing else: the call is now
+    // `run(psql.command, …)` because the binary is discovered rather than assumed
+    // to be on PATH, so `/run\(\s*'psql'/` matches zero sites. The two assertions
+    // are kept verbatim — `toHaveLength(1)` is the non-vacuity half and the bound
+    // is the TOOL-12 ratchet. Relaxing either (to `>= 1`, or to a looser regex
+    // such as `/run\(\s*psql/i` that a comment could satisfy) would lose the
+    // 120 s bound on the very route this slice exists to enable.
+    const sites = callSites(EXECUTABLE_SCRIPT, /run\(\s*psql\.command/);
     expect(sites).toHaveLength(1);
     expect(sites[0]).toContain('PSQL_HOST_TIMEOUT_MS');
+    // …and the bare-name spelling is really gone, so the discovery module cannot
+    // be reintroduced-around by a second, undiscovered call site.
+    expect(callSites(EXECUTABLE_SCRIPT, /run\(\s*'psql'/)).toHaveLength(0);
   });
 
   it('the Prisma CLI route carries a named bound larger than the version probe (AC-14)', () => {
@@ -1336,7 +1347,9 @@ describe('schema-drift-check: routes A and B are bounded, data-plane sized (TOOL
     // `run(cli.command` each had exactly 1 site and NEITHER contained `timeoutMs`,
     // so both cases above are genuinely red-before / green-after.
     const ladder: Array<[string, RegExp]> = [
-      ['psql', /run\(\s*'psql'/],
+      // `psql.command` since TOOL-23 — the same single site, discovered instead of
+      // assumed. See the anchor note in the case above.
+      ['psql', /run\(\s*psql\.command/],
       ['prisma', /run\(\s*cli\.command/],
       ['docker exec', /run\(\s*'docker',\s*\[\s*'exec'/],
       ['docker port', /run\(\s*'docker',\s*\[\s*'port'/],
@@ -1347,6 +1360,187 @@ describe('schema-drift-check: routes A and B are bounded, data-plane sized (TOOL
       expect([name, sites.length]).toEqual([name, 1]);
       expect([name, (sites[0] ?? '').includes('timeoutMs')]).toEqual([name, true]);
     }
+  });
+});
+
+/* ================================================================== *
+ * 5c. TOOL-23 / TOOL-24 — the client is DISCOVERED, and a client failure is no
+ *     longer reported as an absent server
+ *
+ * PLACEMENT IS LOAD-BEARING, for the same reason the TOOL-11/TOOL-12 block above
+ * says so: everything below `describeWithDb` becomes `describe.skip` on a machine
+ * with no reachable PostgreSQL — which is precisely the machine this slice is
+ * about — so evidence placed there would be evidence that can only run where the
+ * bug cannot.
+ *
+ * THE DEFECT, MEASURED 2026-08-13 (run 50). `127.0.0.1:5432` accepts TCP in 3 ms,
+ * a complete PostgreSQL 15 client set sits at `C:\Program Files\PostgreSQL\15\bin`
+ * and `psql … -c "select version();"` returns `PostgreSQL 15.3` — and the gate
+ * printed « no PostgreSQL server answered at the resolved address ». Two defects,
+ * one sentence: the client was looked for on the inherited PATH and nowhere else
+ * (TOOL-23), and `check()`'s catch asserted `serverReachable = false` for ANY
+ * route failure although `error.routeFailure` is a statement about the CLIENT
+ * (TOOL-24).
+ *
+ * WHY THESE CASES ASSERT ON `failures[]` AND NOT ON THE HEADLINE. On every path
+ * the suite currently drives, the headline is ALREADY `tooling_unavailable` by
+ * precedence and the exit code is ALREADY 1 — so a test written against the
+ * headline would have been green before the change too. The only observable
+ * deltas are inside the failure list, and they are asserted in BOTH directions:
+ * the sentence must be GONE on a live preflight and PRESENT on a refused one. One
+ * assertion that behaves differently on the two preflight states is the only proof
+ * the conflation was removed rather than the sentence deleted globally.
+ * ================================================================== */
+
+describe('schema-drift-check: a client failure is not an absent server (TOOL-24)', () => {
+  /** RFC 2606 reserves `.invalid`, so `dns.lookup` answers `ENOTFOUND` — the
+   * cheapest deterministic `indeterminate`. */
+  const LIVE_PREFLIGHT_URL = 'postgresql://pilotage:pilotage@schema-drift-gate.invalid:5433/pilotage?schema=public';
+
+  it('a route failure with a NON-refused preflight no longer claims the server was absent (AC-4)', () => {
+    const run = runInChild([], { DATABASE_URL: LIVE_PREFLIGHT_URL });
+
+    // The premise, asserted before the behaviour: this really is the
+    // `indeterminate` path, so the case cannot pass by addressing something else.
+    expect(run.output).toContain('`indeterminate`');
+
+    // 1. The false sentence is GONE. It is the sentence that parked RLS, VAL-03
+    //    and TOOL-13's drift half for eight consecutive runs.
+    expect(run.output).not.toContain('no PostgreSQL server answered');
+
+    // 2. The run says what it actually MEASURED (DNC-08: a run must describe
+    //    itself), and reports reachability as unknown rather than as absence —
+    //    `serverReachable` now appears in the missing-evidence list, which is the
+    //    truthful outcome and is exactly what `null` buys.
+    expect(run.output).toContain('Reachability is therefore reported as UNKNOWN rather than as absence');
+    expect(run.output).toContain('Missing: serverReachable');
+
+    // 3. It is still a FAILURE, with the same verdict and a non-zero exit. This
+    //    change removes a conflation; it must not make the gate tolerant.
+    expect(run.output).toContain('SCHEMA DRIFT CHECK: FAIL — tooling_unavailable');
+    expect(run.status).not.toBe(0);
+  }, 180000);
+
+  it('THE INVERTED CONTROL — a genuinely refused address still fires unreachable_server (AC-5)', () => {
+    // Without this case, the one above is satisfied by deleting the sentence
+    // unconditionally. `DEAD_URL` is a closed loopback port, i.e. a genuinely
+    // absent server, and the preflight measures `refused` there.
+    //
+    // THIS IS ALSO THE MUTANT KILLER. Write the catch as
+    // `serverReachable = routeFailure ? null : false` — dropping the conjunction —
+    // and `unreachable_server` stops being emitted here, so this case goes red
+    // while every other assertion in the file stays green.
+    const run = runInChild([], { DATABASE_URL: DEAD_URL });
+    expect(run.output).toContain('ECONNREFUSED');
+    expect(run.output).toContain('no PostgreSQL server answered at the resolved address');
+    expect(run.output).toContain('The route back to green is starting a database, never editing code');
+    // The HEADLINE is unchanged and stays `tooling_unavailable` by precedence —
+    // `unreachable_server` is a FINDING here, not the headline, and asserting the
+    // headline would be testing the wrong thing (`docs/runbooks/…` §9 and the
+    // existing case at "the CLI against a refused address" both record this).
+    expect(run.output).toContain('SCHEMA DRIFT CHECK: FAIL — tooling_unavailable');
+    expect(run.status).not.toBe(0);
+  }, 120000);
+
+  it('`serverReachable` stays true | false | null — a sentinel string never reaches ok (AC-4b)', () => {
+    // The tri-state temptation: told "do not assert false", the obvious next move
+    // is `serverReachable = 'unknown'`. `evaluateDrift` checks `=== false`
+    // (skipped, truthy string) and REQUIRED_EVIDENCE filters `null`/`undefined`
+    // (skipped, it is a string) — so a field carrying ZERO evidence would satisfy
+    // the evidence requirement. That is DNC-08 committed inside the function
+    // written to prevent DNC-08, the same defect `evaluateDrill({})` was caught
+    // for. Pinned in `evaluateDrift` so it holds however the caller is written.
+    for (const sentinel of ['unknown', 'indeterminate', 'maybe', 0, 1]) {
+      const outcome = evaluateDrift({ ...healthyRun(), serverReachable: sentinel });
+      expect([sentinel, outcome.verdict === 'ok']).toEqual([sentinel, false]);
+      expect([sentinel, outcome.exitCode]).toEqual([sentinel, 1]);
+    }
+    // …and the three legitimate values behave as documented.
+    expect(evaluateDrift({ ...healthyRun(), serverReachable: true }).verdict).toBe('ok');
+    expect(evaluateDrift({ ...healthyRun(), serverReachable: false }).verdict).toBe('unreachable_server');
+    expect(evaluateDrift({ ...healthyRun(), serverReachable: null }).verdict).toBe('unknown');
+  });
+
+  it('a TCP accept is never promoted to "a PostgreSQL answered" (AC-4c)', () => {
+    // `preflight.state === 'open'` must NEVER set `serverReachable = true`: a
+    // tunnel, a proxy, Traefik or any unrelated service accepts a connection
+    // identically. Only a successful `SELECT 1;` may set it true, and it does so
+    // on the SUCCESS path, never in the catch.
+    const body = /const check = \(\) => \{[\s\S]*?\n {2}\};/.exec(EXECUTABLE_SCRIPT)?.[0] ?? '';
+    expect(body).not.toBe('');
+    const assignments = body.match(/state\.serverReachable = [^;]+;/g) ?? [];
+    expect(assignments).toHaveLength(2);
+    // The success path, and it is the ONLY `true`.
+    expect(assignments.filter((line) => line.includes('true'))).toHaveLength(1);
+    // The catch: conjunctive, and `'refused'` is what keeps `false` reachable.
+    const inCatch = assignments.find((line) => line.includes('routeFailure')) ?? '';
+    expect(inCatch).toContain("preflightState !== 'refused'");
+    expect(inCatch).toContain('preflightState !== null');
+    expect(inCatch).toContain('null : false');
+    // No sentinel: the softened value is `null`, not a string.
+    expect(body).not.toMatch(/state\.serverReachable = ['"]/);
+  });
+
+  it('the preflight state is CARRIED to the catch, never re-measured there', () => {
+    // A second probe can disagree with the first, and the run would then report
+    // two different truths about one address. It is attached at the throw site in
+    // `query()` and read in `check()`.
+    expect(EXECUTABLE_SCRIPT).toMatch(/error\.preflightState = pre\.state;/);
+    const body = /const check = \(\) => \{[\s\S]*?\n {2}\};/.exec(EXECUTABLE_SCRIPT)?.[0] ?? '';
+    expect(body).toContain('error.preflightState');
+    expect(body).not.toContain('probeAddress');
+  });
+
+  it('preflightState is NARRATION — no verdict rests on it (AC-7 of the slice)', () => {
+    // It is deliberately absent from REQUIRED_EVIDENCE: adding it would make a
+    // run that never reached a preflight report `unknown` for a field that is not
+    // evidence of anything.
+    expect(evaluateDrift({ ...healthyRun() }).verdict).toBe('ok');
+    expect(evaluateDrift({ ...healthyRun(), preflightState: 'open' }).verdict).toBe('ok');
+    expect(evaluateDrift({ ...healthyRun(), preflightState: null }).verdict).toBe('ok');
+
+    // …and when it IS present on a tooling failure it is APPENDED to the existing
+    // message rather than replacing it. Both halves asserted, so a rewrite of the
+    // original sentence is caught.
+    const failures = evaluateDrift({
+      ...healthyRun(),
+      toolingAvailable: false,
+      toolingDetail: 'every route was tried',
+      serverReachable: null,
+      preflightState: 'indeterminate',
+    }).failures.join('\n');
+    expect(failures).toContain('no usable route to the database and/or to the Prisma CLI');
+    expect(failures).toContain('every check below would pass vacuously (DNC-08)');
+    expect(failures).toContain('The TCP preflight measured `indeterminate` at the resolved address');
+    expect(failures).not.toContain('no PostgreSQL server answered');
+
+    // The same input with `refused` keeps the absence claim — the inverted control
+    // at the level of the pure function.
+    const refused = evaluateDrift({
+      ...healthyRun(),
+      toolingAvailable: false,
+      serverReachable: false,
+      preflightState: 'refused',
+    }).failures.join('\n');
+    expect(refused).toContain('no PostgreSQL server answered at the resolved address');
+  });
+
+  it('the psql binary comes from the shared discovery module, with no options (TOOL-23, DNC-10)', () => {
+    // The ladder lives in ONE place — the sameness TOOL-22 made structural for the
+    // ADDRESS is now structural for the CLIENT. And the injectable `options`
+    // parameter that the module's own spec points at a fixture tree must NOT be
+    // passed here: a production call site that supplied roots would BE the
+    // backdoor the seam is otherwise not.
+    expect(EXECUTABLE_SCRIPT).toContain("require('./lib/postgres-client-path')");
+    const sites = callSites(EXECUTABLE_SCRIPT, /postgresClient\(/);
+    expect(sites).toHaveLength(1);
+    expect(sites[0]).toBe("('psql')");
+    // The credential still travels in the environment, never in argv — discovery
+    // changed WHICH binary is spawned, not HOW the password travels (ADR-025 D6).
+    const spawnSite = callSites(EXECUTABLE_SCRIPT, /run\(\s*psql\.command/)[0] ?? '';
+    expect(spawnSite).toContain('PGPASSWORD: source.password');
+    expect(spawnSite).not.toContain('--password');
+    expect(spawnSite).not.toContain('://');
   });
 });
 

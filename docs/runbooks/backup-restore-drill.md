@@ -231,7 +231,9 @@ Comment distinguer les deux familles de verdicts (l'étape imprime la ligne `SCH
 
 | Verdict | Ce que ça veut dire | Action |
 |---|---|---|
-| `tooling_unavailable` / `unreachable_server` | le contrôle **n'a pas pu tourner** (aucune route SQL, ou aucun serveur ne répond). Les trois routes essayées sont nommées avec leur erreur réelle | démarrer le stack (commande ci-dessus), puis relancer |
+| `unreachable_server` | **aucun serveur n'a répondu** : le préflight TCP a mesuré `refused` à l'adresse résolue, et c'est une mesure de l'absence du serveur | démarrer le stack (commande ci-dessus), puis relancer |
+| `tooling_unavailable`, préflight `refused` | même cause que la ligne précédente : `tooling_unavailable` l'emporte par précédence, et `unreachable_server` reste listé dans les constats | démarrer le stack (commande ci-dessus), puis relancer |
+| `tooling_unavailable`, préflight `open` ou `indeterminate` | le contrôle **n'a pas pu tourner faute de CLIENT**, pas faute de serveur. Les trois routes SQL sont nommées avec leur erreur réelle, et le message dit quel état le préflight a mesuré ; la joignabilité est alors rapportée **inconnue**, jamais comme une absence (TOOL-24) | installer un client PostgreSQL (`psql` / `pg_dump` / `pg_restore`), ou vérifier qu'un jeu **complet** existe sous une racine d'installation connue — le script imprime la liste de tout ce qu'il a cherché (TOOL-23) |
 | `migrate_deploy_failed` | une migration **ne s'exécute pas** sur PostgreSQL (la sortie de Prisma est reproduite telle quelle) | corriger le SQL de la migration |
 | `schema_drift` | le registre de migrations **ne reproduit pas** `schema.prisma`. La sortie de Prisma nomme l'objet dérivé (`[+] Added tables …`) | écrire la migration manquante : `pnpm --filter @pilotage/api exec prisma migrate dev --name <ce-qui-change>` |
 | `scratch_create_failed` / `scratch_not_empty` / `scratch_cleanup_failed` | problème sur la base scratch (droit `CREATEDB` manquant, base non vide à la création, suppression impossible) | la commande de suppression manuelle est imprimée par le script |

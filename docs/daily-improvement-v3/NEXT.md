@@ -1,7 +1,81 @@
 # Next story
 
-_Rewritten by run 47 (`TOOL-15` + `TOOL-18`), 2026-08-13. Read this section first; everything below it is older and
+_Rewritten by run 50 (`TOOL-23` + `TOOL-24`), 2026-08-13. Read this section first; everything below it is older and
 kept for content._
+
+---
+
+# NEXT — written by run 50 (`TOOL-23` + `TOOL-24`), 2026-08-13 — **this section supersedes every section below**
+
+## ✅ The eight-run "settle the database first" block is over, and it was never Docker
+
+**The schema-drift gate executed end-to-end for the first time in this programme:**
+
+```
+▶ server reachable at 127.0.0.1:5432
+▶ scratch built : 55 base tables, 2 ledger row(s)
+▶ migrate diff … exit 0 (in-sync)
+SCHEMA DRIFT CHECK: PASS — ok: 2 migration(s) built 55 tables and the datamodel adds nothing
+```
+
+exit **0**, 25.7 s. The migration ledger is now **proven** to reproduce `schema.prisma`, not asserted to.
+
+**What was actually wrong, after `TOOL-22` fixed the address:** `C:\Program Files\PostgreSQL\15\bin\psql.exe` was
+installed the whole time, and that directory **is** in the persisted Windows user PATH — but no running process
+inherited it, so `spawnSync('psql', …)` answered `ENOENT`. The gate then reported *"no PostgreSQL server answered —
+start the local stack"* while a server answered in **3 ms**, which sent eight consecutive runs at a wedged Docker
+engine instead of at a missing client lookup.
+
+**The three lessons worth carrying, in order of how much they cost:**
+
+- **A verdict must name the instrument that produced it.** `TOOL-24` was one assignment — `serverReachable = false`
+  set from a CLIENT failure — in a script that *already owned* a three-state TCP preflight built to separate exactly
+  those two things. The evidence was in the process the whole time; the prose contradicted it. When a gate's
+  remediation sentence has been believed for eight runs, **re-measure the sentence, not the thing it blames.**
+- **A comment is not a measurement, and it decays into a claim.** `schema-drift-check.js:296` and `:1014` recorded
+  *"there is no host `psql` here"* as a fact about this host. It was false, and it was load-bearing: runs cited it
+  instead of re-checking. This is `TOOL-22`'s lesson repeating at a second address — that one was a port held by a
+  comment, this one was a host capability held by a comment.
+- **The unblocking was one directory away from the block.** Everything parked behind "we need a database" needed a
+  **client**, and the check for it costs one `psql --version`. Before deferring for a missing dependency again,
+  **execute the dependency once by hand.** Two minutes here would have saved eight runs.
+
+## ▶ Recommended next story
+
+1. **`S-E01-2b` (RLS) — now genuinely executable, and it is the highest-value slice on the board (P0/P1, L0).** Its
+   precondition was *"a reachable PostgreSQL"*, and that is now measured, not hoped: `127.0.0.1:5432` answers, `psql`
+   is discoverable through `scripts/lib/postgres-client-path.js`, and `migrate deploy` + `migrate diff` both complete.
+   It writes migrations, so `schema drift` will **not** be skipped — the gate that guards it now actually runs.
+   `PF-02` ("RLS claimed, not implemented") is the oldest open L0 trust finding.
+2. **`TOOL-25` (P1, discovered this run) — two correct gates jointly producing a false green.**
+   `schema-drift-gate.spec.ts:96` still pins `127.0.0.1:5433` **and asserts it** (`:533`, `:563`), so five end-to-end
+   cases skip on a correctly-configured checkout while the script three directories away passes against 5432. The
+   literal is wrong *on purpose*: `production-artefact-check.js` rule A6 forbids `5432` in `apps/api/src` string
+   literals. Fix direction — resolve the address at runtime from `scripts/lib/default-database-url.js` so **no DSN
+   literal exists to match**, satisfying A6 by construction rather than by choosing a wrong port. Take `TOOL-21`'s
+   care: assert the spec and the scripts **agree**, do not merely delete the assertion.
+3. **Arm the skipped-count ratchet (operator, one command per app).** `node scripts/test-ratchet.js api --update` and
+   `… worker --update`, **from a COMPLETE run**. `TOOL-13` shipped it disarmed; `TOOL-25` is a live instance of the
+   exact class it was built to catch, sitting silent. Never hand-write those numbers, and note
+   `feedback-shell-backticks-execute-docs`: writing that command into markdown via `node -e "…"` in double quotes has
+   **executed** it once already.
+4. **`VAL-03` (restore rehearsal) — also unblocked.** `restore-drill.js` now discovers `pg_dump`/`pg_restore` through
+   the same module. It has never been executed; it now can be.
+
+## State of the world at the end of run 50
+
+- **`TOOL-19` (wedged Docker engine) is unchanged and no longer blocking.** No container was started or rebuilt — none
+  was needed, because the database this host actually uses is the **native Windows service** `postgresql-x64-15` on
+  **5432**, not a container. Runs that assumed "local stack" meant "Docker" were reasoning about the wrong process.
+  The local Docker stack's health remains **unknown**; do not assume it is healthy.
+- **Ledger hygiene, unresolved and worth an operator glance:** `TOOL-20`, `TOOL-21` and `TOOL-22` have **no rows on
+  `main`** — their rows live in the *held* PR #239, which also rewrites this file. That is
+  `project_held_pr_causes_duplicate_work` observed a second time. #239 was held because *"main is RED at 63f8650"*,
+  and #240 (`TOOL-21`) has since made main green — **its hold reason appears to be spent**, so it is a candidate for
+  human review this cycle.
+- **A near-miss worth recording:** the routine read `GATE: FAIL` out of a stale `/tmp/gate2.log` dated 14:44 and
+  almost reported a verdict it had not measured. Gate logs are now read by mtime as well as content. `R-23` is about
+  pipes; this is its sibling — **a verdict you did not produce this run is not evidence, whatever file it is in.**
 
 ---
 

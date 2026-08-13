@@ -203,6 +203,19 @@ const MIGRATIONS_DIR = join(PRISMA_DIR, 'migrations');
  */
 const { defaultDatabaseUrl } = require('./lib/default-database-url');
 
+/**
+ * TOOL-23: the same treatment, one seam over — for the CLIENT rather than the
+ * ADDRESS. Route B used to spawn the bare name `psql`, i.e. the inherited PATH and
+ * nothing else, and this file's own comments then recorded « there is no host psql
+ * here » as a fact about the machine. Measured 2026-08-13: the machine has
+ * `C:\Program Files\PostgreSQL\15\bin\psql.exe`, that route works, and only the
+ * inherited environment block was stale. `postgresClient()` walks the PATH first
+ * (returning the bare name, so a checkout where this already works spawns exactly
+ * today's argv) and then the well-known install roots. There is no variable and no
+ * flag that names a client binary — see the module header for why that is DNC-10.
+ */
+const { postgresClient } = require('./lib/postgres-client-path');
+
 const DEFAULT_DATABASE_URL = defaultDatabaseUrl();
 const DEFAULT_CONTAINER = 'pilotage_postgres';
 
@@ -256,8 +269,10 @@ const DOCKER_TIMEOUT_MS = 5000;
 /**
  * The bound on the docker DATA plane — `docker exec … psql`, which is route C.
  * It is deliberately NOT `DOCKER_TIMEOUT_MS`, and the asymmetry was a review
- * finding on this slice rather than a guess: route C is the route that works on
- * the local Windows stack (there is no host `psql` here), and what travels over
+ * finding on this slice rather than a guess: route C was, when this bound was
+ * written, believed to be the only route that worked on the local Windows stack
+ * — TOOL-23 measured that claim and it was false, route B works here too once the
+ * client is discovered rather than assumed to be on PATH — and what travels over
  * it is `CREATE DATABASE … TEMPLATE template0` and `DROP DATABASE … WITH
  * (FORCE)`, not a metadata lookup. A cold `docker exec` on Docker Desktop
  * routinely spends 1–3 s before `psql` even starts, and `run()`'s bound does not
@@ -293,12 +308,17 @@ const PRISMA_CLI_PROBE_TIMEOUT_MS = 60000;
  * `DOCKER_EXEC_TIMEOUT_MS`'s comment above for why that trade is the wrong way
  * round.
  *
- * Why it needs a bound at all, given nothing hangs here today: `psql` is `ENOENT`
- * on this Windows host, so route B fails instantly for the wrong reason. `ci.yml`
- * runs on `ubuntu-latest`, where a PostgreSQL client ships in the image and the
- * OS TCP timeout is ~130 s per attempt — and the `indeterminate` preflight branch
- * (deliberately kept, so a loaded-but-alive server is not read as absent)
- * descends that ladder on purpose, unbounded, on every PR.
+ * Why it needs a bound at all: `ci.yml` runs on `ubuntu-latest`, where a
+ * PostgreSQL client ships in the image and the OS TCP timeout is ~130 s per
+ * attempt — and the `indeterminate` preflight branch (deliberately kept, so a
+ * loaded-but-alive server is not read as absent) descends that ladder on purpose,
+ * unbounded, on every PR.
+ *
+ * TOOL-23 corrected the sentence that used to stand here — "`psql` is `ENOENT` on
+ * this Windows host, so route B fails instantly for the wrong reason". `psql` was
+ * `ENOENT` only because it was looked for on the inherited PATH alone; it is
+ * installed, it answers, and route B is now a live route on this host too. The
+ * bound therefore matters HERE as well, not only in CI.
  */
 const PSQL_HOST_TIMEOUT_MS = 120000;
 
@@ -496,6 +516,7 @@ function evaluateDrift(input) {
     toolingAvailable = true,
     toolingDetail = null,
     serverReachable = null,
+    preflightState = null,
     migrationDirectories = null,
     scratchName = null,
     sourceDatabase = null,
@@ -550,6 +571,30 @@ function evaluateDrift(input) {
     );
   }
 
+  /* --- 0a-bis. `serverReachable` is TRUE, FALSE or NULL — never a sentinel
+   * (TOOL-24).
+   *
+   * The tri-state temptation this closes: told "do not assert `false` on a client
+   * failure", the obvious next move is `serverReachable = 'unknown'`. Every check
+   * below is written `=== false`, so a truthy string SKIPS the reachability
+   * failure; and `REQUIRED_EVIDENCE` filters `null`/`undefined`, so a string also
+   * SATISFIES the evidence requirement. A field carrying zero evidence would then
+   * read as a clean run — DNC-08 committed inside the function whose whole purpose
+   * is to enforce DNC-08, which is exactly what `evaluateDrill({})` was caught for.
+   *
+   * Pinned HERE rather than at the caller so it holds however the caller is
+   * written: `true` means a `SELECT 1;` returned, `false` means absence was
+   * MEASURED, `null` means the run does not know. Nothing else is a state. */
+  if (serverReachable !== null && serverReachable !== undefined && typeof serverReachable !== 'boolean') {
+    fail(
+      'unknown',
+      `serverReachable was reported as ${JSON.stringify(serverReachable)}, which is neither true (a ` +
+        '`SELECT 1;` returned), false (absence was measured) nor null/absent (the run does not know). ' +
+        'A sentinel value would pass the evidence filter while carrying no evidence, so it is refused ' +
+        'rather than interpreted (DNC-08)',
+    );
+  }
+
   /* --- 0b. the check could not describe its own run --------------------- */
   if (fatalError) {
     fail('unknown', `the check did not complete: ${fatalError}`);
@@ -561,7 +606,20 @@ function evaluateDrift(input) {
       'tooling_unavailable',
       `no usable route to the database and/or to the Prisma CLI. ${toolingDetail || 'every route was tried and none worked'}. ` +
         'That is a FAILURE and it is reported as one: tooling that cannot run is the state in which ' +
-        'every check below would pass vacuously (DNC-08)',
+        'every check below would pass vacuously (DNC-08)' +
+        // TOOL-24: APPENDED, never a rewrite of the sentence above — that text is
+        // asserted verbatim elsewhere. It names what the run actually measured, so
+        // an operator can tell "no client here" from "no server there" without
+        // re-running anything. `preflightState` is narration and is NOT part of
+        // REQUIRED_EVIDENCE: a verdict never rests on it.
+        (typeof preflightState === 'string'
+          ? `. The TCP preflight measured \`${preflightState}\` at the resolved address — a statement ` +
+            'about the SERVER, where every route failure listed above is a statement about the CLIENT' +
+            (preflightState === 'refused'
+              ? ', and that measurement IS evidence of absence, so the unreachable_server finding below ' +
+                'stands on its own instrument (TOOL-24)'
+              : '. Reachability is therefore reported as UNKNOWN rather than as absence (TOOL-24)')
+          : ''),
     );
   }
   if (serverReachable === false) {
@@ -1005,13 +1063,18 @@ function prismaRun(cli, argv, envOverlay, input) {
  *      (ADR-025 D6). This is the route that works in `ci.yml`'s build job —
  *      `ubuntu-latest` ships a PostgreSQL client, and a service container is NOT
  *      reachable as `pilotage_postgres`. It is tried before the container route
- *      for exactly that reason: the over-the-wire route is the portable one.
+ *      for exactly that reason: the over-the-wire route is the portable one. Its
+ *      binary is located by `scripts/lib/postgres-client-path.js`, never by a bare
+ *      PATH lookup (TOOL-23).
  *   C. `docker exec -i pilotage_postgres psql`, SQL on STDIN — never `-c`, never
  *      through a shell, because a heredoc through `sh -c` breaks on CRLF and this
  *      repository is developed on Windows. Guarded by the container publishing
  *      the port the URL addresses, so the two routes cannot address two different
- *      clusters. This is the route that works on the local stack, where there is
- *      no host `psql`.
+ *      clusters. It was long described here as "the route that works on the local
+ *      stack, where there is no host `psql`" — TOOL-23 measured that and it is
+ *      false: a host `psql` is installed on the local Windows machine, it was
+ *      merely never looked for anywhere but the inherited PATH. Route C is
+ *      untouched by that slice and remains the fallback.
  */
 function makeSqlRoutes(cli, source) {
   const attempts = [];
@@ -1095,6 +1158,29 @@ function makeSqlRoutes(cli, source) {
     );
   };
 
+  /**
+   * The OTHER narration, and the one TOOL-24 needed (B5).
+   *
+   * `recordPreflight` above fires only on `refused`, so until now an `open` or
+   * `indeterminate` run printed no preflight line at all — the run held the
+   * evidence that distinguishes "no server" from "no client" and never showed it.
+   * This line is deliberately worded so it can never be mistaken for the
+   * short-circuit narration: it does not claim the probe settled anything, and it
+   * does not claim a route was skipped. Both of those distinctions are asserted by
+   * `schema-drift-gate.spec.ts`'s indeterminate-ladder case, which discriminates a
+   * real attempt from a short-circuit by exactly those substrings.
+   */
+  let livePreflightRecorded = false;
+  const recordLivePreflight = (pre) => {
+    if (livePreflightRecorded) return;
+    livePreflightRecorded = true;
+    attempts.push(
+      `preflight — the TCP probe of ${source.host}:${source.port} measured \`${pre.state}\` ` +
+        `(${pre.detail} after ${pre.elapsedMs} ms). That is a statement about the SERVER; every route ` +
+        'line below is a statement about the CLIENT, and the two are not the same claim (TOOL-24)',
+    );
+  };
+
   let containerUsable = null;
   const containerAddressesTheUrl = () => {
     if (containerUsable !== null) return containerUsable;
@@ -1123,12 +1209,37 @@ function makeSqlRoutes(cli, source) {
     return containerUsable;
   };
 
-  const psqlHost = (database, sql) =>
-    run('psql', ['-h', source.host, '-p', source.port, '-U', source.user, ...psqlFlags(database)], {
+  /**
+   * Route B. The binary is DISCOVERED (TOOL-23), never assumed to be on PATH.
+   *
+   * When it cannot be found this returns a `run()`-SHAPED result rather than
+   * throwing or growing a branch at the caller: `query()` and `exec()` both
+   * already narrate a non-zero route B as
+   * `attempts.push('B. host psql — ' + stderr)`, so handing them a failed result
+   * whose stderr names the ladder that was searched makes the run describe the
+   * real reason with no new control flow and no broadened catch (DNC-08).
+   *
+   * The password still travels in `options.env` and never in argv (ADR-025 D6).
+   * Discovery changes WHICH binary is spawned, never HOW the credential travels.
+   */
+  const psqlHost = (database, sql) => {
+    const psql = postgresClient('psql');
+    if (!psql.command) {
+      return {
+        status: -1,
+        stdout: '',
+        stderr:
+          'no psql client: not found on PATH nor at any well-known PostgreSQL install root. Searched:\n' +
+          indent(psql.tried.join('\n'), 6),
+        timedOut: false,
+      };
+    }
+    return run(psql.command, ['-h', source.host, '-p', source.port, '-U', source.user, ...psqlFlags(database)], {
       input: sql,
       env: source.password ? { PGPASSWORD: source.password } : undefined,
       timeoutMs: PSQL_HOST_TIMEOUT_MS,
     });
+  };
 
   const psqlContainer = (database, sql) =>
     run('docker', ['exec', '-i', DEFAULT_CONTAINER, 'psql', '-U', source.user, ...psqlFlags(database)], {
@@ -1142,6 +1253,7 @@ function makeSqlRoutes(cli, source) {
     if (pre.state === 'refused') {
       recordPreflight(pre);
     } else {
+      recordLivePreflight(pre);
       const host = psqlHost(database, sql);
       if (host.status === 0) return splitRows(host.stdout);
       attempts.push(`B. host psql — ${host.stderr.trim() || `exit ${host.status}`}`);
@@ -1153,9 +1265,15 @@ function makeSqlRoutes(cli, source) {
     }
     const error = new Error(
       `no SQL route could answer. Tried:\n${indent(attempts.join('\n'), 4)}\n` +
-        '    (route A, `prisma db execute`, can execute but returns no rows, so it cannot answer a query)',
+        '    (route A, `prisma db execute`, can execute but returns no rows, so it cannot answer a query)\n' +
+        `    The TCP preflight of ${source.host}:${source.port} measured \`${pre.state}\` — a statement ` +
+        'about the SERVER, where every route failure above is a statement about the CLIENT (TOOL-24)',
     );
     error.routeFailure = true;
+    // Carried, never re-measured. `check()`'s catch has no access to the memoised
+    // preflight, and a second probe could disagree with the first — the run would
+    // then report two different truths about one address.
+    error.preflightState = pre.state;
     throw error;
   };
 
@@ -1406,6 +1524,10 @@ function main() {
     toolingAvailable: true,
     toolingDetail: null,
     serverReachable: null,
+    /* What the TCP preflight measured, when a route failure carried it here
+     * (TOOL-24). Deliberately NOT in `REQUIRED_EVIDENCE`: it is narration for the
+     * `tooling_unavailable` message, never a fact a verdict may rest on. */
+    preflightState: null,
     migrationDirectories: null,
     scratchName: null,
     sourceDatabase: null,
@@ -1493,8 +1615,42 @@ function main() {
       state.serverReachable = true;
       console.log(`▶ server reachable at ${source.host}:${source.port}`);
     } catch (error) {
-      state.serverReachable = false;
-      if (error && error.routeFailure) {
+      /* TOOL-24 — the verdict no longer contradicts evidence the run already
+       * holds.
+       *
+       * `error.routeFailure` means "no CLIENT could run the query". It says
+       * NOTHING about whether a server answered, and this catch used to assert
+       * `serverReachable = false` unconditionally — so a machine with a live
+       * PostgreSQL and no discoverable client printed « no PostgreSQL server
+       * answered at the resolved address », which is the sentence that parked
+       * RLS, VAL-03 and this gate's own drift half for eight runs.
+       *
+       * The instrument that tells the two apart already ran: the three-state TCP
+       * preflight, carried here on the error rather than re-measured (a second
+       * probe could disagree with the first).
+       *
+       * The condition is CONJUNCTIVE on purpose, and `null` is the only softer
+       * value allowed:
+       *   • a `refused` preflight still measured absence → `false`, so
+       *     `unreachable_server` still fires with its existing text (AC-5);
+       *   • any other client-only failure → `null`, i.e. ABSENCE OF EVIDENCE,
+       *     which `REQUIRED_EVIDENCE` reports as an additional `unknown` finding.
+       *     That extra finding is desirable: the run genuinely does not know.
+       *     A sentinel string such as 'unknown' would pass the evidence filter
+       *     while carrying no evidence — DNC-08 committed inside the function
+       *     written to prevent it.
+       *   • an `open` preflight NEVER sets it true. A TCP accept is not a
+       *     PostgreSQL: a tunnel, a proxy or Traefik accepts identically. Only a
+       *     successful `SELECT 1;` above may set it true.
+       *
+       * A non-`routeFailure` throw keeps today's `false` and is deliberately out
+       * of scope for this slice.
+       */
+      const routeFailure = Boolean(error && error.routeFailure);
+      const preflightState = typeof (error && error.preflightState) === 'string' ? error.preflightState : null;
+      state.preflightState = preflightState;
+      state.serverReachable = routeFailure && preflightState !== null && preflightState !== 'refused' ? null : false;
+      if (routeFailure) {
         state.toolingAvailable = false;
         state.toolingDetail = String(error.message);
       }
