@@ -148,6 +148,22 @@ const FALLBACK = '/parent/dashboard';
 const { stripCommentsPreservingLines } = require(LINK_INTEGRITY_SCRIPT) as {
   stripCommentsPreservingLines: (source: string) => string;
 };
+/**
+ * TOOL-17 — the shared walk-then-read seam. Unguarded on purpose for the SAME
+ * DNC-08 reason as the stripper above: a MISSING MODULE must still fail at LOAD.
+ * What the helper tolerates is narrower and different — a path that `walk()`
+ * listed and that is CONFIRMED gone by the time it is read.
+ */
+const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+  join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
+) as {
+  mapWalkedFiles: (
+    paths: string[],
+    build: (path: string, source: string) => [string, string],
+  ) => { entries: [string, string][]; skipped: string[] };
+  warnSkipped: (label: string, skipped: string[]) => boolean;
+  MAX_VANISHED_FILES: number;
+};
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 function raw(path: string): string {
@@ -184,10 +200,21 @@ function repoRelative(absolute: string): string {
   return absolute.slice(REPO_ROOT.length + 1).split('\\').join('/');
 }
 
-/** The whole app, comment-stripped, keyed by repo-relative path. */
-const EXECUTABLE_SRC = new Map<string, string>(
-  WEB_SRC_FILES.map((file) => [repoRelative(file), stripCommentsPreservingLines(raw(file))]),
+/**
+ * The whole app, comment-stripped, keyed by repo-relative path.
+ *
+ * TOOL-17: routed through the shared seam. `csv-escape-gate.spec.ts:493` plants
+ * `apps/web/src/lib/__csv_escape_probe.tsx` inside this very walk root and
+ * deletes it again; under parallel jest that used to take this suite down at
+ * LOAD. Only a CONFIRMED-absent walked path is skipped; the accounting identity
+ * and the cap are asserted in the vacuity floor below.
+ */
+const { entries: EXECUTABLE_SRC_ENTRIES, skipped: VANISHED_WEB_FILES } = mapWalkedFiles(
+  WEB_SRC_FILES,
+  (file, source) => [repoRelative(file), stripCommentsPreservingLines(source)],
 );
+warnSkipped('open-redirect-gate / apps/web/src', VANISHED_WEB_FILES);
+const EXECUTABLE_SRC = new Map<string, string>(EXECUTABLE_SRC_ENTRIES);
 
 /* ================================================================== *
  * The harness — transpile and EXECUTE the real module
@@ -368,7 +395,12 @@ describe('PF-102 — the guard is not vacuous', () => {
   it('walked apps/web/src and found a real tree', () => {
     // Without this, every `toEqual([])` below passes forever by walking nothing.
     expect(WEB_SRC_FILES.length).toBeGreaterThanOrEqual(300);
-    expect(EXECUTABLE_SRC.size).toBe(WEB_SRC_FILES.length);
+    // TOOL-17 accounting. Was `EXECUTABLE_SRC.size === WEB_SRC_FILES.length`; the
+    // skips are ADDED back rather than the identity relaxed, and they are capped
+    // because the floor above is asserted on the walk LIST while a skip shrinks
+    // only the MAP. Not `toBe(0)`: that would relocate the flake, not remove it.
+    expect(EXECUTABLE_SRC.size + VANISHED_WEB_FILES.length).toBe(WEB_SRC_FILES.length);
+    expect(VANISHED_WEB_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
   });
 
   it('the stripper it borrows really strips, and really preserves length', () => {

@@ -118,6 +118,26 @@ const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
 };
 
 /**
+ * TOOL-17 — the shared walk-then-read seam. Unguarded on purpose, exactly like
+ * the stripper above: a MISSING MODULE is a different seam from a VANISHING
+ * WALKED FILE, and only the second one is tolerated (and only once the absence
+ * is CONFIRMED). This suite is the most exposed of the five — `SOURCES` walks
+ * `apps/api/src`, where `audit-write-gate.spec.ts:689` plants its probe, and
+ * `CONSUMER_SOURCES` walks `apps/web/src` too, where `csv-escape-gate.spec.ts:493`
+ * plants the other one.
+ */
+const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+  join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
+) as {
+  mapWalkedFiles: <V>(
+    paths: string[],
+    build: (path: string, source: string) => [string, V],
+  ) => { entries: [string, V][]; skipped: string[] };
+  warnSkipped: (label: string, skipped: string[]) => boolean;
+  MAX_VANISHED_FILES: number;
+};
+
+/**
  * The web adapter, loaded at RUNTIME rather than with a static import.
  *
  * G-TRUTH wants the *real* `humanizeResourceType`, not a re-implementation of
@@ -179,19 +199,36 @@ const WRITER_ROOTS = [
 ];
 const SEED_PATH = join(REPO_ROOT, 'apps', 'api', 'prisma', 'seed-demo.ts');
 
-const WRITER_FILES = [
-  ...WRITER_ROOTS.flatMap((root) =>
-    walk(root, (name) => name.endsWith('.ts') && !name.endsWith('.spec.ts') && !name.endsWith('.d.ts')),
-  ).filter((f) => !repoRel(f).includes('__fixtures__')),
-  SEED_PATH,
-];
+/**
+ * TOOL-17 — the WALKED half, split from the NAMED half on purpose.
+ *
+ * Only paths in this list may be tolerated when they vanish mid-run. `SEED_PATH`
+ * below is a fixed, named constant: a missing seed is the *missing-file* seam,
+ * not the *vanishing-walked-file* seam, and it must keep failing at LOAD.
+ */
+const WALKED_WRITER_FILES = WRITER_ROOTS.flatMap((root) =>
+  walk(root, (name) => name.endsWith('.ts') && !name.endsWith('.spec.ts') && !name.endsWith('.d.ts')),
+).filter((f) => !repoRel(f).includes('__fixtures__'));
 
-const SOURCES = new Map<string, ts.SourceFile>(
-  WRITER_FILES.map((file) => [
+const WRITER_FILES = [...WALKED_WRITER_FILES, SEED_PATH];
+
+const { entries: WALKED_SOURCE_ENTRIES, skipped: VANISHED_WRITER_FILES } = mapWalkedFiles(
+  WALKED_WRITER_FILES,
+  (file, source): [string, ts.SourceFile] => [
     file,
-    ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true),
-  ]),
+    ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true),
+  ],
 );
+warnSkipped('audit-vocabulary-gate / writer roots', VANISHED_WRITER_FILES);
+
+const SOURCES = new Map<string, ts.SourceFile>([
+  ...WALKED_SOURCE_ENTRIES,
+  // Bare read, deliberately: see the split above.
+  [
+    SEED_PATH,
+    ts.createSourceFile(SEED_PATH, readFileSync(SEED_PATH, 'utf8'), ts.ScriptTarget.ES2022, true),
+  ],
+]);
 
 type Axis = 'action' | 'resourceType';
 
@@ -628,6 +665,14 @@ describe('V-0 — the gate is not vacuous', () => {
     // measurement, above the pre-slice figure, and unbreakable by a correct
     // migration.
     expect(WRITER_FILES.length).toBeGreaterThanOrEqual(120);
+    // TOOL-17 accounting. The floor above is asserted on the walk LIST, and a
+    // tolerated skip shrinks the MAP — so state the identity on the map and cap
+    // the skips, or a corpus that emptied itself would keep this green. Not
+    // `toBe(0)`: that relocates the flake instead of removing it.
+    expect(SOURCES.size + VANISHED_WRITER_FILES.length).toBe(WRITER_FILES.length);
+    expect(VANISHED_WRITER_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+    expect(CONSUMER_SOURCES.size + VANISHED_CONSUMER_FILES.length).toBe(CONSUMER_FILES.length);
+    expect(VANISHED_CONSUMER_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
     expect(EXTRACTED.seams).toBeGreaterThanOrEqual(30);
     expect(WRITTEN_ACTIONS.size).toBeGreaterThanOrEqual(40);
     expect(WRITTEN_RESOURCE_TYPES.size).toBeGreaterThanOrEqual(20);
@@ -779,11 +824,17 @@ describe('V-1 / AC-2 / AC-7 — every written code has a label, and every label 
     // `writeAudit` anywhere under `apps/api/src` would silently make the extractor
     // apply one helper's parameter positions to another's arguments — the exact
     // hazard Phase B's file-scoping was invented to avoid.
-    const declarers = WRITER_FILES.filter((file) =>
-      /export\s+(?:async\s+)?function\s+writeAudit\b/.test(
-        stripCommentsPreservingLines(readFileSync(file, 'utf8')),
-      ),
-    ).map(repoRel);
+    // TOOL-17: reads the corpus the extractor already built instead of re-reading
+    // every writer file here. `ts.SourceFile.text` IS the bytes `createSourceFile`
+    // was handed, so this is the same string the old `readFileSync` produced —
+    // with one fewer race window, and no second place to keep in step.
+    const declarers = [...SOURCES]
+      .filter(([, source]) =>
+        /export\s+(?:async\s+)?function\s+writeAudit\b/.test(
+          stripCommentsPreservingLines(source.text),
+        ),
+      )
+      .map(([file]) => repoRel(file));
     expect(declarers).toEqual(['apps/api/src/shared/audit/write-audit.ts']);
     expect([...SHARED_SEAM_KEYS]).toEqual(['apps/api/src/shared/audit/write-audit.ts#writeAudit']);
   });
@@ -1036,11 +1087,21 @@ const CONSUMER_ROOTS = [
     .map((d) => join(REPO_ROOT, 'packages', d.name, 'src')),
 ];
 
-const CONSUMER_SOURCES = new Map<string, string>(
-  CONSUMER_ROOTS.flatMap((root) => walk(root, (n) => n.endsWith('.ts') || n.endsWith('.tsx'))).map(
-    (file) => [repoRel(file), stripCommentsPreservingLines(readFileSync(file, 'utf8'))],
-  ),
+const CONSUMER_FILES = CONSUMER_ROOTS.flatMap((root) =>
+  walk(root, (n) => n.endsWith('.ts') || n.endsWith('.tsx')),
 );
+
+/**
+ * TOOL-17: the widest walk in the repo — `apps/api/src` + `apps/web/src` +
+ * `apps/worker/src` + every `packages/<name>/src` — exposed to BOTH probes.
+ * Routed through the shared seam; accounting identity in `V-0` below.
+ */
+const { entries: CONSUMER_ENTRIES, skipped: VANISHED_CONSUMER_FILES } = mapWalkedFiles(
+  CONSUMER_FILES,
+  (file, source): [string, string] => [repoRel(file), stripCommentsPreservingLines(source)],
+);
+warnSkipped('audit-vocabulary-gate / consumer roots', VANISHED_CONSUMER_FILES);
+const CONSUMER_SOURCES = new Map<string, string>(CONSUMER_ENTRIES);
 
 /* ------------------------------------------------------------------ *
  * The recorded pre-fix bytes — AC-1's positive control
@@ -1864,10 +1925,20 @@ describe('V-11 / AC-1, AC-6, AC-7 — one window helper, one timezone source, no
     // « nothing was read », which is the DNC-08 shape of a vacuous pass.
     expect(files.length).toBeGreaterThan(50);
 
+    // TOOL-17: a ninth walked-read site, in-test rather than at module level, so
+    // its failure mode was a spurious RED instead of a spurious LOAD failure —
+    // same race, same seam, same accounting.
+    const { entries: scanned, skipped: vanished } = mapWalkedFiles(
+      files,
+      (file, source): [string, string] => [file, stripCommentsPreservingLines(source)],
+    );
+    warnSkipped('audit-vocabulary-gate / PF-149 Tenant.timezone scan', vanished);
+    expect(scanned.length + vanished.length).toBe(files.length);
+    expect(vanished.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
+
     const offenders: string[] = [];
     let writersSeen = 0;
-    for (const file of files) {
-      const source = stripCommentsPreservingLines(readFileSync(file, 'utf8'));
+    for (const [file, source] of scanned) {
       const writes = /\.tenant\.(create|createMany|update|updateMany|upsert)\s*\(/g;
       for (const hit of source.matchAll(writes)) {
         // Only a write that actually carries the column is a writer of it.

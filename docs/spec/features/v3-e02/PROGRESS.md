@@ -2,7 +2,7 @@
 
 **Layer** L0 · **Closes** PF-03, PF-55, PF-56, VAL-01, VAL-03, VAL-10 (+ PF-58, PF-59, PF-60, PF-61 discovered in flight)
 **Spec** the story contracts in `docs/daily-improvement-v3/stories/sprint-01.md` are the spec-kit for this epic.
-**Status (2026-08-12, after `TOOL-13`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
+**Status (2026-08-13, after `TOOL-17`)** `code-complete` — still **not `shipped`**. `S-E02-3`, `S-E02-5`, `S-E02-17`,
 `S-E02-18` and `S-E02-19` are all ✅ done. `S-E02-18` closed the seven findings `S-E02-17` queued (`PF-104`…`PF-110`,
 plus the `PF-112` register renumber): the gate that slice made blocking **can now fail**, its wiring is **executed** by
 a test rather than asserted, and the dashboard stops under-reporting a stalled worker. `S-E02-19` then closed the
@@ -19,8 +19,10 @@ was stale (see the re-scoping note in the slice table). **`S-E02-1`'s residual i
 genuinely hosted: it needs hosted credentials and an operator. Recording this epic as `shipped` would claim that
 operator half was delivered, which is the exact overstatement this epic exists to end.
 **The epic also carries a gate-hardening track** — `TOOL-06`/`TOOL-07`/`TOOL-08` (run 43), `TOOL-10` (run 44, the drift
-check's TCP preflight and the ratchet's honest kill message) and now **`TOOL-13`** (run 45, the ratchet stops calling a
-suite that stopped executing "green", batching `TOOL-16(a)`, `TOOL-11` and `TOOL-12`). Those slices repair the machinery
+check's TCP preflight and the ratchet's honest kill message), **`TOOL-13`** (run 45, the ratchet stops calling a
+suite that stopped executing "green", batching `TOOL-16(a)`, `TOOL-11` and `TOOL-12`) and now **`TOOL-17`** (run 46, a
+file that vanishes between `walk()` and `readFileSync` stops taking an unrelated suite down at LOAD — one narrow,
+accounted tolerance in `scripts/lib/walk-read.js`, applied to nine sites). Those slices repair the machinery
 this epic built rather than extending it, so they move the epic's *reliability*, never its status: `code-complete` is
 unchanged and `PF-111` / `PF-113` are still its two residuals. **One thing `TOOL-13` leaves for an operator, and it is
 not a detail:** the skip ratchet ships **disarmed** — `apps.<app>.skipped` is absent from `known-test-failures.json` on
@@ -69,6 +71,7 @@ new half of the gate announces itself `INACTIVE` and qualifies its own verdict l
 | **TOOL-06/07/08** | The merge gate stops gating; its meta-tests were reading the dead code | ✅ done | 2026-08-12 (run 43) | PR #223 → `545879f`. `run_stage` refuses a non-numeric timeout (exit 64); `csv escapers` executed for the **first time** since `#215` — 698 files across six roots, four sanctioned escapers. Block at the bottom of this file |
 | **TOOL-10** | The drift check concludes "unreachable" in milliseconds; a killed ratchet stops reporting itself as a startup failure | ✅ done *(gate-hardening track; **two spec files typechecked but UNEXECUTED**)* | 2026-08-12 (run 44) | **Fail-before, measured on this worktree:** one unreachable-address `node scripts/schema-drift-check.js` **did not finish in 30 037 ms** (`SIGTERM`/`ETIMEDOUT`), and the whole `schema-drift-gate.spec.ts` **did not finish in 600 000 ms** when driven on `HEAD` — the story's `>30 037 ms` is confirmed and understated. Route C's `docker port pilotage_postgres 5432/tcp` measured **unbounded** (killed at 8 026 ms by the probe's own `spawnSync` timeout; bash-level `timeout` does **not** kill it — `ps -W` shows orphaned docker processes dated Aug 10). **Pass-after:** `DEAD_URL` → **519 ms**, exit **1**, `SCHEMA DRIFT CHECK: FAIL — tooling_unavailable`, output still naming `prisma db execute` / host `psql` / `docker exec pilotage_postgres`; the default `:5433` → **546 ms**, same verdict, same exit. **The verdict does not move** — that is the contract, and `scripts/ci-gate.sh` is **byte-identical** (`git diff --quiet` YES), so no stage bound went up. Both spec files under `--runInBand`: **17.5 s, 116 passed / 2 failed / 5 skipped**, the two failures **pre-existing** (`AC-5`, `AC-15` at `schema-drift-gate.spec.ts:721`, both asserting on `ci-gate.sh`, which this diff does not open). `pnpm typecheck` **13/13, 51.9 s**, `@pilotage/api` a real cache **miss**; `git diff --check` clean on unstaged, staged and `main...HEAD`. **⚠️ Those jest numbers come from a reviewer's own run, not from the gate**: the gate could not execute either spec (shell Node **v25.7.0** vs the **22.13.1** `.nvmrc` pin), and **no run has ever driven the ladder against a reachable PostgreSQL after the change** — see the `TOOL-10` block at the bottom of this file for why that is the one must-check |
 | **TOOL-13** | A suite that stops existing must not read as green — the ratchet learns to count what did **not** execute | ✅ done *(gate-hardening track; the new half ships **disarmed**, by design — see the block at the bottom)* | 2026-08-12 (run 45) | **Fail-before, measured on this worktree:** the two spec files under `--runInBand` report `{"total":124,"passed":119,"failed":0,"pending":5}` — and `test-ratchet.js` on `HEAD` calls that **`✓ no drift.`**, including about *"the unmodified repository PASSES — the gate is not red on correct code"*, which had never executed on this machine. **Pass-after:** the same real report fed to the new core reduces to `skipped = {"src/shared/quality/schema-drift-gate.spec.ts": 5}` — the exact five — and a baseline two lower yields `{from:2,to:5}` → **exit 1**. **147 total / 142 passed / 0 failed / 5 pending**, wall **57 s**: `test-ratchet.spec.ts` **14 → 30** (the 14 byte-identical, the diff is 475/0 in one hunk after `:273`, AC-11) and `schema-drift-gate.spec.ts` **105 → 112**, its 5 pending unchanged because they are the story's *subject*. **`TOOL-12` non-vacuity, balanced against the shipped file:** `run('psql'` and `run(cli.command` are **1 site each at `HEAD`, neither carrying `timeoutMs`; 1 site each now, both carrying it** — genuinely red-before / green-after. **Typecheck, re-measured by the routine on the final rebased tree** (the sprint ledger credited this slice with a `13/13, exit 0, 5m34s` run that the test-architect had actually performed on the **docs-only** tree, before any implementation existed — that provenance is corrected here rather than inherited): `ci-gate.sh` stage **`✓ typecheck`**, with `@pilotage/api` and `@pilotage/web` both real cache **misses that executed**. `git diff --check` clean; **`scripts/ci-gate.sh` byte-identical** (AC-15). ⚠️ **`apps.<app>.skipped` is deliberately absent** — see the block at the bottom of this file; the gate prints `INACTIVE` and qualifies its verdict until an operator runs `--update` from a complete run ⚠️ **Gate verdict on this diff: `GATE: FAIL (1 stage(s))` — `test:api (ratchet)`, and NOT this diff.** Two runs of that one stage on this unchanged tree produced two DIFFERENT load failures — `audit-vocabulary-gate.spec.ts` on `__audit_write_probe.ts`, then `portal-landing-gate.spec.ts` on `__csv_escape_probe.tsx` — each a probe another spec wrote into the shared checkout and deleted mid-walk. Neither suite is in this diff; `audit-vocabulary-gate` passes **73/73 alone**. Recorded as **`TOOL-17`** (the measured mechanism behind `TOOL-16(b)`, and `TOOL-15` generalised). **The PR was left OPEN, not auto-merged.** Both reds were diagnosable only because `TOOL-16(a)` — batched into this very diff — prints jest own explanation |
+| **TOOL-17** | A spec that writes a probe into the real working tree must not make an unrelated suite fail to **LOAD** — the walk-then-read race gets one narrow, accounted tolerance | ✅ done *(gate-hardening track; **typechecked, UNEXECUTED** — no jest run; three residuals named below)* | 2026-08-13 (run 46) | **Fail-before, measured by run 45's own gate** (this is the mechanism `TOOL-13` recorded and could not fix): two `node scripts/test-ratchet.js api` runs on **one unchanged tree** produced **two different** load failures — `audit-vocabulary-gate.spec.ts` on `__audit_write_probe.ts`, then `portal-landing-gate.spec.ts` on `__csv_escape_probe.tsx`. **Pass-after is asserted, not yet executed:** the new `walk-read-gate.spec.ts` (550 lines, **17 cases**) drives the four-step tolerance against a real scratch tree under the OS temp dir — including **AC-5, the PRE-SLICE construction throwing `ENOENT` on the vanished path**, so the fix has a red-before case in the same file as the green-after one; `EISDIR` off the real filesystem is rethrown with the same `code` **and** message; a non-`ENOENT` failure **aborts the whole map** rather than skipping one file; the re-check is proven to be asked about the *same* path that failed; a wholesale-missing root walks to **nothing** instead of being absorbed as N skips. **Nine** walked-read sites across five specs converted (the brief named five; reading the code found nine — three of them in-test, where the failure mode was a spurious RED rather than a spurious load failure). `scripts/lib/walk-read.js` is a **new file beside `scripts/lib/ratchet-core.js`**; **no existing script, check, `ci-gate.sh` or baseline is opened**. `pnpm typecheck` **13/13**, `@pilotage/api` a real cache **MISS** that executed `tsc --noEmit` over the five edited specs and the new one; `git diff --check` exit **0**. ⚠️ **No suite was executed by this run** — the first full `test:api` run is the evidence that matters, and until it exists this slice is a typechecked hypothesis about a race. See the block at the bottom of this file |
 
 ## S-E02-6 — the manifest was inert; now the comparison is real
 
@@ -2233,3 +2236,121 @@ non-determinism. It now blocks more than it did this morning: an unarmed skip ra
 `TOOL-15` says two consecutive full-ratchet runs on the same branch already produce different failure sets, so
 `GATE: PASS` on gate-machinery diffs is not reproducible. Nothing downstream gets more trustworthy until that is
 fixed.
+
+---
+
+## `TOOL-17` — a file that vanishes between `walk()` and `readFileSync` must not take an unrelated suite down at LOAD (run 46, 2026-08-13)
+
+`TOOL-13` ended by recording, from its own gate run, the thing it could not fix: two `node scripts/test-ratchet.js api`
+runs on **one unchanged tree** produced **two different failure sets**, and every failure in both was a suite that
+failed to **LOAD** with `ENOENT` on a probe file a *different* spec had written into the shared checkout and deleted.
+This slice closes that.
+
+**The mechanism, restated once so it is not re-derived.** Two specs plant a probe into the real working tree and remove
+it in `afterEach` — `audit-write-gate.spec.ts:689` → `apps/api/src/shared/quality/__audit_write_probe.ts`,
+`csv-escape-gate.spec.ts:493` → `apps/web/src/lib/__csv_escape_probe.tsx`. Five other specs `walk()` those same roots
+and then `readFileSync` every walked path **at module scope**. Under parallel jest the probe is listed by the walk and
+gone by the read; the module-level read throws; jest reports `<suite failed to load>` for the whole suite. **Both sides
+are correct code** — each writer proves its gate can go red by making it go red on a real file, and walk-then-read is
+the right way to build a corpus. The race is the defect.
+
+### The constraint that decides whether this slice was worth landing
+
+The obvious fix is one line, and it is forbidden:
+
+```ts
+try { source = readFileSync(file, 'utf8'); } catch { continue; }   // ← DO NOT DO THIS
+```
+
+Four of the five victims carry an explicit comment saying they fail at LOAD **on purpose**, because a gate that cannot
+read its corpus must go red rather than report "nothing to check, therefore pass". A blanket catch converts five
+deliberate loud failures into green ones — **`DNC-08`**, and a third instance of `PF-146` / `PF-105` in this
+repository. So the entire engineering content of this slice is the *narrowness* of the tolerance.
+
+### What landed
+
+| Piece | Why it is that and not something cheaper |
+|---|---|
+| `scripts/lib/walk-read.js` (241 lines) — the **one** `catch` in the slice, in `readOrConfirmVanished` | Four steps, in order: read → **rethrow the original object unwrapped** if `error.code !== 'ENOENT'` → **rethrow** if `exists(path)` is true again → only then push onto `skipped` and return `undefined`. A read that fails `ENOENT` while the file is *present* is not this race and must never be swallowed |
+| It lives at `scripts/lib/`, beside `scripts/lib/ratchet-core.js` | **No new architectural decision, so no ADR is owed.** `ratchet-core.js` (#231) is the same artefact class at the same address: a pure CJS helper required **by absolute path** from a spec under `apps/api/src/shared/quality/` (`test-ratchet.spec.ts:307`). Measured this run: **every** walk root in the repo is `apps/<app>/src`, `apps/web/tests` or `packages/<pkg>/src` (`audit-write-check.js:145`, `csv-escape-check.js:135-142`, `production-artefact-check.js:100`, `link-integrity-check.js:186-198`) — `scripts/` is in none of them, so this file is an input to nothing it fixes and never reaches `apps/api/dist` |
+| Tolerance applies to **walk-derived paths only** | `SEED_PATH` in `audit-vocabulary-gate.spec.ts` was **split out of** `WRITER_FILES` and keeps its bare `readFileSync`: a missing seed is the *missing-file* seam, not the *vanishing-walked-file* seam. Every `require()` at the top of the five victims stays **unguarded** for the same reason |
+| A restated **accounting identity** at every site — `map.size + skipped.length === walked.length` | The identity that existed before (`EXECUTABLE.size === API_FILES.length`) was **added back with the skips**, not deleted. Deleting it is how a tolerance quietly becomes a hole |
+| `MAX_VANISHED_FILES = 5`, asserted at every site | The existing floors are asserted on the walk **LIST** (`>= 300`, `>= 200`, `>= 120`) and a skip shrinks the **MAP** — so identity + floor alone would still pass over a corpus that had emptied itself. The cap transports the floor onto the map. It is a **budget, not a measurement**: two writer specs exist, one probe each, observed ceiling **2**. Deliberately **not** `toBe(0)`, which would relocate the flake from load time to assert time and fix nothing |
+| `warnSkipped(label, skipped)` names **every** skipped path, not just how many | A count with no identity is the same "cannot tell" DNC-08 guards against, one layer up. The warn is a supplement — the identity and the cap carry the weight, because this repo already recorded its view of a `console.warn` nobody reads at `trust-proxy-dnc10-gate.spec.ts:312` |
+| `walk-read-gate.spec.ts` (550 lines, **17 cases**) | Drives a real scratch tree under the OS temp dir — never the checkout. Includes **AC-5: the PRE-SLICE construction throws `ENOENT` naming the vanished path**, so the red-before lives in the same file as the green-after; `EISDIR` off the real filesystem rethrown with the same code *and* message; a non-`ENOENT` failure aborting the **whole map**; the re-check proven to be asked about the *same* path; a wholesale-missing root walking to **nothing** rather than being absorbed as N skips; and a location/uniqueness rule that also asserts the `ratchet-core.js` precedent still exists, so "this is the documented convention" goes red if the precedent moves |
+
+**Nine sites, not five.** The brief named five victim *files*; reading the code found **nine walked-read sites** in
+them. Three are in-test rather than at module scope, so their failure mode was a spurious **RED** instead of a spurious
+load failure — the same race, and a fix that converted only the module-level five would have left them live.
+
+### The story spec was wrong on one point, and it is recorded rather than quietly worked around
+
+`docs/spec/features/v3-e02/stories/TOOL-17.md` mandated `apps/api/src/shared/quality/__fixtures__/…` and forbade any
+location outside `apps/api/src`, on the stated premise that `tsc --noEmit` would fail with *"file is not under
+rootDir"* — *"That was checked, not guessed."* **The premise does not hold for this construction.** The rootDir edge
+applies to a TS `import`; every consumer reaches this module through a **computed** `require(join(REPO_ROOT, …))`,
+which TypeScript never resolves into the program — the same shape the five victims already use for
+`scripts/link-integrity-check.js`. `ratchet-core.js` is the standing proof, and typecheck is green from
+`scripts/lib/`. The spec's own §4 also conceded that its mandated path would be **compiled into `apps/api/dist/`** by
+`tsconfig.build.json` — test infrastructure inside the shipped API artefact. A **§4.1 CORRECTION** was added to the
+story doc rather than leaving the contradiction for the next run to rediscover.
+
+### ⚠️ What this slice does **not** have, stated plainly
+
+**No suite was executed.** `pnpm typecheck` is 13/13 with `@pilotage/api` a real cache **miss** that executed, and
+`git diff --check` is exit 0 — but no agent runs jest, so the five converted suites and the 17 new cases are
+**typechecked and unproven at runtime**. The first full `test:api` run is the evidence that matters here, and the
+honest statement of what this slice delivers until then is: *a typechecked hypothesis about a race, with its
+red-before case written down*.
+
+**It reduces the flake rate; it does not remove it.** Step 3 is racy in the opposite direction — a probe re-created
+before `exists()` runs makes the helper **rethrow**, i.e. the original load crash, rarer but still possible. Only
+hermetic writers (**`TOOL-15`, still OPEN**) remove it. `walk()` bodies are untouched, so a *directory* vanishing
+mid-walk still throws from `readdirSync`. On Windows a delete-in-flight can surface `EPERM`/`EBUSY`, which are **not**
+tolerated on purpose: every measured occurrence was `ENOENT`, and an `EPERM` sighting is a new finding, not a
+regression of this one.
+
+### Three residuals the verify panel confirmed, and this slice did not take
+
+1. **A sixth victim exists** — `apps/api/src/shared/audit/write-audit.spec.ts:416` walks `apps/api/src` (the exact root
+   the `__audit_write_probe.ts` is planted in) and does a bare `readFileSync` per walked path in its AC-9 test. It is
+   the one remaining hand-rolled walk-then-read in the repo. Its failure mode is a nondeterministic RED in a suite
+   unrelated to any diff — the defect this slice exists to close, still live one file over.
+2. **FR-4 leaks at the named-constant reads.** The tolerance was supposed to apply only to walked paths, with every
+   *named* read still failing loudly. But roughly fifteen reads have the shape `EXECUTABLE.get('<literal>') ?? ''`, and
+   they are now served out of a tolerant map — so a skipped named file becomes `''`. Both directions are wrong: some
+   assertions pass vacuously over `''`, others (`G3_EXCLUSIONS` at `audit-provenance-gate.spec.ts:409`,
+   `audit-vocabulary-gate.spec.ts:1169`) go **RED** on a skip, which is the flake relocated rather than removed. The
+   fix is one line per suite: assert the named keys are never among the skips.
+3. **The cap is one global number applied to corpora of 800 and of 10.** `portal-landing-gate.spec.ts`'s new
+   `EXECUTABLE_TESTS` site walks `apps/web/tests` — **10 files** — and its floor is `>= 1`, so identity + cap permit
+   **half** the corpus to disappear while green. Neither probe writer touches `apps/web/tests`, so the expected skip
+   count there is exactly **0**: the tolerance buys nothing at that site and costs reach.
+
+Also worth naming because nothing else records it: the accounting identity is **tautological by construction** —
+`mapWalkedFiles` sends every input down exactly one of two branches, so `entries.length + skipped.length ===
+paths.length` cannot fail. Its residual content is "the build function produced no duplicate keys". **The real
+detector of a shrinking corpus is the cap**, and `MAX_VANISHED_FILES = 5` is therefore the exact size of the
+false-green window these five gates now accept.
+
+`V3-E02` remains **`code-complete`**. `PF-111` and `PF-113` are still its two residuals; `TOOL-15` and `TOOL-16(b)`
+are untouched and still open.
+
+### The pointer, as of 2026-08-13 (run 46)
+
+**Next slice → `TOOL-17(b)`** — close this slice's own three residuals, in the order they are listed above. It is the
+same shape the `S-E02-17 → S-E02-18 → S-E02-19` chain used, and it is cheap now that the seam exists: the sixth victim
+is a five-line conversion through `mapWalkedFiles`, the FR-4 leak is one `expect(NAMED_RELS.filter(r =>
+!MAP.has(r))).toEqual([])` per suite, and the cap becomes per-corpus instead of one shared number. Doing it as its own
+slice, rather than widening this one, is what kept this PR reviewable — but leaving it undone means the tolerance is
+in place while its two known holes are open, which is the wrong resting state for a merge gate.
+
+**The `S-E01-2b` pointer from runs 44 and 45 is still not spent** — `TOOL-10`, `TOOL-13` and now `TOOL-17` are all
+gate-hardening picks that jumped the queue, and the dependency map still makes `E01 → E03` a hard edge. Its
+precondition is unchanged and still unmet: a working PostgreSQL on `127.0.0.1:5433`.
+
+**One thing changed about the sequencing argument, though, and it favours finishing this track first.** `TOOL-13`
+shipped its skip ratchet **disarmed** because arming it requires a *complete, deterministic* run, and `TOOL-16(b)` says
+the `apps/api` suite is not deterministic. `TOOL-17` is the first repair of that non-determinism, and `TOOL-17(b)` plus
+`TOOL-15` are what finish it. Until they land, `GATE: PASS` on a gate-machinery diff is still not reproducible, and
+nothing downstream of the gate gets more trustworthy.

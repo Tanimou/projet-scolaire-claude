@@ -41,12 +41,27 @@ import { join, relative, resolve, sep } from 'node:path';
 const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
 const SCRIPT_PATH = join(REPO_ROOT, 'scripts', 'link-integrity-check.js');
 const API_SRC = join(REPO_ROOT, 'apps', 'api', 'src');
+const WALK_READ_PATH = join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js');
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 // Unguarded on purpose (DNC-08): if the stripper disappears, this suite must
 // fail at LOAD rather than degrade into "nothing to check, therefore pass".
 const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
   stripCommentsPreservingLines: (source: string) => string;
+};
+/**
+ * TOOL-17 — the shared walk-then-read seam. Unguarded for the SAME reason: a
+ * MISSING MODULE is a different seam from a VANISHING WALKED FILE, and only the
+ * second one is tolerated. See `scripts/lib/walk-read.js` for the four-step
+ * tolerance and why it is not a blanket catch.
+ */
+const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(WALK_READ_PATH) as {
+  mapWalkedFiles: (
+    paths: string[],
+    build: (path: string, source: string) => [string, string],
+  ) => { entries: [string, string][]; skipped: string[] };
+  warnSkipped: (label: string, skipped: string[]) => boolean;
+  MAX_VANISHED_FILES: number;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -70,9 +85,15 @@ function walk(root: string): string[] {
 
 const repoRel = (file: string): string => relative(REPO_ROOT, file).split(sep).join('/');
 const API_FILES = walk(API_SRC);
-const EXECUTABLE = new Map<string, string>(
-  API_FILES.map((file) => [repoRel(file), stripCommentsPreservingLines(readFileSync(file, 'utf8'))]),
+// TOOL-17: routed through the shared seam. A file listed by `walk()` above and
+// deleted before its read (a sibling spec's probe) no longer crashes this suite
+// at LOAD; every other errno still throws, unwrapped.
+const { entries: EXECUTABLE_ENTRIES, skipped: VANISHED_API_FILES } = mapWalkedFiles(
+  API_FILES,
+  (file, source) => [repoRel(file), stripCommentsPreservingLines(source)],
 );
+warnSkipped('trust-proxy-dnc10-gate / apps/api/src', VANISHED_API_FILES);
+const EXECUTABLE = new Map<string, string>(EXECUTABLE_ENTRIES);
 /**
  * Specs are excluded from the source rules on purpose and bounded the same way
  * `audit-provenance-gate.spec.ts` bounds its own exclusions: the two specs that
@@ -124,6 +145,14 @@ describe('G-1 — this guard is not vacuous', () => {
   it('walked apps/api/src and found a real application', () => {
     expect(API_FILES.length).toBeGreaterThanOrEqual(200);
     expect(PRODUCTION.length).toBeGreaterThanOrEqual(150);
+    // TOOL-17 accounting. The two floors above are asserted on the WALK LIST, and
+    // a tolerated skip shrinks the MAP, not the list — so on their own they would
+    // still pass over a corpus that had silently emptied. These two lines carry
+    // the floors onto the read map: nothing is lost except a confirmed-vanished
+    // file, and at most `MAX_VANISHED_FILES` of those. Deliberately NOT
+    // `toBe(0)` — that would move the flake from LOAD to assert time.
+    expect(EXECUTABLE.size + VANISHED_API_FILES.length).toBe(API_FILES.length);
+    expect(VANISHED_API_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
   });
 
   it('the file it exists to guard is present and non-trivial', () => {

@@ -117,6 +117,21 @@ const CALENDAR_SEED_PATH = join(API_SRC, 'modules', 'calendar', 'calendar-seed.s
 const { stripCommentsPreservingLines } = require(SCRIPT_PATH) as {
   stripCommentsPreservingLines: (source: string) => string;
 };
+/**
+ * TOOL-17 — the shared walk-then-read seam, required unguarded for the same
+ * reason: a MISSING MODULE is a different seam from a VANISHING WALKED FILE.
+ * Only the second is tolerated, and only after the absence is CONFIRMED.
+ */
+const { mapWalkedFiles, warnSkipped, MAX_VANISHED_FILES } = require(
+  join(REPO_ROOT, 'scripts', 'lib', 'walk-read.js'),
+) as {
+  mapWalkedFiles: (
+    paths: string[],
+    build: (path: string, source: string) => [string, string],
+  ) => { entries: [string, string][]; skipped: string[] };
+  warnSkipped: (label: string, skipped: string[]) => boolean;
+  MAX_VANISHED_FILES: number;
+};
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 function walk(root: string): string[] {
@@ -140,10 +155,20 @@ function walk(root: string): string[] {
 const repoRel = (file: string): string => relative(REPO_ROOT, file).split(sep).join('/');
 
 const API_FILES = walk(API_SRC);
-/** Every `.ts` under `apps/api/src`, comment-stripped, keyed by repo-relative path. */
-const EXECUTABLE = new Map<string, string>(
-  API_FILES.map((file) => [repoRel(file), stripCommentsPreservingLines(readFileSync(file, 'utf8'))]),
+/**
+ * Every `.ts` under `apps/api/src`, comment-stripped, keyed by repo-relative path.
+ *
+ * TOOL-17: routed through the shared seam, so a file listed by `walk()` and
+ * deleted before its read (a sibling spec's probe) no longer takes this suite
+ * down at LOAD. Every other errno still throws, unwrapped. The accounting
+ * identity is asserted with the floors in `G-1` below.
+ */
+const { entries: EXECUTABLE_ENTRIES, skipped: VANISHED_API_FILES } = mapWalkedFiles(
+  API_FILES,
+  (file, source) => [repoRel(file), stripCommentsPreservingLines(source)],
 );
+warnSkipped('audit-provenance-gate / apps/api/src', VANISHED_API_FILES);
+const EXECUTABLE = new Map<string, string>(EXECUTABLE_ENTRIES);
 const PRODUCTION = [...EXECUTABLE].filter(([path]) => !path.endsWith('.spec.ts'));
 
 /* ================================================================== *
@@ -258,7 +283,13 @@ describe('G-1 — the guard is not vacuous', () => {
     // red, and far above zero so an empty walk cannot pass.
     expect(API_FILES.length).toBeGreaterThanOrEqual(200);
     expect(PRODUCTION.length).toBeGreaterThanOrEqual(150);
-    expect(EXECUTABLE.size).toBe(API_FILES.length);
+    // TOOL-17 accounting: the identity was `EXECUTABLE.size === API_FILES.length`
+    // before the walk-then-read seam existed. A tolerated skip must not merely
+    // relocate the flake here, so the skips are ADDED back rather than the
+    // identity being deleted — and they are capped, because the two floors above
+    // are asserted on the walk LIST and a skip shrinks only the MAP.
+    expect(EXECUTABLE.size + VANISHED_API_FILES.length).toBe(API_FILES.length);
+    expect(VANISHED_API_FILES.length).toBeLessThanOrEqual(MAX_VANISHED_FILES);
   });
 
   it('the stripper it borrows really strips, and really preserves length', () => {
