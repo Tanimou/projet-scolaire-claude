@@ -126,13 +126,26 @@ export class InviteController {
     //    S-E04-9 SHIPS WITHOUT THE ADOPTION BRANCH, and that withdrawal is the
     //    finding rather than an omission. AC-4 rested on the premise « a Keycloak
     //    account with no local `UserProfile` is a state produced by exactly this
-    //    bug ». Three facts falsify it:
-    //      (a) `UserSyncService.ensureUser` (`user-sync.service.ts:23-56`) creates
-    //          the `UserProfile` LAZILY, on FIRST LOGIN. Every realm identity that
-    //          has never logged in is profile-less BY DESIGN, not by failure.
+    //    bug ». Three facts falsified it:
+    //      (a) `UserSyncService.ensureUser` USED TO create the `UserProfile`
+    //          LAZILY, on FIRST LOGIN — every realm identity that had never logged
+    //          in was profile-less BY DESIGN, not by failure. **S-E01-1a CLOSED
+    //          THAT PREMISE** (`PF-01` half (a), ADR-043): the seam now RESOLVES
+    //          or REFUSES (`UnprovisionedUserError`, 403,
+    //          `code: 'ACCOUNT_NOT_PROVISIONED'`), creates no `Tenant` and no
+    //          `UserProfile`, and the three realm identities are seeded into the
+    //          real demonstration tenant instead (slug deliberately NOT spelled
+    //          out here — `production-artefact-check.js` rule `A4` scans raw
+    //          source, comments included). Kept in place rather than deleted because
+    //          the reasoning is what makes the withdrawal reviewable — and the
+    //          conclusion is UNCHANGED: a profile-less Keycloak identity is still
+    //          not adoptable here (the state now means « not provisioned », which
+    //          is even less of an invitation to adopt).
     //      (b) `infra/keycloak/realm-export.json` ships three of them —
-    //          `admin@` / `teacher@` / `parent@pilotage.local`, enabled, with no
-    //          matching row in `apps/api/prisma/seed-demo.ts`.
+    //          `admin@` / `teacher@` / `parent@pilotage.local`, enabled. They now
+    //          DO have a matching row in `apps/api/prisma/seed-demo.ts` (S-E01-1a,
+    //          seeded with no `authProviderId`: the realm export declares no `id`,
+    //          so first login binds them through the email-linking fallback).
     //      (c) ADR-004 puts every tenant in ONE realm, so those identities are
     //          reachable from any tenant.
     //    Adoption therefore matched « any never-onboarded account », not « the

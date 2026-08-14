@@ -23,8 +23,18 @@ import { InviteController } from './invite.controller';
  * created an enabled identity and mailed its activation link, and neither is
  * reversible. `ADR-035` D2 makes an audit-insert failure fatal, so a rollback
  * left an enabled `school_admin` with **no `UserProfile`**; on first login
- * `UserSyncService.ensureUser` self-provisions that identity into the demo
+ * `UserSyncService.ensureUser` self-provisioned that identity into the demo
  * tenant with realm-derived permissions. That is the ADR-002 breach.
+ *
+ * S-E01-1a (`PF-01` half (a), ADR-043) closed that second half at the seam
+ * itself: `ensureUser` no longer self-provisions anything — it resolves a
+ * provisioned profile or REFUSES with `UnprovisionedUserError` (403,
+ * `ACCOUNT_NOT_PROVISIONED`), creating no `Tenant` and no `UserProfile`. The
+ * orphan an aborted invite leaves behind is therefore no longer an escalation
+ * path; it is a locked-out identity. Everything below is UNCHANGED and still
+ * required: this slice's guarantee is that the orphan is DELETED (AC-1), and a
+ * rollback that silently depended on the login path to "fix" the orphan would
+ * have been the wrong fix in either world.
  *
  * THE FAKE STAGES, THEN COMMITS
  * -----------------------------
@@ -50,10 +60,13 @@ import { InviteController } from './invite.controller';
  * ---------------------------------------------------------------
  * An earlier draft of this slice let the handler ADOPT a Keycloak identity that
  * had no local `UserProfile`, on the premise that such a state is "produced by
- * exactly this bug". It is not: `UserSyncService.ensureUser` creates the profile
- * LAZILY at first login, so every never-logged-in realm identity matches — and
- * `infra/keycloak/realm-export.json` ships three (`admin@` / `teacher@` /
- * `parent@pilotage.local`) with no row in `seed-demo.ts`. Under ADR-004's single
+ * exactly this bug". It is not: `UserSyncService.ensureUser` USED TO create the
+ * profile LAZILY at first login, so every never-logged-in realm identity matched
+ * — and `infra/keycloak/realm-export.json` ships three (`admin@` / `teacher@` /
+ * `parent@pilotage.local`) which had no row in `seed-demo.ts`. S-E01-1a removed
+ * the lazy creation AND seeded those three, so the state now means "never
+ * provisioned" rather than "not yet logged in" — a weaker claim to adopt on, not
+ * a stronger one. The withdrawal stands. Under ADR-004's single
  * realm, any `users.write` holder in any tenant could have adopted them:
  * password overwritten, a realm role added, and the identity bound for good to
  * the adopter's tenant through the globally unique `authProviderId`. Cases (vi)
@@ -65,7 +78,12 @@ const ACTOR = 'actor-profile-1';
 const EMAIL = 'directrice@college-x.fr';
 const KC_NEW = 'kc-created-by-this-request';
 const KC_EXISTING = 'kc-identity-that-already-exists';
-/** The realm's seeded, never-logged-in admin — profile-less by design. */
+/**
+ * The realm's seeded, never-logged-in admin. It was profile-less BY DESIGN until
+ * S-E01-1a, which seeded it into `voltaire-demo` and made the seam refuse rather
+ * than provision. The constant keeps its role here unchanged: it names an
+ * identity this handler must never adopt.
+ */
 const SEEDED_REALM_ADMIN = 'admin@pilotage.local';
 
 function jwt(roles: string[]): KeycloakJwtPayload {
@@ -407,11 +425,14 @@ describe('(v)(vi)(vii) — an existing Keycloak identity is refused, always, ide
 
   // THE SECURITY REGRESSION GUARD. This case is what fails the moment anyone
   // re-introduces the withdrawn adoption branch: a Keycloak identity with NO
-  // local profile is precisely the shape a never-logged-in realm account has —
-  // `UserSyncService.ensureUser` creates profiles LAZILY at first login, and
-  // `realm-export.json` ships `admin@pilotage.local` in exactly that state. The
-  // `prisma` fake answers "no profile anywhere" here, which is the state an
-  // adopting controller would treat as green.
+  // local profile is precisely the shape a never-logged-in realm account had —
+  // `UserSyncService.ensureUser` created profiles LAZILY at first login, and
+  // `realm-export.json` ships `admin@pilotage.local`, which S-E01-1a has since
+  // seeded (`seed-demo.ts`, no `authProviderId`). Post-S-E01-1a the seam refuses
+  // instead of creating, so an unseeded identity in this shape is a subject that
+  // is simply NOT provisioned — still not adoptable, and now for a plainer
+  // reason. The `prisma` fake answers "no profile anywhere" here, which is the
+  // state an adopting controller would treat as green.
   it('(vi) G-TENANT — a profile-LESS seeded realm account is NOT adoptable', async () => {
     const db = makeDb({ keycloakUser: { id: KC_EXISTING, email: SEEDED_REALM_ADMIN } });
 

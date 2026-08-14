@@ -1539,6 +1539,53 @@ async function main() {
   }
 
   // ───────────────────────────────────────────────────────────────────────
+  // STEP 15 — S-E01-1a · les TROIS identités du realm, provisionnées ICI
+  //
+  //   Depuis S-E01-1a, `UserSyncService.ensureUser` REFUSE (403) un sujet
+  //   authentifié sans `UserProfile` au lieu de lui inventer un tenant `demo`.
+  //   C'est la bonne règle — une connexion n'est pas un événement de
+  //   provisioning — mais `infra/keycloak/realm-export.json:105-137` livre trois
+  //   identités activées (`admin@` / `teacher@` / `parent@pilotage.local`) qui
+  //   n'avaient AUCUNE ligne ici. Sans ce bloc, toute connexion locale et toute
+  //   e2e authentifiée (ADR-023) se heurteraient au refus : la démo aurait l'air
+  //   en panne. Le seed est ce qui sépare cette story d'une coupure.
+  //
+  //   PAS d'`authProviderId`, et c'est une MESURE, pas un raccourci : les trois
+  //   users du realm-export ne déclarent AUCUN champ `id` (seulement `username`,
+  //   `email`, `firstName`, `lastName`, `enabled`, `emailVerified`, `credentials`,
+  //   `realmRoles`) — Keycloak frappe l'UUID à l'import, il n'y a donc aucun id à
+  //   lire. La résolution passe par le REPLI PAR EMAIL de `ensureUser`, qui est la
+  //   convention de la maison et non un contournement : `seed-keycloak-users.ts`
+  //   découvre l'id au runtime, et le compte élève démo ci-dessus est semé
+  //   exactement de la même façon.
+  //
+  //   Idempotent par `upsert` sur `[tenantId, email]`, jamais un `create` nu.
+  //   `update` ne touche PAS `authProviderId` : si un premier login l'a déjà lié,
+  //   un re-seed ne doit pas défaire la liaison.
+  // ───────────────────────────────────────────────────────────────────────
+  console.info('  ▸ Identités du realm (admin@ / teacher@ / parent@pilotage.local)…');
+  const realmIdentities = [
+    { email: 'admin@pilotage.local', firstName: 'Sophie', lastName: 'Durand' },
+    { email: 'teacher@pilotage.local', firstName: 'Catherine', lastName: 'Dupont' },
+    { email: 'parent@pilotage.local', firstName: 'Jean', lastName: 'Martin' },
+  ];
+  for (const identity of realmIdentities) {
+    await prisma.userProfile.upsert({
+      where: { tenantId_email: { tenantId: T, email: identity.email } },
+      update: { firstName: identity.firstName, lastName: identity.lastName, status: 'active' },
+      create: {
+        tenantId: T,
+        email: identity.email,
+        firstName: identity.firstName,
+        lastName: identity.lastName,
+        status: 'active',
+        locale: 'fr-FR',
+      },
+    });
+  }
+  console.info(`     ✓ ${realmIdentities.length} identités realm rattachées au tenant ${tenant.slug}`);
+
+  // ───────────────────────────────────────────────────────────────────────
   // FINISH
   // ───────────────────────────────────────────────────────────────────────
   console.info('');
@@ -1550,6 +1597,13 @@ async function main() {
   console.info('');
   console.info('  Comptes admin : mme.dupont@voltaire.fr  /  m.lefebvre@voltaire.fr');
   console.info('  Compte élève (E8) : student@pilotage.local  (rôle realm `student`)');
+  // S-E01-1a — nommés ICI pour qu'un développeur refusé sache pourquoi : depuis
+  // cette story, `ensureUser` ne provisionne plus personne à la connexion. Une
+  // identité du realm absente de cette liste reçoit un 403
+  // `ACCOUNT_NOT_PROVISIONED`, et le correctif est ce seed, jamais un drapeau.
+  console.info('  Identités realm (S-E01-1a) : admin@ / teacher@ / parent@pilotage.local');
+  console.info('    ↳ rattachées au tenant voltaire-demo, SANS authProviderId :');
+  console.info('      la liaison se fait au 1er login par le repli EMAIL de UserSyncService.');
   console.info('  → provisionner via : pnpm prisma:seed:keycloak  (étape suivante)');
 }
 

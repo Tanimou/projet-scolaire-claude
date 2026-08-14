@@ -165,8 +165,22 @@ export class KeycloakAdminService {
    * Delete a user. Used as the COMPENSATING action when a mutation that
    * followed an irreversible `createUser` rolls back (S-E04-9, `ADR-035` D15):
    * Keycloak has no transaction to join, so an enabled account with no local
-   * `UserProfile` is the residue, and on first login `UserSyncService` would
+   * `UserProfile` is the residue, and on first login `UserSyncService` USED TO
    * self-provision it into the demo tenant with realm-derived permissions.
+   * S-E01-1a (`PF-01` half (a), ADR-043) removed that: the seam now refuses such
+   * a subject (403 `ACCOUNT_NOT_PROVISIONED`) instead of minting a tenant. The
+   * compensation is still required, and the reason simply changes register: the
+   * residue is now an enabled realm account no admin can see or clean up.
+   *
+   * **It is NOT true that such an account "can never log in", and the
+   * distinction is the whole reason this compensation still matters.** The
+   * orphan carries an attacker-CHOSEN, server-forced `emailVerified: true`
+   * email, and `ensureUser`'s surviving branch adopts an existing
+   * `UserProfile` on an **email string match** alone — it never reads
+   * `email_verified` and never scopes by tenant (`PF-186`). So an orphan whose
+   * address happens to match an unbound profile logs straight IN, into that
+   * profile's tenant. Refusal covers the subject with no match; it does not
+   * cover the subject with a lucky one. Compensating remains mandatory.
    *
    * **404 is a SUCCESS, not a failure.** Already gone is the desired state, and
    * a compensation that manufactures a phantom orphan — sending an operator
