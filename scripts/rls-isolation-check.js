@@ -301,7 +301,11 @@ const DERIVED_TABLES = Object.freeze([
     // two under a context: the tenant's own custom role, and the SHARED system
     // role, which is visible under every context AND under none.
     expectedRows: 2,
-    privileges: 'SELECT',
+    // S-E01-1c / ADR-047 §D1 — was `'SELECT'`. The three write verbs are added
+    // because `roles.controller.ts` uses exactly three (`create` :154,
+    // `update` :242, `delete` :294) and they are bounded by the six
+    // `system_role_write_guard_*` RESTRICTIVE policies, not by trust.
+    privileges: 'SELECT, INSERT, UPDATE, DELETE',
     // …which is why this table is the FIRST in this file whose no-context count
     // is not zero. Written as a MEASURED number per table, never as a relaxed
     // assertion: the day the system role stops being visible without a context,
@@ -321,10 +325,61 @@ const DERIVED_TABLES = Object.freeze([
     key: 'role_id',
     rowSlot: 'customRole',
     expectedRows: 2,
-    privileges: 'SELECT',
+    // S-E01-1c / ADR-047 §D1 — TWO write verbs, not three, and the asymmetry
+    // with `role` above is a MEASUREMENT: a sweep of `apps/api/src` +
+    // `apps/worker/src` for `\b(prisma|tx)\.rolePermission\.<verb>` returns
+    // `deleteMany` (:250) and `create` (:252) and NO `update*` call site at all.
+    // A privilege with no caller is pure blast radius (ADR-042 §D5's reasoning,
+    // preserved rather than relaxed). The RESTRICTIVE `FOR UPDATE` guard IS
+    // still installed on this table, so a later grant cannot open a hole in one
+    // line — guard complete by command, privilege minimal by measurement.
+    privileges: 'SELECT, INSERT, DELETE',
     noContextRows: 1,
   }),
 ]);
+
+/**
+ * S-E01-1c — the RESTRICTIVE guard family that makes a SYSTEM role unwritable.
+ *
+ * Every census term in this file filters `polname = 'tenant_isolation'`, so
+ * these six policies are INVISIBLE to all of them. That is the trade ADR-047 §D3
+ * accepts in exchange for leaving the permissive policy — and therefore the
+ * SELECT predicate, and therefore five green census assertions — untouched. The
+ * price is paid here: the family gets its own named assertions, or this slice
+ * ships policies no ratchet can see.
+ */
+const WRITE_GUARD_PREFIX = 'system_role_write_guard_';
+
+/** The two tables the guard family covers, and the only two. */
+const WRITE_GUARD_TABLES = Object.freeze(['role', 'role_permission']);
+
+/**
+ * One entry per guarded command, carrying the `pg_policy.polcmd` letter and the
+ * clause shape PostgreSQL 15 ALLOWS for it — `FOR INSERT` takes only
+ * `WITH CHECK`, `FOR DELETE` takes only `USING`. Asserted as a shape rather than
+ * as a count, because "three policies exist" is satisfied by three `FOR INSERT`
+ * policies and the missing `FOR DELETE` is exactly the hole ADR-047 §D3 rejects
+ * the cheap design for.
+ */
+const WRITE_GUARD_COMMANDS = Object.freeze([
+  Object.freeze({ suffix: 'insert', polcmd: 'a', using: false, withCheck: true }),
+  Object.freeze({ suffix: 'update', polcmd: 'w', using: true, withCheck: true }),
+  Object.freeze({ suffix: 'delete', polcmd: 'd', using: true, withCheck: false }),
+]);
+
+/**
+ * ADR-047 §D4 — `ADR-042 §D5` AMENDED IN PLACE, never relaxed.
+ *
+ * The assertion it replaces was `DERIVED_DELETE == 0` ("no tenant-derived table
+ * grants DELETE — a privilege with no caller is pure blast radius"). Since
+ * `S-E01-1b` both of these ARE tenant-derived, and this slice grants DELETE on
+ * both. The reasoning is preserved exactly: these two now HAVE callers
+ * (`roles.controller.ts:294` for `role`, `:250` for `role_permission`). It
+ * becomes a SET EQUALITY in both directions rather than a count or a `>= 0`, so
+ * a THIRD derived table acquiring DELETE fails the gate with its name printed —
+ * which is what the original zero was for.
+ */
+const DERIVED_DELETE_ALLOWED = Object.freeze(['role', 'role_permission']);
 
 /**
  * The CLOSED set of privilege strings the derived tables may hold (ADR-042 §D5).
@@ -348,6 +403,17 @@ const DERIVED_PRIVILEGE_SETS = Object.freeze([
   'SELECT',
   'SELECT, INSERT',
   'SELECT, INSERT, UPDATE',
+  // S-E01-1c / ADR-047 §D1 — TWO strings join the closed set, and the reason is
+  // written beside them because a widening of a closed set is the one edit that
+  // must never be made silently. `role` and `role_permission` ARE privilege
+  // data, and the objection §D1 answers is that today the app writes them as the
+  // table OWNER, on every tenant's rows, under NO predicate at all. The write is
+  // therefore NARROWED, not opened — but only because the six
+  // `system_role_write_guard_*` policies are proven to exist, to be RESTRICTIVE,
+  // and to refuse by execution, all asserted below before this string is read as
+  // acceptable.
+  'SELECT, INSERT, UPDATE, DELETE',
+  'SELECT, INSERT, DELETE',
 ]);
 
 /**
@@ -635,12 +701,57 @@ const SHARED_PERMISSION = '66666666-0000-4000-8000-000000000066';
 
 /**
  * The `role` row the proof ATTEMPTS to create with a FOREIGN-tenant `school_id`.
- * `role` holds no INSERT privilege this slice, so this attempt must be refused
- * — and the assertion below reads WHICH refusal arrived, because
- * `permission denied` and `violates row-level security policy` mean opposite
- * things about whether the policy works.
+ *
+ * S-E01-1c INVERTED WHY IT MUST FAIL, and that inversion is the fail-before /
+ * pass-after evidence. Until this slice `role` held NO `INSERT` privilege, so
+ * the refusal was `permission denied` and said nothing about any predicate.
+ * `INSERT` is granted now, so the attempt reaches `tenant_isolation`'s
+ * `WITH CHECK` and the refusal must be `new row violates row-level security
+ * policy`. The assertion below reads WHICH refusal arrived, because the two
+ * share SQLSTATE 42501 and mean opposite things about whether the policy works.
  */
 const ROLE_FOREIGN_INSERT = fid(SLOT_A, 75);
+
+// ---------------------------------------------------------------------------
+// S-E01-1c — the WRITE MATRIX's own rows.
+//
+// They are numbered from 79 upward and are created LATE (step 7d), after every
+// visibility assertion above has been read. That ordering is deliberate: a
+// committed `role` INSERT would move `FRESH_D_role`, `POOLED_D_role`,
+// `EMPTY_D_role`, `CTX_A_TOTAL_role` and `OWNER_PRED_role`, and "the write
+// matrix quietly re-based four count assertions" is a worse outcome than any
+// defect it could find.
+// ---------------------------------------------------------------------------
+
+/** A SECOND `permission` row, seeded by the OWNER for the write phase and removed after it. */
+const WRITE_PERMISSION = fid(SLOT_A, 79);
+
+/**
+ * PF-194 — a CUSTOM role with `school_id IS NULL`, created for tenant B.
+ *
+ * This is the shape `roles.controller.ts` ACTUALLY produces (it never sets
+ * `schoolId`, ADR-046 §D3), and `role`'s predicate admits the NULL branch for
+ * EVERY tenant. So tenant A can write it. The probe below shows that ACCEPTED,
+ * as an executed `[LIMIT]` beside the school-scoped one shown refused — because
+ * AC-8 (f) alone tests only the shape the product never makes, and a green run
+ * would otherwise read as "cross-tenant role writes are impossible".
+ */
+const PF194_ROLE = fid(SLOT_B, 80);
+
+/** F-8 — tenant B's assignment OF that role, to measure what the cascade removes. */
+const PF194_USER_ROLE = fid(SLOT_B, 81);
+
+/** The roles the POSITIVE CONTROLS create as `app_user`. */
+const WRITE_GLOBAL_ROLE = fid(SLOT_A, 82);
+const WRITE_SCOPED_ROLE = fid(SLOT_A, 83);
+const WRITE_NULLIFY_ROLE = fid(SLOT_A, 84);
+
+/** The row the guard must REFUSE outright: an INSERT declaring `is_system = true`. */
+const WRITE_SYSTEM_ROLE_ATTEMPT = fid(SLOT_A, 85);
+
+/** Fixture literals read back by name, so a probe and its assertion cannot drift. */
+const SYSTEM_ROLE_NAME = 'RLS proof role';
+const B_CUSTOM_ROLE_NAME = 'Custom B';
 
 /** Rows the PROOF creates: an own-tenant INSERT, and two that must be refused. */
 const RECEIPT_OWN_INSERT = fid(SLOT_A, 70);
@@ -1010,7 +1121,17 @@ INSERT INTO school (id, tenant_id, name, school_code, country, updated_at) VALUE
 -- incidental: it is a SYSTEM role, so it must be visible under BOTH GUCs and
 -- under NONE. That is the branch of \`role\`'s predicate that keeps every seeded
 -- portal role reachable after the cutover.
-INSERT INTO role (id, name, slug) VALUES (${lit(SHARED_ROLE)}, 'RLS proof role', 'rls-proof-role');
+--
+-- S-E01-1c / FR-11 — \`is_system\` IS NOW SET EXPLICITLY, AND IT IS A FIX.
+-- Every marker in this file calls this row SYSTEM_ROLE, and every "a SYSTEM role
+-- is refused" assertion of the write matrix below points at it — but the column
+-- defaults to FALSE, so until this line was written the row was a plain custom
+-- role wearing a system-role name, and the entire guard suite would have been
+-- green while testing nothing. It is asserted by the OWNER before the matrix
+-- runs (\`SYSTEM_ROLE_IS_SYSTEM|1\`), because a fixture that silently stops
+-- being what its name says is the exact shape of a proof that proves nothing.
+INSERT INTO role (id, name, slug, is_system)
+  VALUES (${lit(SHARED_ROLE)}, ${lit(SYSTEM_ROLE_NAME)}, 'rls-proof-role', true);
 
 -- S-E01-1b · the one \`permission\` row and the SYSTEM role's grant of it. Both
 -- are global reference data; together with the row above they are what the
@@ -1317,24 +1438,33 @@ COMMIT;
 `;
 
 /**
- * S-E01-1b — THE WRITE REFUSALS, in their OWN psql process.
+ * S-E01-1b — THE PRIVILEGE REFUSALS, in their OWN psql process.
  *
- * `role`, `role_permission` and `tenant` are granted `SELECT` and nothing else,
- * so every statement here is EXPECTED to raise `permission denied` — the exact
- * string `PROOF_SQL`'s stderr guard treats as a loud failure. Running them there
- * would make the whole check red for succeeding.
+ * `tenant` and `permission` are granted `SELECT` and nothing else, so every
+ * statement here is EXPECTED to raise `permission denied` — the exact string
+ * `PROOF_SQL`'s stderr guard treats as a loud failure. Running them there would
+ * make the whole check red for succeeding.
  *
- * Why execute this at all when the catalog already says `role=SELECT`? Because
- * "the grant string is SELECT" and "a write is actually refused" are different
- * claims, and the second is the one G-AUTHZ is about. `ON_ERROR_STOP` is off so
- * every statement runs and each refusal is read independently.
+ * S-E01-1c — TWO PROBES LEFT THIS FILE, AND THAT MOVE IS THE POINT.
  *
- * Two of these are REAL application call sites, named rather than hypothetical:
- * `roles.controller.ts` creates and edits custom roles, and
- * `register.controller.ts` upserts a tenant by slug. Both work today because the
- * app connects as the OWNER; both would fail after the cutover. That is recorded
- * (PF-193 for the role write path, PF-185 for the tenant upsert) and is NOT
- * silently unblocked by widening a grant here.
+ * `role` and `role_permission` used to be here for the same reason. They are now
+ * GRANTED (ADR-047 §D1), so `permission denied for table role` is no longer the
+ * expected result — it is a MISSING GRANT. Left in this unguarded invocation it
+ * would read as "refused as expected", and the whole suite would be green on a
+ * migration whose `GRANT` never executed. Worse: an RLS `WITH CHECK` violation
+ * and a privilege denial SHARE SQLSTATE 42501, so only the message text
+ * discriminates. Their probes therefore moved into `ROLE_WRITE_SQL`, which is
+ * run with its own SHARPENED stderr guard: `permission denied` naming either
+ * table is a LOUD failure there, exactly as it is for the other 49. This is the
+ * S-E01-2d lesson applied a second time, in the same direction.
+ *
+ * What stays here is what is still genuinely fail-closed, each a REAL call site:
+ * `register.controller.ts` upserts `tenant` by slug (PF-185, still a cutover
+ * blocker, deliberately NOT unblocked by a reflex GRANT — ADR-047 §D6), and
+ * `permission` is written by nothing outside the owner-connected seeds.
+ *
+ * `ON_ERROR_STOP` is off so every statement runs and each refusal is read
+ * independently.
  */
 const REFERENCE_WRITE_SQL = `
 \\pset footer off
@@ -1347,22 +1477,26 @@ SET ${TENANT_GUC} = ${lit(TENANT_A)};
 -- marker cannot run, and its absence is the evidence. (Measured: the first
 -- version of this block reported four false failures for exactly this reason.)
 BEGIN;
-INSERT INTO role (id, school_id, name, slug)
-  VALUES (${lit(ROLE_FOREIGN_INSERT)}, ${lit(SCHOOL_A)}, 'Smuggled', 'smuggled');
-SELECT 'ROLE_INSERT_ACCEPTED|1';
-ROLLBACK;
-BEGIN;
-UPDATE role SET name = 'Escalated' WHERE id = ${lit(SHARED_ROLE)};
-SELECT 'ROLE_UPDATE_ACCEPTED|1';
-ROLLBACK;
-BEGIN;
-DELETE FROM role_permission WHERE role_id = ${lit(SHARED_ROLE)};
-SELECT 'ROLE_PERMISSION_DELETE_ACCEPTED|1';
-ROLLBACK;
-BEGIN;
 INSERT INTO tenant (id, name, slug, updated_at)
   VALUES (${lit(fid(SLOT_A, 76))}, 'Minted', 'minted', now());
 SELECT 'TENANT_INSERT_ACCEPTED|1';
+ROLLBACK;
+BEGIN;
+UPDATE tenant SET name = 'Renamed' WHERE id = ${lit(TENANT_A)};
+SELECT 'TENANT_UPDATE_ACCEPTED|1';
+ROLLBACK;
+-- AC-8 (h) — \`permission\` is the other half of the surface that stays
+-- read-only, and it had no execution probe at all until this slice: it was
+-- asserted only by its grant string. "The grant string is SELECT" and "a write
+-- is actually refused" are different claims.
+BEGIN;
+INSERT INTO permission (id, code, label, resource_type, action)
+  VALUES (${lit(fid(SLOT_A, 78))}, 'rls.proof.forged', 'Forged', 'rls_proof', 'write');
+SELECT 'PERMISSION_INSERT_ACCEPTED|1';
+ROLLBACK;
+BEGIN;
+DELETE FROM permission WHERE id = ${lit(SHARED_PERMISSION)};
+SELECT 'PERMISSION_DELETE_ACCEPTED|1';
 ROLLBACK;
 -- The floor that makes the four absences above mean something: this connection
 -- CAN still read. Without it, "no marker printed" would also be the reading on a
@@ -1370,6 +1504,328 @@ ROLLBACK;
 SELECT 'WRITE_PROBE_STILL_READS|' || count(*) FROM role WHERE id = ${lit(SHARED_ROLE)};
 SELECT 'WRITE_PROBE_RAN|1';
 `;
+
+/**
+ * S-E01-1c — THE WRITE MATRIX'S FIXTURES, seeded by the OWNER, LATE.
+ *
+ * Three rows and one assertion, none of which exists in `FIXTURES_SQL`:
+ *
+ *   • a SECOND `permission`, so the `deleteMany`-then-`delete` positive control
+ *     can leave a CHILD ROW BEHIND. Without it the cascade is believed rather
+ *     than executed: a `deleteMany` that silently matched zero rows followed by
+ *     a `DELETE FROM role` leaves exactly the same end state as a working one.
+ *   • `PF194_ROLE` — a CUSTOM role with `school_id` unset, created for tenant B.
+ *     This is the shape `roles.controller.ts` actually produces, and it is the
+ *     one AC-8 (f) does NOT test.
+ *   • `PF194_USER_ROLE` — tenant B's ASSIGNMENT of that role, so what the
+ *     `ON DELETE CASCADE` takes with it is measured and not narrated.
+ *
+ * And the FLOOR: `SYSTEM_ROLE_IS_SYSTEM`, read by the OWNER. Every refusal below
+ * is phrased "a SYSTEM role is refused", and `is_system` defaults to false — so
+ * without this line the whole matrix could be green while pointing at a plain
+ * custom role.
+ */
+const WRITE_SEED_SQL = `
+\\pset footer off
+SELECT 'SYSTEM_ROLE_IS_SYSTEM|' || count(*) FROM role
+  WHERE id = ${lit(SHARED_ROLE)} AND is_system = true;
+SELECT 'SEED_B_ROLE_NAME|' || count(*) FROM role
+  WHERE id = ${lit(fid(SLOT_B, SLOT.customRole))} AND name = ${lit(B_CUSTOM_ROLE_NAME)};
+INSERT INTO permission (id, code, label, resource_type, action)
+  VALUES (${lit(WRITE_PERMISSION)}, 'rls.proof.write', 'RLS write permission', 'rls_proof', 'write');
+INSERT INTO role (id, name, slug)
+  VALUES (${lit(PF194_ROLE)}, 'Global custom B', 'global-custom-b');
+INSERT INTO role_permission (role_id, permission_id)
+  VALUES (${lit(PF194_ROLE)}, ${lit(SHARED_PERMISSION)});
+INSERT INTO user_role (id, user_profile_id, role_id)
+  VALUES (${lit(PF194_USER_ROLE)}, ${lit(fid(SLOT_B, SLOT.member))}, ${lit(PF194_ROLE)});
+SELECT 'SEED_PF194_ROLE|' || count(*) FROM role WHERE id = ${lit(PF194_ROLE)};
+SELECT 'SEED_PF194_USER_ROLE|' || count(*) FROM user_role WHERE id = ${lit(PF194_USER_ROLE)};
+SELECT 'WRITE_SEED_RAN|1';
+`;
+
+/**
+ * S-E01-1c — THE WRITE MATRIX, executed as `app_user` under GUC = tenant A.
+ *
+ * It COMMITS. That is not a shortcut: three of the refusals (AC-9 (b), (e) and
+ * the update/delete halves of (f)) are SILENT — a policied write that matches no
+ * row raises nothing and affects nothing — so the only way to tell "refused"
+ * from "succeeded" is to read the row back, and for a FOREIGN row only the OWNER
+ * can do that. A transaction rolled back at the end would make every owner-side
+ * read-back vacuous: it would be reading the undo, not the refusal.
+ *
+ * The LOUD refusals sit behind savepoints so the committed half survives them.
+ *
+ * THE STDERR GUARD OVER THIS BLOCK IS SHARPENED (F-9). Both tables are GRANTED
+ * now, so `permission denied for table role` / `… role_permission` here means
+ * the migration's GRANT never executed, and it is read as a LOUD FAILURE — the
+ * inverse of what `REFERENCE_WRITE_SQL` expects for `tenant` / `permission`.
+ * The two failures share SQLSTATE 42501; only the message text tells them apart.
+ */
+const ROLE_WRITE_SQL = `
+\\pset footer off
+SET ${TENANT_GUC} = ${lit(TENANT_A)};
+BEGIN;
+
+-- ===========================================================================
+-- POSITIVE CONTROLS. Every refusal below is worthless without them: on a
+-- database where the GRANT never landed, "the write was refused" is green for
+-- entirely the wrong reason.
+-- ===========================================================================
+-- (P1) THE SHIPPED SHAPE: no \`school_id\`, and no \`is_system\` named at all, so
+--      the column takes its default. \`WITH CHECK\` sees the row AFTER defaults,
+--      which is what makes this an insert the guard must ACCEPT —
+--      \`roles.controller.ts\` passes \`isSystem: false\` explicitly today, and a
+--      future caller may not.
+INSERT INTO role (id, name, slug)
+  VALUES (${lit(WRITE_GLOBAL_ROLE)}, 'Write global A', 'write-global-a')
+  RETURNING 'W_INSERT_GLOBAL|1';
+-- (P2) the SCHOOL-SCOPED shape, which the product cannot currently create but
+--      the policy was written for.
+INSERT INTO role (id, school_id, name, slug)
+  VALUES (${lit(WRITE_SCOPED_ROLE)}, ${lit(SCHOOL_A)}, 'Write scoped A', 'write-scoped-a')
+  RETURNING 'W_INSERT_SCOPED|1';
+INSERT INTO role (id, school_id, name, slug)
+  VALUES (${lit(WRITE_NULLIFY_ROLE)}, ${lit(SCHOOL_A)}, 'Write nullify A', 'write-nullify-a')
+  RETURNING 'W_INSERT_NULLIFY|1';
+-- (P3) two permissions attached, so the delete below happens WITH a child row.
+INSERT INTO role_permission (role_id, permission_id)
+  VALUES (${lit(WRITE_SCOPED_ROLE)}, ${lit(SHARED_PERMISSION)})
+  RETURNING 'W_INSERT_ROLEPERM_1|1';
+INSERT INTO role_permission (role_id, permission_id)
+  VALUES (${lit(WRITE_SCOPED_ROLE)}, ${lit(WRITE_PERMISSION)})
+  RETURNING 'W_INSERT_ROLEPERM_2|1';
+-- (P4) the edit, READ BACK. F-7: a policied UPDATE that matches nothing raises
+--      nothing either, so a positive control asserted by the absence of an error
+--      is the same non-assertion as a negative one.
+UPDATE role SET name = 'Write renamed A' WHERE id = ${lit(WRITE_SCOPED_ROLE)};
+SELECT 'W_UPDATE_READBACK|' || count(*) FROM role
+  WHERE id = ${lit(WRITE_SCOPED_ROLE)} AND name = 'Write renamed A';
+-- (P5) \`rolePermission.deleteMany\` (roles.controller.ts:250) — ONE of the two,
+--      so the remaining child makes the cascade below observable.
+DELETE FROM role_permission
+  WHERE role_id = ${lit(WRITE_SCOPED_ROLE)} AND permission_id = ${lit(SHARED_PERMISSION)};
+SELECT 'W_DELETEMANY_READBACK|' || count(*) FROM role_permission
+  WHERE role_id = ${lit(WRITE_SCOPED_ROLE)};
+-- (P6) \`role.delete\` (:294) with a child row still present. Whether the cascade
+--      really fired is a question only the OWNER can answer: from here, a row
+--      whose parent is gone is invisible either way.
+DELETE FROM role WHERE id = ${lit(WRITE_SCOPED_ROLE)};
+SELECT 'W_DELETE_ROLE_READBACK|' || count(*) FROM role WHERE id = ${lit(WRITE_SCOPED_ROLE)};
+
+-- (P7) F-6 — the escalation ADR-046 §D2 banned BY NAME (\`ON DELETE SET NULL\`),
+--      reachable here through a PERMITTED write instead: an own-tenant
+--      school-scoped role can have its \`school_id\` cleared, which PROMOTES it
+--      to global — visible, and now writable, by every tenant. \`WITH CHECK\`
+--      cannot see the old row, so no \`WITH CHECK\` predicate can refuse it. It
+--      is probed rather than refused, and recorded under PF-194.
+UPDATE role SET school_id = NULL WHERE id = ${lit(WRITE_NULLIFY_ROLE)};
+SELECT 'W_SCHOOL_NULLIFIED|' || count(*) FROM role
+  WHERE id = ${lit(WRITE_NULLIFY_ROLE)} AND school_id IS NULL;
+
+-- ===========================================================================
+-- THE LOUD REFUSALS. Each behind a savepoint: the statement ABORTS the
+-- transaction, the marker below it cannot run, and its ABSENCE is the evidence.
+-- ===========================================================================
+-- (a) an INSERT declaring \`is_system = true\`.
+SAVEPOINT w_insert_system;
+INSERT INTO role (id, name, slug, is_system)
+  VALUES (${lit(WRITE_SYSTEM_ROLE_ATTEMPT)}, 'Forged system', 'forged-system', true);
+SELECT 'W_INSERT_SYSTEM_ACCEPTED|1';
+ROLLBACK TO SAVEPOINT w_insert_system;
+-- (c) flipping a CUSTOM role into a SYSTEM one. This is the half \`USING\` cannot
+--     see, and the reason \`WITH CHECK\` is injected on FOR UPDATE at all.
+SAVEPOINT w_flip_system;
+UPDATE role SET is_system = true WHERE id = ${lit(WRITE_GLOBAL_ROLE)};
+SELECT 'W_FLIP_SYSTEM_ACCEPTED|1';
+ROLLBACK TO SAVEPOINT w_flip_system;
+-- (d) attaching a permission to a SYSTEM role — ADR-047 §D2's escalation, the
+--     one that changes what every real user can do at their next request.
+SAVEPOINT w_system_roleperm;
+INSERT INTO role_permission (role_id, permission_id)
+  VALUES (${lit(SHARED_ROLE)}, ${lit(WRITE_PERMISSION)});
+SELECT 'W_SYSTEM_ROLEPERM_INSERT_ACCEPTED|1';
+ROLLBACK TO SAVEPOINT w_system_roleperm;
+-- (f-insert) a role attached to ANOTHER tenant's school. Refused by
+--     \`tenant_isolation\`'s WITH CHECK, not by the new guard — and until this
+--     slice it was refused by the ABSENCE of the INSERT privilege, which said
+--     nothing about any predicate. That inversion is the fail-before/pass-after.
+SAVEPOINT w_foreign_insert;
+INSERT INTO role (id, school_id, name, slug)
+  VALUES (${lit(ROLE_FOREIGN_INSERT)}, ${lit(SCHOOL_B)}, 'Smuggled', 'smuggled');
+SELECT 'W_FOREIGN_INSERT_ACCEPTED|1';
+ROLLBACK TO SAVEPOINT w_foreign_insert;
+
+-- ===========================================================================
+-- THE SILENT REFUSALS. Nothing is raised and zero rows are touched, so each is
+-- proven by READING THE ROW BACK UNCHANGED. This is the S-E01-2d lesson, and it
+-- is the difference between an assertion and a hope.
+-- ===========================================================================
+-- (b) editing a SYSTEM role.
+UPDATE role SET name = 'Escalated' WHERE id = ${lit(SHARED_ROLE)};
+SELECT 'ROLE_SYSTEM_NAME_UNCHANGED|' || count(*) FROM role
+  WHERE id = ${lit(SHARED_ROLE)} AND name = ${lit(SYSTEM_ROLE_NAME)};
+-- (e) deleting a SYSTEM role's permission row.
+DELETE FROM role_permission WHERE role_id = ${lit(SHARED_ROLE)};
+SELECT 'ROLE_SYSTEM_ROLEPERM_UNCHANGED|' || count(*) FROM role_permission
+  WHERE role_id = ${lit(SHARED_ROLE)};
+-- (f-update / f-delete) ANOTHER tenant's SCHOOL-SCOPED role. From here the row
+--     is not even visible, so these two counts are a floor and NOT the proof —
+--     \`app_user\` under GUC = A cannot tell "a row I cannot see" from "a row I
+--     deleted". The OWNER answers that, below.
+UPDATE role SET name = 'Hijacked' WHERE id = ${lit(fid(SLOT_B, SLOT.customRole))};
+SELECT 'W_FOREIGN_UPDATE_ROWS|' || count(*) FROM role WHERE id = ${lit(fid(SLOT_B, SLOT.customRole))};
+DELETE FROM role_permission WHERE role_id = ${lit(fid(SLOT_B, SLOT.customRole))};
+SELECT 'W_FOREIGN_ROLEPERM_ROWS|' || count(*) FROM role_permission
+  WHERE role_id = ${lit(fid(SLOT_B, SLOT.customRole))};
+DELETE FROM role WHERE id = ${lit(fid(SLOT_B, SLOT.customRole))};
+SELECT 'W_FOREIGN_DELETE_ROWS|' || count(*) FROM role WHERE id = ${lit(fid(SLOT_B, SLOT.customRole))};
+
+-- ===========================================================================
+-- PF-194 — THE LIMIT, EXECUTED AND SHOWN ACCEPTED.
+-- ===========================================================================
+-- The same two writes as (f), against the SAME foreign tenant, on the shape the
+-- product ACTUALLY creates: \`school_id\` unset. \`role\`'s predicate admits that
+-- branch for EVERY tenant, and the new guard only tests \`is_system\`. So these
+-- SUCCEED, and a green (f) above must never be read as "cross-tenant role writes
+-- are impossible". Not a regression — the owner does the same today under no
+-- predicate at all — and not fixable here (ADR-047 §D7).
+UPDATE role SET name = 'PF194 hijacked' WHERE id = ${lit(PF194_ROLE)};
+SELECT 'W_PF194_UPDATE|' || count(*) FROM role
+  WHERE id = ${lit(PF194_ROLE)} AND name = 'PF194 hijacked';
+DELETE FROM role WHERE id = ${lit(PF194_ROLE)};
+SELECT 'W_PF194_DELETE_ROWS|' || count(*) FROM role WHERE id = ${lit(PF194_ROLE)};
+COMMIT;
+
+-- The floor that makes every ABSENT marker above mean "refused" rather than
+-- "the connection died three statements ago".
+SELECT 'ROLE_WRITE_STILL_READS|' || count(*) FROM role WHERE id = ${lit(SHARED_ROLE)};
+SELECT 'ROLE_WRITE_PROBE_RAN|1';
+`;
+
+/**
+ * S-E01-1c — the write matrix read back by the ONLY connection that can see all
+ * of it. AC-9: a foreign row `app_user` cannot see is indistinguishable, from
+ * that connection, from a foreign row it just deleted.
+ */
+const WRITE_OWNER_SQL = `
+\\pset footer off
+-- (b) / (e) — the SYSTEM role and its permission row, untouched.
+SELECT 'OWNER_SYSTEM_ROLE_UNCHANGED|' || count(*) FROM role
+  WHERE id = ${lit(SHARED_ROLE)} AND name = ${lit(SYSTEM_ROLE_NAME)} AND is_system = true;
+SELECT 'OWNER_SYSTEM_ROLEPERM|' || count(*) FROM role_permission WHERE role_id = ${lit(SHARED_ROLE)};
+-- (f) — tenant B's SCHOOL-SCOPED role: still there, still named what it was,
+--       still holding its permission row. Three facts, because "the row exists"
+--       would also be true of a row that had been renamed.
+SELECT 'OWNER_B_ROLE_PRESENT|' || count(*) FROM role WHERE id = ${lit(fid(SLOT_B, SLOT.customRole))};
+SELECT 'OWNER_B_ROLE_UNCHANGED|' || count(*) FROM role
+  WHERE id = ${lit(fid(SLOT_B, SLOT.customRole))} AND name = ${lit(B_CUSTOM_ROLE_NAME)};
+SELECT 'OWNER_B_ROLEPERM_PRESENT|' || count(*) FROM role_permission
+  WHERE role_id = ${lit(fid(SLOT_B, SLOT.customRole))};
+-- (a) / (f-insert) — neither refused INSERT left a row behind. From under
+--     GUC = A the difference is invisible.
+SELECT 'OWNER_FORGED_ROLES_ABSENT|' || count(*) FROM role
+  WHERE id IN (${lit(WRITE_SYSTEM_ROLE_ATTEMPT)}, ${lit(ROLE_FOREIGN_INSERT)});
+-- (c) — the flip was refused, so the role is still NOT a system role.
+SELECT 'OWNER_GLOBAL_STILL_CUSTOM|' || count(*) FROM role
+  WHERE id = ${lit(WRITE_GLOBAL_ROLE)} AND is_system = false;
+-- (P6) — THE CASCADE, EXECUTED RATHER THAN BELIEVED. The role is gone AND the
+--        child row went with it; referential actions run with row security off.
+SELECT 'OWNER_W_ROLE_GONE|' || count(*) FROM role WHERE id = ${lit(WRITE_SCOPED_ROLE)};
+SELECT 'OWNER_W_CASCADE_ROLEPERM|' || count(*) FROM role_permission
+  WHERE role_id = ${lit(WRITE_SCOPED_ROLE)};
+-- (P7) / F-6 — the school-scoped role really was promoted to global.
+SELECT 'OWNER_W_NULLIFIED|' || count(*) FROM role
+  WHERE id = ${lit(WRITE_NULLIFY_ROLE)} AND school_id IS NULL;
+-- PF-194 — the cross-tenant write ACCEPTED, and F-8: the cascade silently
+-- revoked an assignment belonging to a tenant the caller cannot even see.
+SELECT 'OWNER_PF194_ROLE_GONE|' || count(*) FROM role WHERE id = ${lit(PF194_ROLE)};
+SELECT 'OWNER_PF194_USER_ROLE_GONE|' || count(*) FROM user_role WHERE id = ${lit(PF194_USER_ROLE)};
+SELECT 'OWNER_WRITE_READBACK_RAN|1';
+`;
+
+/**
+ * AC-8b — the MUTANT probe, run three times: green, RED with the guard dropped,
+ * green again once it is restored from its own captured expression.
+ *
+ * S-E01-1b measured a real cross-tenant defect that left the WHOLE harness
+ * green, so "the assertion exists" is not evidence that the assertion is alive.
+ * This one names the assertion it validates: `ROLE_SYSTEM_NAME_UNCHANGED`.
+ *
+ * It ROLLS BACK: the fixture must survive, because the slice rollback executed
+ * after it reads the same rows.
+ */
+function mutantProbeSql(label) {
+  return `
+\\pset footer off
+SET ${TENANT_GUC} = ${lit(TENANT_A)};
+BEGIN;
+UPDATE role SET name = 'Mutant escalated' WHERE id = ${lit(SHARED_ROLE)};
+SELECT '${label}|' || count(*) FROM role
+  WHERE id = ${lit(SHARED_ROLE)} AND name = ${lit(SYSTEM_ROLE_NAME)};
+ROLLBACK;
+SELECT '${label}_RAN|1';
+`;
+}
+
+/** The `pg_get_expr` capture the mutant is restored FROM — never a re-typed literal. */
+const GUARD_EXPR_SQL = `
+\\pset footer off
+SELECT 'GUARD_EXPR|' || pg_get_expr(p.polqual, p.polrelid) FROM pg_policy p
+  WHERE p.polname = ${lit(WRITE_GUARD_PREFIX + 'update')} AND p.polrelid = 'public.role'::regclass;
+`;
+
+/**
+ * AC-7 — THIS SLICE'S OWN ROLLBACK, copied from its migration header and
+ * EXECUTED, before the generic one.
+ *
+ * The dangerous move here is the copy-paste: the previous slice's rollback does
+ * `DROP POLICY IF EXISTS tenant_isolation` + `DISABLE ROW LEVEL SECURITY` +
+ * `REVOKE SELECT, INSERT, UPDATE, DELETE`. Copied here it would revoke the
+ * `SELECT` that `20260814180000` granted — leaving the reference surface
+ * unreadable — and disable RLS on tables the PREVIOUS migration policies. This
+ * rollback restores the PRE-SLICE state, not the empty one, and the read-back
+ * below asserts exactly that in three directions.
+ */
+function sliceRollbackSql(appUser) {
+  return `
+\\pset footer off
+DO $slice_rollback$
+DECLARE
+  t text;
+  c text;
+  guarded  CONSTANT text[] := ARRAY[${WRITE_GUARD_TABLES.map(lit).join(', ')}];
+  commands CONSTANT text[] := ARRAY[${WRITE_GUARD_COMMANDS.map((k) => lit(k.suffix)).join(', ')}];
+  has_app_user CONSTANT boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user');
+BEGIN
+  FOREACH t IN ARRAY guarded LOOP
+    FOREACH c IN ARRAY commands LOOP
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', ${lit(WRITE_GUARD_PREFIX)} || c, t);
+    END LOOP;
+  END LOOP;
+  IF has_app_user THEN
+    REVOKE INSERT, UPDATE, DELETE ON public.role FROM app_user;
+    REVOKE INSERT, DELETE ON public.role_permission FROM app_user;
+  END IF;
+END
+$slice_rollback$;
+SELECT 'AFTER_WRITE_GUARD|' || count(*) FROM pg_policy p
+  WHERE p.polname LIKE ${lit(WRITE_GUARD_PREFIX + '%')};
+SELECT 'AFTER_TENANT_ISOLATION|' || count(*) FROM pg_policy p
+  WHERE p.polname = ${lit(POLICY_NAME)}
+    AND p.polrelid IN (${WRITE_GUARD_TABLES.map((t) => `${lit('public.' + t)}::regclass`).join(', ')});
+SELECT 'AFTER_WRITE_RLS|' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relrowsecurity
+    AND c.relname IN (${WRITE_GUARD_TABLES.map(lit).join(', ')});
+SELECT 'AFTER_WRITE_GRANTS|' || coalesce(string_agg(entry, ';' ORDER BY entry), '') FROM (
+  SELECT g.table_name || '=' || string_agg(g.privilege_type, ', ' ORDER BY g.privilege_type) AS entry
+    FROM information_schema.role_table_grants g
+   WHERE g.table_schema = 'public' AND g.table_name IN (${WRITE_GUARD_TABLES.map(lit).join(', ')})
+     AND g.grantee = ${lit(appUser)}
+   GROUP BY g.table_name) e;
+SELECT 'SLICE_ROLLBACK_RAN|1';
+`;
+}
 
 /**
  * S-E01-2d — WHY THERE IS NO LONGER A SEPARATE `OUTBOX_SQL` INVOCATION.
@@ -1755,9 +2211,15 @@ async function main() {
           WHERE g.grantee=${lit(app.user)} AND g.table_schema='public'
             AND g.table_name IN (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s)
           GROUP BY g.table_name) e;
-       -- ADR-042 §D5 — NONE of the derived tables receives DELETE. Asserted as a
-       -- count so a widening shows up even if a name is added to the tuple.
-       SELECT 'DERIVED_DELETE|' || count(*) FROM information_schema.role_table_grants g
+       -- ADR-042 §D5, AMENDED BY ADR-047 §D4. This was 'DERIVED_DELETE' and a
+       -- count asserted equal to ZERO. It is now the NAMES, asserted by set
+       -- equality in BOTH directions against DERIVED_DELETE_ALLOWED — never a
+       -- relaxed count and never a '>='. The original reasoning is unchanged:
+       -- a DELETE with no caller is pure blast radius. These two acquired
+       -- callers (roles.controller.ts:250, :294); a THIRD table appearing here
+       -- fails the gate with its name printed.
+       SELECT 'DERIVED_DELETE_NAMES|' || coalesce(string_agg(DISTINCT g.table_name, ',' ORDER BY g.table_name), '')
+         FROM information_schema.role_table_grants g
         WHERE g.grantee=${lit(app.user)} AND g.table_schema='public' AND g.privilege_type='DELETE'
           AND g.table_name IN (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s);
        -- G-AUDIT — grade_revision reaches app_user AT ALL (else the next line is
@@ -1809,6 +2271,107 @@ async function main() {
        SELECT 'OUTBOX_DELETE|' || count(*) FROM information_schema.role_table_grants
         WHERE grantee=${lit(app.user)} AND table_schema='public' AND table_name=${lit(OUTBOX_TABLE)}
           AND privilege_type='DELETE';
+       -- ===================================================================
+       -- S-E01-1c — THE RESTRICTIVE GUARD FAMILY (ADR-047 §D5).
+       --
+       -- EVERY term above filters \`polname = 'tenant_isolation'\`, so not one
+       -- of them can see these six policies. That is the trade ADR-047 §D3
+       -- accepts to keep the SELECT predicate — and five green assertions —
+       -- untouched, and this block is the price. Without it the slice ships
+       -- policies no ratchet observes.
+       -- ===================================================================
+       -- The count of ALL policies, whatever their name. Asserted equal to
+       -- POLICIES + 6, so a SEVENTH policy landing under a THIRD name FAILS
+       -- instead of being invisible to both the named count and this one.
+       SELECT 'TOTAL_POLICIES|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public';
+       SELECT 'WRITE_GUARD_NAMES|' || coalesce(string_agg(c.relname || ':' || p.polname, ',' ORDER BY c.relname, p.polname), '')
+         FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND p.polname LIKE ${lit(WRITE_GUARD_PREFIX + '%')};
+       -- THE SINGLE MOST IMPORTANT LINE IN THIS SLICE. Permissive policies for
+       -- one command are OR-ed: a guard that loses \`AS RESTRICTIVE\` — the
+       -- cheapest imaginable future "repair" — OR-s with tenant_isolation and
+       -- re-opens EVERY write, silently, with no error anywhere.
+       SELECT 'WRITE_GUARD_PERMISSIVE|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND p.polname LIKE ${lit(WRITE_GUARD_PREFIX + '%')} AND p.polpermissive;
+       -- A policy naming a role exempts every OTHER non-owner role, silently.
+       SELECT 'WRITE_GUARD_ROLE_SCOPED|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND p.polname LIKE ${lit(WRITE_GUARD_PREFIX + '%')}
+          AND p.polroles <> '{0}'::oid[];
+       -- The SHAPE, per policy: command letter, and which of USING / WITH CHECK
+       -- is present. PG 15 accepts ONLY WITH CHECK on FOR INSERT and ONLY USING
+       -- on FOR DELETE, so this single set equality asserts the command
+       -- coverage AND the clause form at once. A missing FOR DELETE is exactly
+       -- the hole ADR-047 §D3 rejects the cheap design for.
+       SELECT 'WRITE_GUARD_SHAPE|' || coalesce(string_agg(entry, ',' ORDER BY entry), '') FROM (
+         -- \`polcmd\` is PostgreSQL's internal "char" type, and \`text || "char"\`
+         -- is an AMBIGUOUS operator ("could not choose a best candidate") —
+         -- measured, not guessed: the first version of this query failed with
+         -- exactly that error. The cast is load-bearing, not cosmetic.
+         SELECT c.relname || ':' || p.polcmd::text
+                || ':' || CASE WHEN p.polqual IS NULL THEN '-' ELSE 'q' END
+                || ':' || CASE WHEN p.polwithcheck IS NULL THEN '-' ELSE 'c' END AS entry
+           FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+           JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public' AND p.polname LIKE ${lit(WRITE_GUARD_PREFIX + '%')}) g;
+       -- The guard must actually GUARD: \`is_system = false\` present in the
+       -- installed expression text of every one of the six, read back with
+       -- pg_get_expr rather than trusted from the migration source.
+       SELECT 'WRITE_GUARD_NO_IS_SYSTEM|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND p.polname LIKE ${lit(WRITE_GUARD_PREFIX + '%')}
+          AND coalesce(pg_get_expr(p.polqual, p.polrelid), '')
+              || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
+              NOT LIKE '%is_system = false%';
+       -- A RESTRICTIVE policy that is FOR ALL or FOR SELECT would AND into
+       -- SELECT and hide every system role — locking all four portals out. It
+       -- is the named forbidden repair, so it is asserted absent by catalog.
+       SELECT 'RESTRICTIVE_READ_PATH|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND NOT p.polpermissive AND p.polcmd IN ('*', 'r');
+       -- AC-2 / AC-3 "the SELECT predicate is TODAY'S predicate, VERBATIM" as an
+       -- executable PRECONDITION rather than a promise: no tenant_isolation
+       -- policy anywhere mentions \`is_system\`. Appending the conjunct to the
+       -- permissive policy is the ONE-LINE change that would return zero
+       -- permissions for every user on every portal — every real user holds a
+       -- SYSTEM role — and it is the shape this line exists to refuse.
+       SELECT 'TENANT_ISOLATION_IS_SYSTEM|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND p.polname=${lit(POLICY_NAME)}
+          AND coalesce(pg_get_expr(p.polqual, p.polrelid), '')
+              || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '') LIKE '%is_system%';
+       -- …and the other direction, so the line above cannot pass on a database
+       -- where tenant_isolation was DELETED from these two tables rather than
+       -- left alone: both still carry a permissive FOR ALL policy whose text
+       -- still walks the tenant GUC.
+       -- The pattern stops at the GUC NAME on purpose: \`pg_get_expr\` renders the
+       -- call back as \`current_setting('app.current_tenant_id'::text, true)\`,
+       -- with a cast the migration never wrote. Matching the source spelling
+       -- byte for byte would fail on a policy that is perfectly correct —
+       -- MEASURED, and it is why "byte-identical to the sibling's text" is the
+       -- wrong shape for this assertion and the file-not-in-the-diff argument is
+       -- the right one.
+       SELECT 'TENANT_ISOLATION_INTACT|' || count(*) FROM pg_policy p
+        WHERE p.polname=${lit(POLICY_NAME)} AND p.polpermissive AND p.polcmd='*'
+          AND pg_get_expr(p.polqual, p.polrelid) LIKE ${lit("%current_setting('" + TENANT_GUC + "'%")}
+          AND p.polrelid IN (${WRITE_GUARD_TABLES.map((t) => `${lit('public.' + t)}::regclass`).join(', ')});
+       -- The two tables' FULL privilege strings, so the write GRANT is read as a
+       -- decided string and not as "at least SELECT".
+       SELECT 'WRITE_GUARD_GRANTS|' || coalesce(string_agg(entry, ';' ORDER BY entry), '') FROM (
+         SELECT g.table_name || '=' || string_agg(g.privilege_type, ', ' ORDER BY g.privilege_type) AS entry
+           FROM information_schema.role_table_grants g
+          WHERE g.grantee=${lit(app.user)} AND g.table_schema='public'
+            AND g.table_name IN (${WRITE_GUARD_TABLES.map(lit).join(', ')})
+          GROUP BY g.table_name) e;
+       -- ADR-047 §D6 — \`tenant\` and \`permission\` stay SELECT-ONLY. Asserted
+       -- HERE, in the same breath as the widening, because the reflex when a
+       -- cutover blocker appears is to grant one more verb to one more table.
+       SELECT 'READ_ONLY_SURFACE_WRITE|' || count(*) FROM information_schema.role_table_grants g
+        WHERE g.grantee=${lit(app.user)} AND g.table_schema='public'
+          AND g.table_name IN ('tenant', 'permission') AND g.privilege_type <> 'SELECT';
        -- Present in every real database, absent from this scratch one: the
        -- ledger is applied here file by file with psql, and Prisma's CLI — not
        -- the SQL — creates this table. Measured rather than assumed.
@@ -2001,11 +2564,17 @@ async function main() {
       c.get('PARENT_SELECT_MISSING'),
       0,
     );
-    // ADR-042 §D5 — measured: no delete caller exists for any of the five.
-    expectEqual(
-      'AC-4 no tenant-derived table grants DELETE (ADR-042 §D5 — a privilege with no caller is pure blast radius)',
-      c.get('DERIVED_DELETE'),
-      0,
+    // ADR-042 §D5, AMENDED IN PLACE BY ADR-047 §D4 — a NAMED SET, never a
+    // relaxed count. The reasoning survives verbatim ("a privilege with no
+    // caller is pure blast radius"); what changed is that two of the seven
+    // acquired callers. Both directions: a third table gaining DELETE fails
+    // here with its name, AND one of these two losing it fails too — which is
+    // what makes the write path's positive controls non-vacuous.
+    expectSetEqual(
+      'AC-4 exactly the NAMED tenant-derived tables grant DELETE (ADR-042 §D5 as amended by ADR-047 §D4 — ' +
+        `role: roles.controller.ts:294, role_permission: :250; every other derived table still holds none)`,
+      names(c.get('DERIVED_DELETE_NAMES')),
+      DERIVED_DELETE_ALLOWED,
     );
     // G-AUDIT. Reachability first, for the same reason as the append-only pair.
     expectEqual(
@@ -2077,6 +2646,106 @@ async function main() {
       `ADR-044 §D3 ${OUTBOX_TABLE} does NOT hold DELETE — retention is an OWNER job, and a DELETE here ` +
         'would let the application role erase UNDELIVERED events, the one loss the outbox pattern exists to prevent',
       c.get('OUTBOX_DELETE'),
+      0,
+    );
+
+    // ---- 5d. S-E01-1c — THE RESTRICTIVE GUARD FAMILY (ADR-047 §D5).
+    //
+    //      Additive: not one assertion above is renamed, relaxed or removed, and
+    //      `POLICIES` / `POLICIED_NAMES` / `WITH_CHECK_NULL` / `ROLE_SCOPED` /
+    //      `QUAL_MISMATCH` keep the values they had yesterday — because the
+    //      permissive policy object was NOT touched. The cost of that is that
+    //      those five are BLIND here, and these are the assertions that pay it.
+    const writeGuardNamesExpected = WRITE_GUARD_TABLES.flatMap((table) =>
+      WRITE_GUARD_COMMANDS.map((k) => `${table}:${WRITE_GUARD_PREFIX}${k.suffix}`),
+    );
+    const writeGuardShapeExpected = WRITE_GUARD_TABLES.flatMap((table) =>
+      WRITE_GUARD_COMMANDS.map(
+        (k) => `${table}:${k.polcmd}:${k.using ? 'q' : '-'}:${k.withCheck ? 'c' : '-'}`,
+      ),
+    );
+    // Reached FIRST: every assertion below filters on the guard prefix, so on a
+    // database where the migration never ran they would ALL be vacuously green.
+    expectSetEqual(
+      `AC-4 the guard family is exactly ${writeGuardNamesExpected.length} policies over exactly ` +
+        `${WRITE_GUARD_TABLES.length} tables — a seventh, or one on a third table, fails with its name`,
+      names(c.get('WRITE_GUARD_NAMES')),
+      writeGuardNamesExpected,
+    );
+    expectEqual(
+      'AC-4 TOTAL_POLICIES == POLICIES + 6: every policy in the schema is either a tenant_isolation one or ' +
+        'a named guard. A policy shipped under a THIRD name is invisible to the name-filtered census AND ' +
+        'to the guard census; this line is the only thing that sees it',
+      c.get('TOTAL_POLICIES'),
+      Number(c.get('POLICIES')) + writeGuardNamesExpected.length,
+    );
+    expectEqual(
+      'AC-4 NO guard policy is PERMISSIVE — the one that matters most. Permissive policies for a command ' +
+        'are OR-ed, so a guard that loses `AS RESTRICTIVE` re-opens every write with no error anywhere ' +
+        '(ADR-047 §D3): a fail-open shipped by deleting two words',
+      c.get('WRITE_GUARD_PERMISSIVE'),
+      0,
+    );
+    expectEqual(
+      'AC-4 every guard policy is TO PUBLIC (polroles = {0}), never TO app_user — naming a role would ' +
+        'silently exempt every OTHER non-owner role',
+      c.get('WRITE_GUARD_ROLE_SCOPED'),
+      0,
+    );
+    expectSetEqual(
+      'AC-4 each guard carries its command AND the clause shape PG 15 allows for it: FOR INSERT = ' +
+        'WITH CHECK only, FOR UPDATE = both (from the SAME variable), FOR DELETE = USING only. A missing ' +
+        'FOR DELETE is precisely the hole the divergent-USING/WITH-CHECK design leaves open',
+      names(c.get('WRITE_GUARD_SHAPE')),
+      writeGuardShapeExpected,
+    );
+    expectEqual(
+      'AC-4 every guard predicate, READ BACK from pg_get_expr rather than trusted from the migration ' +
+        'source, actually contains `is_system = false`',
+      c.get('WRITE_GUARD_NO_IS_SYSTEM'),
+      0,
+    );
+    expectEqual(
+      'AC-2 NO restrictive policy is FOR ALL or FOR SELECT anywhere — one would AND into the READ path, ' +
+        'hide every system role, and lock all four portals out at the first request (ADR-046 §D3`s named ' +
+        'forbidden repair)',
+      c.get('RESTRICTIVE_READ_PATH'),
+      0,
+    );
+    // AC-2 / AC-3 "verbatim", as a PRECONDITION and not a promise. The sibling
+    // migration file is untouched in this diff, which is the strongest form of
+    // the claim; these two lines are the executable half of it.
+    expectEqual(
+      'AC-2 no tenant_isolation policy mentions `is_system` — appending the conjunct to the PERMISSIVE ' +
+        'policy would put it in USING, hence in SELECT, and every real user holds a SYSTEM role: the ' +
+        'authorization join would return ZERO permissions for everyone, on every portal',
+      c.get('TENANT_ISOLATION_IS_SYSTEM'),
+      0,
+    );
+    expectEqual(
+      `AC-3 …and the other direction: both ${WRITE_GUARD_TABLES.join(' / ')} still carry a PERMISSIVE ` +
+        'FOR ALL tenant_isolation policy that still walks the tenant GUC. Without this line the assertion ' +
+        'above would also pass on a database where the permissive policy had simply been deleted',
+      c.get('TENANT_ISOLATION_INTACT'),
+      WRITE_GUARD_TABLES.length,
+    );
+    expectSetEqual(
+      'AC-5 the two guarded tables hold EXACTLY their decided privilege strings — asymmetric because ' +
+        'MEASURED (no rolePermission.update* call site exists anywhere), read from the ONE definition in ' +
+        'DERIVED_TABLES so no literal is edited twice',
+      String(c.get('WRITE_GUARD_GRANTS') ?? '')
+        .split(';')
+        .map((entry) => canonicalGrant(entry.trim()))
+        .filter((entry) => entry !== ''),
+      WRITE_GUARD_TABLES.map((table) =>
+        canonicalGrant(`${table}=${DERIVED_TABLES.find((d) => d.child === table).privileges}`),
+      ),
+    );
+    expectEqual(
+      'ADR-047 §D6 `tenant` and `permission` hold NOTHING beyond SELECT. Asserted beside the widening, ' +
+        'because the reflex when a cutover blocker appears is one more verb on one more table: INSERT on ' +
+        '`tenant` would make the application role able to MINT tenants (PF-185 made permanent)',
+      c.get('READ_ONLY_SURFACE_WRITE'),
       0,
     );
 
@@ -2441,14 +3110,17 @@ async function main() {
       w.get('WRITE_PROBE_STILL_READS'),
       1,
     );
+    // S-E01-1c — the `role` / `role_permission` probes LEFT this list, and the
+    // move is the assertion: they are GRANTED now, so `permission denied` on
+    // them is a MISSING GRANT rather than the expected result, and reading it
+    // here as "refused as expected" would leave the suite green on a migration
+    // whose GRANT never ran. They are proven in `ROLE_WRITE_SQL`, under a
+    // stderr guard that treats that exact string as a loud failure.
     for (const [label, marker] of [
-      ['an INSERT into `role` (roles.controller.ts creates custom roles — PF-193)', 'ROLE_INSERT_ACCEPTED'],
-      ['an UPDATE of `role` (roles.controller.ts edits them — PF-193)', 'ROLE_UPDATE_ACCEPTED'],
-      [
-        'a DELETE from `role_permission` (roles.controller.ts replaces a role`s permission set — PF-193)',
-        'ROLE_PERMISSION_DELETE_ACCEPTED',
-      ],
       ['an INSERT into `tenant` (register.controller.ts upserts by slug — PF-185)', 'TENANT_INSERT_ACCEPTED'],
+      ['an UPDATE of `tenant` (the other half of the same upsert — PF-185)', 'TENANT_UPDATE_ACCEPTED'],
+      ['an INSERT into `permission` (genuinely global reference data — ADR-047 §D6)', 'PERMISSION_INSERT_ACCEPTED'],
+      ['a DELETE from `permission` (nothing outside the owner-connected seeds writes it)', 'PERMISSION_DELETE_ACCEPTED'],
     ]) {
       if (w.has(marker)) {
         fail(
@@ -2592,6 +3264,357 @@ async function main() {
           'assertion that fails when the redundant-for-app_user tenant comparison is deleted as "dead code"',
         st.get(`OWNER_PRED_${child}`),
         2,
+      );
+    }
+
+    // ---- 8c. S-E01-1c — THE WRITE MATRIX (AC-8, AC-9), EXECUTED.
+    //
+    //      It runs HERE, last of the proof steps, and the position is load-
+    //      bearing: it COMMITS `role` rows, and a committed `role` row would
+    //      move `FRESH_D_role`, `POOLED_D_role`, `EMPTY_D_role`,
+    //      `CTX_A_TOTAL_role` and `OWNER_PRED_role`. Running it earlier would
+    //      have re-based five count assertions to accommodate a new probe, which
+    //      is how a suite stops measuring what it says it measures.
+    const writeSeed = psql(client.command, scratchOwner, WRITE_SEED_SQL);
+    if (writeSeed.status !== 0) {
+      throw new ToolingUnavailable(`could not seed the write matrix: ${writeSeed.stderr.trim()}`);
+    }
+    const ws = facts(writeSeed);
+    expectEqual('S-E01-1c the write-matrix seed ran to the end', ws.get('WRITE_SEED_RAN'), 1);
+    // THE FLOOR, and it is not ceremony: `is_system` defaults to FALSE, and
+    // every refusal below is phrased "a SYSTEM role is refused". Before this
+    // slice the fixture did not set the column at all, so the whole matrix
+    // would have been green while pointing at a plain custom role (FR-11).
+    expectEqual(
+      'AC-8 FLOOR: the fixture the refusals point at really IS a system role (read by the OWNER — the ' +
+        'column defaults to false, so a fixture that never sets it makes every "SYSTEM role" assertion vacuous)',
+      ws.get('SYSTEM_ROLE_IS_SYSTEM'),
+      1,
+    );
+    expectEqual(
+      "AC-8 FLOOR: tenant B's school-scoped custom role carries the name the read-backs compare against",
+      ws.get('SEED_B_ROLE_NAME'),
+      1,
+    );
+    expectEqual('PF-194 the NULL-school custom role of tenant B was seeded', ws.get('SEED_PF194_ROLE'), 1);
+    expectEqual("F-8 …and tenant B's assignment of it", ws.get('SEED_PF194_USER_ROLE'), 1);
+
+    const roleWrite = psql(client.command, scratchApp, ROLE_WRITE_SQL, { onErrorStop: false });
+    const rw = facts(roleWrite);
+    // THE SHARPENED STDERR GUARD (F-9). Both tables are granted now, so this
+    // exact string means the migration's GRANT never executed — the INVERSE of
+    // what it means in REFERENCE_WRITE_SQL for `tenant` / `permission`. The two
+    // failures share SQLSTATE 42501; only the text tells them apart, and reading
+    // a missing grant as "refused as expected" is the false green this whole
+    // file exists to refuse.
+    if (/permission denied for table (role|role_permission)\b/i.test(roleWrite.stderr)) {
+      fail(
+        `AC-8 ${app.user} HOLDS the write grant on role / role_permission`,
+        'psql reported "permission denied" on a table this migration GRANTS. That is a MISSING GRANT, not ' +
+          `a refusal, and it is what a copy of the S-E01-1b probe would have read as success:\n${roleWrite.stderr.trim()}`,
+      );
+    } else {
+      record(
+        'AC-8 no `permission denied` on role / role_permission — the GRANT landed, so every refusal below ' +
+          'is a POLICY refusal and not a missing privilege',
+      );
+    }
+    expectEqual('AC-8 the write matrix ran to the end', rw.get('ROLE_WRITE_PROBE_RAN'), 1);
+    expectEqual(
+      'AC-8 …and the probing connection can still READ — otherwise "no marker printed" would also be the ' +
+        'reading on a connection that died',
+      rw.get('ROLE_WRITE_STILL_READS'),
+      1,
+    );
+
+    // --- the POSITIVE CONTROLS. Without them every refusal below is green on a
+    //     database where the grant simply never landed.
+    for (const [label, marker] of [
+      [
+        'INSERT a CUSTOM role in the SHIPPED shape (no school_id, no is_system named — so the NOT NULL ' +
+          'default is what WITH CHECK sees, which is the case a future caller that omits `isSystem` hits)',
+        'W_INSERT_GLOBAL',
+      ],
+      ['INSERT a SCHOOL-SCOPED custom role of the own tenant', 'W_INSERT_SCOPED'],
+      ['INSERT a second school-scoped role, for the school_id-nullify probe', 'W_INSERT_NULLIFY'],
+      ['attach a permission to a custom role (roles.controller.ts:252)', 'W_INSERT_ROLEPERM_1'],
+      ['attach a SECOND permission, so the delete below happens WITH a child row', 'W_INSERT_ROLEPERM_2'],
+    ]) {
+      if (rw.has(marker)) {
+        record(`AC-8 POSITIVE CONTROL: ${label} is ACCEPTED for ${app.user}`);
+      } else {
+        fail(
+          `AC-8 POSITIVE CONTROL: ${label} is ACCEPTED for ${app.user}`,
+          `no marker printed — the write was refused, so PF-193 is NOT closed:\n${roleWrite.stderr.trim()}`,
+        );
+      }
+    }
+    expectEqual(
+      'AC-8 POSITIVE CONTROL: the edit is READ BACK with the NEW name — a policied UPDATE that matched ' +
+        'nothing raises nothing either, so "no error" is not evidence that anything happened (F-7)',
+      rw.get('W_UPDATE_READBACK'),
+      1,
+    );
+    expectEqual(
+      'AC-8 POSITIVE CONTROL: deleteMany removed ONE role_permission and left the other — read back, not ' +
+        'assumed, so a deleteMany that matched zero rows cannot pass as one that worked',
+      rw.get('W_DELETEMANY_READBACK'),
+      1,
+    );
+    expectEqual(
+      'AC-8 POSITIVE CONTROL: the role is deleted while a child role_permission still exists',
+      rw.get('W_DELETE_ROLE_READBACK'),
+      0,
+    );
+
+    // --- the LOUD refusals. Absence of the marker IS the evidence: the failing
+    //     statement aborts the (savepointed) transaction and the marker cannot run.
+    for (const [label, marker] of [
+      ['(a) an INSERT declaring `is_system = true`', 'W_INSERT_SYSTEM_ACCEPTED'],
+      ['(c) an UPDATE flipping a CUSTOM role into a SYSTEM one (the half USING cannot see)', 'W_FLIP_SYSTEM_ACCEPTED'],
+      [
+        '(d) attaching a permission to a SYSTEM role — the escalation that actually matters, because ' +
+          'system roles are the roles real users HOLD (ADR-047 §D2)',
+        'W_SYSTEM_ROLEPERM_INSERT_ACCEPTED',
+      ],
+      [
+        "(f) an INSERT of a role attached to ANOTHER tenant's school — refused by tenant_isolation`s " +
+          'WITH CHECK now, where before this slice it was refused by the ABSENCE of the privilege',
+        'W_FOREIGN_INSERT_ACCEPTED',
+      ],
+    ]) {
+      if (rw.has(marker)) {
+        fail(`AC-8 ${label} is REFUSED`, 'it was ACCEPTED — the guard is not doing its job');
+      } else {
+        record(`AC-8 ${label} is REFUSED`);
+      }
+    }
+    if (/violates row-level security policy/i.test(roleWrite.stderr)) {
+      record(
+        'AC-8 …and the loud refusals are POLICY violations (`violates row-level security policy`), not ' +
+          'privilege denials',
+        'the grant is present, so the write reaches WITH CHECK — which is the claim G-AUTHZ is about',
+      );
+    } else {
+      fail(
+        'AC-8 the loud refusals are POLICY violations',
+        `no RLS violation was reported, so the writes were stopped by something else — or not at all:\n${roleWrite.stderr.trim()}`,
+      );
+    }
+
+    // --- the SILENT refusals, each proven by READ-BACK (AC-9).
+    expectEqual(
+      'AC-9 (b) an UPDATE of a SYSTEM role raises NOTHING and changes NOTHING — proven by reading the row ' +
+        'back with its ORIGINAL name, because a policied UPDATE matching zero rows is indistinguishable ' +
+        'from a successful one on the caller`s side',
+      rw.get('ROLE_SYSTEM_NAME_UNCHANGED'),
+      1,
+    );
+    expectEqual(
+      "AC-9 (e) a DELETE of a SYSTEM role's role_permission raises NOTHING and removes NOTHING — the row " +
+        'is still there',
+      rw.get('ROLE_SYSTEM_ROLEPERM_UNCHANGED'),
+      1,
+    );
+    // These three are a FLOOR and not the proof: under GUC = A the foreign row
+    // is not visible either way. The OWNER answers below.
+    for (const marker of ['W_FOREIGN_UPDATE_ROWS', 'W_FOREIGN_ROLEPERM_ROWS', 'W_FOREIGN_DELETE_ROWS']) {
+      expectEqual(
+        `AC-9 (f) FLOOR: ${marker} — the foreign-tenant row is invisible from here, which is exactly why ` +
+          'this number cannot be the evidence',
+        rw.get(marker),
+        0,
+      );
+    }
+
+    const writeOwner = psql(client.command, scratchOwner, WRITE_OWNER_SQL);
+    if (writeOwner.status !== 0) {
+      throw new ToolingUnavailable(`the write-matrix read-back failed to run: ${writeOwner.stderr.trim()}`);
+    }
+    const wo = facts(writeOwner);
+    expectEqual('AC-9 the owner-side read-back ran to the end', wo.get('OWNER_WRITE_READBACK_RAN'), 1);
+    expectEqual(
+      'AC-9 (b) OWNER: the SYSTEM role still carries its original name AND is still a system role',
+      wo.get('OWNER_SYSTEM_ROLE_UNCHANGED'),
+      1,
+    );
+    expectEqual("AC-9 (e) OWNER: the SYSTEM role's permission row survived", wo.get('OWNER_SYSTEM_ROLEPERM'), 1);
+    expectEqual(
+      "AC-9 (f) OWNER: tenant B's SCHOOL-SCOPED custom role still EXISTS — the cross-tenant DELETE reached nothing",
+      wo.get('OWNER_B_ROLE_PRESENT'),
+      1,
+    );
+    expectEqual(
+      'AC-9 (f) OWNER: …and it is UNCHANGED, still carrying its original name — "the row exists" would ' +
+        'also be true of a row that had been renamed',
+      wo.get('OWNER_B_ROLE_UNCHANGED'),
+      1,
+    );
+    expectEqual(
+      "AC-9 (f) OWNER: …and its permission row is intact — the cross-tenant deleteMany reached nothing either",
+      wo.get('OWNER_B_ROLEPERM_PRESENT'),
+      1,
+    );
+    expectEqual(
+      'AC-8 (a)/(f) OWNER: neither refused INSERT left a row behind — from under GUC = A the difference ' +
+        'between "rolled back" and "invisible" cannot be observed',
+      wo.get('OWNER_FORGED_ROLES_ABSENT'),
+      0,
+    );
+    expectEqual(
+      'AC-8 (c) OWNER: the custom role the flip targeted is STILL a custom role',
+      wo.get('OWNER_GLOBAL_STILL_CUSTOM'),
+      1,
+    );
+    expectEqual('AC-8 OWNER: the deleted custom role is really gone', wo.get('OWNER_W_ROLE_GONE'), 0);
+    expectEqual(
+      'AC-8 OWNER: the ON DELETE CASCADE removed the surviving role_permission child — EXECUTED, not ' +
+        'believed. A deleteMany that silently matched nothing, followed by the role delete, would leave ' +
+        'exactly this end state, which is why the child row had to still exist at the moment of the delete',
+      wo.get('OWNER_W_CASCADE_ROLEPERM'),
+      0,
+    );
+
+    // ---- 8d. THE LIMITS, EXECUTED AND SHOWN ACCEPTED. Recorded with ids and
+    //      priorities, never fixed here: both fixes are the ones ADR-047 §D7
+    //      refuses, and a limit written in a comment is a hope.
+    expectEqual(
+      'PF-194 the NULL-school cross-tenant UPDATE was ACCEPTED (this is the LIMIT being measured, not a ' +
+        'refusal being asserted) — a zero here would mean the probe never ran',
+      rw.get('W_PF194_UPDATE'),
+      1,
+    );
+    expectEqual('PF-194 …and the DELETE removed it', wo.get('OWNER_PF194_ROLE_GONE'), 0);
+    record(
+      '[LIMIT] PF-194 (P1) — a CUSTOM role with school_id unset is writable by EVERY tenant, and that is ' +
+        'the ONLY shape roles.controller.ts can create',
+      `EXECUTED as ${app.user} under GUC = tenant A against a role created for tenant B: the UPDATE was ` +
+        'ACCEPTED and the DELETE removed the row, while the SCHOOL-SCOPED probe (f) above was refused. ' +
+        'AC-8 (f) alone therefore tests the shape the product NEVER produces. Not a regression — the owner ' +
+        'connection does the same today under no predicate at all — and not fixable here: the two remedies ' +
+        'are `role.tenant_id` (ADR-047 §D7) and making the controller set `schoolId` (PF-08 / ADR-015 D8.6), ' +
+        'both product decisions. Blocked on PF-153 / PF-08.',
+    );
+    expectEqual(
+      'F-8 …and the cascade took tenant B`s user_role assignment with it, unseen',
+      wo.get('OWNER_PF194_USER_ROLE_GONE'),
+      0,
+    );
+    record(
+      '[LIMIT] PF-194 (F-8) — deleting that role silently revoked a `user_role` row belonging to a tenant ' +
+        'the caller cannot see',
+      'user_role.role_id -> role is ON DELETE CASCADE (0_baseline:1662) and referential actions run with ' +
+        'row security OFF, so the assignment goes with no error and no visibility. roles.controller.ts:279 ' +
+        'blocks this in APPLICATION code — which is exactly what ADR-047 §D2 says the database must not ' +
+        'depend on. Same owner and same blockers as PF-194.',
+    );
+    expectEqual(
+      'F-6 an UPDATE clearing `school_id` on an OWN-tenant role was ACCEPTED — measured, not feared',
+      rw.get('W_SCHOOL_NULLIFIED'),
+      1,
+    );
+    expectEqual('F-6 …and the OWNER confirms the row really is global now', wo.get('OWNER_W_NULLIFIED'), 1);
+    record(
+      '[LIMIT] PF-194 (F-6) — a school-scoped role can be PROMOTED to global by clearing school_id',
+      'This is the `ON DELETE SET NULL` escalation ADR-046 §D2 banned BY NAME, reached instead through a ' +
+        'PERMITTED write. WITH CHECK cannot see the old row, so no WITH CHECK predicate can refuse it; a ' +
+        'trigger could, and is out of scope for a policy slice. Recorded under PF-194 because the promoted ' +
+        'row lands in exactly the writable-by-everyone state PF-194 describes.',
+    );
+    record(
+      '[LIMIT] F-16 (P2, folded into PF-194) — an INSERT into role_permission naming a FOREIGN-tenant ' +
+        'role_id is an existence oracle',
+      'Referential-integrity triggers run with row security off, so a foreign-tenant parent clears the FK ' +
+        'and dies on WITH CHECK (42501/RLS), while a NONEXISTENT id dies on the FK (23503). Two ' +
+        'distinguishable errors enumerate ids the caller cannot read. Not introduced by this slice — the ' +
+        'FK predates it — and not closable by a policy.',
+    );
+
+    // ---- 8e. AC-8b — ONE MUTANT, KILLED BY EXECUTION.
+    //
+    //      S-E01-1b MEASURED a real cross-tenant defect that left the ENTIRE
+    //      harness green, so "the assertion exists" is not evidence that the
+    //      assertion is alive. This kills exactly one named assertion,
+    //      `ROLE_SYSTEM_NAME_UNCHANGED`, and restores the policy from its OWN
+    //      captured expression rather than from a re-typed literal.
+    const guardExpr = psql(client.command, scratchOwner, GUARD_EXPR_SQL);
+    const capturedExpr = String(facts(guardExpr).get('GUARD_EXPR') ?? '').trim();
+    if (guardExpr.status !== 0 || capturedExpr === '') {
+      fail(
+        'AC-8b the FOR UPDATE guard on `role` can be read back with pg_get_expr',
+        `nothing was captured, so the mutation below could not be reversed:\n${guardExpr.stderr.trim()}`,
+      );
+    } else {
+      const greenBefore = facts(psql(client.command, scratchApp, mutantProbeSql('MUT_BEFORE'), { onErrorStop: false }));
+      const dropped = psql(
+        client.command,
+        scratchOwner,
+        `DROP POLICY ${WRITE_GUARD_PREFIX}update ON public.role;`,
+      );
+      const red = facts(psql(client.command, scratchApp, mutantProbeSql('MUT_RED'), { onErrorStop: false }));
+      const restored = psql(
+        client.command,
+        scratchOwner,
+        `CREATE POLICY ${WRITE_GUARD_PREFIX}update ON public.role AS RESTRICTIVE FOR UPDATE TO PUBLIC ` +
+          `USING (${capturedExpr}) WITH CHECK (${capturedExpr});`,
+      );
+      const green = facts(psql(client.command, scratchApp, mutantProbeSql('MUT_GREEN'), { onErrorStop: false }));
+      if (dropped.status !== 0) fail('AC-8b the deliberate weakening applied', dropped.stderr.trim());
+      if (restored.status !== 0) fail('AC-8b the guard was restored from its captured expression', restored.stderr.trim());
+      const before = greenBefore.get('MUT_BEFORE');
+      const weakened = red.get('MUT_RED');
+      const after = green.get('MUT_GREEN');
+      if (String(before) === '1' && String(weakened) === '0' && String(after) === '1') {
+        record(
+          'AC-8b MUTANT_KILLED: with `system_role_write_guard_update` dropped from public.role, the named ' +
+            'assertion ROLE_SYSTEM_NAME_UNCHANGED went RED (the SYSTEM role was renamed by app_user), and ' +
+            'GREEN again once the policy was recreated from its own pg_get_expr text',
+          `before = ${before}, weakened = ${weakened}, restored = ${after} (predicate: ${capturedExpr})`,
+        );
+      } else {
+        fail(
+          'AC-8b MUTANT_KILLED: ROLE_SYSTEM_NAME_UNCHANGED flips RED under a deliberately dropped guard',
+          `it did not flip (before = ${before}, weakened = ${weakened}, restored = ${after}). ` +
+            'The assertion it validates is DEAD: it would stay green on a database with no write guard at all.',
+        );
+      }
+    }
+
+    // ---- 8f. AC-7 — THIS SLICE'S OWN ROLLBACK, EXECUTED BEFORE the generic
+    //      one, because the generic one cannot express "the PRE-SLICE state came
+    //      back". A rollback that only ever runs as part of a total teardown is
+    //      indistinguishable from a rollback that is too aggressive.
+    const sliceRollback = psql(client.command, scratchOwner, sliceRollbackSql(app.user));
+    if (sliceRollback.status !== 0) {
+      fail('AC-7 the header ROLLBACK of this migration executes', sliceRollback.stderr.trim());
+    } else {
+      const sr = facts(sliceRollback);
+      expectEqual('AC-7 the slice rollback ran to the end', sr.get('SLICE_ROLLBACK_RAN'), 1);
+      expectEqual(
+        'AC-7 the slice rollback drops all six guard policies',
+        sr.get('AFTER_WRITE_GUARD'),
+        0,
+      );
+      expectEqual(
+        'AC-7 …and it does NOT drop tenant_isolation: copying the sibling`s rollback would have removed ' +
+          'the policy the PREVIOUS migration installed, leaving RLS enabled with nothing to permit',
+        sr.get('AFTER_TENANT_ISOLATION'),
+        WRITE_GUARD_TABLES.length,
+      );
+      expectEqual(
+        'AC-7 …and it does NOT disable ROW LEVEL SECURITY on either table',
+        sr.get('AFTER_WRITE_RLS'),
+        WRITE_GUARD_TABLES.length,
+      );
+      expectSetEqual(
+        `AC-7 …and ${app.user} holds EXACTLY SELECT on both tables again — the pre-slice state, not the ` +
+          'empty one. Revoking SELECT here would leave the reference surface unreadable and break the ' +
+          'authorization join that S-E01-1b exists to enable',
+        String(sr.get('AFTER_WRITE_GRANTS') ?? '')
+          .split(';')
+          .map((entry) => canonicalGrant(entry.trim()))
+          .filter((entry) => entry !== ''),
+        WRITE_GUARD_TABLES.map((table) => canonicalGrant(`${table}=${REFERENCE_PRIVILEGES}`)),
       );
     }
 
@@ -2777,6 +3800,7 @@ module.exports = {
   // one layer below the constants it was written for.
   AUTO_DISCRIMINANT_PRIVILEGES,
   AUTO_DISCRIMINANT_SQL,
+  DERIVED_DELETE_ALLOWED,
   DERIVED_PRIVILEGE_SETS,
   DERIVED_SET_SQL,
   DERIVED_TABLES,
@@ -2792,6 +3816,13 @@ module.exports = {
   TENANT_B,
   TENANT_GUC,
   VERDICT_EXIT_CODES,
+  // S-E01-1c — the guard family is EXPORTED for the same reason the derivation
+  // is: `apps/api/src/shared/quality/rls-isolation-gate.spec.ts` asserts the
+  // migration's policy names against these, so the migration and the census
+  // cannot drift apart through two hand-written literals (ADR-042 §D3).
+  WRITE_GUARD_COMMANDS,
+  WRITE_GUARD_PREFIX,
+  WRITE_GUARD_TABLES,
   fid,
   isLoopbackHost,
   lit,

@@ -78,6 +78,18 @@ const OUTBOX_MIGRATION_PATH = join(MIGRATIONS_DIR, OUTBOX_MIGRATION_DIR_NAME, 'm
 const REFERENCE_MIGRATION_DIR_NAME = '20260814180000_role_reference_surface_rls';
 const REFERENCE_MIGRATION_PATH = join(MIGRATIONS_DIR, REFERENCE_MIGRATION_DIR_NAME, 'migration.sql');
 
+/**
+ * S-E01-1c — la CINQUIÈME migration : la SURFACE D'ÉCRITURE de l'autorisation.
+ *
+ * Chemin propre, comme les quatre autres, et pour la même raison : une migration
+ * appliquée ne se réécrit pas. Celle-ci ne touche NI le fichier de sa sœur NI
+ * l'objet `tenant_isolation` qu'il installe — ce non-toucher EST la forme la plus
+ * forte de « le prédicat de SELECT est celui d'aujourd'hui, verbatim », et il est
+ * asserté ci-dessous plutôt que promis.
+ */
+const WRITE_MIGRATION_DIR_NAME = '20260814210000_role_write_surface_rls';
+const WRITE_MIGRATION_PATH = join(MIGRATIONS_DIR, WRITE_MIGRATION_DIR_NAME, 'migration.sql');
+
 /** La table que `S-E01-2d` fait passer du résidu aux tables tenant-scopées. */
 const OUTBOX_TABLE = 'outbox_event';
 
@@ -86,6 +98,7 @@ const MIGRATION = readFileSync(MIGRATION_PATH, 'utf8');
 const DERIVED_MIGRATION = readFileSync(DERIVED_MIGRATION_PATH, 'utf8');
 const OUTBOX_MIGRATION = readFileSync(OUTBOX_MIGRATION_PATH, 'utf8');
 const REFERENCE_MIGRATION = readFileSync(REFERENCE_MIGRATION_PATH, 'utf8');
+const WRITE_MIGRATION = readFileSync(WRITE_MIGRATION_PATH, 'utf8');
 const SCHEMA = readFileSync(SCHEMA_PATH, 'utf8');
 const CHECKER = readFileSync(CHECKER_PATH, 'utf8');
 
@@ -106,6 +119,65 @@ const DERIVED_MIGRATION_CODE = executableSql(DERIVED_MIGRATION);
 const CHECKER_CODE = executableJs(CHECKER);
 const OUTBOX_MIGRATION_CODE = executableSql(OUTBOX_MIGRATION);
 const REFERENCE_MIGRATION_CODE = executableSql(REFERENCE_MIGRATION);
+// Déclaré AVANT `writeGuardTuple()` / `writeAllowedPrivileges()` : les deux
+// corps lisent cette constante, et leurs appels ci-dessous s'évaluent à la
+// charge du module. La cible est ES2022, donc le `const` est émis tel quel :
+// déclaré après, la TDZ ferait échouer le FICHIER ENTIER à l'import
+// (`ReferenceError: Cannot access 'WRITE_MIGRATION_CODE' before
+// initialization`) — que tsc ne voit pas, la lecture passant par un corps de
+// fonction (pas de TS2448). Ne pas redescendre.
+const WRITE_MIGRATION_CODE = executableSql(WRITE_MIGRATION);
+
+/**
+ * S-E01-1c — le vérificateur est aussi `require()` pour ses CONSTANTES.
+ *
+ * Le nom des six policies de garde vit à UN seul endroit. Le ré-écrire ici en
+ * littéral ferait de ce fichier une SECONDE source de vérité sur ce que la
+ * migration installe — exactement la dérive qu'ADR-042 §D3 interdit, et la
+ * raison pour laquelle le frère adversarial importe déjà `DERIVED_TABLES`.
+ *
+ * Le `require()` est sûr : le vérificateur garde son `main()` derrière
+ * `require.main === module`, donc le charger ne crée aucune base de données.
+ */
+/* eslint-disable @typescript-eslint/no-require-imports */
+const checker = require(CHECKER_PATH) as {
+  WRITE_GUARD_PREFIX: string;
+  WRITE_GUARD_TABLES: readonly string[];
+  WRITE_GUARD_COMMANDS: ReadonlyArray<{
+    suffix: string;
+    polcmd: string;
+    using: boolean;
+    withCheck: boolean;
+  }>;
+  DERIVED_DELETE_ALLOWED: readonly string[];
+  DERIVED_TABLES: ReadonlyArray<{ child: string; privileges: string }>;
+  DERIVED_PRIVILEGE_SETS: readonly string[];
+};
+/* eslint-enable @typescript-eslint/no-require-imports */
+
+/** Le tuple littéral 2 × 3 de la migration d'ÉCRITURE : table, privilèges, prédicat. */
+function writeGuardTuple(): Array<{ table: string; privileges: string }> {
+  const block = /guarded\s+CONSTANT\s+text\[\]\[\]\s*:=\s*ARRAY\[([\s\S]*?)\n\s*\]\s*;/.exec(
+    WRITE_MIGRATION_CODE,
+  );
+  if (!block) return [];
+  return [...(block[1] ?? '').matchAll(/ARRAY\[\s*'([^']*)'\s*,\s*'([^']*)'\s*,/g)].map((m) => ({
+    table: m[1] as string,
+    privileges: m[2] as string,
+  }));
+}
+
+/** Le jeu FERMÉ de chaînes de privilèges déclaré par la migration d'écriture. */
+function writeAllowedPrivileges(): string[] {
+  const block = /allowed_privileges\s+CONSTANT\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]\s*;/.exec(
+    WRITE_MIGRATION_CODE,
+  );
+  if (!block) return [];
+  return [...(block[1] ?? '').matchAll(/'([^']*)'/g)].map((m) => m[1] as string);
+}
+
+const WRITE_GUARD_TUPLE = writeGuardTuple();
+const WRITE_ALLOWED_PRIVILEGES = writeAllowedPrivileges();
 
 /**
  * Le tableau littéral 5 × 4 de la migration dérivée : enfant, colonne FK,
@@ -1428,6 +1500,354 @@ describe('S-E01-1b — la migration de la SURFACE DE RÉFÉRENCE : une FK, trois
   });
 });
 
+describe('S-E01-1c — la SURFACE D’ÉCRITURE : six policies RESTRICTIVE, deux GRANTs, zéro colonne', () => {
+  it('elle est au chemin attendu, elle TRIE après ses quatre sœurs, et elle n’en réécrit aucune', () => {
+    expect(existsSync(WRITE_MIGRATION_PATH)).toBe(true);
+    expect(readdirSync(MIGRATIONS_DIR)).toContain(WRITE_MIGRATION_DIR_NAME);
+    for (const dir of [
+      MIGRATION_DIR_NAME,
+      DERIVED_MIGRATION_DIR_NAME,
+      OUTBOX_MIGRATION_DIR_NAME,
+      REFERENCE_MIGRATION_DIR_NAME,
+    ]) {
+      expect(WRITE_MIGRATION_DIR_NAME).not.toEqual(dir);
+    }
+    // L'ordre lexicographique EST l'ordre d'application : cette migration
+    // s'appuie sur la policy `tenant_isolation` que la précédente installe, et
+    // elle REFUSE de s'appliquer si elle n'y est pas (voir plus bas).
+    expect(WRITE_MIGRATION_DIR_NAME > REFERENCE_MIGRATION_DIR_NAME).toBe(true);
+  });
+
+  it('AC-1 — RELUE À LA MAIN : ni `db push` ni `migrate dev` n’apparaissent', () => {
+    expect(WRITE_MIGRATION_CODE).not.toContain('db push');
+    expect(WRITE_MIGRATION_CODE).not.toContain('migrate dev');
+    expect(WRITE_MIGRATION).toContain('RELUE À LA MAIN');
+    // Une migration qui découvrirait ses tables depuis `information_schema`
+    // aurait un périmètre qui bouge avec la base au lieu du diff.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/from\s+information_schema/i);
+  });
+
+  it('AC-2/AC-3 — LE GARDE EST `AS RESTRICTIVE`, ET C’EST LA DÉCISION ENTIÈRE', () => {
+    // Deux policies PERMISSIVES pour une même commande sont composées par OU :
+    // une policy « plus stricte » ajoutée à côté de `tenant_isolation … FOR ALL`
+    // sans ces deux mots ne restreint RIEN, en silence. C'est la seule ligne de
+    // ce fichier dont l'oubli livre un garde qui ne garde rien.
+    expect((WRITE_MIGRATION_CODE.match(/AS RESTRICTIVE/g) ?? []).length).toBe(3);
+    expect(WRITE_MIGRATION_CODE).toMatch(/FOR INSERT TO PUBLIC WITH CHECK/);
+    expect(WRITE_MIGRATION_CODE).toMatch(/FOR UPDATE TO PUBLIC USING \(%s\) WITH CHECK \(%s\)/);
+    expect(WRITE_MIGRATION_CODE).toMatch(/FOR DELETE TO PUBLIC USING/);
+    // PG 15 n'accepte QUE `WITH CHECK` sur FOR INSERT et QUE `USING` sur FOR
+    // DELETE : une boucle qui émettrait les deux clauses partout REFUSERAIT de
+    // s'appliquer. La contrainte DNC « WITH CHECK depuis la MÊME variable » vaut
+    // donc là où les deux doivent être identiques, et là seulement.
+    expect(WRITE_MIGRATION_CODE).toMatch(/target, predicate, predicate\)/);
+    // …et jamais un garde RESTRICTIVE sur le chemin de LECTURE : il serait
+    // composé par ET avec SELECT, cacherait tout rôle SYSTÈME, et verrouillerait
+    // les quatre portails à la première requête.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/AS RESTRICTIVE FOR (ALL|SELECT)/);
+    // Les policies sont TO PUBLIC : nommer un rôle exempterait en silence tout
+    // AUTRE rôle non-propriétaire.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/CREATE POLICY[\s\S]{0,220}TO\s+app_user/);
+  });
+
+  it('AC-2 — elle NE TOUCHE PAS `tenant_isolation`, et c’est la forme forte de « verbatim »', () => {
+    // Le prédicat de SELECT est « celui d'aujourd'hui, verbatim » non pas parce
+    // qu'on l'a relu, mais parce que l'OBJET n'est pas touché : cette migration
+    // ne crée, ne supprime et ne remplace aucune policy de ce nom.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/CREATE POLICY[\s\S]{0,80}tenant_isolation/);
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/DROP POLICY[\s\S]{0,80}tenant_isolation/);
+    // …et elle ne mentionne `is_system` QUE dans ses propres prédicats de garde,
+    // jamais dans un prédicat portant le GUC : ajouter `AND is_system = false` à
+    // la policy permissive la mettrait dans USING, donc dans SELECT, et tout
+    // utilisateur réel détient un rôle SYSTÈME — zéro permission pour tout le
+    // monde, sur les quatre portails, dès la première requête.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/current_setting/);
+    // Le garde ne porte AUCUN contexte de tenant : la moitié tenant reste
+    // ENTIÈREMENT dans la policy permissive, donc DNC-10 n'a ici aucune surface.
+    expect(WRITE_MIGRATION_CODE).toContain('is_system = false');
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/IS\s+NOT\s+TRUE/i);
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/IS\s+DISTINCT\s+FROM\s+true/i);
+  });
+
+  it('G-DNC — aucune forme `IS NULL OR`, aucun `OR true`, aucun commentaire de bloc', () => {
+    // Contrairement à sa sœur, AUCUNE colonne nullable n'intervient ici, donc le
+    // cliquet s'applique SANS qualification — y compris à l'en-tête.
+    expect(WRITE_MIGRATION).not.toMatch(/IS\s+NULL\s+OR/i);
+    expect(WRITE_MIGRATION).not.toMatch(/\bOR\s+true\b/i);
+    // `executableSql` ne retire que les `--` : un `/* */` masquerait du SQL réel
+    // à tous les cliquets textuels de ce fichier.
+    expect(WRITE_MIGRATION_CODE).not.toContain('/*');
+  });
+
+  it('AC-4 — le nom des six policies vient du vérificateur, pas d’un littéral local', () => {
+    expect(checker.WRITE_GUARD_PREFIX).toBe('system_role_write_guard_');
+    expect([...checker.WRITE_GUARD_TABLES].sort()).toEqual(['role', 'role_permission']);
+    expect(checker.WRITE_GUARD_COMMANDS.map((k) => k.suffix)).toEqual(['insert', 'update', 'delete']);
+    // La forme par commande, telle que PG 15 l'autorise — et telle que le
+    // recensement la relit depuis `pg_policy`.
+    expect(checker.WRITE_GUARD_COMMANDS.map((k) => `${k.polcmd}${k.using ? 'q' : '-'}${k.withCheck ? 'c' : '-'}`)).toEqual([
+      'a-c',
+      'wqc',
+      'dq-',
+    ]);
+    expect(WRITE_MIGRATION_CODE).toContain(`guard_prefix CONSTANT text := '${checker.WRITE_GUARD_PREFIX}'`);
+    // Et le recensement les VOIT : chaque terme existant filtre
+    // `polname = 'tenant_isolation'`, donc sans ces assertions nommées la story
+    // livrerait six policies qu'aucun cliquet n'observe.
+    for (const term of [
+      'WRITE_GUARD_NAMES',
+      'WRITE_GUARD_PERMISSIVE',
+      'WRITE_GUARD_ROLE_SCOPED',
+      'WRITE_GUARD_SHAPE',
+      'WRITE_GUARD_NO_IS_SYSTEM',
+      'RESTRICTIVE_READ_PATH',
+      'TENANT_ISOLATION_IS_SYSTEM',
+      'TENANT_ISOLATION_INTACT',
+      'TOTAL_POLICIES',
+    ]) {
+      expect(CHECKER_CODE).toContain(term);
+    }
+  });
+
+  it('AC-5 — le jeu de privilèges est FERMÉ, ASYMÉTRIQUE, et jamais `ON ALL TABLES`', () => {
+    expect(WRITE_GUARD_TUPLE.map((r) => r.table)).toEqual(['role', 'role_permission']);
+    // L'ASYMÉTRIE EST UNE MESURE : aucun site `rolePermission.update*` n'existe
+    // dans le corpus, donc `role_permission` ne reçoit pas UPDATE. Une symétrie
+    // de rédaction aurait accordé un privilège sans appelant.
+    expect(WRITE_GUARD_TUPLE.map((r) => r.privileges)).toEqual([
+      'INSERT, UPDATE, DELETE',
+      'INSERT, DELETE',
+    ]);
+    expect([...WRITE_ALLOWED_PRIVILEGES].sort()).toEqual(['INSERT, DELETE', 'INSERT, UPDATE, DELETE'].sort());
+    // Chaque chaîne du tuple appartient au jeu fermé — sinon la migration lève.
+    for (const row of WRITE_GUARD_TUPLE) expect(WRITE_ALLOWED_PRIVILEGES).toContain(row.privileges);
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/ON\s+ALL\s+TABLES\s+IN\s+SCHEMA/i);
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/GRANT[^;']*ON\s+(ALL\s+)?SEQUENCE/i);
+    expect(WRITE_MIGRATION_CODE).not.toContain('GRANT USAGE ON SCHEMA public');
+    // `tenant` et `permission` ne reçoivent RIEN : le réflexe, quand un bloqueur
+    // de bascule apparaît, est un verbe de plus sur une table de plus.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/GRANT[^;]*\bpublic\.tenant\b/i);
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/GRANT[^;]*\bpublic\.permission\b/i);
+    // …et le SELECT de la sœur n'est PAS ré-émis : une seconde source de vérité
+    // sur le même privilège.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/GRANT\s+SELECT/i);
+  });
+
+  it('AC-5 — la même décision est portée UNE fois : `DERIVED_TABLES` du vérificateur', () => {
+    const byName = Object.fromEntries(checker.DERIVED_TABLES.map((d) => [d.child, d.privileges]));
+    expect(byName['role']).toBe('SELECT, INSERT, UPDATE, DELETE');
+    expect(byName['role_permission']).toBe('SELECT, INSERT, DELETE');
+    // Le jeu FERMÉ gagne exactement ces deux chaînes.
+    expect(checker.DERIVED_PRIVILEGE_SETS).toContain('SELECT, INSERT, UPDATE, DELETE');
+    expect(checker.DERIVED_PRIVILEGE_SETS).toContain('SELECT, INSERT, DELETE');
+    // ADR-042 §D5 est MODIFIÉ, pas relâché : un ensemble NOMMÉ, jamais `>= 0`.
+    expect([...checker.DERIVED_DELETE_ALLOWED].sort()).toEqual(['role', 'role_permission']);
+    expect(CHECKER_CODE).toContain('DERIVED_DELETE_NAMES');
+    expect(CHECKER_CODE).not.toContain("c.get('DERIVED_DELETE')");
+  });
+
+  it('AC-6 — tous les gardes de la migration précédente sont TENUS', () => {
+    expect(WRITE_MIGRATION_CODE).toMatch(/SET\s+lock_timeout\s*=\s*'5s'/);
+    // `has_app_user` calculé UNE fois : deux copies seraient une source de dérive.
+    // (Le rollback de l'en-tête en porte une seconde, mais il est en commentaire.)
+    expect((WRITE_MIGRATION_CODE.match(/FROM pg_roles WHERE rolname = 'app_user'/g) ?? []).length).toBe(1);
+    expect(WRITE_MIGRATION_CODE).toMatch(/to_regclass\(format\('public\.%I', target\)\)/);
+    expect(WRITE_MIGRATION_CODE).toMatch(/target_oid IS NULL THEN\s*\n\s*RAISE EXCEPTION/);
+    // R-11 : le SEUL prédicat qui traverse une FK est celui de `role_permission`.
+    expect(WRITE_MIGRATION_CODE).toMatch(/x\.indkey\[0\]\s*=\s*fk_attnum/);
+    expect(WRITE_MIGRATION_CODE).toContain("ARRAY['role_permission', 'role_id']");
+    // Aucun index créé : celui qui mène par `role_permission.role_id` est le
+    // PRIMARY KEY `(role_id, permission_id)`, mesuré et vérifié avant tout DDL.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/CREATE\s+INDEX/i);
+    // Re-jouable : PG 15 n'a pas d'`IF NOT EXISTS` sur `CREATE POLICY`.
+    const dropAt = WRITE_MIGRATION_CODE.indexOf('DROP POLICY IF EXISTS %I');
+    const createAt = WRITE_MIGRATION_CODE.indexOf('CREATE POLICY %I');
+    expect(dropAt).toBeGreaterThan(-1);
+    expect(createAt).toBeGreaterThan(dropAt);
+    // Pas de FORCE : l'app se connecte toujours comme propriétaire.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/FORCE\s+ROW\s+LEVEL\s+SECURITY/i);
+  });
+
+  it('AC-6 — elle REFUSE plutôt que de sauter, et le mot `CONTINUE` n’y est pas', () => {
+    for (const guard of [
+      /array_length\(guarded, 1\) IS DISTINCT FROM expected_guarded/,
+      /array_length\(commands, 1\) IS DISTINCT FROM expected_commands/,
+      /is_system_nullable/,
+      /polname = 'tenant_isolation'/,
+      /privileges = ANY \(allowed_privileges\)/,
+    ]) {
+      expect(WRITE_MIGRATION_CODE).toMatch(guard);
+    }
+    expect((WRITE_MIGRATION_CODE.match(/RAISE EXCEPTION/g) ?? []).length).toBeGreaterThanOrEqual(8);
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/\bCONTINUE\b/);
+    // La PRÉCONDITION qui remplace la promesse : sans `tenant_isolation`, six
+    // gardes RESTRICTIVE ne laisseraient passer AUCUNE ligne, en silence.
+    expect(WRITE_MIGRATION).toContain('un garde RESTRICTIVE sans policy permissive');
+    // Et la colonne du garde : NULLABLE, `is_system = false` deviendrait de la
+    // logique à trois valeurs, et la réparation tentante (`IS NOT TRUE`) échoue
+    // OUVERT. On refuse plutôt que de laisser ce choix se poser.
+    expect(WRITE_MIGRATION_CODE).toMatch(/a\.attnotnull/);
+  });
+
+  it('AC-7 — EXPAND PUR, et le rollback rend l’état d’AVANT, pas l’état vide', () => {
+    expect(WRITE_MIGRATION).toContain('EXPAND PUR');
+    // Aucune colonne, aucune contrainte, aucun index — donc `schema.prisma` reste
+    // intact et le piège `prisma generate` (P-05) n'est PAS armé.
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/ALTER TABLE/i);
+    expect(WRITE_MIGRATION_CODE).not.toMatch(/ADD\s+CONSTRAINT/i);
+    expect(WRITE_MIGRATION).toContain('P-05');
+    // LE ROLLBACK. Le copier depuis la sœur serait ACTIVEMENT NUISIBLE : il
+    // reprendrait le SELECT que `20260814180000` a accordé (surface de référence
+    // illisible) et désactiverait RLS sur des tables que la migration
+    // PRÉCÉDENTE protège.
+    // Le bloc est EXTRAIT de l'en-tête et asserté SUR LUI-MÊME : une assertion
+    // portée sur le fichier entier confondrait le rollback avec la PROSE qui
+    // explique pourquoi il ne fait pas `DISABLE ROW LEVEL SECURITY` — et la
+    // phrase la plus importante de cet en-tête serait interdite par le cliquet
+    // censé la protéger.
+    const ROLLBACK_BLOCK = /DO \$rollback\$([\s\S]*?)\$rollback\$;/.exec(WRITE_MIGRATION)?.[1] ?? '';
+    expect(ROLLBACK_BLOCK.length).toBeGreaterThan(200);
+    expect(ROLLBACK_BLOCK).toContain('DROP POLICY IF EXISTS %I ON public.%I');
+    expect(ROLLBACK_BLOCK).toContain('REVOKE INSERT, UPDATE, DELETE ON public.role FROM app_user');
+    expect(ROLLBACK_BLOCK).toContain('REVOKE INSERT, DELETE ON public.role_permission FROM app_user');
+    expect(ROLLBACK_BLOCK).not.toContain('REVOKE SELECT');
+    expect(ROLLBACK_BLOCK).not.toContain('DISABLE ROW LEVEL SECURITY');
+    expect(ROLLBACK_BLOCK).not.toContain('tenant_isolation');
+    // …et l'en-tête DIT pourquoi, plutôt que de laisser l'absence parler.
+    expect(WRITE_MIGRATION).toContain('il ne fait PAS `DISABLE ROW LEVEL SECURITY`');
+    // Le SQL exécutable, lui, n'en porte aucune trace.
+    expect(WRITE_MIGRATION_CODE).not.toContain('DISABLE ROW LEVEL SECURITY');
+    expect(WRITE_MIGRATION_CODE).not.toContain('REVOKE');
+    // …et il est EXÉCUTÉ, avant le rollback générique, avec ses relectures.
+    for (const term of [
+      'AFTER_WRITE_GUARD',
+      'AFTER_TENANT_ISOLATION',
+      'AFTER_WRITE_RLS',
+      'AFTER_WRITE_GRANTS',
+      'sliceRollbackSql',
+    ]) {
+      expect(CHECKER_CODE).toContain(term);
+    }
+  });
+
+  it('AC-8/AC-9 — la matrice d’écriture est PROUVÉE PAR EXÉCUTION, contrôles positifs d’abord', () => {
+    // Les contrôles positifs : sans eux, chaque refus est vert sur une base où
+    // le GRANT n'a jamais atterri.
+    for (const marker of [
+      'W_INSERT_GLOBAL',
+      'W_INSERT_SCOPED',
+      'W_INSERT_ROLEPERM_1',
+      'W_INSERT_ROLEPERM_2',
+      'W_UPDATE_READBACK',
+      'W_DELETEMANY_READBACK',
+      'W_DELETE_ROLE_READBACK',
+    ]) {
+      expect(CHECKER_CODE).toContain(marker);
+    }
+    // Les refus BRUYANTS (a), (c), (d), (f-insert).
+    for (const marker of [
+      'W_INSERT_SYSTEM_ACCEPTED',
+      'W_FLIP_SYSTEM_ACCEPTED',
+      'W_SYSTEM_ROLEPERM_INSERT_ACCEPTED',
+      'W_FOREIGN_INSERT_ACCEPTED',
+    ]) {
+      expect(CHECKER_CODE).toContain(marker);
+    }
+    // Les refus SILENCIEUX, prouvés PAR RELECTURE et jamais par l'absence
+    // d'erreur : un UPDATE policé qui ne matche rien ne lève rien.
+    expect(CHECKER_CODE).toContain('ROLE_SYSTEM_NAME_UNCHANGED');
+    expect(CHECKER_CODE).toContain('ROLE_SYSTEM_ROLEPERM_UNCHANGED');
+    expect(CHECKER_CODE).toContain('OWNER_B_ROLE_UNCHANGED');
+    expect(CHECKER_CODE).toContain('OWNER_B_ROLEPERM_PRESENT');
+    // Le plancher qui empêche « aucun marqueur » de vouloir dire « la connexion
+    // est morte ».
+    expect(CHECKER_CODE).toContain('ROLE_WRITE_STILL_READS');
+    expect(CHECKER_CODE).toContain('ROLE_WRITE_PROBE_RAN');
+    // (g)/(h) restent dans l'invocation NON gardée ; role/role_permission en
+    // sortent, et c'est le déplacement qui EST l'assertion.
+    expect(CHECKER_CODE).toContain('TENANT_INSERT_ACCEPTED');
+    expect(CHECKER_CODE).toContain('PERMISSION_INSERT_ACCEPTED');
+    expect(CHECKER_CODE).not.toContain('ROLE_INSERT_ACCEPTED');
+    expect(CHECKER_CODE).not.toContain('ROLE_PERMISSION_DELETE_ACCEPTED');
+    // La garde stderr AIGUISÉE : `permission denied` sur ces deux tables est
+    // désormais un GRANT MANQUANT, pas un refus attendu — et les deux partagent
+    // le SQLSTATE 42501, donc seul le texte les distingue.
+    expect(CHECKER_CODE).toMatch(/permission denied for table \(role\|role_permission\)/);
+  });
+
+  it('AC-8 — le PLANCHER de la fixture : le rôle visé EST un rôle système', () => {
+    // `is_system` vaut FALSE par défaut. Avant ce correctif la fixture ne posait
+    // pas la colonne, donc chaque assertion « un rôle SYSTÈME est refusé »
+    // portait sur un rôle custom et la suite entière était verte en ne prouvant
+    // rien. Le plancher est lu par le PROPRIÉTAIRE.
+    expect(CHECKER_CODE).toContain('SYSTEM_ROLE_IS_SYSTEM');
+    expect(CHECKER_CODE).toMatch(/INSERT INTO role \(id, name, slug, is_system\)/);
+  });
+
+  it('AC-8b — UN MUTANT, TUÉ PAR EXÉCUTION, et restauré depuis sa PROPRE expression', () => {
+    // `S-E01-1b` a MESURÉ un vrai défaut inter-tenant qui laissait tout le
+    // harnais vert : « l'assertion existe » n'est pas une preuve qu'elle est
+    // vivante. Celle-ci en nomme une seule et la fait basculer.
+    expect(CHECKER_CODE).toContain('MUT_BEFORE');
+    expect(CHECKER_CODE).toContain('MUT_RED');
+    expect(CHECKER_CODE).toContain('MUT_GREEN');
+    expect(CHECKER_CODE).toContain('MUTANT_KILLED');
+    expect(CHECKER_CODE).toContain('The assertion it validates is DEAD');
+    // Restaurée depuis `pg_get_expr`, jamais depuis un littéral retapé : un
+    // littéral serait une SECONDE source de vérité pour l'expression même que
+    // ce test vérifie.
+    expect(CHECKER_CODE).toContain('GUARD_EXPR_SQL');
+    expect(CHECKER_CODE).toContain('capturedExpr');
+  });
+
+  it('PF-194 / F-6 / F-8 — les limites sont EXÉCUTÉES et montrées ACCEPTÉES, pas racontées', () => {
+    // AC-8 (f) ne teste que la forme SCOPÉE-ÉCOLE — la forme que le produit ne
+    // crée JAMAIS. Un vert y serait lu comme « les écritures inter-tenant sont
+    // impossibles », ce qui est le défaut de PF-02 reproduit dans le contrôle
+    // écrit pour le refuser.
+    expect(CHECKER_CODE).toContain('W_PF194_UPDATE');
+    expect(CHECKER_CODE).toContain('OWNER_PF194_ROLE_GONE');
+    expect(CHECKER_CODE).toContain('OWNER_PF194_USER_ROLE_GONE');
+    expect(CHECKER_CODE).toContain('[LIMIT] PF-194');
+    // F-6 : `UPDATE role SET school_id = NULL` PROMEUT un rôle scopé en rôle
+    // global — l'escalade qu'ADR-046 §D2 interdit par NOM, atteinte par une
+    // écriture PERMISE. `WITH CHECK` ne voit pas l'ancienne ligne.
+    expect(CHECKER_CODE).toContain('W_SCHOOL_NULLIFIED');
+    expect(CHECKER_CODE).toContain('OWNER_W_NULLIFIED');
+    // F-16 : l'oracle d'existence par la FK, nommé plutôt que corrigé.
+    expect(CHECKER_CODE).toContain('F-16');
+  });
+
+  it('elle CITE ADR-047 au lieu de prendre la décision en commentaire', () => {
+    expect(WRITE_MIGRATION).toContain('ADR-047');
+    expect(existsSync(join(REPO_ROOT, 'docs', 'adr', 'ADR-047-authorization-write-surface.md'))).toBe(true);
+    // …et l'ADR porte bien les sections que la migration cite.
+    const adr = readFileSync(join(REPO_ROOT, 'docs', 'adr', 'ADR-047-authorization-write-surface.md'), 'utf8');
+    for (const heading of ['### D1 —', '### D2 —', '### D3 —', '### D4 —', '### D6 —', '### D7 —', '### D8 —']) {
+      expect(adr).toContain(heading);
+    }
+    // Le refus de `role.tenant_id`, par NOM et avec sa raison.
+    expect(adr).toContain('`role.tenant_id` is **refused**');
+    expect(adr).toContain('PF-194');
+  });
+
+  it('PF-80 — la migration a gagné son entrée dans le baseline du restore drill', () => {
+    // Une migration qui atteint le disque sans atteindre ce fichier EST la
+    // dérive que le drill existe pour attraper — quatre runs d'affilée.
+    const baseline = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'scripts', 'restore-drill-baseline.json'), 'utf8'),
+    ) as { ledger: { migrations: string[]; reason: string } };
+    expect(baseline.ledger.migrations).toContain(WRITE_MIGRATION_DIR_NAME);
+    expect(baseline.ledger.reason).toContain(WRITE_MIGRATION_DIR_NAME);
+    // …et le baseline liste TOUTES les migrations du disque, dans les deux sens.
+    const onDisk = readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    expect([...baseline.ledger.migrations].sort()).toEqual(onDisk);
+  });
+});
+
 describe('AC-12 — le rollback est écrit EN ENTIER, et la logique expand/contract est explicite', () => {
   it('l’en-tête porte le DROP, le DISABLE et les REVOKE', () => {
     expect(MIGRATION).toContain('DROP POLICY IF EXISTS tenant_isolation ON public.%I');
@@ -1738,6 +2158,11 @@ describe('Règle ADR — une citation qui ne résout pas est pire que pas de cit
     // invisible depuis `main`. C'est la forme exacte de TOOL-29/TOOL-30, et
     // l'allocation a été faite contre `main` PLUS les PR ouvertes.
     expect(ADR_NUMBERS.has('046')).toBe(true);
+    // S-E01-1c — `047`, alloué contre `main` PLUS les six PR ouvertes (toutes
+    // Dependabot, aucune ne réclame d'ADR ni d'id de finding). Asserté PRÉSENT,
+    // jamais « le suivant est libre » : cette forme-là prend en otage le numéro
+    // d'après et fait rougir la suite sur un ADR qui n'a rien cassé.
+    expect(ADR_NUMBERS.has('047')).toBe(true);
     expect(cited('voir ADR-042 §D1 et ADR-000')).toEqual(['042', '000']);
   });
 
@@ -1746,6 +2171,7 @@ describe('Règle ADR — une citation qui ne résout pas est pire que pas de cit
     ['derived/migration.sql', DERIVED_MIGRATION],
     ['outbox/migration.sql', OUTBOX_MIGRATION],
     ['reference/migration.sql', REFERENCE_MIGRATION],
+    ['write/migration.sql', WRITE_MIGRATION],
     ['rls-isolation-check.js', CHECKER],
   ])('%s ne cite QUE des ADR qui existent dans docs/adr/', (_name, source) => {
     // Un lecteur qui suit la citation pour comprendre POURQUOI il n'y a pas de
@@ -1798,6 +2224,7 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
     ['derived/migration.sql', DERIVED_MIGRATION],
     ['outbox/migration.sql', OUTBOX_MIGRATION],
     ['reference/migration.sql', REFERENCE_MIGRATION],
+    ['write/migration.sql', WRITE_MIGRATION],
     ['rls-isolation-check.js', CHECKER],
     [
       'prisma.service.ts',

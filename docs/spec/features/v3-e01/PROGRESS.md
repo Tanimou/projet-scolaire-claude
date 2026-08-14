@@ -5,7 +5,7 @@ satisfied: `S-E02-3` done 2026-08-07) · **Blocks** `V3-E03`, and transitively e
 **Closes** PF-01, PF-02, PF-18, VAL-02, VAL-04 · **Gates** G-TENANT, G-AUTHZ, G-MIGRATION · **DNC** DNC-10
 **Epic brief** [`docs/daily-improvement-v3/epics/V3-E01-tenant-isolation.md`](../../../daily-improvement-v3/epics/V3-E01-tenant-isolation.md)
 
-**Status (2026-08-14)** `in-progress` — **five partial slices and TWO whole ones landed**: `S-E01-2` (one of its three
+**Status (2026-08-14)** `in-progress` — **five partial slices and THREE whole ones landed**: `S-E01-2` (one of its three
 thirds), `S-E01-2b` (the policies on the 44 tables that carry a `tenant_id`, proven to refuse for a real non-owner
 role — but **not** the connection cutover), `S-E01-2c` (the FK-path policies on the **five** tenant-DERIVED tables,
 plus `ADR-042`), `S-E01-2d` (`outbox_event`'s denormalised `tenant_id`, plus `ADR-044`), `S-E01-1a` (the identity seam
@@ -13,7 +13,9 @@ stops inventing a tenant — `PF-01` half (a)), **`S-E01-3`** (the two-tenant ad
 catalog-enumerated breadth, plus `ADR-045` — the epic's first slice to land **whole**, and it closes **`VAL-02`'s DATABASE half** — the application half stays open, see the ledger)
 and **`S-E01-1b`** (the cutover's REFERENCE SURFACE — the authorization join `app_user` could not complete, `role`
 re-classified as tenant-derived rather than global, plus `ADR-046`; the second slice to land whole, and still **not**
-the cutover).
+the cutover) and **`S-E01-1c`** (the cutover's **WRITE** surface — `app_user` may edit a CUSTOM role, and a SYSTEM
+role is made unwritable **by the database** through six `AS RESTRICTIVE` per-command policies, plus `ADR-047`;
+the third slice to land whole, closing `PF-193`, and **still not** the cutover).
 The epic is **not** `shipped`, and **four** sentences must not be misread:
 
 1. **The running application is still not RLS-isolated**, and no policy slice changed that. It connects as
@@ -70,6 +72,7 @@ The epic is **not** `shipped`, and **four** sentences must not be misread:
 |---|---|---|---|---|
 | **S-E01-1a** | The identity seam stops **inventing** a tenant — `ensureUser` refuses an unprovisioned subject instead of upserting a `demo` tenant around it | 🟡 **shipped in part — 2026-08-14, ⚠️ NOT auto-merged (P1 · `[auth][security][tenancy]`)** — [`stories/S-E01-1a.md`](./stories/S-E01-1a.md) | 53 | **Evidence, executed:** `jest apps/api/src/shared/auth/user-sync.service.spec.ts` **22/22 pass** (new file, 470 lines — before it the tenant origin of the whole API had *no* test); `jest src/modules/identity src/shared/quality src/shared/auth` **1717 pass**; `pnpm typecheck` **13/13 exit 0** with `@pilotage/api` a genuine cache miss that compiled the changed sources and `prisma/seed-demo.ts`; `git diff --check` exit 0; `node scripts/production-artefact-check.js` **green** (it went RED mid-run on two *comments* naming the demo slug — rule `A4` scans raw source, comments included — and both were reworded, not exempted). **Closes `PF-01` half (a)** only. Deletes `DEMO_TENANT_SLUG` + the creation branch from `user-sync.service.ts:9,38-56`; refuses with an exported `UnprovisionedUserError` (`403`, `code: ACCOUNT_NOT_PROVISIONED`, one French sentence for all three refusal reasons) and **writes nothing** while refusing, proven on the fake client's call record rather than only on the thrown error. Ships **`ADR-043`**. **Three refusal branches shipped where the story specified one** (`no-match`, `ambiguous-email`, `email-bound-to-another-subject`) — tested (T-4/T-5/T-6), reconciled into `ADR-043` §D7. **Half (b) stays open as `PF-185`; `PF-186` records the unscoped email lookup.** No schema change (`G-MIGRATION` does not trigger), no cutover, no `pending` enum. **Four residuals a human owns — see [`S-E01-1a` — what landed, and the four residuals](#s-e01-1a--what-landed-and-the-four-residuals)** |
 | **S-E01-1b** | The connection cutover's **REFERENCE SURFACE**: `app_user` can complete an authorization join, and `role` stops being mis-classified as global | 🟢 **shipped — 2026-08-14** — proven by execution | 56 | **Evidence, executed against real PostgreSQL:** `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0, 165 assertions**. The fail-before / pass-after pair, both halves run: the join `user_profile -> user_role -> role -> role_permission -> permission` raises **`permission denied for table role`** on the ledger *without* this migration and returns **`AUTHZ_JOIN|1`** with it (and `AUTHZ_JOIN_FOREIGN|0`). Census agreement moved **`45 + 5` → `45 + 7 + 1 = 53`** with **no literal edited**: the derivation became a recursive CTE and a third catalog-derived term (`AUTODISC|tenant`) joined it. `A_SEES_B_ROLE|0` / `B_SEES_B_ROLE|1`; **`A_SEES_B_ROLEPERM` went `1` → `0`** (a cross-tenant read measured under a bare grant, closed before it shipped); system role visible under A, under B and under **no** context, with the school-scoped one invisible as its control; `NOCTX_TENANTS|0` (no enumeration oracle, no `SECURITY DEFINER` function); `_prisma_migrations` readable with and without a context. **E-8 mutation check: 3 predicate defects injected, 3 killed** — and the FIRST run of it killed only 2, which is what forced the `pg_get_expr` **owner-side predicate evaluation** into existence. Rollback EXECUTED (`AFTER_POLICIES\|0`, `AFTER_RLS\|0`, `AFTER_GRANTS\|0`, `AFTER_ROLE_FK\|0`, `AFTER_ROLE_INDEX\|0`); scratch DB dropped and verified. Ships **`ADR-046`**, amends **`ADR-042 §D2/§D3`** in place. Records **`PF-191`** (closed), **`PF-192`** (closed), **`PF-193`** (open). **No cutover, no `DATABASE_URL` change.** See the section below |
+| **S-E01-1c** | The connection cutover's **WRITE SURFACE**: `app_user` may edit a **CUSTOM** role, and a **SYSTEM** role becomes unwritable **by the database** rather than by a handler | 🟢 **shipped — 2026-08-14, ⚠️ NOT auto-merged (P1 · `[schema][security][authz][migration][rls][tenancy][db-grants]`)** — [`stories/S-E01-1c.md`](./stories/S-E01-1c.md) | 57 | **Evidence, executed against real PostgreSQL:** `node scripts/rls-isolation-check.js` **×2** → `RLS ISOLATION: PROVEN for the non-owner role`, exit 0, byte-stable across both runs; `node scripts/tenant-adversarial-check.js` → green, **791 call sites classified over 167 `(table, privilege)` pairs, 165 satisfied**; `pnpm typecheck` → exit 0, 13/13, `@pilotage/api` a genuine cache **miss** that ran `tsc --noEmit && tsc --noEmit -p prisma/tsconfig.json`; `git diff --check` exit 0, extended by `--no-index` over the three untracked files. `apps/api/prisma/migrations/20260814210000_role_write_surface_rls/migration.sql` (487 lines, hand-written, ADR-027/G-MIGRATION) grants `INSERT, UPDATE, DELETE` on `role` and `INSERT, DELETE` on `role_permission`, under **six** `AS RESTRICTIVE`, per-command, `TO PUBLIC` policies named `system_role_write_guard_{insert,update,delete}` on each table. **`schema.prisma` is NOT touched** — no column, no constraint, no index — so the `prisma generate` RED trap (`P-05`) is **not armed**, the first `V3-E01` migration since `S-E01-2c` for which that is true, and it is a measurement (no `schema.prisma` hunk in the diff), not a hope. The load-bearing assertions genuinely fired: **`WRITE_GUARD_PERMISSIVE == 0`** (a guard that lost `AS RESTRICTIVE` would **OR** with `tenant_isolation` and allow every write, silently), `TOTAL_POLICIES == POLICIES + 6` (the six are invisible to every `polname = 'tenant_isolation'` census term, so they get their own), the six-policy `WRITE_GUARD_SHAPE` set equality, `DERIVED_DELETE_NAMES` set-equal to `['role','role_permission']` (`ADR-042 §D5`'s zero becomes a **named** two, `ADR-047 §D4`), **AC-8b mutant killed by execution** (`before=1, weakened=0, restored=1`), and the header rollback **executed** with `tenant_isolation` surviving and both tables reading back exactly `SELECT`. Ships **`ADR-047`**; amends `ADR-042 §D5`; supersedes one clause of `ADR-046 §D5`. **Closes `PF-193`** and **`TOOL-32`**; **records `PF-194` (P1)** and **`PF-197` (P2)**. **The harness falsified the spec that commissioned it:** `PF-195`/`PF-196` were pre-allocated on the premise that the 44 tenant-scoped tables hold `SELECT, INSERT` only; the checker measured `20260813120000:480` and **refused to spend the ids** — no finding was written for a premise that is false. **⚠️ NOT the cutover** — `DATABASE_URL` untouched, `FORCE ROW LEVEL SECURITY` still absent, no runtime module changed, zero `withTenant` call sites, and the app still connects as owner `pilotage`, which is why nothing regresses and why `PF-194` is inert **today**. See the section below |
 | **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **next, RE-SCOPED 2026-08-14** — steps 1 partially taken by `S-E01-1a`; the GRANT half of step 3 is taken by `S-E01-1b` | — | `PF-01` half (a) is taken by `S-E01-1a`; what remains under this id is **steps 2–5** of [Next slice](#next-slice): the first real `withTenant` call site, the `DATABASE_URL` → `app_user` cutover with the missing GRANTs, the decision on the six FK-derived tables (`PF-183`, held PR #245), and the `ADR-032` §D3 one-line correction. The `pending` `UserStatus` is an **enum change** (`schema.prisma:31-35` has only `active|suspended|deleted`), so it carries `G-MIGRATION` and belongs here, not in `1a`. **This is still the slice that mints the first real tenant claim** — but note the *source* of that claim forks on `D-02` (`PF-185`) |
 | **S-E01-2** | RLS policies + real `withTenant` call sites + **parameterised GUC** | 🟡 **partial — the parameterisation third only** | 2026-08-11 | 57/57 jest in `apps/api/src/shared/prisma/prisma.service.spec.ts` (no DB, no `DATABASE_URL`, no generated client), `pnpm typecheck` 13/13 exit 0, `git diff --check` exit 0. Ships **`ADR-032`**; annotates `ADR-002`. Closes **`PF-02` half (b)**; **half (a) stays open**; records **`PF-179`**. See the section below |
 | **S-E01-2b** | The RLS half: 44 policies, the `nullif` NULL-context decision, the append-only grant split, and the `Prisma.TransactionClient` narrowing — **without** `FORCE` and **without** a call site, both on purpose | 🟡 **partial — the policy half, proven; not the cutover** | 2026-08-13 | `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0** against the real local PostgreSQL (44/44 RLS enabled, 44/44 `tenant_isolation` policies, connected as `app_user` owning 0 tables without `BYPASSRLS`, positive control first, executed rollback). `pnpm typecheck` **13/13 exit 0**; `git diff --check` exit 0. **5 mutants injected into the migration, 5 killed.** Ships `ADR-032` §D5–§D8. **`PF-02` half (a) closes only PARTIALLY.** See the section below |
@@ -642,6 +645,154 @@ included. `ADR-045`'s own `Consequence` clause prescribes exactly this move, so 
 `RESIDUE = permission`, `AUTODISC = tenant`, `COVERED = 50` against a floor of 40, privilege matrix equal by set on
 all 54 granted tables, three named `[LIMIT]` lines and no fourth.
 
+## `S-E01-1c` — the write surface: what the database now refuses, and the one write it still accepts
+
+**Delivered.** `apps/api/prisma/migrations/20260814210000_role_write_surface_rls/migration.sql` grants `app_user`
+`INSERT, UPDATE, DELETE` on `role` and `INSERT, DELETE` on `role_permission` — and, in the same migration, makes a
+**SYSTEM** role unwritable by anything below the handler. Six policies, one family name, three commands, two tables,
+all `AS RESTRICTIVE … TO PUBLIC`:
+
+```sql
+CREATE POLICY system_role_write_guard_delete ON public.role
+  AS RESTRICTIVE FOR DELETE TO PUBLIC USING (role.is_system = false);
+```
+
+and on `role_permission` the parent hop written out in full
+(`EXISTS (SELECT 1 FROM public.role r WHERE r.id = role_permission.role_id AND r.is_system = false)`) rather than
+leaning on `role`'s own policy — because the owner connection runs under no policy at all, so leaning would have been
+a promise, not a guard. Ships **`ADR-047`**.
+
+**Four decisions, each argued from a composition rule rather than from taste.**
+
+1. **`AS RESTRICTIVE`, and this is the whole slice.** Permissive policies for a command are **OR**-ed. `role` already
+   carries the permissive `tenant_isolation … FOR ALL`, so a *second permissive* policy with a narrower predicate
+   narrows **nothing** — it is a guard that does nothing, silently. `WRITE_GUARD_PERMISSIVE == 0` is therefore the
+   single most load-bearing assertion in the diff, and it is executed.
+2. **Divergent `USING`/`WITH CHECK` on the one `FOR ALL` policy was considered and rejected by behaviour, not by
+   style.** It refuses the `INSERT` of a system role and the `UPDATE` of one — and **cannot refuse `DELETE`**, because
+   PostgreSQL consults `USING` only. Deleting a system role, and deleting its `role_permission` rows, would both be
+   accepted. That is the entire finding, so the cheap shape is out (`ADR-047 §D3`).
+3. **Not a per-command split of `tenant_isolation` either.** A `FOR SELECT` or `FOR DELETE` policy has
+   `polwithcheck IS NULL` **by construction**, so `WITH_CHECK_NULL == 0` and `QUAL_MISMATCH == 0` would go red — and
+   each has a locally cheap repair that deletes a real protection. The `tenant_isolation` object is **not touched at
+   all**; the effective write predicate is `tenant_isolation`'s predicate **AND** the guard, composed by the engine
+   instead of by string concatenation. `SELECT` gains no restrictive policy, so reads are bit-for-bit yesterday's.
+4. **`FOR UPDATE` ships on `role_permission` although no `UPDATE` is granted.** There is no `rolePermission.update*`
+   call site anywhere in `apps/api/src` or `apps/worker/src` — measured, and it is why the grant is three verbs and
+   not four. The guard is nevertheless complete **by command**, so widening the grant later cannot open a hole in one
+   line. The reverse — a grant with no matching guard — is how this class of defect gets in.
+
+**`ADR-042 §D5` is amended, not relaxed.** `DERIVED_DELETE == 0` (*"a privilege with no caller is pure blast radius"*)
+becomes a **set equality in both directions** against a named `DERIVED_DELETE_ALLOWED = ['role','role_permission']`,
+each name carrying its call site. A third derived table acquiring `DELETE` still fails the gate, with its name
+printed — which is what the original assertion was for.
+
+**Two harness defects fixed on the way, and neither is cosmetic.** The `SHARED_ROLE` fixture never set `is_system`,
+so **every** "a SYSTEM role is refused" assertion in the sibling checker was vacuous. And `cutoverReadiness` anchored
+its scan on `\bprisma\.`, which cannot see a single `tx.` call site — all five `PF-193` writes are `tx.` calls. That
+second one is **`TOOL-32`**, closed here: `AC-9 CUTOVER READINESS` aggregated `privilege_type` per table but tested
+only table-level reachability, so a table granted `SELECT` and *written* by production code **passed**.
+
+**The harness also falsified the brief that commissioned it, and no id was spent.** `PF-195`/`PF-196` were
+pre-allocated on the premise that the 44 tenant-scoped tables hold `SELECT, INSERT` only. The checker measured
+`20260813120000:480` and found `UPDATE` and `DELETE` there, so the premise is false and the findings were **not
+written**. `S-E01-1c.md` §8 still asserts the false premise and is the file a traceability matrix would be written
+from — read it against `AC-11`'s executed line, which is the record.
+
+**NOT delivered, and the distinction is again the point of the epic.** The application still connects as `pilotage`,
+the table owner, exempt from every policy while `FORCE ROW LEVEL SECURITY` is absent. `DATABASE_URL` is untouched, no
+runtime module changed, and `withTenant` still has zero production call sites. `tenant` and `permission` stay
+`SELECT`-only **by decision** (`ADR-047 §D6`): granting `INSERT` on `tenant` would make the application role able to
+**mint** tenants, which is `PF-185` made permanent, and §D1's narrowing argument does not transfer to a capability
+that has no policy to bound it.
+
+**⚠️ Five conditions a human owns before this merges.**
+
+1. **`PF-194` — the cross-tenant CUSTOM-role write, accepted, and proven accepted by execution.** The six guards
+   constrain `is_system` and **nothing else**; they add zero tenant predicate on the write path. `role`'s permissive
+   predicate is `school_id IS NULL OR <school in tenant>`, and `roles.controller.ts:154` **never sets `schoolId`** —
+   so *every role the product can create* takes the `IS NULL` branch, which is admitted for **every** tenant. After
+   the cutover, tenant A may `UPDATE` or `DELETE` tenant B's custom role and rewrite its `role_permission` set. The
+   harness executes exactly that and asserts it **SUCCEEDS** (`W_PF194_UPDATE`, `W_PF194_DELETE_ROWS`,
+   `OWNER_PF194_ROLE_GONE`, `OWNER_PF194_USER_ROLE_GONE`), which is the right disposition — a limit proven is a fact,
+   a limit written in a comment is a hope. It is **not** a regression (today's owner connection does the same under
+   no predicate at all) and it is **not fixable here** (the fixes are `role.tenant_id`, refused in `ADR-047 §D7`, or
+   making the controller set `schoolId`, which is `PF-08` / `ADR-015 D8.6` product territory). **But it must be
+   GREEN-inverted before `S-E01-1` flips `DATABASE_URL`**: add the assertion that the cross-tenant `UPDATE`/`DELETE`
+   is *refused*, with an owner-side read-back (`OWNER_XT_ROLE_UNCHANGED`, `OWNER_XT_USER_ROLE_ALIVE`). Today it would
+   fail by design; at the cutover it stops being a documented deferral and becomes a live cross-tenant write
+   primitive on the authorization surface itself. Note the amplification, also executed: `user_role_role_id_fkey` is
+   `ON DELETE CASCADE` and RI triggers run with row security **off**, so the `DELETE` silently revokes tenant B
+   users' role assignments even though `user_role` grants no `DELETE`.
+2. **`user_role.role_id` is the same escalation one table over, and it is named nowhere in this diff.** `app_user`
+   already holds `SELECT, INSERT, UPDATE` on `user_role`, whose policy path is `user_profile_id → user_profile.tenant_id`
+   only — `role_id` is deliberately **not** on the path (`ADR-042 §D2` / `ADR-046 §D2` refused it, because routing
+   through it would leak system-role assignments cross-tenant). So after the cutover a single
+   `INSERT INTO user_role (user_profile_id, role_id) VALUES (<my own user>, <a super_admin system role>)` passes every
+   policy in the database, and the only thing between that and a self-granted `super_admin` is
+   `users.service.ts:125` (`isLadderRole` → `assertMayConferRealmRole`) — *exactly* the "layer a handler can forget"
+   that `ADR-047 §D2` says the database must not depend on. Composed with this diff's two grants there is a second
+   path with no system row touched at all: `INSERT` a custom role (`is_system = false`, guard passes) → `INSERT`
+   `role_permission` rows for **any** `permission` id (the guard checks only the parent's `is_system`;
+   `assertWithinCeiling` is application-layer and has no database counterpart) → `INSERT` a `user_role` binding it to
+   your own profile. **`ADR-047 §D2` should be amended to say plainly that the database bounds WHICH ROLE may be
+   written, not WHICH PERMISSIONS a writable role may carry**, and the composed path needs a finding id before
+   `S-E01-1`.
+3. **Two `ADR-047` passages describe a guard that was not built.** §D3 clause 3 states the migration *"asserts that
+   the installed `pg_get_expr(polqual)` on `role` and `role_permission` is byte-identical to what `20260814180000`
+   installed"*, and §D5 lists a `TENANT_ISOLATION_UNCHANGED` census row. Neither exists: `migration.sql:426-433`
+   asserts only that a policy **named** `tenant_isolation` is **present**, and the string
+   `TENANT_ISOLATION_UNCHANGED` appears nowhere in `scripts/rls-isolation-check.js`. What shipped instead is the
+   weaker, real pair `TENANT_ISOLATION_IS_SYSTEM == 0` + `TENANT_ISOLATION_INTACT == 2`. The implementing agent
+   measured the reason (`pg_get_expr` re-renders `current_setting('…'::text, true)`, so a byte-comparison against the
+   sibling's source text would fail on a **correct** policy) — but the ADR, which is the record future slices read,
+   was never amended. Real mitigation exists (the diff does not touch the sibling migration, and `AC-2` evaluates the
+   installed predicate owner-side), so this is a **documentation overclaim**, not a hole. Fix it by amending §D3/§D5
+   in place, the way §D4 amends `ADR-042 §D5` — an ADR that describes a guard the code does not have is how the next
+   reviewer stops checking.
+4. **The DELETE half of §D3 is asserted from `pg_policy` shape, not from execution.** §D3 rejects the cheap shape by
+   naming exactly two behaviours it cannot refuse: deleting a system role, **and** deleting a system role's
+   `role_permission` rows. The harness executes the **second** (`:1669`); it never executes the first —
+   `SHARED_ROLE`, the fixture's `is_system = true` role, is the target of no `DELETE` by `app_user` anywhere in the
+   file. Add one probe beside the `(e)` case, with the owner read-backs that already exist (`OWNER_SYSTEM_ROLE_UNCHANGED`,
+   `OWNER_SYSTEM_ROLEPERM`) — they currently have no attempted delete upstream of them to be evidence *of*. This is
+   the evidence class the harness's own comment distrusts: `S-E01-1b` measured a real cross-tenant defect that left
+   the whole harness green.
+5. **`UNCOVERED_EXPECTED = ['role','role_permission']` is now justified by a reason this diff falsified.** The
+   docblock at `scripts/tenant-adversarial-check.js:261` still says `role` is granted *"`SELECT` AND NOTHING ELSE"*
+   and that *"the INSERT branch below is a HARD FAIL when the grant is missing"*, and
+   `tenant-adversarial-gate.spec.ts:678` still hard-asserts `PLAN.some(p => p.table === table) === false` for both.
+   After this migration both tables hold `INSERT`. So the adversarial four-verb cross-tenant suite structurally
+   excludes exactly the two tables that just acquired write privileges — the two where `PF-194` lives. Either move
+   them into `PLAN` (accepting a recorded `PF-194` expectation rather than a denial), or rewrite the justification so
+   the exclusion is a **recorded decision** rather than an inherited one.
+
+**Recorded, not fixed** (none blocking, all named): the story spec `stories/S-E01-1c.md:214-217,338` names the
+policies `system_role_immutable_*` while the migration, `ADR-047`, `WRITE_GUARD_PREFIX` and the gate ratchet all ship
+`system_role_write_guard_*` — the rename is the right one (it keeps the `polname = 'tenant_isolation'` census filter
+untouched) but the spec now instructs a reader to capture a policy by a name that returns zero rows. `AC-14`'s
+`G-DNC/DNC-10` ratchet (*"no `IS NULL OR` anywhere in this migration"*) is asserted **per file** and passes
+literally, on the first migration that makes the sibling's `role.school_id IS NULL OR …` branch reach
+`INSERT`/`UPDATE`/`DELETE` rather than `SELECT` — a per-file green standing in for a property that is composed across
+files, and the exact mechanism of `PF-194`. The `R-11` leading-index precheck (`:396`, inherited verbatim from
+`20260814180000:494`) filters neither `indisvalid` nor `indpred IS NULL`, so a partial or `INVALID` index satisfies
+the one guard in a migration that refuses on every other precondition. The classifier in
+`tenant-adversarial-check.js:2020` runs over **raw** file text with no comment stripping, which is why a `//`-comment
+in `user-sync.service.ts:119` prints a permanent phantom `[LIMIT] … service (1)`; the dangerous variant is a
+commented-out `prisma.<real model>.<verb>` manufacturing a phantom cutover blocker in a report whose whole value is
+that every `[LIMIT]` is real. `AC-9`'s affirmative *"the receiver set is closed BY MEASUREMENT"* over-claims: the
+scan sees `$transaction(async (ident)` only, not the non-`async` form and not `PrismaService.withTenant(id, async
+(client) => …)` — and `withTenant` is precisely the API `AC-9`'s own verdict demands every call site adopt before the
+cutover. `PF-197` (P2) is recorded and not fixed: two boot-time `CREATE UNIQUE INDEX` statements through
+`$executeRawUnsafe` (`guardianship-claim-index.bootstrap.ts`, `booking-index.bootstrap.ts`) raise
+`must be owner of relation` as a non-owner and are both wrapped in a `try/catch` that downgrades to `logger.warn`, so
+after the cutover the `ADR-022` open-claim idempotency guard and the booking index **silently** stop being ensured.
+Finally, `apps/api/prisma/seed.ts` and `seed-demo.ts` sit **outside** the enumerator's two roots
+(`tenant-adversarial-check.js:1973`, an unnamed inline literal) and perform four of the exact statements these six
+policies exist to refuse — including a `rolePermission.deleteMany` under a system parent, which is refused
+**silently**, 0 rows, no error. Harmless today (the seeds run as owner) and invisible to the block whose whole purpose
+is to enumerate every remaining write blocker.
+
 ## Merge conditions and inherited obligations
 
 Three things the verify panel and the test architect established that a human must carry forward.
@@ -697,6 +848,20 @@ moment the `WITH CHECK` guarding the outbox discriminant stops being inert; and 
 owner, or per-tenant GUC loop — must be **decided**, because a context-free `app_user` drains zero rows forever and
 silently.)*
 
+*(Updated again 2026-08-14 by `S-E01-1c`. **The pointer is STILL `S-E01-1` — `S-E01-1c` did not consume it either.**
+What changed is step 3's grant question, which was the last named blocker on the authorization surface:
+`role` now holds `INSERT, UPDATE, DELETE` and `role_permission` holds `INSERT, DELETE`, each under six
+`AS RESTRICTIVE` per-command guards that make a SYSTEM role unwritable **by the database** (`ADR-047`), so the admin
+portal's custom-role editor has a write path after the flip and `PF-193` closes. What survives into `S-E01-1` is
+**two** reference tables, both refused here on purpose (`ADR-047 §D6`): `tenant` stays `SELECT`-only because granting
+`INSERT` would let the application role **mint** tenants — `PF-185` made permanent — and `permission` stays
+`SELECT`-only with no policy, measured genuinely global. **Three things move ONTO the cutover's plate in exchange,
+all listed in § `S-E01-1c`:** `PF-194` (the cross-tenant CUSTOM-role write, proven ACCEPTED by execution) must be
+inverted to a GREEN refusal **before** `DATABASE_URL` flips, not after; the composed `user_role.role_id`
+self-escalation path needs a finding id and a decision, because it is strictly larger than the one closed here and is
+named in no document; and `PF-197`'s two boot-time `CREATE UNIQUE INDEX` statements must stop soft-failing, since as
+a non-owner they downgrade to `logger.warn` and the `ADR-022` idempotency guard silently stops being ensured.)*
+
 `S-E01-2b` closed the four prerequisites this section used to list: the predicate is shipped and mutation-proven
 (`missing_ok` + `nullif` + `::uuid`), the fail-open `IS NULL OR` form is banned by a ratchet, `fn` is narrowed, and
 `FORCE ROW LEVEL SECURITY` turned out **not** to be the answer — the owner-bypass trap closes when the application
@@ -731,10 +896,14 @@ The slice, in the order it must be done:
    **and the sixth is discharged too, by `S-E01-2d` (`ADR-044`), 2026-08-14**: `outbox_event` has a denormalised
    `tenant_id`, the ordinary policy, and a `SELECT, INSERT, UPDATE` grant. Read the forbidden branch and what actually
    happened side by side — the grant did **not** arrive to silence a `permission denied`; the **policy landed first**
-   and is proven to deny before any privilege exists. **What survives into this slice is one grant question:** the
+   and is proven to deny before any privilege exists. ~~**What survives into this slice is one grant question:** the
    grant set is still incomplete for `tenant`, `permission`, `role` and `role_permission`, which `ADR-042 §D4`
-   names as reference data outside the derived set — that call belongs here. Carry `S-E01-2c`'s own merge conditions
-   too: the `has_app_user = false` branch is still unexercised, now across **50** tables.
+   names as reference data outside the derived set — that call belongs here.~~ — **`role` and `role_permission` are
+   discharged too, by `S-E01-1b` (READ, `ADR-046`) and `S-E01-1c` (WRITE, `ADR-047`), 2026-08-14.** What survives is
+   **`tenant` and `permission`**, and neither is an open question any more — both are **decided as `SELECT`-only**
+   (`ADR-047 §D6`), so what this slice inherits is not a call to make but a consequence to handle: `PF-185`'s
+   `tenant.upsert` in `register.controller.ts` has **no write path** after the flip, on purpose. Carry `S-E01-2c`'s
+   own merge conditions too: the `has_app_user = false` branch is still unexercised, now across **53** tables.
 5. **Correct `ADR-032` §D3's overstatement** (obligation 1 above) — one line, and it must not be inherited a third
    time.
 6. **Prove the outbox discriminant before the connection flips, and decide who drains it** (`S-E01-2d`, §
@@ -744,6 +913,17 @@ The slice, in the order it must be done:
    settle the relay's connection identity in the same breath: a context-free `app_user` sees **zero** pending events
    under the policy, silently and forever, which is the failure shape this programme has repeatedly ruled worse than a
    loud one.
+7. **Invert `PF-194` from an accepted `[LIMIT]` into a GREEN refusal, and do it BEFORE step 3** (`S-E01-1c`,
+   `ADR-047` §The residual). Today `scripts/rls-isolation-check.js:1690-1697` proves by execution that `app_user`
+   under tenant A can `UPDATE` and `DELETE` tenant B's custom role — correct as a record, and correct **not** to land
+   red, because the app connects as owner and the assertion would fail by design. The moment `DATABASE_URL` points at
+   `app_user`, that stops being a documented deferral and becomes a live cross-tenant write primitive **on the
+   authorization surface itself**, amplified by `user_role_role_id_fkey`'s `ON DELETE CASCADE` (RI triggers run with
+   row security off, so the delete silently revokes assignments in a tenant the caller cannot see). The fix is a
+   product decision — `PF-08` / `ADR-015 D8.6`: make `roles.controller.ts:154` set `schoolId`, which collapses the
+   `school_id IS NULL` branch for product-created roles — not another policy. **In the same breath, allocate an id
+   for the `user_role.role_id` self-escalation path** (§ `S-E01-1c` condition 2): it needs no system row, passes every
+   policy in the database, and is guarded only by `users.service.ts:125`.
 
 > **⚠️ STORY-ID COLLISION, recorded 2026-08-14 (run 56) — the `S-E01-1b` named just below is NOT the `S-E01-1b`
 > that shipped.** This paragraph allocated `S-E01-1b` to the *demo-identity / `status`-enforcement* detour. Run 56 was
