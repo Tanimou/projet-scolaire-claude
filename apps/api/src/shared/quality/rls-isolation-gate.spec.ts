@@ -451,9 +451,25 @@ describe('Règle ADR — une citation qui ne résout pas est pire que pas de cit
     // Un répertoire vide rendrait chaque « résout » vrai pour rien.
     expect(ADR_NUMBERS.size).toBeGreaterThanOrEqual(20);
     expect(ADR_NUMBERS.has('032')).toBe(true);
-    // Le numéro que ce diff a failli citer sans l'écrire.
-    expect(ADR_NUMBERS.has('042')).toBe(false);
-    expect(cited('voir ADR-042 D1')).toEqual(['042']);
+    // Le contrôle négatif — `has()` doit pouvoir répondre `false`, sinon les deux
+    // cas ci-dessous passent pour rien.
+    //
+    // Il est ancré sur `000`, RÉSERVÉ PAR CONSTRUCTION : la numérotation des ADR
+    // commence à `001`, donc aucun ADR légitime ne peut jamais occuper ce numéro.
+    // La version précédente ancrait ce contrôle sur le PROCHAIN numéro libre du
+    // moment (`042`) : elle prenait donc en OTAGE le numéro suivant, et le premier
+    // ADR écrit après elle faisait rougir cette suite sans avoir rien cassé.
+    //
+    // Ce n'est pas une hypothèse : DEUX slices ont réclamé `042` en deux jours —
+    // `S-E01-2c` / `PF-183` (isolation par chemin de clé étrangère, PR #245, encore
+    // ouverte) et `S-E01-1a` (cette couture d'identité, renumérotée en `ADR-043` au
+    // moment du land, justement à cause de cette collision). Le premier des deux à
+    // fusionner aurait rendu `main` rouge ici, sur un fichier que ni l'un ni l'autre
+    // n'aurait eu de raison de regarder.
+    //
+    // Un contrôle négatif ne doit pas être une réservation de numéro.
+    expect(ADR_NUMBERS.has('000')).toBe(false);
+    expect(cited('voir ADR-000 D1')).toEqual(['000']);
   });
 
   it.each([
@@ -476,7 +492,15 @@ describe('Règle ADR — une citation qui ne résout pas est pire que pas de cit
     expect(MIGRATION).toContain('ADR-032 §D6');
     expect(MIGRATION).toContain('ADR-032 §D7');
     expect(MIGRATION).toContain('ADR-032 §D8');
+    // Cette ligne ne dit PAS « le numéro 042 est vide » — elle dit « cette
+    // migration-ci ne cite pas la décision d'un AUTRE seam ». `042` est réservé à
+    // l'isolation par chemin de clé étrangère (`PF-183`, PR #245, encore ouverte)
+    // et `043` à la couture d'identité (`S-E01-1a`) ; les trois seams sont voisins
+    // et faciles à confondre. L'assertion reste donc vraie quand `ADR-042`
+    // atterrira, et c'est le but : elle porte sur ce que la migration CITE, pas sur
+    // ce que `docs/adr/` CONTIENT.
     expect(MIGRATION).not.toContain('ADR-042');
+    expect(MIGRATION).not.toContain('ADR-043');
   });
 
   it('ADR-032 porte réellement §D5–§D8, et son §Deferred item 1 ne dit plus le contraire', () => {

@@ -5,11 +5,18 @@ satisfied: `S-E02-3` done 2026-08-07) · **Blocks** `V3-E03`, and transitively e
 **Closes** PF-01, PF-02, PF-18, VAL-02, VAL-04 · **Gates** G-TENANT, G-AUTHZ, G-MIGRATION · **DNC** DNC-10
 **Epic brief** [`docs/daily-improvement-v3/epics/V3-E01-tenant-isolation.md`](../../../daily-improvement-v3/epics/V3-E01-tenant-isolation.md)
 
-**Status (2026-08-13)** `in-progress` — **two partial slices landed**: `S-E01-2` (one of its three thirds) and
-`S-E01-2b` (the policies, proven to refuse for a real non-owner role — but **not** the connection cutover). The epic
-is **not** `shipped`, and the sentence that must not be misread is: **after `S-E01-2b`, the running application is
-still not RLS-isolated.** It connects as `pilotage`, the table owner; `FORCE ROW LEVEL SECURITY` is deliberately
-absent; the remaining step is a **connection cutover**, which belongs to `S-E01-1`.
+**Status (2026-08-14)** `in-progress` — **three partial slices landed**: `S-E01-2` (one of its three thirds),
+`S-E01-2b` (the policies, proven to refuse for a real non-owner role — but **not** the connection cutover), and
+`S-E01-1a` (the identity seam stops inventing a tenant — `PF-01` half (a); half (b) forks out as `PF-185`). The epic
+is **not** `shipped`, and two sentences must not be misread:
+
+1. **After `S-E01-2b`, the running application is still not RLS-isolated.** It connects as `pilotage`, the table
+   owner; `FORCE ROW LEVEL SECURITY` is deliberately absent; the remaining step is a **connection cutover**, which
+   belongs to `S-E01-1`.
+2. **After `S-E01-1a`, the tenancy of a request is resolved rather than invented — but a subject with no profile is
+   still admitted through `@RequiresPermission`.** `permissions.guard.ts:28` unions realm-role permissions without
+   requiring a `UserProfile`, so the refusal only bites where the handler body calls `ensureUser`. That is `PF-165`
+   half (b), its own slice, and it is the reason `S-E01-1a` closes half of a finding and not a gate.
 
 > **This file is new on 2026-08-11.** The epic had no `PROGRESS.md` and no `docs/spec/features/v3-e01/` directory at
 > all, because no `S-E01-*` slice had ever landed. `docs/daily-improvement-v3/stories/sprint-02.md` **does not exist**
@@ -26,11 +33,60 @@ absent; the remaining step is a **connection cutover**, which belongs to `S-E01-
 
 | Story | Title | State | Run | Evidence |
 |---|---|---|---|---|
-| **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **next** | — | `PF-01` open. No story written; bullet only in `sprint-plan.md`. **This is the slice that mints the first real tenant claim**, so it is the natural owner of the first `withTenant` call site — and, since `S-E01-2b`, of the `DATABASE_URL` → `app_user` cutover that is the only thing still standing between the shipped policies and an actually isolated application. See [Next slice](#next-slice) |
+| **S-E01-1a** | The identity seam stops **inventing** a tenant — `ensureUser` refuses an unprovisioned subject instead of upserting a `demo` tenant around it | 🟡 **shipped in part — 2026-08-14, ⚠️ NOT auto-merged (P1 · `[auth][security][tenancy]`)** — [`stories/S-E01-1a.md`](./stories/S-E01-1a.md) | 53 | **Evidence, executed:** `jest apps/api/src/shared/auth/user-sync.service.spec.ts` **22/22 pass** (new file, 470 lines — before it the tenant origin of the whole API had *no* test); `jest src/modules/identity src/shared/quality src/shared/auth` **1717 pass**; `pnpm typecheck` **13/13 exit 0** with `@pilotage/api` a genuine cache miss that compiled the changed sources and `prisma/seed-demo.ts`; `git diff --check` exit 0; `node scripts/production-artefact-check.js` **green** (it went RED mid-run on two *comments* naming the demo slug — rule `A4` scans raw source, comments included — and both were reworded, not exempted). **Closes `PF-01` half (a)** only. Deletes `DEMO_TENANT_SLUG` + the creation branch from `user-sync.service.ts:9,38-56`; refuses with an exported `UnprovisionedUserError` (`403`, `code: ACCOUNT_NOT_PROVISIONED`, one French sentence for all three refusal reasons) and **writes nothing** while refusing, proven on the fake client's call record rather than only on the thrown error. Ships **`ADR-043`**. **Three refusal branches shipped where the story specified one** (`no-match`, `ambiguous-email`, `email-bound-to-another-subject`) — tested (T-4/T-5/T-6), reconciled into `ADR-043` §D7. **Half (b) stays open as `PF-185`; `PF-186` records the unscoped email lookup.** No schema change (`G-MIGRATION` does not trigger), no cutover, no `pending` enum. **Four residuals a human owns — see [`S-E01-1a` — what landed, and the four residuals](#s-e01-1a--what-landed-and-the-four-residuals)** |
+| **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **next, RE-SCOPED 2026-08-14** — steps 1 partially taken by `S-E01-1a` | — | `PF-01` half (a) is taken by `S-E01-1a`; what remains under this id is **steps 2–5** of [Next slice](#next-slice): the first real `withTenant` call site, the `DATABASE_URL` → `app_user` cutover with the missing GRANTs, the decision on the six FK-derived tables (`PF-183`, held PR #245), and the `ADR-032` §D3 one-line correction. The `pending` `UserStatus` is an **enum change** (`schema.prisma:31-35` has only `active|suspended|deleted`), so it carries `G-MIGRATION` and belongs here, not in `1a`. **This is still the slice that mints the first real tenant claim** — but note the *source* of that claim forks on `D-02` (`PF-185`) |
 | **S-E01-2** | RLS policies + real `withTenant` call sites + **parameterised GUC** | 🟡 **partial — the parameterisation third only** | 2026-08-11 | 57/57 jest in `apps/api/src/shared/prisma/prisma.service.spec.ts` (no DB, no `DATABASE_URL`, no generated client), `pnpm typecheck` 13/13 exit 0, `git diff --check` exit 0. Ships **`ADR-032`**; annotates `ADR-002`. Closes **`PF-02` half (b)**; **half (a) stays open**; records **`PF-179`**. See the section below |
 | **S-E01-2b** | The RLS half: 44 policies, the `nullif` NULL-context decision, the append-only grant split, and the `Prisma.TransactionClient` narrowing — **without** `FORCE` and **without** a call site, both on purpose | 🟡 **partial — the policy half, proven; not the cutover** | 2026-08-13 | `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0** against the real local PostgreSQL (44/44 RLS enabled, 44/44 `tenant_isolation` policies, connected as `app_user` owning 0 tables without `BYPASSRLS`, positive control first, executed rollback). `pnpm typecheck` **13/13 exit 0**; `git diff --check` exit 0. **5 mutants injected into the migration, 5 killed.** Ships `ADR-032` §D5–§D8. **`PF-02` half (a) closes only PARTIALLY.** See the section below |
 | **S-E01-3** | Two-tenant adversarial suite in CI (VAL-02) | ⬜ not started — **unblocked** | — | `VAL-02` open. **`S-E01-2b` gave it something to defeat**, so its fail-before/pass-after criterion is satisfiable for the first time. Partly pre-empted: the gate already runs a two-tenant adversarial proof through `psql`; what remains is the same shape **through the application's own query paths** |
 | **S-E01-4** | Student Keycloak client split | ⛔ blocked on decision **D-02** | — | `PF-18`, `VAL-04` open |
+
+## `S-E01-1a` — what landed, and the four residuals
+
+**Delivered.** `ensureUser` no longer contains a tenant slug. The branch that upserted a `demo` `Tenant` into
+existence and created an `active` `UserProfile` inside it is **deleted, not guarded** — there is no fail-open leg, no
+`NODE_ENV` branch, no `ALLOW_*`/`SKIP_*` flag, and the file reads no environment variable at all. A ratchet in
+`user-sync.service.spec.ts:451-462` reads the stripped source for exactly those escape hatches, with a non-vacuity
+floor and a `__filename` self-exclusion, so the absence is mechanised rather than asserted (`DNC-10`). The positive
+control (T-2) asserts against a synthetic `TENANT_INVENTED` marker, which is what stops the whole suite being green
+on a service that refuses everything.
+
+**403, not 401, argued from measurement.** `apps/web/src/lib/api-client.ts:111-113` intercepts 401 before any caller
+and redirects to `/{portal}/login?error=session_expired`, and `AppShellRoot.tsx:86` calls `fetchMe()` on every page of
+all four portals. A 401 here is an infinite login loop captioned by a falsehood. 403 is terminal and true.
+
+**No audit row on refusal, and that is forced rather than lazy.** `AuditLog.tenantId` is required, so auditing a
+refusal would mean inventing the tenant id the code just refused to invent. The compensating trace is a `warn`
+carrying the `sub` alone — no email, no name (RGPD minimisation).
+
+**The four residuals, none of them fixed here, all of them measured.**
+
+1. **The seeded identities live in the tenant that holds the children's data.** STEP 15 of `seed-demo.ts` upserts
+   `admin@` / `teacher@` / `parent@pilotage.local` into `T` — the populated demonstration tenant — **with no
+   `authProviderId`**, because the realm export declares no user `id` (Keycloak mints the UUID at import, per
+   cluster). `infra/keycloak/realm-export.json` ships those identities enabled, `emailVerified`, with a repo-literal
+   password, and `admin@` carries the `school_admin` realm role. Before this slice that credential auto-provisioned
+   into an *empty* tenant; after it, first login adopts the seeded row and it is `school_admin` **inside the tenant
+   with the student records**. The blast radius of an unrotated demo password moved from nothing to everything.
+   `seed-keycloak-users.ts` rotates only the accounts it provisions itself, and these three are not among them.
+2. **Adoption is by bare email string, unscoped by tenant and unverified.** `payload.email_verified` is parsed in
+   `jwt.strategy.ts:12` and never read; `email` is unique only *per tenant* (`schema.prisma:879`); `status` is never
+   consulted, so a `suspended` or `deleted` row still resolves and can still be bound to a fresh subject. One matching
+   row is treated as consent. Recorded as `PF-186` (unscoped lookup) — `status` is the natural `S-E01-1b`.
+3. **A first binding cannot be undone by anything in the repo.** After first login binds `authProviderId`, a realm
+   re-import (ordinary here: Postgres is a native Windows service, Keycloak is a container, so the container volume is
+   wiped while the database survives) presents a new `sub`; `findUnique` misses, `findMany` returns the row bound to
+   the old `sub`, and the account is refused **permanently**. Re-running either seed does not repair it —
+   `seed-demo.ts`'s `update` branch deliberately never touches `authProviderId`, and `seed-keycloak-users.ts`'s
+   `DEMO_USERS` list covers only the two `@voltaire.fr` accounts. Recovery is hand-written SQL. On a database where
+   the *old* lazy-provisioning already ran, the same mechanism produces a second row with the same email in the `demo`
+   tenant, which is either inert (while the old `sub` holds) or a permanent `ambiguous-email` refusal (once it does
+   not). Neither state is remediated, and the seed prints success in both.
+4. **The refusal reaches the user as a generic crash screen, not as the French sentence.** `apps/web/src/lib/me.ts:34`
+   catches 401 only; `AppShellRoot` awaits `fetchMe()` in a **layout server component**, so a 403 propagates to the
+   portal `error.tsx` boundaries, whose message Next redacts to a digest in production. `ACCOUNT_NOT_PROVISIONED`
+   appears nowhere under `apps/web/src`. The 403-over-401 decision still holds; what is false is any claim that the
+   copy is what a refused user reads. This is the deferred UI half, and it is named so the human merging is not told
+   the failure mode is softer than it is.
 
 ## `S-E01-2` — what actually landed, and what the title still promises
 
@@ -198,10 +254,18 @@ stops connecting as owner, not when the owner is forced (`ADR-032` §D5). Only p
 predicate, R-11, with a p95 benchmark before/after) is untaken, and it becomes load-bearing exactly at the cutover,
 because that is the moment the predicate first runs on a real query path.
 
+**`S-E01-1a` (2026-08-14) took step 1 in part and changed the shape of what is left.** The `demo` fallback is gone
+from `ensureUser`; what the cutover still lacks is not a *refusal* but a *claim*. Two consequences for the ordering
+below: the `pending` `UserStatus` is an enum change (`schema.prisma:31-35` has only `active|suspended|deleted`), so it
+carries `G-MIGRATION` and stays here; and the remaining `demo` upsert lives in `register.controller.ts`, where it
+forks on `D-02` and is recorded as `PF-185` rather than deleted by analogy.
+
 The slice, in the order it must be done:
 
-1. **Resolve the tenant explicitly.** Kill the `demo` fallback, introduce the `pending` state (`PF-01`). This is what
-   mints a *trusted* claim; case must be normalised at the **source of the claim**, never in `assertTenantId`.
+1. ~~**Resolve the tenant explicitly.**~~ **Half taken by `S-E01-1a`** — `ensureUser` resolves or refuses, and mints
+   nothing. What remains under this number: the `pending` `UserStatus` enum (a migration), and the decision on
+   `PF-185` (public registration) which is what actually *mints* a trusted claim. Case must still be normalised at the
+   **source of the claim**, never in `assertTenantId`.
 2. **Write the first real `withTenant` call site** on the request path. The narrowed type is already in place, so a
    caller that closes over the injected service instead of `tx` is now a compile error.
 3. **Flip `DATABASE_URL` to `app_user`** and prove the four portals still work. The grant set is **deliberately
@@ -214,6 +278,18 @@ The slice, in the order it must be done:
    reason. They are FK-derived, so today they are the hole in the coverage `S-E01-2b` closed everywhere else.
 5. **Correct `ADR-032` §D3's overstatement** (obligation 1 above) — one line, and it must not be inherited a third
    time.
+
+**Recommended before `S-E01-1`, and new on 2026-08-14: `S-E01-1b` — the demo identities stop being a standing
+credential, and `status` starts being enforced.** It is small, it is entirely inside the seam `S-E01-1a` just touched,
+and it retires three of that slice's four residuals in one pass: (a) remove the `credentials` block from
+`infra/keycloak/realm-export.json` and extend `seed-keycloak-users.ts`'s `DEMO_USERS` to cover `admin@` / `teacher@` /
+`parent@pilotage.local`, which both rotates the repo-literal password to `KEYCLOAK_DEMO_PASSWORD` and gives those
+three the `updateMany({tenantId,email},{authProviderId})` re-bind the `@voltaire.fr` accounts already have — that is
+residual 1 and residual 3 together, using a mechanism that exists rather than inventing one; (b) gate adoption on
+`payload.email_verified === true` and on `status: 'active'`, both refusing through the same message and code so no new
+enumeration oracle appears — residual 2. It carries no migration and no cutover, so it can land while `S-E01-1`'s
+enum/GRANT work is still being scoped. **`S-E01-1` remains the critical path**; this is a one-run detour that stops the
+`S-E01-1a` residuals from being inherited by the cutover, which is the moment they stop being latent.
 
 **Then `S-E01-3`, and it is unblocked for the first time.** The two-tenant adversarial suite now has a policy to
 defeat, so its fail-before/pass-after criterion is satisfiable. Note it is *partly pre-empted*:

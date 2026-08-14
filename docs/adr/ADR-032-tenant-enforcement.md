@@ -123,8 +123,23 @@ later without turning red.
 `S-E01-2b` writes the RLS half this ADR deferred. It is recorded **here**, as an amendment to the
 tenant-enforcement decision, rather than as a new ADR: `ADR-032` *is* that decision and its own §Deferred
 names precisely this half. Splitting one seam across two ADRs is how references start pointing at the wrong
-decision. **No `ADR-042` exists and none is intended** — the migration, its guard spec and its checker cite
-`ADR-032 §D5`–`§D8`.
+decision. **No second tenant-enforcement ADR exists and none is intended** — the migration, its guard spec and
+its checker cite `ADR-032 §D5`–`§D8`.
+
+> **Annotated in place, 2026-08-14 (`S-E01-1a`).** This clause originally read *« No `ADR-042` exists and none
+> is intended »*. That wording **pinned a decision to an integer**, and the integer has since been claimed
+> twice. The sentence was only ever **scoped to this seam** — it refused a second ADR for *tenant enforcement*,
+> not a second ADR anywhere — so it is restated above in terms of the seam and the numbering note moved here.
+>
+> **Who holds which number, as of this commit.** `ADR-043` is identity resolution in `UserSyncService`
+> (`PF-01` half (a), this slice) — it is the file that exists on this branch. **`ADR-042` is reserved for
+> FK-path tenant isolation** (`PF-183`), which is written and awaiting review in **open PR #245**; it is
+> therefore *not* on `main` yet, and this annotation must not be read as evidence that it is.
+>
+> `S-E01-1a` originally took `042` as "the next free number" and was **renumbered to `043` at land** precisely
+> because #245 had already taken it — an id collision that the ledger, not the compiler, was going to catch.
+> The three seams are neighbours and easy to confuse, which is why this note lives here rather than only in
+> `ADR-043` §Numbering. Nothing about §D5–§D8 changes.
 
 The four artefacts are `apps/api/prisma/migrations/20260813120000_tenant_rls_policies/migration.sql`,
 `scripts/rls-isolation-check.js` (the executed proof), `apps/api/src/shared/quality/rls-isolation-gate.spec.ts`
