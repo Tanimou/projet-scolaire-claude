@@ -270,6 +270,44 @@ if changed_match "$CODE_RE"; then
     skip_stage "rls isolation" "no prisma change"
   fi
 
+  # S-E01-3 / VAL-02 — the two-tenant ADVERSARIAL suite, at catalog-enumerated
+  # breadth. It has its OWN trigger and is deliberately NOT nested inside the
+  # `^apps/api/prisma/` branch above, for two separate reasons.
+  #
+  # The first is coverage, and it is a measurement: the S-E01-1 cutover — the
+  # change this suite exists to de-risk — switches DATABASE_URL from the owner
+  # `pilotage` to `app_user`. That diff touches `.env` and `prisma.service.ts`. It
+  # touches NOTHING under `apps/api/prisma/`. A stage copied onto the trigger
+  # above would therefore not run on the very diff it protects. The trigger below
+  # names the identity/connection seam as well as the ledger.
+  #
+  # The second is verdict legibility: TOOL-27 makes the `rls isolation` stage
+  # above intermittent, and a flaky neighbour must not be able to colour this
+  # stage's result.
+  #
+  # WIRED BECAUSE THE DETERMINISM BAR WAS MET, not because it exists: three
+  # consecutive local runs produced byte-identical output (modulo the generated
+  # scratch database name) and exit 0, at 20 s / 21 s / 20 s wall time — 675
+  # assertions, 4 named limits, 0 failures. Those three runs were taken on the
+  # tree REBASED onto origin/main (e53f2d9, S-E01-2d): an earlier triple, taken
+  # before that merge, described a schema that no longer existed and would have
+  # wired a BLOCKING stage that is red on main. The 300 s bound is derived from
+  # the measurement plus cold-cluster headroom, NOT copied from the stage above.
+  # A flaky blocking stage is worse than no stage.
+  #
+  # It FAILS and never skips when PostgreSQL, `psql`, `app_user` or
+  # DATABASE_URL_APP is unreachable (DNC-08, ADR-027) — the remedy is to start
+  # PostgreSQL, never to edit code. Decision record:
+  # docs/adr/ADR-045-adversarial-tenant-suite.md.
+  #
+  # Kept in step with .github/workflows/ci.yml — the two must not drift
+  # (S-E02-2 AC-4).
+  if changed_match '^(apps/api/prisma/|apps/api/src/shared/prisma/|scripts/tenant-adversarial-check\.js|scripts/rls-isolation-check\.js|\.env)'; then
+    run_stage 300 "tenant adversarial" node scripts/tenant-adversarial-check.js
+  else
+    skip_stage "tenant adversarial" "no prisma, identity-seam or checker change"
+  fi
+
   # Then the client: without it typecheck/tests fail on unresolvable types.
   run_stage 300 "prisma generate" bash -c prisma_generate
 

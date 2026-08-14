@@ -5,12 +5,13 @@ satisfied: `S-E02-3` done 2026-08-07) · **Blocks** `V3-E03`, and transitively e
 **Closes** PF-01, PF-02, PF-18, VAL-02, VAL-04 · **Gates** G-TENANT, G-AUTHZ, G-MIGRATION · **DNC** DNC-10
 **Epic brief** [`docs/daily-improvement-v3/epics/V3-E01-tenant-isolation.md`](../../../daily-improvement-v3/epics/V3-E01-tenant-isolation.md)
 
-**Status (2026-08-14)** `in-progress` — **five partial slices landed**: `S-E01-2` (one of its three thirds),
-`S-E01-2b` (the policies on the 44 tables that carry a `tenant_id`, proven to refuse for a real non-owner role — but
-**not** the connection cutover), `S-E01-2c` (the FK-path policies on the **five** tenant-DERIVED tables, plus
-`ADR-042`), `S-E01-2d` (`outbox_event`'s denormalised `tenant_id`, plus `ADR-044`) and `S-E01-1a` (the identity seam
-stops inventing a tenant — `PF-01` half (a)). The epic is **not** `shipped`, and **three** sentences must not be
-misread:
+**Status (2026-08-14)** `in-progress` — **five partial slices and one WHOLE one landed**: `S-E01-2` (one of its three
+thirds), `S-E01-2b` (the policies on the 44 tables that carry a `tenant_id`, proven to refuse for a real non-owner
+role — but **not** the connection cutover), `S-E01-2c` (the FK-path policies on the **five** tenant-DERIVED tables,
+plus `ADR-042`), `S-E01-2d` (`outbox_event`'s denormalised `tenant_id`, plus `ADR-044`), `S-E01-1a` (the identity seam
+stops inventing a tenant — `PF-01` half (a)) and **`S-E01-3`** (the two-tenant adversarial suite at
+catalog-enumerated breadth, plus `ADR-045` — the epic's first slice to land **whole**, and it closes **`VAL-02`'s DATABASE half** — the application half stays open, see the ledger).
+The epic is **not** `shipped`, and **four** sentences must not be misread:
 
 1. **The running application is still not RLS-isolated**, and no policy slice changed that. It connects as
    `pilotage`, the table owner; `FORCE ROW LEVEL SECURITY` is deliberately absent; the remaining step is a
@@ -23,6 +24,13 @@ misread:
    still admitted through `@RequiresPermission`.** `permissions.guard.ts:28` unions realm-role permissions without
    requiring a `UserProfile`, so the refusal only bites where the handler body calls `ensureUser`. That is `PF-165`
    half (b), its own slice, and it is the reason `S-E01-1a` closes half of a finding and not a gate.
+4. **`VAL-02`’s DATABASE half is closed and `G-TENANT` is not.** `S-E01-3` proves the shipped policies deny at **catalog-enumerated
+   breadth** — 50 tables × 4 verbs × both directions, positive control first, one mutant killed by execution — and
+   that is exactly the validation `VAL-02` asked for. It is **not** a statement about the running application, and the
+   suite refuses to let it be read as one: on its GREEN path it prints four `[LIMIT]` lines, two of them headed
+   `THE APPLICATION IS NOT READY TO CUT OVER`. **Do not let a green check erase that.** A gate that is green because
+   the property it guards is unreachable from the request path is the shape sentence (1) describes, and this suite is
+   built to *name* that shape rather than inherit it.
 
 > **⚠️ Finding-id collision, recorded 2026-08-14 (run 55) as `TOOL-30`.** `S-E01-1a` and `S-E01-2c`/`S-E01-2d` were
 > written by parallel runs that could not see each other's unmerged PRs, and they allocated **`PF-185`, `PF-186` and
@@ -59,7 +67,8 @@ misread:
 | **S-E01-2b** | The RLS half: 44 policies, the `nullif` NULL-context decision, the append-only grant split, and the `Prisma.TransactionClient` narrowing — **without** `FORCE` and **without** a call site, both on purpose | 🟡 **partial — the policy half, proven; not the cutover** | 2026-08-13 | `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0** against the real local PostgreSQL (44/44 RLS enabled, 44/44 `tenant_isolation` policies, connected as `app_user` owning 0 tables without `BYPASSRLS`, positive control first, executed rollback). `pnpm typecheck` **13/13 exit 0**; `git diff --check` exit 0. **5 mutants injected into the migration, 5 killed.** Ships `ADR-032` §D5–§D8. **`PF-02` half (a) closes only PARTIALLY.** See the section below |
 | **S-E01-2c** | The tenant-**DERIVED** half: 5 FK-path `EXISTS` policies, a derived set computed from `pg_constraint` rather than listed, a per-table grant with **no `DELETE` anywhere**, and `outbox_event` deferred by name | 🟡 **partial — the five FK-derivable tables; `outbox_event` deferred, and still not the cutover** | 2026-08-13 | `apps/api/prisma/migrations/20260813180000_tenant_rls_derived_policies/migration.sql` (hand-reviewed, `schema.prisma` untouched so the `prisma generate` RED trap stays disarmed); `scripts/rls-isolation-check.js` extended from 44 to **44 + 5**, with `DERIVED_EXPECTED` derived from `pg_constraint` and an `AC-5b` **set-equality** residue check; `rls-isolation-gate.spec.ts` +450 lines. `pnpm typecheck` **13/13 exit 0** (`@pilotage/api` a genuine cache **miss** that compiled the new spec); `git diff --check` exit 0, extended by `--no-index` over the three untracked files. Ships **`ADR-042`** (extends `ADR-032`, supersedes nothing); annotates `ADR-032` in two places **in place**. Advances `PF-02` half (a); records **`PF-185`** (`outbox_event`) and **`PF-186`** (`ON DELETE CASCADE` vs append-only). **⚠️ The checker's own green is NOT established by this run's gate** — see the section below |
 | **S-E01-2d** | The LAST table outside every policy: `outbox_event` gets a **denormalised** `tenant_id` (it holds no FK and never will — `aggregate_type`/`aggregate_id` are polymorphic), an `ON DELETE CASCADE` FK to `tenant`, the leading index the new column needs, the ordinary `tenant_isolation` policy of the 44, and `SELECT, INSERT, UPDATE` — **no `DELETE`** | 🟡 **partial — policy coverage is now complete; still not the cutover** | 2026-08-14 | `apps/api/prisma/migrations/20260814120000_outbox_event_tenant_scope/migration.sql` (hand-reviewed; **`schema.prisma` IS touched** — a column and an FK, which `migrate diff` sees — so `prisma generate` runs in this slice, `P-05`); `scripts/rls-isolation-check.js` census moves from `44 + 5` to `45 + 5` **with no literal edited**, the separate fail-closed `psql` probe is **deleted** and the proof folded into `PROOF_SQL` so the `permission denied` stderr guard covers this table too; `rls-isolation-gate.spec.ts` gains the third migration's ratchet and **inverts** the six `S-E01-2c` outbox assertions rather than deleting them. **Executed, not asserted:** `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0, run twice**, census **`45 + 5`**, `RLS_ON = POLICIES = GRANTED = 50`; `rls-isolation-gate.spec.ts` **97/97** in 112 s; `tsc --noEmit` **forced non-cached** in `apps/api` → 0 and `-p prisma/tsconfig.json` → 0 (this run's `pnpm typecheck` was a **vacuous `FULL TURBO` replay** — see the section below); generated client carries `OutboxEvent.tenantId` with an mtime **after** the schema edit, so `P-05` is closed by observation. Ships **`ADR-044`** (discharges `ADR-042 §D7`, supersedes nothing). **Closes `PF-185`.** `PF-186` (cascade vs append-only) untouched and still open. **⚠️ Three conditions a human owns — see [the section below](#s-e01-2d--the-last-table-what-it-decided-and-the-one-path-that-has-never-run)** |
-| **S-E01-3** | Two-tenant adversarial suite in CI (VAL-02) | ⬜ not started — **unblocked** | — | `VAL-02` open. **`S-E01-2b` gave it something to defeat**, so its fail-before/pass-after criterion is satisfiable for the first time. Partly pre-empted: the gate already runs a two-tenant adversarial proof through `psql`; what remains is the same shape **through the application's own query paths** |
+| **S-E01-3** | Two-tenant adversarial suite in CI (VAL-02) — catalog-enumerated BREADTH, four verbs, both directions | ✅ **done** | 2026-08-14 | `node scripts/tenant-adversarial-check.js` → **675 assertions, 4 named limits, 0 failures, exit 0**, three consecutive byte-identical runs (20 s / 21 s / 20 s, modulo the generated scratch database name) against the real local PostgreSQL. 45 tenant-bearing + 5 FK-derived tables enumerated from the live catalog of its own scratch database; `COVERED` = 50 against a floor of 40, `UNCOVERED` asserted empty by set equality; per `(table, verb)` the expected outcome is read from `role_table_grants`, so `42501` is never scored as isolation and a WIDENED grant FAILS. `MUTANT_KILLED` executed in-suite. Ships **`ADR-045`**; guard spec `apps/api/src/shared/quality/tenant-adversarial-gate.spec.ts` **EXECUTED — jest 58/58 pass in 7 s** (it had never been run when the branch was first proposed, which is how a `toContain` on a sentence the checker does not carry reached review); wired into `ci-gate.sh` + `ci.yml` with its own trigger. **Latent flake closed while running it:** `.gitattributes` pins `*.ts`/`*.sh`/`*.yml` to `eol=lf` but **not `*.js`**, so the checker is CRLF on a Windows checkout and LF on the Linux CI — the two guard assertions that anchor a MULTI-LINE fragment (the `INS_A_OWN` / `INS_A_FGN` ordering, and the banner extraction) were therefore green in CI and **red on a developer machine**, the worse of the two directions. Every source the spec reads is now normalised to `
+` at the read, so the guard judges content and never checkout style. **CORRECTION to the previous note in this row:** "the same shape through the application's own query paths" is **not** what remained and is not what this slice ships — `PrismaService.withTenant` has **0 production callers out of 722 Prisma call sites** (measured by the suite itself), so there are no application query paths to run it through. What remained was BREADTH, and the application-path work is the cutover, `S-E01-1`. **⚠️ RE-CORRECTED AT LAND BY RUN 56 — the argument is sound and its conclusion does not follow.** That `withTenant` has 0/722 callers establishes that the application half is *unmeasurable today*; it does not establish that it is *unnecessary*. `VAL-02` is defined as a suite « on every read/write/export/job » (`audit-findings-index.md:336`), and this one drives `psql` — no controller, no export, no worker job. Accepting « we cannot exercise it yet, therefore it is closed » is the `PF-02` pattern itself: a guardrail recorded as discharged while nothing exercises it. Closes `VAL-02`’s **DATABASE half only**; the application half is open and owned by `S-E01-1`. Advances `PF-02` half (a). **⚠️ REBASE CORRECTION, and it is the durable lesson of this row:** the branch was first measured at `51b4634`, i.e. BEFORE `S-E01-2d` (`e53f2d9`) merged, and its first evidence line (*"661 assertions, 44 + 5 = 49"*) was true of a tree that no longer existed. On the merged ledger `outbox_event` carries a `tenant_id`, so the live-catalog census returned it, `PLAN` did not attempt it, and three named assertions were red — caught in review, not by a run. Fixed at the right layer rather than patched: `outbox_event` joined `PLAN` as the 45th ordinary tenant-bearing table (seeded for both tenants, four verbs), the privilege matrix takes its `SELECT, INSERT, UPDATE` from `ADR-044 §D3` **by name** instead of the `FULL_DML` default, and the old fail-closed probe was **deleted** — after `ADR-044` a `permission denied` there would be a MISSING GRANT, the very false green this suite exists to refuse. The guard spec **inverts** its six `outbox_event` assertions rather than dropping them. An evidence line is only true of the tree it was measured on |
 | **S-E01-4** | Student Keycloak client split | ⛔ blocked on decision **D-02** | — | `PF-18`, `VAL-04` open |
 
 ## `S-E01-1a` — what landed, and the four residuals
@@ -418,6 +427,96 @@ path exists in code today, so this is a note for whoever writes the first produc
 marks the migration **failed** in `_prisma_migrations` and blocks subsequent `migrate deploy` until
 `prisma migrate resolve` — a runbook line, so an operator hitting the fail-loud branch does not read it as corruption.
 
+## `S-E01-3` — what it proves, what it refuses to claim, and the three thresholds a human owns
+
+**Delivered.** `scripts/tenant-adversarial-check.js` seeds **two real tenants** on a disposable scratch database,
+applies the whole migration ledger, connects as the non-owner `app_user`, and then does the thing no previous slice
+did: it **enumerates the tables from the live catalog of that database** rather than from a list in the file — 45 by
+`tenant_id` column + 5 by FK path = **50** — and runs `SELECT`, `INSERT`, `UPDATE`, `DELETE` against each, under GUC =
+A and GUC = B, with the **positive control asserted first**. 675 assertions, 4 named limits, 0 failures, exit 0,
+three consecutive runs byte-identical modulo the generated scratch name.
+
+**Four shapes carry the whole value, and each closes a false green this programme has actually met.**
+
+1. **The expected outcome per `(table, verb)` is read from `role_table_grants`.** Without it, a `42501` from a
+   **missing** privilege scores as a denial — the audit-log carve-out (`SELECT, INSERT` only) would make
+   `audit_log` look maximally isolated for the wrong reason. With it, a **widened** grant also fails, so the append-only
+   split is now guarded in both directions rather than one.
+2. **`COVERED`/`UNCOVERED` is a set-equality partition**, against an empty `UNCOVERED_EXPECTED` with a
+   `MIN_COVERED_TABLES = 40` floor. A table a future migration adds lands in `UNCOVERED` and turns the stage red
+   instead of being silently unmeasured. **This ratchet is the suite's headline property and it is the one thing not
+   proven by execution** — see condition 4 below.
+3. **Fail-before/pass-after is EXECUTED, not asserted.** `MUTANT_KILLED` disables RLS on `public.school` inside a `DO`
+   block guarded **server-side** by `current_database() !~ '^tenant_adversarial_'`, watches the foreign-row probe go
+   `0 → 1`, restores, and watches it return to `0`. A textual claim that the suite "would catch" a broken policy is
+   what `PF-02` was; this is the executed form of the same sentence.
+4. **A table with no seeded row for the second tenant is named `UNCOVERED`, never counted as three green denials on an
+   empty table.** Emptiness is the cheapest way to be green about nothing.
+
+**What it deliberately does NOT claim, printed on the GREEN path as four `[LIMIT]` lines.** The banner refuses the
+word *isolated* unqualified. `PrismaService.withTenant` has **0 production callers out of 722 Prisma call sites**;
+the **owner bypass** is asserted as a **present** leak on two tables, with an inverted assertion that goes RED the day
+`FORCE` lands; and production code reaches **three** tables ungranted to `app_user` (`role` ×7, `permission` ×3,
+`tenant` ×2), which become `42501` on the AuthZ path at the **first request after the cutover**. That honesty is the
+best part of the diff, and it is the reason this row closes `VAL-02`’s DATABASE half without touching `PF-02` half (a).
+
+**The rebase is the durable lesson, and it belongs in this file more than the suite does.** The branch was first
+measured at `51b4634` — **before `S-E01-2d` (`e53f2d9`) merged** — and its first evidence line (*"661 assertions,
+44 + 5 = 49"*) was true of a tree that no longer existed. On the merged ledger `outbox_event` carries a `tenant_id`,
+so the live-catalog census returned it, `PLAN` did not attempt it, and **three named assertions were red**. Review
+caught it; no run did, because the run that would have caught it was never taken on the merged tree. The repair was
+made at the schema layer rather than patched: `outbox_event` joined `PLAN` as the 45th ordinary tenant-bearing table,
+the privilege matrix takes its `INSERT|SELECT|UPDATE` from **`ADR-044 §D3` by name** instead of the `FULL_DML`
+default (so the withheld `DELETE` is asserted), and the old fail-closed probe was **deleted** — after `ADR-044` a
+`permission denied` there would be a MISSING GRANT, the exact reading this suite exists to refuse. **An evidence line
+is only true of the tree it was measured on.**
+
+**⚠️ Four conditions a human owns before this merges.**
+
+1. **`AC-9 CUTOVER READINESS` is guarded by bare zero-thresholds, in the one block whose purpose is to stop a false
+   "safe to cut over" reading.** `readiness.withTenantCallers === 0` emits `[LIMIT]`; anything else emits an
+   affirmative green line. So the **first** `.withTenant(` call site added anywhere flips the block from a named limit
+   to a claim of readiness while 721 of 722 call sites still set no GUC — `PF-02`'s own failure mode, reproduced
+   inside the machine-readable block built to prevent it, and inconsistent with the file's own `MIN_COVERED_TABLES`
+   floor discipline. `readiness.prismaCallSites` is computed and printed but **never asserted**, so a regex that stops
+   matching call sites degrades the denominator silently. Express `AC-9` as a **ratio with a floor**, or hard-pin it
+   as a `[LIMIT]` only `S-E01-1` may discharge. Do not let it self-clear.
+2. **Every could-not-run condition exits `2` (`not_isolated`), never `1` (`tooling_unavailable`).** Teardown and
+   precondition problems call `fail()`, so they land in the same `failures` array as isolation breaches, and
+   `report(failures.length === 0 ? 'isolated' : 'not_isolated')` then prints *"NOT PROVEN — cross-tenant access was
+   not refused as required"*. A leftover `app_user` backend after the bounded 5 s quiesce poll, a refused
+   `DROP DATABASE`/`DROP ROLE`, a migration that will not apply, or a schema below the floor all page as a **tenancy
+   breach**. This contradicts `AC-9`'s three distinguishable codes and `FR-11`'s promise that the drop reports its own
+   verdict. One `toolingFailures[]` accumulator fixes it.
+3. **The new `ci-gate.sh` trigger's `\.env` alternative is dead by construction, and half the comment leans on it.**
+   `.env` is gitignored, and `CHANGED` is built from `git diff --name-only` + `git status --porcelain`, neither of
+   which lists ignored paths — so that arm can never fire. Real coverage of the `S-E01-1` cutover diff rests
+   **entirely** on `apps/api/src/shared/prisma/`, and the tracked files that actually carry a deployable
+   `DATABASE_URL` — `infra/docker-compose.yml` and `.env.example` — are **not** in the regex. A cutover done the
+   deployment way (flip the DSN in compose, no `prisma.service.ts` edit) prints `skip_stage` and the gate passes green
+   on precisely the diff this suite was built to protect. Note also that the `ci.yml` half runs unconditionally and is
+   unaffected — but GitHub Actions has been billing-locked since 2026-07-28, so `ci-gate.sh` is the only wiring that
+   actually executes today.
+4. **The census ratchet — property (2) above — is the one claim not proven by execution.** `notAttempted` is a single
+   `filter`, its correctness argued in prose inside a label string and pinned textually by a `toContain` in the guard
+   spec. Invert it and every tenant-bearing table added by every future migration escapes this suite **silently and
+   permanently** while 675 assertions stay green about a schema the suite no longer covers. The fix is an `AC-8b`
+   census mutant in the block that already owns `guardedMutation()`: create a throwaway tenant-bearing table, re-run
+   the census SQL, assert it appears in `notAttempted`, drop it. ~0.3 s on a 20 s suite, exactly reversible, no new
+   flag.
+
+**Recorded, not fixed** (none blocking, all named): `APPEND_ONLY_TABLES` is re-declared locally although the sibling
+exports the identical literal — the drift `ADR-042 §D3` forbids, in the one file that argues for `require()`-ing
+constants rather than re-typing them; the AC-8 success message names `CTX_A_FOREIGN_school` while the probe's label is
+`MUT_FOREIGN_school`, and the wrong name propagated into `ADR-045` and both ledgers; two fixture slots collide
+(`student3` and `outboxEvent` both `65`), harmless today but breaking the file's own one-slot-per-row invariant;
+`PSQL_TIMEOUT_MS` equals the 300 s stage budget, so the script's own named timeout diagnosis can never be reached
+under `ci-gate.sh`; `CREATE ROLE`/`DROP ROLE` interpolate the role name as an unquoted identifier (carried verbatim
+from the merged sibling, so a replicated pre-existing pattern rather than a regression); `ADR-045 §D1`'s concurrency
+guarantee covers the scratch **database** names but not the cluster-wide **role**, which both scripts create and drop
+under the same guard. Finally: `.gitattributes` pins `*.ts`/`*.sh`/`*.yml` to `eol=lf` but **not `*.js`** — a
+repo-wide renormalisation is the real repair, deliberately not taken here.
+
 ## Merge conditions and inherited obligations
 
 Three things the verify panel and the test architect established that a human must carry forward.
@@ -533,8 +632,23 @@ enumeration oracle appears — residual 2. It carries no migration and no cutove
 enum/GRANT work is still being scoped. **`S-E01-1` remains the critical path**; this is a one-run detour that stops the
 `S-E01-1a` residuals from being inherited by the cutover, which is the moment they stop being latent.
 
-**Then `S-E01-3`, and it is unblocked for the first time.** The two-tenant adversarial suite now has a policy to
-defeat, so its fail-before/pass-after criterion is satisfiable. Note it is *partly pre-empted*:
-`scripts/rls-isolation-check.js` already runs a two-tenant adversarial proof at the `psql` level. What `S-E01-3` still
-owes is the same adversarial shape **through the application's own query paths** — the thing that would catch a
-repository bypassing `withTenant`, which no `psql` proof can see. `S-E01-4` stays blocked on `D-02`.
+~~**Then `S-E01-3`, and it is unblocked for the first time.**~~ **✅ Landed 2026-08-14 (`ADR-045`), and the paragraph
+that stood here was wrong on its own terms — kept struck rather than deleted, because the correction is the useful
+part.** It said what `S-E01-3` still owed was "the same adversarial shape **through the application's own query
+paths**". That work does not exist to be done: the suite measured it and `PrismaService.withTenant` has **0
+production call sites out of 722** Prisma call sites, so there are no application query paths to run an adversarial
+suite through. What actually remained was **BREADTH** — `rls-isolation-check.js` proved denial on `school` and the
+five FK-derived tables; `S-E01-3` proves it on **all 50**, four verbs, both directions, with the expected outcome per
+`(table, verb)` read from `role_table_grants` and one mutant killed by execution. The application-path proof the old
+paragraph described **is** the cutover, `S-E01-1`, and it can only be written after step (2) above lands the first
+call site. `VAL-02`’s DATABASE half is closed (the application half is owned by `S-E01-1`); `S-E01-4` stays blocked on `D-02`.
+
+**The pointer is therefore unchanged: `S-E01-1b`, then `S-E01-1`.** `S-E01-3` was the one `V3-E01` slice that could
+land without touching the identity seam or the connection, so it took itself off the board and consumed nothing.
+What it hands forward is **measurement instead of intention**, and three items above become concrete because of it:
+step (3)'s "the grant set is deliberately incomplete" is now a **counted** list of three tables production code
+already reaches (`role` ×7, `permission` ×3, `tenant` ×2), each a `42501` on the AuthZ path at the first request
+after the flip; the owner bypass is asserted as a **present leak** whose assertion goes RED the day `FORCE` lands, so
+the cutover cannot quietly leave the app connecting as `pilotage`; and `AC-9 CUTOVER READINESS` must be converted
+from a zero-threshold to a **ratio with a floor before step (2) is written**, because the first `withTenant` call
+site would otherwise flip that block from a named limit into an affirmative claim of readiness.
