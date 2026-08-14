@@ -96,7 +96,12 @@ const checker = require(CHECKER_PATH) as {
   prismaModelName: (table: string) => string;
 };
 const sibling = require(SIBLING_PATH) as {
+  AUTO_DISCRIMINANT_PRIVILEGES: string;
+  AUTO_DISCRIMINANT_SQL: string;
+  DERIVED_SET_SQL: string;
   DERIVED_TABLES: ReadonlyArray<{ child: string; fk: string; parent: string; privileges: string }>;
+  REFERENCE_PRIVILEGES: string;
+  REFERENCE_SURFACE: readonly string[];
   TENANT_A: string;
   TENANT_B: string;
   TENANT_GUC: string;
@@ -222,11 +227,19 @@ describe('AC-11 — le RECENSEMENT n’a AUCUNE liste gelée de son côté', () 
   });
 
   it('il énumère depuis information_schema.columns et pg_constraint, pas depuis un tableau', () => {
-    // C'est LA raison pour laquelle une 51e table ne peut pas passer : le côté
+    // C'est LA raison pour laquelle une table de plus ne peut pas passer : le côté
     // GAUCHE de l'égalité vient du catalogue vivant de la base scratch, jamais
     // d'une liste que le même diff pourrait modifier.
     expect(enumeration).toContain("c.column_name='tenant_id'");
-    expect(enumeration).toContain("k.contype = 'f'");
+    // La moitié `pg_constraint` est désormais INTERPOLÉE depuis le frère plutôt
+    // que ré-écrite ici — c'est le correctif du défaut qui a fait diverger 6 et 7.
+    // Elle est donc assertée là où elle vit maintenant, dans les DEUX fichiers :
+    // le recensement l'interpole, et la requête interpolée lit bien le catalogue.
+    expect(enumeration).toContain('${DERIVED_SET_SQL}');
+    expect(enumeration).toContain('${AUTO_DISCRIMINANT_SQL}');
+    expect(sibling.DERIVED_SET_SQL).toContain("k.contype = 'f'");
+    expect(sibling.DERIVED_SET_SQL).toContain('pg_constraint');
+    expect(sibling.AUTO_DISCRIMINANT_SQL).toContain("k.contype = 'f'");
     expect(enumeration).toContain('information_schema.role_table_grants');
     // Et il n'interroge JAMAIS pg_policy pour CONSTRUIRE son attente : une table
     // dérivée livrée sans policy serait absente des DEUX côtés (ADR-042 §D3).
@@ -247,13 +260,19 @@ describe('AC-11 — le RECENSEMENT n’a AUCUNE liste gelée de son côté', () 
     expect(CHECKER_CODE).toContain('const notAttempted = enumerated.filter');
   });
 
-  it('la liste UNCOVERED est NOMMÉE, et sa vacuité est une décision consignée', () => {
+  it('la liste UNCOVERED est NOMMÉE, et son contenu est une décision consignée', () => {
     // ADR-045 §D3 : ce n'est PAS une liste d'exemption, c'est une moitié
-    // d'égalité. Vide aujourd'hui — et l'en-tête doit dire pourquoi, sinon un
-    // futur lecteur y ajoutera un nom pour faire disparaître un rouge.
+    // d'égalité. Elle était VIDE jusqu'à `S-E01-1b` ; elle porte maintenant DEUX
+    // noms, et l'en-tête doit dire pourquoi POUR CHACUN, sinon un futur lecteur y
+    // ajoutera un troisième pour faire disparaître un rouge.
     expect(Array.isArray(checker.UNCOVERED_EXPECTED)).toBe(true);
-    expect(CHECKER).toContain('It is EMPTY today, and that is a measurement rather than an aspiration');
+    expect(CHECKER).toContain('It holds EXACTLY TWO NAMES today, and that is a measurement rather than an');
     expect(CHECKER).toContain('never a way to make a red go away');
+    // Chaque nom porte sa raison DANS l'en-tête, jamais dans un commentaire de
+    // ligne qu'une relecture rapide saute.
+    for (const table of checker.UNCOVERED_EXPECTED) {
+      expect(CHECKER).toContain(`\`${table}\``);
+    }
   });
 
   it('le PLANCHER DE NON-VACUITÉ existe, et il est un MINIMUM (pas une attente)', () => {
@@ -341,6 +360,32 @@ describe('AC-11 — les contrôles POSITIFS précèdent leurs dénis, partout', 
     expect(checker.APPEND_ONLY_TABLES).toEqual(['audit_log', 'conversation_message']);
     expect(checker.FULL_DML).toBe('DELETE|INSERT|SELECT|UPDATE');
     expect(checker.APPEND_ONLY_DML).toBe('INSERT|SELECT');
+  });
+
+  it('la matrice couvre la SURFACE DE RÉFÉRENCE de `S-E01-1b`, et par des groupes NOMMÉS', () => {
+    // `S-E01-1b` accorde `SELECT` à `app_user` sur `tenant`, `permission` et
+    // `_prisma_migrations`. La matrice était `tenantTables ∪ DERIVED_TABLES` — un
+    // ensemble qui, jusqu'à ce slice, ÉTAIT la totalité des grants. Trois entrées
+    // mesurées en plus font échouer une ÉGALITÉ d'ensembles, et la réparation
+    // localement la moins chère (passer à une inclusion) supprimerait la seule
+    // chose qui rend `GRANT … ON ALL TABLES IN SCHEMA public` impossible à livrer.
+    expect(CHECKER_CODE).toContain('...autoDiscriminant.map(');
+    expect(CHECKER_CODE).toContain('...referencePresent.map(');
+    expect(sibling.AUTO_DISCRIMINANT_PRIVILEGES).toBe('SELECT');
+    expect(sibling.REFERENCE_PRIVILEGES).toBe('SELECT');
+    expect([...sibling.REFERENCE_SURFACE].sort()).toEqual(['_prisma_migrations', 'permission']);
+    // …et les deux constantes viennent du frère, jamais re-tapées ici.
+    expect(CHECKER_CODE).toContain('AUTO_DISCRIMINANT_PRIVILEGES');
+    expect(CHECKER_CODE).toContain('REFERENCE_PRIVILEGES');
+    expect(CHECKER_CODE).not.toMatch(/AUTO_DISCRIMINANT_PRIVILEGES\s*=\s*'/);
+    expect(CHECKER_CODE).not.toMatch(/REFERENCE_PRIVILEGES\s*=\s*'/);
+    // L'égalité reste une ÉGALITÉ : aucune direction n'est relâchée.
+    expect(CHECKER_CODE).toContain('expectSetEqual(');
+    expect(CHECKER_CODE).not.toMatch(/expectSubsetOf|expectSupersetOf/);
+    // `_prisma_migrations` est ABSENTE de cette base scratch (le ledger est
+    // appliqué par psql, la CLI Prisma ne tourne pas) : sa présence est MESURÉE,
+    // jamais supposée, sinon la matrice attend un grant qui n'existe pas.
+    expect(CHECKER_CODE).toContain("REFERENCE_PRESENT|");
   });
 
   it('une étiquette MANQUANTE est un ÉCHEC DUR, jamais un zéro', () => {
@@ -565,19 +610,67 @@ describe('AC-8 — la mutation est INCONDITIONNELLE, contenue, et elle assertit 
   });
 });
 
-describe('AC-4 — CINQ tables dérivées, pas six, et le chemin FK dans les DEUX sens', () => {
-  it('le jeu prouvé est exactement celui que le frère nomme, sans le re-taper', () => {
+describe('AC-4 — SEPT tables dérivées depuis S-E01-1b, CINQ prouvées ici, et le chemin FK dans les DEUX sens', () => {
+  it('le jeu prouvé est exactement celui que le frère nomme MOINS les non-couvertes NOMMÉES', () => {
     // Deux littéraux pour un même jeu, c'est la dérive qu'ADR-042 §D3 interdit.
     expect(CHECKER_CODE).toContain('DERIVED_TABLES');
+    // Le littéral RESTE, et il est le cliquet : `S-E01-1b` a fait entrer `role`
+    // (sa FK `role_school_id_fkey` est enfin matérialisée) puis `role_permission`
+    // (le résidu à DEUX sauts, invisible à une dérivation d'un seul niveau). Une
+    // huitième entrée arrivée en silence échoue ICI, avec son nom imprimé.
     expect(sibling.DERIVED_TABLES.map((d) => d.child).sort()).toEqual([
       'announcement_receipt',
       'branding',
       'grade_revision',
       'import_row',
+      'role',
+      'role_permission',
       'user_role',
     ]);
+    // La partition, DÉRIVÉE dans les deux sens plutôt que re-tapée : ce que
+    // `PLAN` prouve, c'est exactement le jeu du frère PRIVÉ des noms qu'
+    // `UNCOVERED_EXPECTED` déclare non prouvés ici. Retirer un nom de la liste
+    // sans ajouter la table à `PLAN` rougit, et l'inverse aussi.
     const derivedInPlan = checker.PLAN.filter((entry) => entry.derived).map((entry) => entry.table).sort();
-    expect(derivedInPlan).toEqual(sibling.DERIVED_TABLES.map((d) => d.child).sort());
+    const provenHere = sibling.DERIVED_TABLES.map((d) => d.child)
+      .filter((child) => !checker.UNCOVERED_EXPECTED.includes(child))
+      .sort();
+    expect(derivedInPlan).toEqual(provenHere);
+    expect(derivedInPlan).toHaveLength(5);
+  });
+
+  it('les DEUX dérivées non couvertes sont NOMMÉES, et la raison est le grant `SELECT` seul', () => {
+    // ADR-046 §D5 : `role` et `role_permission` sont des données de PRIVILÈGE,
+    // donc `SELECT` et rien d'autre. Or la branche INSERT du vérificateur est un
+    // ÉCHEC DUR quand le grant manque — délibérément, parce qu'une table qu'il ne
+    // peut pas écrire rendrait ses dénis vacueux. Les mettre dans `PLAN`
+    // exigerait de RELÂCHER cette branche : une protection réelle échangée
+    // contre un chiffre de couverture. Elles sont prouvées PAR EXÉCUTION dans le
+    // frère, ce que la note d'en-tête doit dire noir sur blanc.
+    expect([...checker.UNCOVERED_EXPECTED].sort()).toEqual(['role', 'role_permission']);
+    for (const table of ['role', 'role_permission']) {
+      const entry = sibling.DERIVED_TABLES.find((d) => d.child === table);
+      expect(entry?.privileges).toBe('SELECT');
+      expect(checker.PLAN.some((planned) => planned.table === table)).toBe(false);
+    }
+    // …et la liste n'est PAS devenue une liste d'exemption : la phrase qui
+    // l'interdit reste, et l'en-tête nomme désormais le frère qui les prouve.
+    expect(CHECKER).toContain('never a way to make a red go away');
+    expect(CHECKER).toContain('proven BY EXECUTION in the');
+  });
+
+  it('la dérivation elle-même est IMPORTÉE du frère, pas ré-écrite en SQL local', () => {
+    // C'EST LE DÉFAUT QUE CE RUN A PAYÉ. Ce fichier portait sa PROPRE requête de
+    // recensement, à UN SEUL niveau : elle s'accordait avec `DERIVED_TABLES`
+    // uniquement tant qu'aucune table dérivée n'avait elle-même un enfant dérivé.
+    // `role_permission` est cet enfant — 6 contre 7 — et le rouge serait apparu
+    // au MERGE, pas sur le diff qui l'a causé.
+    expect(CHECKER_CODE).toContain('DERIVED_SET_SQL');
+    expect(CHECKER_CODE).toContain('AUTO_DISCRIMINANT_SQL');
+    expect(sibling.DERIVED_SET_SQL).toContain('WITH RECURSIVE');
+    // La requête locale d'un seul niveau ne doit pas revenir : elle se
+    // reconnaît à son `string_agg(DISTINCT child.relname` sur `pg_constraint`.
+    expect(CHECKER_CODE).not.toContain("string_agg(DISTINCT child.relname");
   });
 
   it('`outbox_event` a REJOINT le régime ordinaire : prouvé sur quatre verbes, plus « fail-closed »', () => {

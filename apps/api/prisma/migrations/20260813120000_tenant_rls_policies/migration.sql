@@ -142,10 +142,39 @@
 --
 --   A. RÉELLEMENT GLOBALES — aucun discriminant de tenant, aucune donnée d'un
 --      tenant : `permission`, `role`, `role_permission`, `_prisma_migrations`.
+--
+--      ⚠️ CORRECTION 2026-08-14 (S-E01-1b, PF-191) — CETTE LIGNE ÉTAIT FAUSSE
+--      POUR `role` ET POUR `role_permission`, ET ELLE L'ÉTAIT DÈS L'ORIGINE.
+--      `role` porte `school_id UUID` (créée par le baseline) et `school` porte
+--      `tenant_id UUID NOT NULL` : une ligne de `role` au `school_id` non nul
+--      appartient donc à UN tenant, et `role_permission` en hérite à deux sauts.
+--      Un GRANT `SELECT` nu sur ces deux tables aurait laissé le tenant A lire
+--      les rôles CUSTOM du tenant B et LEUR COMPOSITION DE PRIVILÈGES — mesuré
+--      par exécution (`A_SEES_B_ROLEPERM|1`) avant d'être refermé.
+--      Ce qui rendait l'erreur invisible : `role.school_id` n'avait AUCUNE clé
+--      étrangère, donc la dérivation structurelle ne pouvait pas la voir.
+--      `S-E01-1b` pose `role_school_id_fkey`, place les deux tables sous policy
+--      et rend la dérivation transitive. Voir
+--      `20260814180000_role_reference_surface_rls` et ADR-046.
+--      SEULES `permission` et `_prisma_migrations` restent réellement globales,
+--      et cette fois la classification a été MESURÉE colonne par colonne.
+--      Le SQL exécutable de CE fichier n'est pas modifié : une migration
+--      appliquée ne se réécrit pas, seule son annotation est corrigée.
+--
 --   B. AUTO-DISCRIMINANTE, EXCLUE DÉLIBÉRÉMENT : `tenant` — sa clé primaire EST
 --      le discriminant. Une policy ici casserait la couture identité, qui doit
 --      lire `tenant` PAR SLUG *avant* qu'un tenant soit résolu (S-E01-1, pas
 --      commencée). Exclusion motivée, pas oubli.
+--
+--      ⚠️ ÉTAT DATÉ, corrigé le 2026-08-14 (S-E01-1b) — L'EXCLUSION RESTE VRAIE
+--      DE CE FICHIER, MAIS SA RAISON A DISPARU. Mesuré sur `apps/api/src` après
+--      `S-E01-1a` : il n'existe PLUS AUCUNE lecture de `tenant` PAR SLUG. Les
+--      seules lectures sont `where: { id: tenantId }` ; les lectures par slug
+--      sont dans les seeds, qui se connectent comme le PROPRIÉTAIRE. La seule
+--      écriture par slug restante est `register.controller.ts`, et elle EST le
+--      défaut ouvert PF-185. `S-E01-1b` place donc `tenant` sous une policy
+--      `id = <GUC>` dans SA migration, sans fonction `SECURITY DEFINER` — celle
+--      qui était « préférée » n'aurait eu AUCUN appelant. Voir ADR-046 §D4.
 --   C. DÉRIVÉES D'UN TENANT PAR CLÉ ÉTRANGÈRE — donc NON PROTÉGÉES par ce diff,
 --      et atteignables par jointure depuis une table protégée :
 --        `grade_revision`      -> grade          (piste d'audit des notes)
@@ -225,6 +254,25 @@
 -- `permission`, `role_permission`, `user_role` et `tenant` restent illisibles
 -- pour `app_user`, donc la première jointure d'autorisation échouerait. La
 -- bascule n'est pas « à une étape » ; c'est écrit dans PROGRESS.md.
+--
+-- ⚠️ ÉTAT DATÉ, corrigé le 2026-08-14 — CETTE PHRASE N'EST PLUS VRAIE, sur DEUX
+-- points, et aucun des deux n'a été corrigé en modifiant ce fichier :
+--
+--   • `user_role` N'EST PLUS illisible depuis `S-E01-2c`
+--     (`20260813180000_tenant_rls_derived_policies`) : elle est l'une des CINQ
+--     tables tenant-DÉRIVÉES et elle détient `SELECT, INSERT, UPDATE`. VÉRIFIÉ
+--     dans le tuple de cette migration-là, pas déduit de cette phrase-ci.
+--   • `role`, `permission`, `role_permission` et `tenant` sont accordés en
+--     `SELECT` — et RIEN d'autre — depuis `S-E01-1b`
+--     (`20260814180000_role_reference_surface_rls`), avec `_prisma_migrations`.
+--     La jointure d'autorisation `user_profile -> user_role -> role ->
+--     role_permission -> permission` a été EXÉCUTÉE comme `app_user` : elle
+--     levait `permission denied for table role` avant, elle rend 1 après.
+--
+-- Ce qui reste vrai de cette phrase, et qui est l'essentiel : la bascule n'est
+-- toujours PAS « à une étape ». Les blocages restants ont maintenant des NOMS
+-- plutôt qu'une prose : PF-193 (le chemin d'ÉCRITURE de `roles.controller.ts`)
+-- et PF-185 (l'`upsert` de `tenant` par `register.controller.ts`). Voir ADR-046.
 --
 -- ============================================================================
 -- EXPAND / CONTRACT, ET LE ROLLBACK (G-MIGRATION, AC-12)

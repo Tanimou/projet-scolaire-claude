@@ -5,6 +5,7 @@
 - **Story**: `S-E01-2c` (epic `V3-E01`), closing `PF-183`.
 - **Relates to**: `ADR-002` (multi-tenancy), `ADR-032` (tenant enforcement — §D5–§D8), `ADR-040` (role delegation ladder), `ADR-027` (a schema gate needs a database).
 - **Supersedes nothing.** It **extends** `ADR-032` from *tables that carry a `tenant_id` column* to *tables that belong to a tenant by foreign key*.
+- **Amended 2026-08-14 by `ADR-046` (`S-E01-1b`)**: `§D3`'s one-level derivation is replaced by a **transitive closure**, and `§D2`'s "`user_role -> role` is a dead end" is now true for a **different reason**. See the two inline amendment notes below — the decisions themselves stand.
 
 ---
 
@@ -150,6 +151,27 @@ Now a sixth derived table raises `DERIVED_EXPECTED` to 6 while `RLS_ON` stays 49
 **fails**. It is read from `pg_constraint` rather than `information_schema.table_constraints` so that multi-column
 foreign keys are seen. No number is hard-coded and no name is subtracted; the agreement survives schema growth and
 cannot be satisfied by deleting a table.
+
+> **AMENDED 2026-08-14 by `ADR-046 §D1` (`S-E01-1b`) — the derivation above is ONE LEVEL DEEP, and that has stopped
+> being a documented limit and become a defect.**
+>
+> This section and `§D4` both name the hole out loud: *a table with no `tenant_id` whose foreign key points at a
+> DERIVED table falls outside both counts and is invisible again.* It stopped being hypothetical the day `S-E01-1b`
+> materialised `role_school_id_fkey`. `role` entered the derived set, and `role_permission` — whose only foreign keys
+> point at `role` and `permission`, neither of which carries a `tenant_id` — became exactly that two-level residue. It
+> was **measured** as a real cross-tenant read, as `app_user` under `GUC = tenant A`, against a `role_permission` row
+> belonging to tenant B's custom role with a bare `SELECT` grant and no policy: `A_SEES_B_ROLEPERM|1`.
+>
+> `DERIVED_SET_SQL` in `scripts/rls-isolation-check.js` is therefore a **recursive CTE** over `pg_constraint`, and
+> `schemaDerivedTables()` in `rls-isolation-gate.spec.ts` iterates to a **fixpoint**. Both remain pure structure —
+> neither asks whether a policy exists — so the argument of this section stands unchanged; only its *depth* was wrong.
+>
+> A **third** catalog-derived term joined the same agreement (`ADR-046 §D4`): the AUTO-DISCRIMINANT tables, derived as
+> the parents of every foreign key whose leading child column is named `tenant_id`. Measured: exactly `{tenant}`. It is
+> written as a query and never as `+ 1`, for precisely the reason this section already gives.
+>
+> The agreement now reads `RLS_ON == TENANT_COLS + DERIVED_EXPECTED + AUTO_DISCRIMINANT`, and **no literal was edited**
+> to make it so: `45 + 7 + 1 == 53`, every term measured on the catalog.
 
 ### D4 — the tables outside the derivation stay outside **named, with reasons**, and their absence is asserted
 

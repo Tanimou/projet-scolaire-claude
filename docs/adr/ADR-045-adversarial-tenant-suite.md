@@ -132,9 +132,25 @@ with its reason** — never to let breadth be bought with vacuum. `DNC-08` forbi
 the alternative. The named list is **not an exemption list**: it subtracts from
 nothing, it is one half of an equality.
 
-**Measured today:** `UNCOVERED_EXPECTED` is empty, because all 45 tenant-bearing
-tables and all five FK-derived ones are seeded for both tenants; `COVERED` = 50
-against a floor of 40.
+**Measured when this file was written:** `UNCOVERED_EXPECTED` is empty, because
+all 45 tenant-bearing tables and all five FK-derived ones are seeded for both
+tenants; `COVERED` = 50 against a floor of 40.
+
+> **Annotated 2026-08-14 by `S-E01-1b` (`ADR-046`), which merged after this file
+> and moved the numbers.** The census is now **45 + 7 = 52**: `role` entered the
+> derived set when `role_school_id_fkey` was finally materialised, and
+> `role_permission` is the **two-level** residue that the one-level derivation
+> this suite originally carried could not see. `COVERED` is unchanged at **50**,
+> and `UNCOVERED_EXPECTED` now holds **exactly those two names**, each with its
+> reason: `ADR-046 §D5` grants both `SELECT` **and nothing else** (they are
+> privilege data — a role that could write `role_permission` could grant itself
+> every permission in the schema), while every table in `PLAN` is driven on four
+> verbs and the INSERT branch is a **hard failure** when the grant is missing.
+> Adding them would have meant relaxing that branch: a real protection traded for
+> a coverage number, which is what the `Consequence` clause above forbids. **Both
+> are proven by execution in the sibling `scripts/rls-isolation-check.js`**,
+> including the measured cross-tenant read on `role_permission` that its two-hop
+> policy closes. So this is the `Consequence` clause being *used*, not amended.
 
 **Related decision, same paragraph of the same problem — the privilege matrix.**
 Seven tables measurably hold no `DELETE` and three hold no `UPDATE`
@@ -201,10 +217,18 @@ epilogue. Two further rules:
   a set of named `[LIMIT]` lines: the count of `PrismaService.withTenant`
   production callers against the count of Prisma call sites (measured **0 / 722**
   across 223 source files), and the ungranted-table set cross-referenced against
-  `prisma.<model>.` reachability in `apps/**` (measured: `tenant` ×2, `role` ×7,
-  `permission` ×3 — each a `42501` on the AuthZ resolution path after the
-  cutover, and invisible to every isolation assertion because none of the three is
-  tenant-bearing).
+  `prisma.<model>.` reachability in `apps/**` (measured when this file was
+  written: `tenant` ×2, `role` ×7, `permission` ×3 — each a `42501` on the AuthZ
+  resolution path after the cutover, and invisible to every isolation assertion
+  because none of the three is tenant-bearing).
+
+  > **Annotated 2026-08-14.** That second half is now **`0` ungranted tables**, and
+  > the decision is what made it move: `S-E01-1b` granted the three (`ADR-046 §D5`)
+  > and the line **re-measured itself**, because the ungranted set is read from
+  > `information_schema.role_table_grants` on the live scratch database rather than
+  > written down. `PF-189` is closed on that evidence. The **first** half is
+  > unchanged — `withTenant` still has **0 / 722** production callers — so the
+  > block still prints a `[LIMIT]` and the suite still refuses the word *ready*.
 
 **No distinction is carried by colour.** A non-TTY CI log strips ANSI; every
 `[OK]` / `[FAIL]` / `[LIMIT]` line is legible from its text alone.

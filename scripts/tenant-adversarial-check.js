@@ -136,14 +136,30 @@ const { postgresClient } = require('./lib/postgres-client-path');
  * there rather than re-declared. `fid`, `lit`, `redact`, `isLoopbackHost` and
  * `migrationFiles` come with them because re-typing them would be the same defect
  * one layer down.
+ *
+ * S-E01-1b — THE DERIVATION SQL IS IMPORTED TOO, and that is the lesson this
+ * slice paid for. This file used to carry its OWN one-level census query for the
+ * FK-derived set: a second hand-written statement about the same catalog fact,
+ * which agreed with `DERIVED_TABLES` only while no derived table had a derived
+ * child of its own. `role_permission` is that child. The moment the sibling
+ * closed the derivation transitively, the two queries disagreed — 6 against 7 —
+ * and the disagreement would have surfaced as a red on a merge, not as a red on
+ * the diff that caused it. `DERIVED_SET_SQL` and `AUTO_DISCRIMINANT_SQL` now come
+ * from the same place the constants do (ADR-042 §D3, one layer below where it was
+ * written).
  */
 const {
+  AUTO_DISCRIMINANT_PRIVILEGES,
+  AUTO_DISCRIMINANT_SQL,
+  DERIVED_SET_SQL,
   DERIVED_TABLES,
   MIN_EXPECTED_TABLES,
   NON_DERIVED_EXPECTED,
   OUTBOX_PRIVILEGES,
   OUTBOX_TABLE,
   POLICY_NAME,
+  REFERENCE_PRIVILEGES,
+  REFERENCE_SURFACE,
   TENANT_GUC,
   VERDICT_EXIT_CODES,
   fid,
@@ -216,10 +232,31 @@ const MIN_COVERED_TABLES = 40;
  * a name here is therefore a deliberate, reviewable statement that the table is
  * NOT PROVEN by this suite — never a way to make a red go away.
  *
- * It is EMPTY today, and that is a measurement rather than an aspiration: every
- * one of the 45 tenant-bearing tables and all five FK-derived ones are seeded for
- * both tenants below.
+ * It holds EXACTLY TWO NAMES today, and that is a measurement rather than an
+ * aspiration: all 45 tenant-bearing tables and five of the seven FK-derived ones
+ * are seeded for both tenants below. The two that are not are named here WITH
+ * their reason, and the reason is structural rather than an omission:
  *
+ *   • `role`            — S-E01-1b gave it `role_school_id_fkey`, so the closure
+ *                         returns it, and ADR-046 §D5 grants it `SELECT` AND
+ *                         NOTHING ELSE. Every table in `PLAN` is driven on four
+ *                         verbs and the INSERT branch below is a HARD FAIL when
+ *                         the grant is missing — deliberately, because a table
+ *                         this suite cannot write is a table whose denials would
+ *                         be vacuous. Seeding a read-only table into `PLAN` would
+ *                         mean relaxing that branch, i.e. trading a real
+ *                         protection for a coverage number.
+ *   • `role_permission` — the same, one level deeper. It is PRIVILEGE data: a
+ *                         role that could write it could grant itself every
+ *                         permission in the schema (ADR-046 §D5 / PF-193).
+ *
+ * Neither is unproven in the programme — both are proven BY EXECUTION in the
+ * sibling `scripts/rls-isolation-check.js`, including the measured cross-tenant
+ * read (`A_SEES_B_ROLEPERM|1`) that the two-hop policy closes. What is true is
+ * that THIS suite does not prove them, and that is what a name here says.
+ * Removing a name without adding the table to `PLAN` fails, in both directions.
+ *
+
  * THE SEQUENCING HAZARD FIRED, AND THIS IS WHAT IT COST. An earlier draft of this
  * file predicted it in the future tense: "when `S-E01-2d` lands it gives
  * `outbox_event` a real `tenant_id`, the census moves 44 -> 45, and both this list
@@ -233,7 +270,7 @@ const MIN_COVERED_TABLES = 40;
  * alongside. It is not named here, because naming it here would say "not proven",
  * which is now false.
  */
-const UNCOVERED_EXPECTED = Object.freeze([]);
+const UNCOVERED_EXPECTED = Object.freeze(['role', 'role_permission']);
 
 /**
  * The append-only tables (ADR-032 §D7): `SELECT, INSERT` and nothing else.
@@ -1357,7 +1394,11 @@ function expectSqlState(probes, label, expected, description) {
 const SQLSTATE_INSUFFICIENT_PRIVILEGE = '42501';
 
 // ---------------------------------------------------------------------------
-// Fixtures — built by the OWNER, because `app_user` holds no grant on `tenant`
+// Fixtures — built by the OWNER. S-E01-1b CHANGED THE REASON, so the sentence is
+// corrected rather than kept: `app_user` now holds `SELECT` on `tenant`
+// (ADR-046 §D4) and still holds no INSERT there, and under GUC = A it could not
+// write B's rows on any table anyway. "Never the owner" binds the ADVERSARIAL
+// phase; it cannot bind the seed.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1971,25 +2012,34 @@ async function main() {
          JOIN information_schema.tables t USING (table_schema, table_name)
         WHERE c.table_schema='public' AND c.column_name='tenant_id' AND t.table_type='BASE TABLE'
           AND c.is_nullable = 'YES';
-       SELECT 'DERIVED_TABLES|' || coalesce(string_agg(DISTINCT child.relname, ','), '')
-         FROM pg_constraint k
-         JOIN pg_class child ON child.oid = k.conrelid
-         JOIN pg_class parent ON parent.oid = k.confrelid
-         JOIN pg_namespace n ON n.oid = child.relnamespace
-        WHERE k.contype = 'f' AND n.nspname = 'public' AND child.relkind = 'r'
-          AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = child.oid
-                            AND a.attname = 'tenant_id' AND a.attnum > 0 AND NOT a.attisdropped)
-          AND     EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = parent.oid
-                            AND a.attname = 'tenant_id' AND a.attnum > 0 AND NOT a.attisdropped);
+       -- S-E01-1b — the derivation is the SIBLING'S, imported rather than
+       -- re-written here. It is TRANSITIVE (a recursive closure), so a child OF a
+       -- derived table — \`role_permission\` — is returned. The one-level query
+       -- this replaced returned 6 where the sibling's constant named 7.
+       SELECT 'DERIVED_TABLES|' || coalesce(string_agg(child, ',' ORDER BY child), '')
+         FROM (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s) d;
+       -- The AUTO-DISCRIMINANT term: the parents of every \`tenant_id\` foreign
+       -- key. \`tenant\` carries no \`tenant_id\` of its own and has no FK out, so
+       -- without this term it falls in the residue AND is policied — counted on
+       -- one side and excused on the other.
+       SELECT 'AUTODISC|' || coalesce(string_agg(name, ',' ORDER BY name), '')
+         FROM (${AUTO_DISCRIMINANT_SQL}) a;
+       -- Which reference-surface tables actually EXIST here. \`_prisma_migrations\`
+       -- is created by Prisma's CLI and this scratch database applies the ledger
+       -- with psql, so it is absent and the migration's own \`to_regclass\` guard
+       -- emits no GRANT for it. Measured, never assumed — an expectation that
+       -- named a grant nobody issued would fail the matrix for the wrong reason.
+       SELECT 'REFERENCE_PRESENT|' || coalesce(string_agg(c.relname, ',' ORDER BY c.relname), '')
+         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relkind='r'
+          AND c.relname IN (${REFERENCE_SURFACE.map(lit).join(', ')});
        SELECT 'RESIDUE|' || coalesce(string_agg(c.relname, ',' ORDER BY c.relname), '')
          FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relkind='r'
           AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid
                             AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped)
-          AND NOT EXISTS (SELECT 1 FROM pg_constraint k JOIN pg_class p ON p.oid = k.confrelid
-                           WHERE k.conrelid = c.oid AND k.contype='f'
-                             AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=p.oid
-                                           AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped));
+          AND c.relname NOT IN (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s)
+          AND c.relname NOT IN (SELECT name FROM (${AUTO_DISCRIMINANT_SQL}) a);
        SELECT 'GRANTS|' || coalesce(string_agg(entry, ';' ORDER BY entry), '') FROM (
          SELECT g.table_name || '=' || string_agg(g.privilege_type, '|' ORDER BY g.privilege_type) AS entry
            FROM information_schema.role_table_grants g
@@ -2012,6 +2062,15 @@ async function main() {
     const tenantTables = names(cen.get('TENANT_TABLES'));
     const derivedTables = names(cen.get('DERIVED_TABLES'));
     const enumerated = [...tenantTables, ...derivedTables].sort();
+    // S-E01-1b — the two terms the enumeration deliberately does NOT fold in.
+    // They carry no `tenant_id` and are not FK-derived, so they are not part of
+    // the COVERED/UNCOVERED partition; they exist here because the PRIVILEGE
+    // MATRIX below is a set equality against every grant `app_user` holds, and
+    // leaving them out would make that equality fail on the three tables
+    // `S-E01-1b` grants (`tenant`, `permission`, and `_prisma_migrations` where
+    // it exists) rather than on a real widening.
+    const autoDiscriminant = names(cen.get('AUTODISC'));
+    const referencePresent = names(cen.get('REFERENCE_PRESENT'));
 
     if (enumerated.length < MIN_COVERED_TABLES) {
       fail(
@@ -2031,18 +2090,32 @@ async function main() {
     // and silent. Cheap to assert, impossible to notice otherwise.
     expectSetEqual('AC-2 every tenant_id column is NOT NULL (a nullable one is silent dark data)', names(cen.get('TENANT_NULLABLE')), []);
 
-    // The five derived tables the sibling names, agreed against the catalog.
+    // The derived tables the sibling names, agreed against the catalog through
+    // the sibling's OWN closure query — so this is an agreement between a
+    // CONSTANT and a MEASUREMENT, never between two hand-written queries.
     expectSetEqual(
-      'AC-4 the FK-derived set measured on pg_constraint is the FIVE this suite proves ' +
-        '(outbox_event is absent because it now CARRIES a tenant_id — ADR-044 — not because it is ' +
-        'unreachable; its aggregate_id still has NO foreign key at all, ADR-042 §D7)',
+      'AC-4 the FK-derived set measured on pg_constraint is exactly the set the sibling names ' +
+        '(SEVEN since S-E01-1b: role entered when role_school_id_fkey was materialised, and ' +
+        'role_permission is the TWO-LEVEL residue a one-level derivation cannot see. outbox_event is ' +
+        'absent because it now CARRIES a tenant_id — ADR-044 — not because it is unreachable; its ' +
+        'aggregate_id still has NO foreign key at all, ADR-042 §D7)',
       derivedTables,
       DERIVED_TABLES.map((d) => d.child),
     );
     expectSetEqual(
-      'AC-2 the tables with no tenant_id outside the derived set are exactly the NAMED residue',
+      'AC-2 the tables with no tenant_id, outside the derived set AND outside the auto-discriminant ' +
+        'term, are exactly the NAMED residue',
       names(cen.get('RESIDUE')).filter((name) => name !== '_prisma_migrations'),
       NON_DERIVED_EXPECTED.filter((name) => name !== '_prisma_migrations'),
+    );
+    // S-E01-1b — the third term, asserted by NAME and not by a count: a SECOND
+    // auto-discriminant table shipped without a policy must fail here rather than
+    // swap places with `tenant`.
+    expectSetEqual(
+      'AC-2 the AUTO-DISCRIMINANT set — the parents of every tenant_id foreign key — is exactly {tenant} ' +
+        '(ADR-046 §D4: its primary key IS the discriminant, so it is policied by id = <GUC>, not by a column)',
+      autoDiscriminant,
+      ['tenant'],
     );
 
     // ---- 5b. THE PRIVILEGE MATRIX — a DECISION, asserted by set equality so a
@@ -2061,20 +2134,37 @@ async function main() {
       if (table === OUTBOX_TABLE) return OUTBOX_DML;
       return FULL_DML;
     };
+    const canon = (privileges) =>
+      privileges
+        .split(',')
+        .map((p) => p.trim().toUpperCase())
+        .sort()
+        .join('|');
     const expectedMatrix = [
       ...tenantTables.map((table) => `${table}=${decidedPrivileges(table)}`),
-      ...DERIVED_TABLES.map((d) => `${d.child}=${d.privileges.split(',').map((p) => p.trim().toUpperCase()).sort().join('|')}`),
+      ...DERIVED_TABLES.map((d) => `${d.child}=${canon(d.privileges)}`),
+      // S-E01-1b / ADR-046 §D5 — THE THIRD AND FOURTH GROUPS. Before this slice
+      // the matrix was `tenantTables ∪ DERIVED_TABLES` and that WAS the whole
+      // grant set. `S-E01-1b` grants the authorization join its reference
+      // surface, so three more tables now hold a privilege. They are added as
+      // NAMED groups with their own privilege constants, never by relaxing the
+      // equality to a superset check — that relaxation is what would let
+      // `GRANT … ON ALL TABLES IN SCHEMA public` through, and it is the one
+      // property this assertion exists to hold.
+      ...autoDiscriminant.map((table) => `${table}=${canon(AUTO_DISCRIMINANT_PRIVILEGES)}`),
+      ...referencePresent.map((table) => `${table}=${canon(REFERENCE_PRIVILEGES)}`),
     ];
     expectSetEqual(
-      'AC-2 the privilege matrix equals the CLOSED set ADR-032 §D7 / ADR-042 §D5 decided ' +
+      'AC-2 the privilege matrix equals the CLOSED set ADR-032 §D7 / ADR-042 §D5 / ADR-046 §D5 decided ' +
         '(so a widened grant FAILS instead of quietly making a denial test pass)',
       [...grants].map(([table, privileges]) => `${table}=${privileges}`),
       expectedMatrix,
     );
 
-    // ---- 6. Fixtures, built by the OWNER (`app_user` holds no grant on `tenant`,
-    //         and under GUC=A it could not insert B's rows anyway: "never the
-    //         owner" binds the ADVERSARIAL phase, and it cannot bind the seed).
+    // ---- 6. Fixtures, built by the OWNER (`app_user` holds SELECT and nothing
+    //         else on `tenant` since S-E01-1b, and under GUC=A it could not insert
+    //         B's rows anyway: "never the owner" binds the ADVERSARIAL phase, and
+    //         it cannot bind the seed).
     const fixtures = psql(client.command, scratchOwner, FIXTURES_SQL);
     if (fixtures.status !== 0) {
       throw new ToolingUnavailable(`could not build the fixtures: ${fixtures.stderr.trim()}`);
@@ -2107,7 +2197,8 @@ async function main() {
 
     expectSetEqual(
       'AC-2 the COVERED / UNCOVERED partition — every enumerated table is either PROVEN below or NAMED ' +
-        'here with its reason. A 51st table lands in UNCOVERED, is absent from the named list, and FAILS',
+        'in UNCOVERED_EXPECTED with its reason. A table added by a future migration lands in UNCOVERED, is ' +
+        'absent from the named list, and FAILS',
       uncoveredNames,
       UNCOVERED_EXPECTED,
     );

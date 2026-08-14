@@ -488,6 +488,62 @@ describe('AC-10 — le nom du GUC ne peut pas dériver entre le TypeScript et le
     expect(CODE).not.toMatch(/\bOR\s+true\b/i);
   });
 
+  it('PF-192 — le cliquet DNC-10 n’est plus contournable par l’idiome du dépôt', () => {
+    // LE TROU, MESURÉ. Les trois motifs ci-dessus sont ANCRÉS : `\([^)]*\)` ne
+    // peut pas franchir une parenthèse et `\s*` ne peut pas franchir du texte.
+    // Or la forme fail-open écrite dans l'IDIOME DE CE DÉPÔT est
+    //     nullif(current_setting('…', true), '')::uuid IS NULL OR …
+    // et les 43 caractères `, '')::uuid ` qui séparent l'appel du `IS` la font
+    // échapper au PREMIER motif dans tous les cas. Elle échappe aux TROIS dès
+    // que le prédicat n'enchaîne pas sur le mot `tenant_id` — c'est-à-dire
+    // précisément sur une table DÉRIVÉE, où l'on enchaîne sur `EXISTS`, et il y
+    // en a six. Le trou était tolérable tant qu'AUCUN `IS NULL OR` légitime
+    // n'existait dans le corpus ; `S-E01-1b` en introduit le PREMIER
+    // (`role.school_id IS NULL OR …`), donc il se referme ici.
+    //
+    // FENÊTRE et non ancrage : le motif accepte jusqu'à 60 caractères entre
+    // l'appel et le `IS NULL OR` — de quoi couvrir l'enveloppe `nullif(…)::uuid`
+    // (43 caractères mesurés) sans atteindre le prédicat légitime, où
+    // `current_setting` vient APRÈS le `IS NULL OR`, jamais avant.
+    const evadable = /current_setting[\s\S]{0,60}?IS\s+NULL\s+OR/i;
+    expect(CODE).not.toMatch(evadable);
+
+    // LES DEUX DIRECTIONS, sans quoi ce test serait vert sur un motif qui ne
+    // reconnaît rien. La forme INTERDITE est reconnue…
+    //
+    // ⚠ LA CHAÎNE DE DÉMONSTRATION ENCHAÎNE SUR `EXISTS`, PAS SUR `tenant_id`,
+    // et ce n'est pas un détail de rédaction — c'est la correction d'un test qui
+    // était vert en prouvant le CONTRAIRE de ce qu'il annonçait. La variante
+    // `… IS NULL OR tenant_id = x` est déjà attrapée par le DEUXIÈME cliquet
+    // (`/IS\s+NULL\s+OR\s+tenant_id/i`) : bâtie sur elle, la démonstration
+    // « l'ancien jeu ne la voyait pas » est fausse, puisque l'ancien jeu la
+    // refusait bel et bien. La forme qui échappe RÉELLEMENT aux trois est celle
+    // d'une table DÉRIVÉE, dont le prédicat enchaîne sur `EXISTS` — et il y en a
+    // désormais SIX (les 5 d'`ADR-042` + `role`), donc c'est la forme la PLUS
+    // probable, pas une curiosité. Mesuré sur cette chaîne : R1 non (la
+    // parenthèse de `nullif(` est infranchissable), R2 non (aucun `tenant_id`
+    // après le `OR`), R3 non (aucun `OR true`).
+    const evasion =
+      "USING (nullif(current_setting('app.current_tenant_id', true), '')::uuid IS NULL " +
+      'OR EXISTS (SELECT 1 FROM public.school s WHERE s.id = role.school_id))';
+    expect(evasion).toMatch(evadable);
+    // …et AUCUN des trois motifs ancrés ne la voyait : c'est la démonstration que
+    // cette ligne AJOUTE quelque chose au lieu de répéter les précédentes. Les
+    // TROIS sont éprouvés, pas seulement le premier — n'en éprouver qu'un
+    // laisserait le trou ouvert sur les deux autres sans que rien ne le signale.
+    expect(evasion).not.toMatch(/current_setting\s*\([^)]*\)\s*IS\s+NULL\s+OR/i);
+    expect(evasion).not.toMatch(/IS\s+NULL\s+OR\s+tenant_id/i);
+    expect(evasion).not.toMatch(/\bOR\s+true\b/i);
+    // …et la forme LÉGITIME d'`S-E01-1b` n'est PAS reconnue : ce qui y est nul
+    // est une DONNÉE (`school_id` : « cette ligne n'appartient à aucune école »),
+    // pas le CONTEXTE, et `current_setting` y est à DROITE du `OR`. Un cliquet
+    // qui rougirait dessus finirait supprimé plutôt que corrigé.
+    expect(
+      "(role.school_id IS NULL OR EXISTS (SELECT 1 FROM public.school s WHERE s.id = role.school_id " +
+        "AND s.tenant_id = nullif(current_setting('app.current_tenant_id', true), '')::uuid))",
+    ).not.toMatch(evadable);
+  });
+
   it('ne pose PAS `FORCE ROW LEVEL SECURITY` — décision consignée, pas oubli (ADR-032 §D5)', () => {
     // Aujourd'hui l'app se connecte comme le PROPRIÉTAIRE : `FORCE` rendrait zéro
     // ligne à toutes ses requêtes. Le jour où quelqu'un l'ajoutera, ce sera avec
