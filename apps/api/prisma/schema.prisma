@@ -266,6 +266,9 @@ model Tenant {
 
   schools      School[]
   userProfiles UserProfile[]
+  /// `S-E01-2d` / `ADR-044` : la FK de `outbox_event` est matérialisée pour que
+  /// la fermeture d'un tenant emporte ses événements non délivrés.
+  outboxEvents OutboxEvent[]
 
   @@map("tenant")
 }
@@ -1305,8 +1308,21 @@ enum OutboxStatus {
   failed
 }
 
+/// Journal d'événements de domaine (pattern outbox).
+///
+/// `tenantId` est **dénormalisé DÉLIBÉRÉMENT** (`ADR-044`, `PF-185`) : le couple
+/// `aggregateType` + `aggregateId` est **polymorphe et non contraint**, donc la
+/// table ne détient aucun chemin de clé étrangère par lequel dériver son tenant.
+/// C'était la seule table du schéma qui n'était ni tenant-scopée ni dérivable —
+/// `ADR-042 §D7` l'avait donc différée par nom, fail-closed. Cette colonne est ce
+/// qui la fait rejoindre les tables tenant-scopées ordinaires.
+///
+/// La relation vers `Tenant` porte `onDelete: Cascade`, comme `School` et
+/// `UserProfile` — les deux seules autres qui matérialisent la FK vers `tenant`.
+/// Un événement non délivré n'a aucun sens sans le tenant qui l'a produit.
 model OutboxEvent {
   id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
   aggregateType String       @map("aggregate_type")
   aggregateId   String       @map("aggregate_id") @db.Uuid
   type          String
@@ -1317,6 +1333,13 @@ model OutboxEvent {
   attempts      Int          @default(0)
   lastError     String?      @map("last_error")
 
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// `tenantId` EN TÊTE : le prédicat d'isolation filtre sur cette colonne, et un
+  /// prédicat sans index de tête est un balayage séquentiel par lecture (R-11).
+  @@index([tenantId, status, createdAt])
+  /// Conservé : le relais draine par statut. Le retirer serait un changement de
+  /// comportement déguisé en nettoyage.
   @@index([status, createdAt])
   @@map("outbox_event")
 }
