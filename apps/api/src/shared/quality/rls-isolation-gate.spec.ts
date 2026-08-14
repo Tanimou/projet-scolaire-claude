@@ -51,9 +51,26 @@ const CHECKER_PATH = join(REPO_ROOT, 'scripts', 'rls-isolation-check.js');
 const DERIVED_MIGRATION_DIR_NAME = '20260813180000_tenant_rls_derived_policies';
 const DERIVED_MIGRATION_PATH = join(MIGRATIONS_DIR, DERIVED_MIGRATION_DIR_NAME, 'migration.sql');
 
+/**
+ * S-E01-2d — la TROISIÈME migration, celle qui donne à `outbox_event` un
+ * `tenant_id` DÉNORMALISÉ et le fait rejoindre le régime des tables
+ * tenant-scopées (`ADR-044`, ferme `PF-185`).
+ *
+ * Elle a son propre chemin, comme les deux autres : une migration appliquée ne
+ * se réécrit pas. Le cliquet des 44 noms reste épinglé sur `S-E01-2b`, et le
+ * 45ᵉ nom est lu ICI — c'est ce qui rend l'accord d'AC-13 non vide sans toucher
+ * à un fichier déjà joué.
+ */
+const OUTBOX_MIGRATION_DIR_NAME = '20260814120000_outbox_event_tenant_scope';
+const OUTBOX_MIGRATION_PATH = join(MIGRATIONS_DIR, OUTBOX_MIGRATION_DIR_NAME, 'migration.sql');
+
+/** La table que `S-E01-2d` fait passer du résidu aux tables tenant-scopées. */
+const OUTBOX_TABLE = 'outbox_event';
+
 /** Chemins NOMMÉS : lecture directe, échec au chargement s'ils manquent (TOOL-17b). */
 const MIGRATION = readFileSync(MIGRATION_PATH, 'utf8');
 const DERIVED_MIGRATION = readFileSync(DERIVED_MIGRATION_PATH, 'utf8');
+const OUTBOX_MIGRATION = readFileSync(OUTBOX_MIGRATION_PATH, 'utf8');
 const SCHEMA = readFileSync(SCHEMA_PATH, 'utf8');
 const CHECKER = readFileSync(CHECKER_PATH, 'utf8');
 
@@ -72,6 +89,7 @@ function executableJs(source: string): string {
 const MIGRATION_CODE = executableSql(MIGRATION);
 const DERIVED_MIGRATION_CODE = executableSql(DERIVED_MIGRATION);
 const CHECKER_CODE = executableJs(CHECKER);
+const OUTBOX_MIGRATION_CODE = executableSql(OUTBOX_MIGRATION);
 
 /**
  * Le tableau littéral 5 × 4 de la migration dérivée : enfant, colonne FK,
@@ -150,12 +168,16 @@ const SCHEMA_DERIVED_TABLES = schemaDerivedTables();
  */
 const NON_DERIVED_EXPECTED = [
   '_prisma_migrations', // le ledger de migrations — pas de la donnée de tenant
-  'outbox_event', // PF-185 — aucune FK, aucun discriminant : non dérivable
   'permission', // donnée de référence par conception (ADR-015)
   'role', // idem
   'role_permission', // idem
   'tenant', // AUTO-DISCRIMINANTE : sa clé primaire EST le discriminant
 ];
+// `outbox_event` a QUITTÉ ce résidu en `S-E01-2d`. Pas parce qu'un nom a été
+// effacé : parce qu'elle porte désormais `tenant_id`, donc la dérivation ne la
+// rend plus. Le vérificateur mesure la même chose sur le catalogue, dans les
+// DEUX sens ; retirer le nom sans livrer la colonne échouerait là-bas avec le
+// nom imprimé. Elle n'est PAS devenue dérivable — elle est devenue scopée.
 
 /**
  * Les noms de tables du tableau littéral de la migration.
@@ -199,6 +221,42 @@ const MIGRATION_TABLES = migrationTableNames();
 /** Le sous-ensemble qui ne reçoit que `SELECT, INSERT` (ADR-032 §D7). */
 const APPEND_ONLY = sqlArrayNames('append_only');
 const { withTenant: SCHEMA_TENANT_TABLES, withoutTenant: SCHEMA_GLOBAL_TABLES } = schemaTenantTables();
+
+/**
+ * S-E01-2d — la table que la TROISIÈME migration place sous policy, lue depuis
+ * son SQL EXÉCUTABLE (`target CONSTANT text := '…'`), jamais depuis son en-tête.
+ *
+ * Un tableau, pas une chaîne : le jour où cette migration en couvrira deux,
+ * l'union ci-dessous continue de fonctionner sans réécriture.
+ */
+function outboxMigrationTableNames(): string[] {
+  const block = /target\s+CONSTANT\s+text\s*:=\s*'([a-z0-9_]+)'\s*;/.exec(OUTBOX_MIGRATION_CODE);
+  return block ? [block[1] as string] : [];
+}
+
+const OUTBOX_MIGRATION_TABLES = outboxMigrationTableNames();
+
+/** Le jeu FERMÉ de chaînes de privilèges déclaré par la migration `outbox`. */
+function outboxAllowedPrivileges(): string[] {
+  const block = /allowed_privileges\s+CONSTANT\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]\s*;/.exec(
+    OUTBOX_MIGRATION_CODE,
+  );
+  if (!block) return [];
+  return [...(block[1] ?? '').matchAll(/'([^']*)'/g)].map((m) => m[1] as string);
+}
+
+const OUTBOX_ALLOWED_PRIVILEGES = outboxAllowedPrivileges();
+
+/**
+ * L'ensemble des tables tenant-SCOPÉES réellement placées sous policy par le
+ * ledger : les 44 de `S-E01-2b` PLUS celle de `S-E01-2d`.
+ *
+ * C'est ce total — jamais le seul tableau des 44 — qui doit égaler ce que
+ * `schema.prisma` déclare. Épingler l'accord sur un seul fichier ferait rougir
+ * la story suivante pour avoir fait exactement ce qu'on lui demandait, et la
+ * réponse tentante serait alors de relâcher l'assertion.
+ */
+const POLICIED_TENANT_TABLES = [...MIGRATION_TABLES, ...OUTBOX_MIGRATION_TABLES].sort();
 
 describe('AC-1 — la migration existe, est RELUE À LA MAIN, et sa répétition seule est factorisée', () => {
   it('elle est au chemin attendu, dans le répertoire de migrations du ledger', () => {
@@ -354,40 +412,58 @@ describe('AC-5 — les GRANTs portent sur les 44, et survivent à un cluster san
   });
 });
 
-describe('AC-13 — les 44 noms ne peuvent pas dériver de `schema.prisma`', () => {
+describe('AC-13 — les noms tenant-scopés ne peuvent pas dériver de `schema.prisma`', () => {
   it('les deux ensembles sont NON VIDES avant toute comparaison', () => {
     // Deux listes vides sont « égales ». Le plancher vient en premier.
+    //
+    // 44 + 1 : le tableau de `S-E01-2b` reste figé à 44 (une migration appliquée
+    // ne se réécrit pas) et `S-E01-2d` en ajoute UN — `outbox_event` — dans SA
+    // migration. C'est l'UNION qui doit égaler `schema.prisma`, jamais le seul
+    // tableau des 44 : le comparer seul rendrait la story `S-E01-2d` rouge alors
+    // qu'elle est exactement ce que l'assertion demandait.
     expect(MIGRATION_TABLES.length).toBe(44);
-    expect(SCHEMA_TENANT_TABLES.length).toBe(44);
     expect(new Set(MIGRATION_TABLES).size).toBe(44);
+    expect(OUTBOX_MIGRATION_TABLES).toEqual([OUTBOX_TABLE]);
+    expect(SCHEMA_TENANT_TABLES.length).toBe(45);
+    expect(new Set(POLICIED_TENANT_TABLES).size).toBe(45);
   });
 
   it('ÉGALITÉ D’ENSEMBLES dans les DEUX sens', () => {
-    // Un seul sens laisserait passer la moitié dangereuse : un 45e modèle
+    // Un seul sens laisserait passer la moitié dangereuse : un 46e modèle
     // tenant-scopé livré sans policy. Le garde de dérive de schéma ne peut PAS le
     // voir — `migrate diff` ignore les policies — donc c'est ici ou nulle part.
-    const inSchemaNotInMigration = SCHEMA_TENANT_TABLES.filter((t) => !MIGRATION_TABLES.includes(t));
-    const inMigrationNotInSchema = MIGRATION_TABLES.filter((t) => !SCHEMA_TENANT_TABLES.includes(t));
+    const inSchemaNotInMigration = SCHEMA_TENANT_TABLES.filter((t) => !POLICIED_TENANT_TABLES.includes(t));
+    const inMigrationNotInSchema = POLICIED_TENANT_TABLES.filter((t) => !SCHEMA_TENANT_TABLES.includes(t));
     expect(inSchemaNotInMigration).toEqual([]);
     expect(inMigrationNotInSchema).toEqual([]);
   });
 
   it('les tables SANS `tenant_id` sont nommées et classées dans l’en-tête', () => {
     // Écrire « RLS est activé » sans nommer celles-ci serait la surclamation PF-02
-    // répétée un cran plus bas. Les six DÉRIVÉES sont le résidu de cette story.
+    // répétée un cran plus bas. Les CINQ DÉRIVÉES sont le résidu de cette story.
+    //
+    // `outbox_event` a quitté cette liste en `S-E01-2d` : elle porte désormais
+    // `tenant_id`, donc `SCHEMA_GLOBAL_TABLES` ne la contient plus et la première
+    // assertion de la boucle échouerait — correctement — si on l'y laissait.
     const derived = [
       'grade_revision',
       'announcement_receipt',
       'branding',
       'import_row',
       'user_role',
-      'outbox_event',
     ];
     for (const table of derived) {
       expect(SCHEMA_GLOBAL_TABLES.concat('_prisma_migrations')).toContain(table);
       expect(MIGRATION).toContain(table);
       expect(MIGRATION_TABLES).not.toContain(table);
     }
+    // …et la sixième d'hier est passée de l'autre côté, ce qui s'assertit dans
+    // les deux sens pour qu'un renommage silencieux ne puisse pas la faire
+    // disparaître des deux listes à la fois.
+    expect(SCHEMA_GLOBAL_TABLES).not.toContain(OUTBOX_TABLE);
+    expect(SCHEMA_TENANT_TABLES).toContain(OUTBOX_TABLE);
+    expect(MIGRATION_TABLES).not.toContain(OUTBOX_TABLE);
+    expect(POLICIED_TENANT_TABLES).toContain(OUTBOX_TABLE);
     // `tenant` est exclue DÉLIBÉRÉMENT : la couture identité doit la lire PAR SLUG
     // avant qu'un tenant soit résolu.
     expect(MIGRATION_TABLES).not.toContain('tenant');
@@ -616,28 +692,208 @@ describe('S-E01-2c AC-12 — le tuple ne peut pas dériver de `schema.prisma`', 
     expect(children.filter((t) => !SCHEMA_DERIVED_TABLES.includes(t))).toEqual([]);
   });
 
-  it('le RÉSIDU est NOMMÉ, et aucune de ses six tables n’est sous policy', () => {
+  it('le RÉSIDU est NOMMÉ, et aucune de ses cinq tables n’est sous policy', () => {
     // AC-5b : la dérivation est d'UN SEUL niveau. Une future table sans
     // `tenant_id` dont la FK pointerait vers une table DÉRIVÉE tomberait hors
     // des deux comptes. Nommer le résidu transforme ce trou en échec.
     const children = DERIVED_TUPLE.map((r) => r.child);
     for (const table of NON_DERIVED_EXPECTED) {
       expect(children).not.toContain(table);
-      expect(MIGRATION_TABLES).not.toContain(table);
+      expect(POLICIED_TENANT_TABLES).not.toContain(table);
     }
-    // `outbox_event` et `tenant` sont NOMMÉES avec leur raison dans la migration.
+    // Le RÉSIDU N'EST PAS UN ENSEMBLE D'EXEMPTION : `outbox_event` en est sortie
+    // en livrant une colonne, pas en perdant une ligne de liste. La direction
+    // interdite s'assertit donc explicitement — sortir du résidu SANS être placée
+    // sous policy serait exactement la table invisible que ce garde existe pour
+    // attraper.
+    expect(NON_DERIVED_EXPECTED).not.toContain(OUTBOX_TABLE);
+    expect(POLICIED_TENANT_TABLES).toContain(OUTBOX_TABLE);
+  });
+
+  it('`S-E01-2c` NOMMAIT `outbox_event` avec sa raison — état daté, conservé, pas relu comme courant', () => {
+    // Ces trois assertions portent sur un fichier DÉJÀ JOUÉ : elles restent
+    // vraies et ne doivent pas être supprimées (une migration appliquée ne se
+    // réécrit pas). Ce qu'elles ne disent plus, c'est l'état COURANT : le
+    // déféré de `ADR-042 §D7` a été levé par `S-E01-2d` / `ADR-044`, et c'est
+    // la migration suivante qui porte l'état vrai.
     expect(DERIVED_MIGRATION).toContain('outbox_event');
     expect(DERIVED_MIGRATION).toContain('PF-185');
     expect(DERIVED_MIGRATION).toContain('ZÉRO clé étrangère');
+    // …et le fait que ce soit un état DATÉ est lui-même vérifiable : la
+    // troisième migration existe et lève le déféré par son nom.
+    expect(OUTBOX_MIGRATION).toContain('PF-185');
+    expect(OUTBOX_MIGRATION).toContain('ADR-042 §D7');
   });
 
-  it('`schema.prisma` n’est PAS touché par cette story, et la migration le dit', () => {
-    // Y toucher armerait le piège `prisma generate` (typecheck ROUGE tant que le
-    // client n'est pas régénéré) pour un fichier que le diff de dérive ne peut
+  it('`schema.prisma` n’est PAS touché par la story `S-E01-2c`, et sa migration le dit', () => {
+    // Y toucher AURAIT armé le piège `prisma generate` (typecheck ROUGE tant que
+    // le client n'est pas régénéré) pour un fichier que le diff de dérive ne peut
     // de toute façon pas voir. Les policies et les GRANTs ne sont pas
-    // modélisables en Prisma.
+    // modélisables en Prisma — c'était vrai de `S-E01-2c`, et ça l'est toujours.
+    //
+    // `S-E01-2d`, elle, TOUCHE `schema.prisma` : une COLONNE et une CLÉ
+    // ÉTRANGÈRE, que Prisma modélise et que le garde de dérive VOIT. Le piège est
+    // donc bien armé pour cette story-là, et refermé dans le même diff par
+    // `prisma generate`. La distinction est la raison d'être des deux migrations.
     expect(DERIVED_MIGRATION).toContain("`schema.prisma` N'EST PAS TOUCHÉ par cette story");
+    expect(OUTBOX_MIGRATION).toContain('`schema.prisma` EST touché par cette story');
+    // Ce qui reste interdit dans les DEUX cas : décrire une policy dans le
+    // schéma. Prisma ne peut pas la porter, donc l'y écrire serait une promesse
+    // que rien n'applique.
     expect(SCHEMA).not.toMatch(/tenant_isolation|ROW LEVEL SECURITY/i);
+  });
+});
+
+describe('S-E01-2d — la migration `outbox_event` : une COLONNE, pas un chemin FK inventé', () => {
+  it('elle est à son chemin nommé et ne réécrit AUCUNE de ses deux sœurs', () => {
+    expect(existsSync(OUTBOX_MIGRATION_PATH)).toBe(true);
+    expect(readdirSync(MIGRATIONS_DIR)).toContain(OUTBOX_MIGRATION_DIR_NAME);
+    // Les deux migrations déjà jouées restent EN PLACE et intactes : ni le ledger
+    // ni le cliquet des 44 noms ne supporteraient qu'on les réécrive.
+    expect(readdirSync(MIGRATIONS_DIR)).toContain(MIGRATION_DIR_NAME);
+    expect(readdirSync(MIGRATIONS_DIR)).toContain(DERIVED_MIGRATION_DIR_NAME);
+    expect(OUTBOX_MIGRATION_PATH).not.toEqual(MIGRATION_PATH);
+    expect(OUTBOX_MIGRATION_PATH).not.toEqual(DERIVED_MIGRATION_PATH);
+    // Et elle est POSTÉRIEURE : un horodatage antérieur la ferait jouer avant la
+    // migration qui crée la table, sur toute base neuve.
+    expect(OUTBOX_MIGRATION_DIR_NAME > DERIVED_MIGRATION_DIR_NAME).toBe(true);
+  });
+
+  it('elle n’a été produite ni par `db push` ni par `migrate dev`, et le dit', () => {
+    expect(OUTBOX_MIGRATION_CODE).not.toContain('db push');
+    expect(OUTBOX_MIGRATION_CODE).not.toContain('migrate dev');
+    expect(OUTBOX_MIGRATION).toContain('RELUE À LA MAIN');
+  });
+
+  it('elle n’INVENTE aucun chemin FK — c’est une DÉNORMALISATION, et elle le dit', () => {
+    // `ADR-042 §D7` avait raison de refuser d'écrire un `EXISTS` sur un parent
+    // qui n'existe pas. Cette story ne contourne pas ce constat, elle donne un
+    // discriminant. Le prédicat doit donc être celui des 44 (comparaison
+    // directe), JAMAIS un `EXISTS` : un `EXISTS` ici serait précisément la
+    // fiction que l'ADR précédent refusait.
+    expect(OUTBOX_MIGRATION_CODE).not.toMatch(/EXISTS\s*\(\s*SELECT 1\s+FROM\s+public\.%I\s+p/i);
+    expect(OUTBOX_MIGRATION).toContain('POLYMORPHE');
+    expect(OUTBOX_MIGRATION).toContain('ADR-044');
+  });
+
+  it('LE BACKFILL refuse de deviner ET refuse de supprimer — il ÉCHOUE BRUYAMMENT', () => {
+    // Les deux réponses complaisantes sont les deux façons de livrer du vert :
+    // supprimer les lignes (perte silencieuse) ou les affecter au premier tenant
+    // venu (fiction avec une policy autour).
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/RAISE\s+EXCEPTION/i);
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/tenant_count\s*=\s*1/);
+    // AUCUN DELETE dans le SQL exécutable : c'est la ligne qu'une « correction »
+    // future ajouterait pour faire passer le NOT NULL.
+    expect(OUTBOX_MIGRATION_CODE).not.toMatch(/DELETE\s+FROM/i);
+    expect(OUTBOX_MIGRATION_CODE).not.toMatch(/TRUNCATE/i);
+    // …et la colonne devient réellement obligatoire, sinon tout ce qui précède
+    // serait une cérémonie autour d'une colonne restée nullable.
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/ALTER\s+COLUMN\s+tenant_id\s+SET\s+NOT\s+NULL/i);
+  });
+
+  it('UNE seule migration, et la raison est MESURÉE — pas une entorse à expand/contract', () => {
+    // `PF-185` écrivait « NOT NULL dans une seconde migration ». Ce découpage
+    // protège des ÉCRIVAINS VIVANTS ; il y en a zéro, et scinder laisserait une
+    // colonne de sécurité NULLABLE en production pendant tout un déploiement.
+    expect(OUTBOX_MIGRATION).toContain('ZÉRO');
+    expect(OUTBOX_MIGRATION).toContain('ADR-044 §D2');
+  });
+
+  it('la FK porte le NOM et la FORME que Prisma génère — sinon le garde de dérive rougit', () => {
+    expect(OUTBOX_MIGRATION_CODE).toContain('outbox_event_tenant_id_fkey');
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/ON\s+DELETE\s+CASCADE\s+ON\s+UPDATE\s+CASCADE/i);
+    expect(OUTBOX_MIGRATION_CODE).toContain('outbox_event_tenant_id_status_created_at_idx');
+    // Le schéma déclare la MÊME chose : c'est la moitié que `migrate diff` VOIT,
+    // donc les deux côtés doivent dire la même chose ou la dérive est réelle.
+    expect(SCHEMA).toMatch(/tenant\s+Tenant\s+@relation\(fields:\s*\[tenantId\][^)]*onDelete:\s*Cascade/);
+    expect(SCHEMA).toContain('@@index([tenantId, status, createdAt])');
+    // L'index par statut est CONSERVÉ : le retirer serait un changement de
+    // comportement du relais déguisé en nettoyage.
+    expect(SCHEMA).toContain('@@index([status, createdAt])');
+  });
+
+  it('R-11 est VÉRIFIÉ avant d’activer la policy, pas supposé', () => {
+    // Différence avec les 44 et les 5 : ici la colonne VIENT d'être créée, donc
+    // aucun index ne pouvait la mener. La migration en crée un ET refuse de
+    // poser la policy s'il n'est pas là.
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS/i);
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/indkey\[0\]\s*=\s*tenant_attnum/);
+    expect(OUTBOX_MIGRATION_CODE).toContain('R-11');
+  });
+
+  it('le prédicat est celui des 44, MOT POUR MOT, avec ses trois pièges refermés', () => {
+    // (1) `nullif(…, '')` : après un COMMIT le GUC est '' et non NULL, donc un
+    //     cast nu lève 22P02 à la DEUXIÈME requête de chaque connexion du pool.
+    expect(OUTBOX_MIGRATION_CODE).toContain(
+      "nullif(current_setting('app.current_tenant_id', true), '')::uuid = tenant_id",
+    );
+    expect(OUTBOX_MIGRATION_CODE).not.toMatch(/current_setting\('app\.current_tenant_id'\)\s*::uuid/);
+    // (2) `USING` et `WITH CHECK` déclarés tous les deux : un `with_check` NULL
+    //     retombe sur `USING`, ce qui a l'air correct et casse plus tard.
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/USING\s*\(/);
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/WITH\s+CHECK\s*\(/);
+    // (3) `TO PUBLIC` : une policy nommant un rôle exempte en silence tous les
+    //     AUTRES rôles non propriétaires.
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/TO\s+PUBLIC/);
+    // Le GUC vient de la MÊME source que le service : deux littéraux divergents
+    // seraient une isolation qui ne s'applique à rien.
+    expect(OUTBOX_MIGRATION_CODE).toContain(TENANT_GUC);
+    // Re-jouable : PG 15 n'a pas d'`IF NOT EXISTS` sur `CREATE POLICY`.
+    const dropAt = OUTBOX_MIGRATION_CODE.indexOf('DROP POLICY IF EXISTS tenant_isolation');
+    const createAt = OUTBOX_MIGRATION_CODE.indexOf('CREATE POLICY tenant_isolation');
+    expect(dropAt).toBeGreaterThan(-1);
+    expect(createAt).toBeGreaterThan(dropAt);
+  });
+
+  it('pas de `FORCE`, et le GRANT est gardé sur `pg_roles`', () => {
+    expect(OUTBOX_MIGRATION_CODE).not.toMatch(/FORCE\s+ROW\s+LEVEL\s+SECURITY/i);
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/pg_roles\s+WHERE\s+rolname\s*=\s*'app_user'/);
+    expect(OUTBOX_MIGRATION_CODE).not.toMatch(/ON\s+ALL\s+TABLES\s+IN\s+SCHEMA/i);
+    // `GRANT USAGE ON SCHEMA public` a déjà été émis nominativement par la
+    // migration des 44 : le ré-émettre serait une seconde source de vérité.
+    expect(OUTBOX_MIGRATION_CODE).not.toContain('GRANT USAGE ON SCHEMA public');
+  });
+
+  it('le GRANT est `SELECT, INSERT, UPDATE` — `DELETE` est RETENU, dans un jeu FERMÉ', () => {
+    expect(OUTBOX_MIGRATION_CODE).toContain("privileges CONSTANT text := 'SELECT, INSERT, UPDATE'");
+    // Jeu FERMÉ, vérifié AVANT tout DDL : une chaîne inconnue doit faire échouer
+    // la migration entière, pas sa moitié.
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/allowed_privileges\s+CONSTANT\s+text\[\]/);
+    for (const privileges of OUTBOX_ALLOWED_PRIVILEGES) expect(privileges).not.toContain('DELETE');
+    expect(OUTBOX_ALLOWED_PRIVILEGES).toContain('SELECT, INSERT, UPDATE');
+    // La raison, écrite : un `DELETE` ici laisserait le rôle applicatif effacer
+    // des événements NON DÉLIVRÉS — la perte exacte que le pattern outbox existe
+    // pour empêcher. Et la mesure honnête est écrite aussi : ZÉRO site d'appel
+    // aujourd'hui, donc c'est la FORME du pattern qui tranche, pas un grep.
+    expect(OUTBOX_MIGRATION).toContain('RETENU');
+    expect(OUTBOX_MIGRATION).toContain("ZÉRO site d'appel");
+    expect(OUTBOX_MIGRATION).toContain('ADR-044 §D3');
+  });
+
+  it('le rollback n’est PAS un copier-coller de « expand pur » — il retire ce qu’il a créé', () => {
+    // C'est la première des trois qui n'est pas un expand pur : une colonne, une
+    // contrainte et un index ont été créés, donc DROP POLICY + DISABLE + REVOKE
+    // ne suffit plus. Écrire « expand pur » ici par analogie serait faux.
+    expect(OUTBOX_MIGRATION).toContain("N'EST PAS UN EXPAND PUR");
+    expect(OUTBOX_MIGRATION).toContain('DROP POLICY IF EXISTS tenant_isolation ON public.outbox_event');
+    expect(OUTBOX_MIGRATION).toContain('DISABLE ROW LEVEL SECURITY');
+    expect(OUTBOX_MIGRATION).toContain('DROP CONSTRAINT IF EXISTS outbox_event_tenant_id_fkey');
+    expect(OUTBOX_MIGRATION).toContain('DROP COLUMN IF EXISTS tenant_id');
+    // …et il DIT qu'il cesse d'être neutre dès que la table n'est plus vide :
+    // l'attribution n'est pas re-dérivable, donc rejouer ce rollback plus tard
+    // détruirait de l'information.
+    expect(OUTBOX_MIGRATION).toContain('DESTRUCTIF');
+  });
+
+  it('l’attente sur le verrou est BORNÉE — `ADD COLUMN` prend un ACCESS EXCLUSIVE', () => {
+    expect(OUTBOX_MIGRATION_CODE).toMatch(/SET\s+lock_timeout\s*=\s*'5s'/);
+  });
+
+  it('elle ne découvre PAS ses tables depuis `information_schema`', () => {
+    // Une migration dont l'effet dépend de la base où elle atterrit est
+    // irrelisable, et non déterministe sur les bases scratch des gardes.
+    expect(OUTBOX_MIGRATION_CODE).not.toMatch(/from\s+information_schema/i);
+    expect(OUTBOX_MIGRATION_CODE).toContain("target CONSTANT text := 'outbox_event'");
   });
 });
 
@@ -778,17 +1034,48 @@ describe('Le vérificateur exécuté — il ÉCHOUE, il ne saute jamais, et il p
     for (const table of NON_DERIVED_EXPECTED) expect(CHECKER_CODE).toContain(`'${table}'`);
   });
 
-  it('il prouve `outbox_event` FAIL-CLOSED par EXÉCUTION, en nommant PF-185', () => {
-    // Sans cette assertion, la prochaine erreur de permission sur `outbox_event`
-    // sera « corrigée » par un GRANT — la seule branche que PF-183 exclut.
-    expect(CHECKER_CODE).toContain('OUTBOX_SQL');
+  it('il prouve `outbox_event` ISOLÉE par EXÉCUTION — l’assertion de `S-E01-2c` est INVERSÉE, pas supprimée', () => {
+    // `S-E01-2c` prouvait l'inverse : `permission denied` était le résultat
+    // ATTENDU, dans une invocation psql SÉPARÉE, parce que la garde générale
+    // traite cette chaîne comme un échec bruyant partout ailleurs. `S-E01-2d`
+    // donne à la table une colonne, une policy et un GRANT, donc la preuve
+    // revient DANS la preuve principale — ce qui remet la garde en vigueur sur
+    // elle. Supprimer ces assertions au lieu de les inverser aurait laissé la
+    // seule table du schéma dont les erreurs de permission sont tolérées.
     expect(CHECKER_CODE).toContain('PF-185');
-    expect(CHECKER_CODE).toContain('OUTBOX_SELECT_ACCEPTED');
-    expect(CHECKER_CODE).toContain('is FAIL-CLOSED by execution');
-    // Il tourne dans SA PROPRE invocation psql : la garde générale qui traite
-    // « permission denied » comme un échec bruyant doit garder son sens partout
-    // ailleurs.
-    expect(CHECKER_CODE).toMatch(/const outboxRun = psql\([^)]*OUTBOX_SQL/);
+    expect(CHECKER_CODE).not.toContain('OUTBOX_SQL');
+    expect(CHECKER_CODE).not.toMatch(/const outboxRun = psql\(/);
+
+    // Le contrôle POSITIF d'abord : avant cette story `app_user` n'avait AUCUN
+    // privilège ici, donc « la ligne du tenant B n'est pas visible » aurait été
+    // vert sur une table que personne ne pouvait lire.
+    expect(CHECKER_CODE).toContain('CTX_A_OUTBOX');
+    expect(CHECKER_CODE).toContain('CTX_A_FOREIGN_OUTBOX');
+    expect(CHECKER_CODE).toContain('CTX_A_TOTAL_OUTBOX');
+    expect(CHECKER_CODE).toContain('CTX_B_OUTBOX');
+    // Le chemin d'ÉCRITURE : un outbox non filtré, c'est chaque agrégat de chaque
+    // tenant.
+    expect(CHECKER_CODE).toContain('OUTBOX_OWN_INSERT');
+    expect(CHECKER_CODE).toContain('OUTBOX_FOREIGN_INSERT_ACCEPTED');
+    expect(CHECKER_CODE).toContain('OUTBOX_FOREIGN_UPDATE');
+    // …et la moitié que la connexion tenant-scopée ne peut PAS observer sur
+    // elle-même : une ligne invisible et une ligne qu'on vient de modifier se
+    // ressemblent depuis ce côté-là.
+    expect(CHECKER_CODE).toContain('OWNER_FOREIGN_OUTBOX_UNTOUCHED');
+    expect(CHECKER_CODE).toContain('OWNER_OUTBOX_FOREIGN_INSERT');
+    // Le catalogue : la colonne AVANT la policy (une policy sur une table sans
+    // colonne ne compilerait pas, et un « policy = 1 » lu seul ne dit pas sur
+    // QUELLE colonne elle filtre), la FK en CASCADE, l'index de tête, et le
+    // GRANT exact — `DELETE` compté à part pour qu'un élargissement échoue avec
+    // sa propre assertion nommée.
+    expect(CHECKER_CODE).toContain('OUTBOX_TENANT_COL');
+    expect(CHECKER_CODE).toContain('OUTBOX_FK_CASCADE');
+    expect(CHECKER_CODE).toContain('OUTBOX_TENANT_INDEX');
+    expect(CHECKER_CODE).toContain('OUTBOX_POLICIES');
+    expect(CHECKER_CODE).toContain('OUTBOX_RLS');
+    expect(CHECKER_CODE).toContain('OUTBOX_GRANTS');
+    expect(CHECKER_CODE).toContain('OUTBOX_DELETE');
+    expect(CHECKER_CODE).toContain("OUTBOX_PRIVILEGES = 'SELECT, INSERT, UPDATE'");
   });
 
   it('il exécute la cascade d’AC-10 au lieu de la croire', () => {
@@ -901,11 +1188,28 @@ describe('Règle ADR — une citation qui ne résout pas est pire que pas de cit
     // Un contrôle négatif ne doit pas être une réservation de numéro.
     expect(ADR_NUMBERS.has('000')).toBe(false);
     expect(cited('voir ADR-000 D1')).toEqual(['000']);
+    // S-E01-2c / S-E01-2d — les trois ADR de la séquence d'isolation EXISTENT.
+    // `042` (chemin FK), `043` (couture d'identité, PR #246) et `044`
+    // (dénormalisation de `tenant_id` sur `outbox_event`). Asserter leur
+    // PRÉSENCE, jamais leur absence : une ligne qui assertait l'absence du
+    // prochain numéro libre est exactement ce que le contrôle négatif ancré sur
+    // `000` ci-dessus vient de supprimer.
+    //
+    // ⚠️ `043` et `044` ont été alloués EN PARALLÈLE par deux runs, chacun
+    // aveugle à l'autre parce qu'une PR tenue n'est pas sur `main` — la collision
+    // a été rattrapée à la main au moment du land (run 55) et est enregistrée
+    // comme `TOOL-29`. Les DEUX sont assertés ici pour que la renumérotation ne
+    // puisse pas se défaire en silence.
+    expect(ADR_NUMBERS.has('042')).toBe(true);
+    expect(ADR_NUMBERS.has('043')).toBe(true);
+    expect(ADR_NUMBERS.has('044')).toBe(true);
+    expect(cited('voir ADR-042 §D1 et ADR-000')).toEqual(['042', '000']);
   });
 
   it.each([
     ['migration.sql', MIGRATION],
     ['derived/migration.sql', DERIVED_MIGRATION],
+    ['outbox/migration.sql', OUTBOX_MIGRATION],
     ['rls-isolation-check.js', CHECKER],
   ])('%s ne cite QUE des ADR qui existent dans docs/adr/', (_name, source) => {
     // Un lecteur qui suit la citation pour comprendre POURQUOI il n'y a pas de
@@ -956,6 +1260,7 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
   const ARTEFACTS: Array<[string, string]> = [
     ['migration.sql', MIGRATION],
     ['derived/migration.sql', DERIVED_MIGRATION],
+    ['outbox/migration.sql', OUTBOX_MIGRATION],
     ['rls-isolation-check.js', CHECKER],
     [
       'prisma.service.ts',

@@ -239,12 +239,23 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    *    job) vivent dans la couture identité (S-E01-1), qui n'est pas commencée.
    *    La narrowing de type ci-dessous atterrit donc AVANT le premier appelant,
    *    exprès : c'est le seul moment où elle ne casse rien.
-   * 6. Les policies ne couvrent PAS tout. Six tables sans `tenant_id` sont
-   *    dérivées d'un tenant par clé étrangère et restent NON protégées —
-   *    `grade_revision`, `announcement_receipt`, `branding`, `import_row`,
-   *    `user_role`, `outbox_event`. PF-02 moitié (a) est refermée
-   *    PARTIELLEMENT. Les noms et leurs raisons sont dans l'en-tête de la
-   *    migration.
+   * 6. La couverture des policies est désormais COMPLÈTE au sens du catalogue,
+   *    et cette phrase a changé DEUX fois — elle est datée pour cette raison.
+   *    - `S-E01-2b` : les 44 tables portant `tenant_id`.
+   *    - `S-E01-2c` (`ADR-042`) : les 5 tables sans `tenant_id` qui dérivent leur
+   *      tenant par clé étrangère (`grade_revision`, `announcement_receipt`,
+   *      `branding`, `import_row`, `user_role`).
+   *    - `S-E01-2d` (`ADR-044`) : `outbox_event`, la dernière restante, qui ne
+   *      détient AUCUNE clé étrangère (`aggregate_type`/`aggregate_id` sont
+   *      polymorphes) et reçoit donc un `tenant_id` DÉNORMALISÉ. Ferme PF-185.
+   *    Il ne reste hors policy que la donnée de RÉFÉRENCE (`permission`, `role`,
+   *    `role_permission`), `tenant` — dont la clé primaire EST le discriminant,
+   *    exclue délibérément pour que la couture identité puisse la lire PAR SLUG
+   *    avant qu'un tenant soit résolu — et le ledger `_prisma_migrations`.
+   *    **PF-02 moitié (a) reste refermée PARTIELLEMENT malgré tout**, et la
+   *    raison n'est plus une table manquante : c'est le point 4 ci-dessus. Les
+   *    policies sont complètes ; la connexion, elle, est toujours celle du
+   *    PROPRIÉTAIRE.
    * 7. Un UUID bien formé est une FORME, pas un DROIT. Ce helper ne sait pas
    *    distinguer le tenant A du tenant B : la résolution et l'autorisation
    *    appartiennent à la couture identité. Ne pas lire cette validation comme un

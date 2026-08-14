@@ -18,10 +18,22 @@
  * counts still balance, and the gate passes on exactly the defect it exists to
  * catch. There is no literal 49 in this file, and there must never be one.
  *
- * `outbox_event` is the sixth table without a `tenant_id`, and it has NO foreign
- * key at all — polymorphic, unconstrained. It is therefore NOT derivable, stays
- * ungranted and unpolicied, and that is PROVEN by execution here (PF-185). It is
- * the only place in this file where `permission denied` is the EXPECTED result.
+ * WHAT S-E01-2d CHANGED, AND THE ASSERTIONS THAT FLIPPED
+ * ------------------------------------------------------
+ * `outbox_event` USED TO BE the sixth table without a `tenant_id`, and it holds
+ * NO foreign key at all — polymorphic, unconstrained — so it was not derivable,
+ * stayed ungranted and unpolicied, and was PROVEN fail-closed by execution here
+ * (PF-185). It was the only place in this file where `permission denied` was the
+ * EXPECTED result. THAT IS OVER. It now carries a DENORMALISED `tenant_id`
+ * (ADR-044), so it is an ordinary tenant-SCOPED table: it counts inside
+ * `TENANT_COLS`, it is NOT in the residue, and a `permission denied` on it is
+ * once again a LOUD failure like everywhere else. It never became derivable — it
+ * stopped needing to be.
+ *
+ * READ THIS BEFORE "SIMPLIFYING" THE OUTBOX ASSERTIONS AWAY: they did not
+ * disappear, they INVERTED. Deleting them instead would remove the only thing
+ * that notices the column, the policy or the grant being dropped out of band —
+ * and the drift gate cannot see two of those three.
  *
  * WHY THIS EXISTS, AND WHY NOTHING ELSE CAN DO ITS JOB
  * ---------------------------------------------------
@@ -293,17 +305,31 @@ const NON_DERIVED_EXPECTED = Object.freeze([
   'permission',
   'role',
   'role_permission',
-  // PF-185 — no FK, no discriminant, NOT derivable. Fail-closed by design and
-  // proven so below; needs a denormalised `tenant_id` + a backfill (ADR-042 §D7)
-  'outbox_event',
   // AUTO-DISCRIMINANT: its PRIMARY KEY is the discriminant. A policy here would
   // break the identity seam, which must read `tenant` BY SLUG before any tenant
   // is resolved (S-E01-1). Excluded deliberately, not forgotten.
   'tenant',
 ]);
+// S-E01-2d: `outbox_event` LEFT this list. It did not leave because someone
+// deleted a name — it left because it now HAS a `tenant_id`, so the residue
+// query (base tables with no `tenant_id` outside the derived set) no longer
+// returns it. The set equality is measured against the catalog in BOTH
+// directions, so removing the name without shipping the column would fail here
+// with the name printed, which is the whole point of a residue check.
 
-/** PF-185. The one table where `permission denied` is the EXPECTED result. */
+/**
+ * PF-185, CLOSED by S-E01-2d. This table has no foreign key and no derivable
+ * path, so it was deferred by name and left fail-closed (ADR-042 §D7). It now
+ * carries a DENORMALISED `tenant_id` (ADR-044) and is proven ISOLATED here, on
+ * the same terms as the other 44: positive control first, then the denial.
+ *
+ * It keeps its own constant because every assertion about it is a NAMED one:
+ * this is the table a future run is most tempted to "fix" with a bare GRANT.
+ */
 const OUTBOX_TABLE = 'outbox_event';
+
+/** The privilege string ADR-044 §D3 decided for it. `DELETE` is deliberately absent. */
+const OUTBOX_PRIVILEGES = 'SELECT, INSERT, UPDATE';
 
 /**
  * The migration ledger's own table, which is in `NON_DERIVED_EXPECTED` because
@@ -385,6 +411,10 @@ const SLOT = Object.freeze({
   student: 58,
   grade: 59,
   gradeRevision: 60,
+  // S-E01-2d — the outbox row. It needs NO chain: `aggregate_id` is polymorphic
+  // and UNCONSTRAINED, which is exactly why no FK path could ever be written for
+  // this table and why it needed a denormalised column instead (ADR-044 §D1).
+  outboxEvent: 61,
 });
 
 /** Tenant A is slot 1, tenant B is slot 2. Used only to build fixture ids. */
@@ -398,6 +428,10 @@ const SHARED_ROLE = '99999999-0000-4000-8000-000000000099';
 const RECEIPT_OWN_INSERT = fid(SLOT_A, 70);
 const RECEIPT_FOREIGN_INSERT = fid(SLOT_A, 71);
 const RECEIPT_FOREIGN_READER = fid(SLOT_A, 72);
+
+/** S-E01-2d — the two outbox rows the proof writes: one accepted, one refused. */
+const OUTBOX_OWN_INSERT = fid(SLOT_A, 73);
+const OUTBOX_FOREIGN_INSERT = fid(SLOT_A, 74);
 
 const TCP_PREFLIGHT_TIMEOUT_MS = 2000;
 const PSQL_TIMEOUT_MS = 180000;
@@ -705,6 +739,30 @@ INSERT INTO grade_revision (id, grade_id, reason, revised_by)
 `;
 }
 
+/**
+ * S-E01-2d — one `outbox_event` row per tenant.
+ *
+ * It hangs off NOTHING: `aggregate_type` + `aggregate_id` are polymorphic and
+ * carry no constraint, so `aggregate_id` here names the tenant's student purely
+ * for readability — the database does not check it, and that is precisely why no
+ * FK-path policy could ever have been written for this table (ADR-042 §D7). Its
+ * `tenant_id` is the ONLY thing that places the row in a tenant, which makes the
+ * pair of assertions below a direct test of the denormalised column.
+ *
+ * `status` is left at its default `pending`, so the OWNER can later prove that a
+ * foreign-tenant UPDATE from `app_user` changed NOTHING — a row the tenant-scoped
+ * connection cannot see is indistinguishable, from that connection, from a row it
+ * successfully updated.
+ */
+function outboxFixture(slot, tenantId, tag) {
+  return `
+-- ${tag} · outbox_event: no chain, no FK to an aggregate. Only \`tenant_id\`.
+INSERT INTO outbox_event (id, tenant_id, aggregate_type, aggregate_id, type, payload)
+  VALUES (${lit(fid(slot, SLOT.outboxEvent))}, ${lit(tenantId)}, 'student',
+          ${lit(fid(slot, SLOT.student))}, ${lit(`student.created.${tag}`)}, '{}'::jsonb);
+`;
+}
+
 /** The fixtures. Built by the OWNER, because `app_user` has no grant on `tenant`. */
 const FIXTURES_SQL = `
 INSERT INTO tenant (id, name, slug, updated_at) VALUES
@@ -723,6 +781,8 @@ INSERT INTO school (id, tenant_id, name, school_code, country, updated_at) VALUE
 INSERT INTO role (id, name, slug) VALUES (${lit(SHARED_ROLE)}, 'RLS proof role', 'rls-proof-role');
 ${derivedFixtures(SLOT_A, TENANT_A, SCHOOL_A, 'A')}
 ${derivedFixtures(SLOT_B, TENANT_B, SCHOOL_B, 'B')}
+${outboxFixture(SLOT_A, TENANT_A, 'A')}
+${outboxFixture(SLOT_B, TENANT_B, 'B')}
 `;
 
 /**
@@ -789,6 +849,7 @@ SELECT 'BYPASSRLS|' || rolbypassrls FROM pg_roles WHERE rolname = current_user;
 -- (C) A FRESH connection with NO context: zero rows AND no error. Both halves.
 SELECT 'FRESH_NO_CTX|' || count(*) FROM school;
 ${derivedCountSteps('FRESH_D')}
+SELECT 'FRESH_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE};
 
 BEGIN;
 SELECT set_config(${lit(TENANT_GUC)}, ${lit(TENANT_A)}, true);
@@ -801,6 +862,15 @@ SELECT 'CTX_A_FOREIGN|' || count(*) FROM school WHERE id = ${lit(SCHOOL_B)};
 -- (A2) S-E01-2c — the SAME pair on each of the five tenant-DERIVED tables,
 --      read BEFORE any INSERT below can change a total.
 ${derivedVisibilitySteps('A', SLOT_A, SLOT_B, { totals: true })}
+
+-- (A3) S-E01-2d — the SAME pair on \`outbox_event\`, which until this slice was
+--      the one table where a \`permission denied\` was expected. Its row hangs off
+--      NOTHING: the denormalised \`tenant_id\` is the only thing placing it in a
+--      tenant, so this pair tests the column and its policy directly, with no FK
+--      path and no parent to hide behind.
+SELECT 'CTX_A_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_A, SLOT.outboxEvent))};
+SELECT 'CTX_A_FOREIGN_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))};
+SELECT 'CTX_A_TOTAL_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE};
 
 -- (D+) the WITH CHECK positive control: an OWN-tenant INSERT must SUCCEED.
 INSERT INTO school (id, tenant_id, name, school_code, country, updated_at)
@@ -870,6 +940,36 @@ UPDATE announcement_receipt SET read_at = now() WHERE id = ${lit(fid(SLOT_B, SLO
 SELECT 'D_FOREIGN_UPDATE_announcement_receipt|' || count(*) FROM announcement_receipt
   WHERE id = ${lit(fid(SLOT_B, SLOT.receipt))};
 
+-- ===========================================================================
+-- S-E01-2d — the WRITE half on \`outbox_event\`, the table that held NO grant at
+-- all until this slice. The read half above is only a positive control; the
+-- reason this table needed a decision rather than a grant is that an unfiltered
+-- outbox is EVERY aggregate of EVERY tenant, so the write path is where the
+-- damage would be.
+-- ===========================================================================
+-- (K+) own-tenant INSERT — must SUCCEED. Without it, (K-) below would be green
+--      on a database where the INSERT privilege simply never landed.
+INSERT INTO ${OUTBOX_TABLE} (id, tenant_id, aggregate_type, aggregate_id, type, payload)
+  VALUES (${lit(OUTBOX_OWN_INSERT)}, ${lit(TENANT_A)}, 'student',
+          ${lit(fid(SLOT_A, SLOT.student))}, 'student.updated', '{}'::jsonb);
+SELECT 'OUTBOX_OWN_INSERT|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(OUTBOX_OWN_INSERT)};
+-- (K-) an INSERT carrying a FOREIGN tenant id — must be refused by WITH CHECK.
+SAVEPOINT outbox_foreign;
+INSERT INTO ${OUTBOX_TABLE} (id, tenant_id, aggregate_type, aggregate_id, type, payload)
+  VALUES (${lit(OUTBOX_FOREIGN_INSERT)}, ${lit(TENANT_B)}, 'student',
+          ${lit(fid(SLOT_B, SLOT.student))}, 'student.updated', '{}'::jsonb);
+SELECT 'OUTBOX_FOREIGN_INSERT_ACCEPTED|1';
+ROLLBACK TO SAVEPOINT outbox_foreign;
+-- (L) THE SILENT ONE, again: marking a FOREIGN tenant's event as delivered
+--     touches NOTHING and raises NOTHING — USING filters it away first. Relay
+--     code that reads "1 row updated" as "delivered" would report a delivery
+--     that never happened. Whether tenant B's row is really untouched is a
+--     question only the OWNER can answer, and it is asked in OWNER_SQL.
+UPDATE ${OUTBOX_TABLE} SET status = 'sent', sent_at = now()
+  WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))};
+SELECT 'OUTBOX_FOREIGN_UPDATE|' || count(*) FROM ${OUTBOX_TABLE}
+  WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))};
+
 -- (J) AC-10 — THE CASCADE, EXECUTED RATHER THAN BELIEVED. \`user_role\` holds no
 --     DELETE privilege while \`user_profile -> user_role\` is ON DELETE CASCADE.
 --     PostgreSQL runs referential actions as the referencing table's owner with
@@ -892,11 +992,13 @@ SELECT 'POOLED_ROWS|' || count(*) FROM school;
 -- \`nullif\` raises 22P02 only on the CHILD: the \`school\`-only assertion above
 -- would not see it.
 ${derivedCountSteps('POOLED_D')}
+SELECT 'POOLED_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE};
 
 -- (Q) the empty string set EXPLICITLY, same requirement.
 SET ${TENANT_GUC} = '';
 SELECT 'EMPTY_ROWS|' || count(*) FROM school;
 ${derivedCountSteps('EMPTY_D')}
+SELECT 'EMPTY_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE};
 
 -- (R) switch context: B's row must REAPPEAR, and it must still exist despite (F).
 BEGIN;
@@ -904,22 +1006,23 @@ SELECT set_config(${lit(TENANT_GUC)}, ${lit(TENANT_B)}, true);
 SELECT 'CTX_B_VISIBLE|' || count(*) FROM school WHERE id = ${lit(SCHOOL_B)};
 SELECT 'CTX_B_FOREIGN|' || count(*) FROM school WHERE id = ${lit(SCHOOL_A)};
 ${derivedVisibilitySteps('B', SLOT_B, SLOT_A)}
+SELECT 'CTX_B_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))};
+SELECT 'CTX_B_FOREIGN_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_A, SLOT.outboxEvent))};
 COMMIT;
 `;
 
 /**
- * PF-185 — `outbox_event` is fail-closed, and here (and ONLY here) `permission
- * denied` is the EXPECTED result.
+ * S-E01-2d — WHY THERE IS NO LONGER A SEPARATE `OUTBOX_SQL` INVOCATION.
  *
- * It runs as its OWN `psql` invocation, deliberately: the main proof treats that
- * string anywhere in its stderr as a loud failure, and it must keep doing so.
- * Mixing the two would either weaken that guard or make this one unreadable.
+ * Until this slice, `outbox_event` ran in its OWN `psql` process because
+ * `permission denied` was its EXPECTED result, and the main proof treats that
+ * string anywhere in its stderr as a loud failure. Now that the table is granted
+ * and policied, the expectation is inverted: a `permission denied` on it is a
+ * MISSING GRANT and must be read exactly as it is read for the other 49. Folding
+ * it back into `PROOF_SQL` is therefore not tidying — it is what re-arms the
+ * stderr guard over this table. Keeping the separate invocation would have left
+ * the one table in the schema whose permission errors were silently tolerated.
  */
-const OUTBOX_SQL = `
-\\pset footer off
-SELECT 'OUTBOX_PROBE|start';
-SELECT 'OUTBOX_SELECT_ACCEPTED|' || count(*) FROM ${OUTBOX_TABLE};
-`;
 
 /** AC-8 — the recorded, deliberate LIMIT of this slice. Not a defect. */
 const OWNER_SQL = `
@@ -940,6 +1043,18 @@ SELECT 'OWNER_CASCADE_CHILD|' || count(*) FROM user_role
   WHERE id = ${lit(fid(SLOT_A, SLOT.cascadeRole))};
 SELECT 'OWNER_CASCADE_CONTROL|' || count(*) FROM user_role
   WHERE id = ${lit(fid(SLOT_B, SLOT.cascadeRole))};
+-- S-E01-2d — the same question for the outbox: tenant B's event must still be
+-- there AND still \`pending\`. From \`app_user\`'s side under GUC = A, an event it
+-- could not see and an event it just marked delivered look identical.
+SELECT 'OWNER_FOREIGN_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE}
+  WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))};
+SELECT 'OWNER_FOREIGN_OUTBOX_UNTOUCHED|' || count(*) FROM ${OUTBOX_TABLE}
+  WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))} AND status = 'pending' AND sent_at IS NULL;
+-- The cross-tenant INSERT of (K-) was rolled back to a savepoint. If WITH CHECK
+-- had accepted it, the row would exist here — the tenant-scoped connection under
+-- GUC = A could never tell the difference.
+SELECT 'OWNER_OUTBOX_FOREIGN_INSERT|' || count(*) FROM ${OUTBOX_TABLE}
+  WHERE id = ${lit(OUTBOX_FOREIGN_INSERT)};
 `;
 
 function facts(result) {
@@ -1148,15 +1263,38 @@ async function main() {
         WHERE n.nspname='public' AND p.polname=${lit(POLICY_NAME)}
           AND pg_get_expr(p.polqual, p.polrelid)
               IS DISTINCT FROM pg_get_expr(p.polwithcheck, p.polrelid);
-       -- PF-185 — outbox_event: no policy, no RLS, no grant. Proven by execution
-       -- separately; these three are the catalog half.
+       -- PF-185, now CLOSED (S-E01-2d) — outbox_event: a tenant_id column, ONE
+       -- policy, RLS on, a leading index, and exactly the decided privileges.
+       -- Every one of these four assertions is the INVERSE of what S-E01-2c
+       -- asserted; the execution half is inside the main proof, not beside it.
+       SELECT 'OUTBOX_TENANT_COL|' || count(*) FROM pg_attribute a
+        WHERE a.attrelid=${lit('public.' + OUTBOX_TABLE)}::regclass AND a.attname='tenant_id'
+          AND a.attnum>0 AND NOT a.attisdropped AND a.attnotnull;
+       -- ADR-044 §D1: the FK to \`tenant\` is MATERIALISED, ON DELETE CASCADE, like
+       -- school and user_profile. \`c\` = cascade; anything else is a silent change
+       -- of what closing a tenant does to its undelivered events.
+       SELECT 'OUTBOX_FK_CASCADE|' || count(*) FROM pg_constraint k
+        WHERE k.conrelid=${lit('public.' + OUTBOX_TABLE)}::regclass AND k.contype='f'
+          AND k.confrelid='public.tenant'::regclass AND k.confdeltype='c';
+       -- R-11: an index whose LEADING column is tenant_id. Unlike the 44 and the
+       -- 5, this one had to be CREATED by the migration — the column is new.
+       SELECT 'OUTBOX_TENANT_INDEX|' || count(*) FROM pg_index x
+        WHERE x.indrelid=${lit('public.' + OUTBOX_TABLE)}::regclass
+          AND x.indkey[0]=(SELECT a.attnum FROM pg_attribute a
+                            WHERE a.attrelid=${lit('public.' + OUTBOX_TABLE)}::regclass AND a.attname='tenant_id');
        SELECT 'OUTBOX_POLICIES|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
          JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relname=${lit(OUTBOX_TABLE)};
        SELECT 'OUTBOX_RLS|' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relname=${lit(OUTBOX_TABLE)} AND c.relrowsecurity;
-       SELECT 'OUTBOX_GRANTS|' || count(*) FROM information_schema.role_table_grants
+       SELECT 'OUTBOX_GRANTS|' || coalesce(string_agg(privilege_type, ', ' ORDER BY privilege_type), '')
+         FROM information_schema.role_table_grants
         WHERE grantee=${lit(app.user)} AND table_schema='public' AND table_name=${lit(OUTBOX_TABLE)};
+       -- ADR-044 §D3 — DELETE is WITHHELD. Counted separately from the shape
+       -- above so a widening fails with its own named assertion.
+       SELECT 'OUTBOX_DELETE|' || count(*) FROM information_schema.role_table_grants
+        WHERE grantee=${lit(app.user)} AND table_schema='public' AND table_name=${lit(OUTBOX_TABLE)}
+          AND privilege_type='DELETE';
        -- Present in every real database, absent from this scratch one: the
        -- ledger is applied here file by file with psql, and Prisma's CLI — not
        -- the SQL — creates this table. Measured rather than assumed.
@@ -1315,17 +1453,45 @@ async function main() {
       c.get('QUAL_MISMATCH'),
       0,
     );
-    // PF-185 — the catalog half. The execution half is step 7b.
+    // ---- PF-185, CLOSED by S-E01-2d — the catalog half. Every assertion here
+    //      is the INVERSE of the one S-E01-2c shipped, and the ORDER matters:
+    //      the column comes first, because a policy on a table without the
+    //      column could not exist, and a green "policy = 1" read before checking
+    //      the column would say nothing about which column it filters on.
     expectEqual(
-      `PF-185 ${OUTBOX_TABLE} carries NO policy (no FK, no discriminant — not derivable; ADR-042 §D7)`,
-      c.get('OUTBOX_POLICIES'),
-      0,
+      `S-E01-2d ${OUTBOX_TABLE} carries a NOT NULL tenant_id — the denormalised discriminant ` +
+        'ADR-042 §D7 deferred and ADR-044 §D1 decided (it is still NOT derivable, and never became so)',
+      c.get('OUTBOX_TENANT_COL'),
+      1,
     );
-    expectEqual(`PF-185 ${OUTBOX_TABLE} has relrowsecurity = false`, c.get('OUTBOX_RLS'), 0);
     expectEqual(
-      `PF-185 ${OUTBOX_TABLE} is granted NOTHING to ${app.user} — fail-closed by DECISION, ` +
-        'never to be "fixed" by widening the grant',
-      c.get('OUTBOX_GRANTS'),
+      `ADR-044 §D1 ${OUTBOX_TABLE}.tenant_id carries a FOREIGN KEY to tenant with ON DELETE CASCADE, ` +
+        'the same shape as school and user_profile',
+      c.get('OUTBOX_FK_CASCADE'),
+      1,
+    );
+    expectEqual(
+      `R-11 an index LEADS by ${OUTBOX_TABLE}.tenant_id — created by this migration, because unlike ` +
+        'the 44 and the 5 the column did not exist before it',
+      c.get('OUTBOX_TENANT_INDEX'),
+      1,
+    );
+    expectEqual(
+      `S-E01-2d ${OUTBOX_TABLE} carries EXACTLY ONE ${POLICY_NAME} policy`,
+      c.get('OUTBOX_POLICIES'),
+      1,
+    );
+    expectEqual(`S-E01-2d ${OUTBOX_TABLE} has relrowsecurity = true`, c.get('OUTBOX_RLS'), 1);
+    expectEqual(
+      `ADR-044 §D3 ${OUTBOX_TABLE} holds EXACTLY "${OUTBOX_PRIVILEGES}" for ${app.user} — the grant is ` +
+        'admissible because the POLICY exists and is proven first, never as a way to silence a permission error',
+      canonicalGrant(`${OUTBOX_TABLE}=${c.get('OUTBOX_GRANTS')}`),
+      canonicalGrant(`${OUTBOX_TABLE}=${OUTBOX_PRIVILEGES}`),
+    );
+    expectEqual(
+      `ADR-044 §D3 ${OUTBOX_TABLE} does NOT hold DELETE — retention is an OWNER job, and a DELETE here ` +
+        'would let the application role erase UNDELIVERED events, the one loss the outbox pattern exists to prevent',
+      c.get('OUTBOX_DELETE'),
       0,
     );
 
@@ -1391,6 +1557,33 @@ async function main() {
       );
     }
 
+    // ---- S-E01-2d: the same pair on `outbox_event`. This is the assertion that
+    //      most needs its positive control: until this slice `app_user` held ZERO
+    //      privileges here, so "tenant B's event is not visible" was green on a
+    //      table nobody could read at all. The row hangs off nothing — the
+    //      denormalised column is the only thing placing it in a tenant.
+    expectEqual(
+      `S-E01-2d POSITIVE CONTROL: GUC = tenant A, the ${OUTBOX_TABLE} row IS VISIBLE ` +
+        '(it was `permission denied` before this slice)',
+      f.get('CTX_A_OUTBOX'),
+      1,
+    );
+    expectEqual(
+      `S-E01-2d GUC = tenant A: tenant B's ${OUTBOX_TABLE} row is NOT visible`,
+      f.get('CTX_A_FOREIGN_OUTBOX'),
+      0,
+    );
+    expectEqual(
+      `S-E01-2d GUC = tenant A: ${OUTBOX_TABLE} shows tenant A's rows and ONLY those`,
+      f.get('CTX_A_TOTAL_OUTBOX'),
+      1,
+    );
+    expectEqual(
+      `S-E01-2d a fresh connection with NO tenant context sees zero ${OUTBOX_TABLE} rows`,
+      f.get('FRESH_OUTBOX'),
+      0,
+    );
+
     expectEqual('AC-7d POSITIVE CONTROL: an OWN-tenant INSERT is accepted', f.get('OWN_INSERT'), 1);
 
     if (f.has('FOREIGN_INSERT_ACCEPTED')) {
@@ -1438,6 +1631,33 @@ async function main() {
       'AC-7 the SILENT one on the FK path: a write against a foreign-parent row raises nothing (and, per ' +
         'the owner below, changed nothing)',
       f.get('D_FOREIGN_UPDATE_announcement_receipt'),
+      0,
+    );
+
+    // ---- S-E01-2d — the WRITE half on `outbox_event`. An unfiltered outbox is
+    //      every aggregate of every tenant, so this is where the damage would be.
+    expectEqual(
+      `S-E01-2d POSITIVE CONTROL: an OWN-tenant INSERT into ${OUTBOX_TABLE} is accepted`,
+      f.get('OUTBOX_OWN_INSERT'),
+      1,
+    );
+    if (f.has('OUTBOX_FOREIGN_INSERT_ACCEPTED')) {
+      fail(
+        `S-E01-2d an INSERT into ${OUTBOX_TABLE} carrying a FOREIGN tenant id is REJECTED`,
+        'it was ACCEPTED — WITH CHECK is not doing its job on the denormalised column',
+      );
+    } else if (/violates row-level security policy/i.test(proof.stderr)) {
+      record(`S-E01-2d an INSERT into ${OUTBOX_TABLE} carrying a FOREIGN tenant id is REJECTED by WITH CHECK`);
+    } else {
+      fail(
+        `S-E01-2d an INSERT into ${OUTBOX_TABLE} carrying a FOREIGN tenant id is REJECTED`,
+        `no RLS violation was reported:\n${proof.stderr.trim()}`,
+      );
+    }
+    expectEqual(
+      `S-E01-2d the SILENT one: marking a FOREIGN tenant's event delivered raises nothing (and, per the ` +
+        'owner below, changed nothing) — relay code reading "1 row updated" as delivered would be wrong',
+      f.get('OUTBOX_FOREIGN_UPDATE'),
       0,
     );
     // AC-10 — the cascade. The parent really went; whether the CHILD went is a
@@ -1489,6 +1709,31 @@ async function main() {
       );
     }
 
+    // The same four no-context / context-switch cases on `outbox_event`. The
+    // pooled one is not redundant with `school`: a predicate written without
+    // `nullif` raises 22P02 on the table that carries it, and this table's
+    // predicate was written last and copied by hand.
+    expectEqual(
+      `F-1 the SAME connection, after COMMIT, with no context: zero ${OUTBOX_TABLE} rows AND NO ERROR`,
+      f.get('POOLED_OUTBOX'),
+      0,
+    );
+    expectEqual(
+      `S-E01-2d an explicitly EMPTY tenant context sees zero ${OUTBOX_TABLE} rows and raises nothing`,
+      f.get('EMPTY_OUTBOX'),
+      0,
+    );
+    expectEqual(
+      `S-E01-2d switching the GUC to tenant B makes B's ${OUTBOX_TABLE} row reappear`,
+      f.get('CTX_B_OUTBOX'),
+      1,
+    );
+    expectEqual(
+      `S-E01-2d GUC = tenant B: tenant A's ${OUTBOX_TABLE} row is NOT visible`,
+      f.get('CTX_B_FOREIGN_OUTBOX'),
+      0,
+    );
+
     // A 22P02 anywhere would mean the predicate is the bare cast form.
     if (/invalid input syntax for type uuid/i.test(proof.stderr)) {
       fail(
@@ -1499,43 +1744,22 @@ async function main() {
       record('F-1 no connection raised 22P02 on the tenant GUC');
     }
 
-    // ---- 7b. PF-185 — `outbox_event` proven FAIL-CLOSED, by execution.
+    // ---- 7b. PF-185, CLOSED (S-E01-2d). There is nothing to run here any more,
+    //      and the absence is the evidence.
     //
-    // This is the ONE place in this file where `permission denied` is the
-    // EXPECTED result, and it runs as its own psql invocation so that the guard
-    // above — which treats that string as a loud failure everywhere else — keeps
-    // its meaning. `outbox_event` holds no foreign key and no discriminant, so
-    // there is no path to write a policy over; isolating it needs a denormalised
-    // column plus a backfill, which is a schema.prisma change and its own slice
-    // (ADR-042 §D7). Measured: `outboxEvent.` has ZERO callers in apps/** and
-    // packages/**, so the cost of leaving it fail-closed is zero features.
+    // S-E01-2c ran a SEPARATE `psql` invocation over `outbox_event` because
+    // `permission denied` was its EXPECTED result and the stderr guard above
+    // treats that string as a loud failure everywhere else. The table now carries
+    // a denormalised `tenant_id`, a policy and a grant (ADR-044), so its proof is
+    // in `PROOF_SQL` with the other 49 — which means the guard above now covers
+    // it, and a lost grant on this table can no longer be read as isolation.
     //
-    // THE POINT OF THIS ASSERTION is to stop the next run from "fixing" the
-    // permission error at the call site by widening the grant.
-    const outboxRun = psql(client.command, scratchApp, OUTBOX_SQL, { onErrorStop: false });
-    const ob = facts(outboxRun);
-    if (!ob.has('OUTBOX_PROBE')) {
-      fail(
-        `PF-185 the ${OUTBOX_TABLE} probe reached the server at all`,
-        `nothing came back — the absence below would be meaningless:\n${outboxRun.stderr.trim()}`,
-      );
-    } else if (ob.has('OUTBOX_SELECT_ACCEPTED')) {
-      fail(
-        `PF-185 a SELECT on ${OUTBOX_TABLE} as ${app.user} is REFUSED`,
-        `it was ACCEPTED (${ob.get('OUTBOX_SELECT_ACCEPTED')} rows). The table has NO policy, so a grant ` +
-          'here is an unfiltered cross-tenant read. Fix the policy, never the grant.',
-      );
-    } else if (/permission denied/i.test(outboxRun.stderr)) {
-      record(
-        `PF-185 ${OUTBOX_TABLE} is FAIL-CLOSED by execution: "permission denied" for ${app.user}`,
-        'expected HERE and only here — no FK, no discriminant, deferred by name (ADR-042 §D7)',
-      );
-    } else {
-      fail(
-        `PF-185 a SELECT on ${OUTBOX_TABLE} as ${app.user} is REFUSED with "permission denied"`,
-        `it failed for a DIFFERENT reason, which proves nothing about the grant:\n${outboxRun.stderr.trim()}`,
-      );
-    }
+    // If this ever needs to become a separate invocation again, that is a signal
+    // the table was made fail-closed once more, and it needs an ADR, not a probe.
+    record(
+      `PF-185 CLOSED: ${OUTBOX_TABLE} is proven ISOLATED inside the main proof, not fail-closed beside it`,
+      'a "permission denied" on it is once again a LOUD failure, like every other table under test',
+    );
 
     // ---- 8. AC-8 — the recorded LIMIT. Named so nobody reads it as a defect.
     const ownerRun = psql(client.command, scratchOwner, OWNER_SQL);
@@ -1579,6 +1803,25 @@ async function main() {
       "AC-10 CONTROL: tenant B's user_role row, whose parent was never deleted, is untouched",
       o.get('OWNER_CASCADE_CONTROL'),
       1,
+    );
+    // S-E01-2d — the same two facts for the outbox, asked of the only connection
+    // that can answer them.
+    expectEqual(
+      `S-E01-2d the foreign UPDATE reached NOTHING — the owner still sees tenant B's ${OUTBOX_TABLE} row`,
+      o.get('OWNER_FOREIGN_OUTBOX'),
+      1,
+    );
+    expectEqual(
+      "S-E01-2d …and it is UNCHANGED: still `pending`, sent_at still NULL, so the silent UPDATE really " +
+        'delivered nothing',
+      o.get('OWNER_FOREIGN_OUTBOX_UNTOUCHED'),
+      1,
+    );
+    expectEqual(
+      `S-E01-2d the refused cross-tenant INSERT left NO row behind in ${OUTBOX_TABLE} — measured by the ` +
+        'owner, because the tenant-scoped connection could not tell the difference',
+      o.get('OWNER_OUTBOX_FOREIGN_INSERT'),
+      0,
     );
 
     // ---- 9. AC-12 — the rollback is EXECUTED, not merely written in a header.
@@ -1727,6 +1970,7 @@ module.exports = {
   DERIVED_TABLES,
   MIN_EXPECTED_TABLES,
   NON_DERIVED_EXPECTED,
+  OUTBOX_PRIVILEGES,
   OUTBOX_TABLE,
   POLICY_NAME,
   SCRATCH_NAME_PATTERN,
