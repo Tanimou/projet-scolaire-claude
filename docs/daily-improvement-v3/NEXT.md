@@ -1,6 +1,128 @@
 # Next story
 
-# NEXT — written by run 56 (`S-E01-1b`), 2026-08-14 — **this section supersedes every section below**
+# NEXT — written by run 57 (`S-E01-1c`), 2026-08-14 — **this section supersedes every section below**
+
+## ✅ `PF-193` is closed: `app_user` may edit CUSTOM roles and may NEVER touch a SYSTEM one
+
+The last named blocker on the authorization surface is gone. `roles.controller.ts` writes `role` and
+`role_permission` at five sites; migration `20260814180000` had granted `SELECT` and only `SELECT`, so those
+five worked **only because the app connects as the table OWNER** and would have failed at the flip.
+
+**The shape is not the per-command split the brief assumed, and the analyst was right to overrule it.** The
+permissive `tenant_isolation FOR ALL` policy is left **byte-identical**; six `AS RESTRICTIVE` per-command
+policies `system_role_write_guard_{insert,update,delete}` carry the `is_system = false` conjunct, and
+PostgreSQL ANDs restrictive with permissive **per command**. Three consequences the split would have lost:
+SELECT is provably untouched; the census's `tenant_isolation`-name-filtered assertions
+(`WITH_CHECK_NULL = 0`, `ROLE_SCOPED = 0`, `QUAL_MISMATCH = 0`) stay green **with no edit** — a split would
+have broken all three, because a `FOR SELECT` policy has `polwithcheck IS NULL` and the write predicate is
+deliberately *not* identical to the read one; and the tenant predicate is never duplicated, which kills the
+DNC-10 re-derivation risk at the source.
+
+**The cost was paid in the same diff, and it is the interesting half.** A census that does not *know* about
+the restrictive policies passes **vacuously** — the exact "silently stops counting" defect the AC existed to
+prevent. So the census gained **six positive assertions**: each guard exists, is `polpermissive = false`, is
+`TO PUBLIC`, and carries `WITH CHECK` on INSERT/UPDATE. `WRITE_GUARD_PERMISSIVE = 0` is asserted rather than
+the six merely counted, because a restore that drops the two words `AS RESTRICTIVE` turns the guard
+permissive, permissive is **OR**-ed with `tenant_isolation`, and **every write is allowed again with no error
+anywhere**. That is the single property a restore is most likely to lose silently.
+
+An invariant that lived only in application code (`roles.controller.ts:190` and `:278` throw
+`ForbiddenException`) now lives in the database, where a future handler that forgets it cannot bypass it.
+A **mutant was injected and killed**: dropping `system_role_write_guard_update` turned
+`ROLE_SYSTEM_NAME_UNCHANGED` red (the system role was renamed by `app_user`) and green again once the policy
+was recreated from its own `pg_get_expr` text.
+
+## 🛑 `PF-194` (P1) — the limit that a green `AC-8 (f)` would have HIDDEN, proven ACCEPTED by execution
+
+**Read this before writing "role writes are tenant-safe" anywhere.** `roles.controller.ts:154` never sets
+`schoolId`, so **every role the product can create has `school_id IS NULL`** — the global / system-reference
+branch, which `role`'s predicate admits for **every** tenant. The guards added this run constrain `is_system`
+and nothing else. Therefore:
+
+> under GUC = tenant **A**, `app_user` **UPDATED** and then **DELETED** a custom role belonging to tenant **B**.
+> Executed, accepted, recorded — beside the school-scoped probe `AC-8 (f)`, which was refused.
+
+So `AC-8 (f)` tests **the shape the product never produces**. A green `AC-8 (f)` alone would read as
+"cross-tenant role writes are impossible", which is `PF-02`'s own failure mode reproduced inside the check
+built to refuse it. Two sub-cases came with it, both executed:
+
+- **F-8** — deleting that role silently revoked a `user_role` row belonging to a tenant the caller cannot see.
+  `user_role.role_id -> role` is `ON DELETE CASCADE` and **referential actions run with row security OFF**.
+  `roles.controller.ts:279` blocks this in *application* code — precisely what `ADR-047 §D2` says the database
+  must not depend on.
+- **F-6** — clearing `school_id` on an own-tenant role **promotes it to global**. This is the
+  `ON DELETE SET NULL` escalation `ADR-046 §D2` banned *by name*, reached instead through a **permitted**
+  write. `WITH CHECK` cannot see the old row, so no `WITH CHECK` predicate can refuse it; a trigger could.
+
+**Not a regression** — the owner connection does all of this today under no predicate at all — and **not
+fixable in a policy slice**: both remedies (`role.tenant_id`, or making the controller set `schoolId`) are
+product decisions owned by `PF-153` / `PF-08` / `ADR-015 D8.6`.
+
+## 🔭 `TOOL-32` — CUTOVER READINESS is VERB-AWARE, and its old anchor could not see a `tx.` call
+
+This is the run's most reusable output. AC-9 classified **791 call sites** by the privilege their verb needs
+across **167 (table, privilege) pairs — 165 satisfied, 2 not**. Its previous anchor was `\bprisma\.`, so
+**every `tx.` call inside a `$transaction` was invisible to it** — including the five `PF-193` writes the
+block exists to see. The previous run's `checked 0 ungranted table(s)` was true and was measuring less than
+it appeared to.
+
+The enumerated residual, which is now a list rather than a belief:
+
+| blocker | owner |
+|---|---|
+| `tenant` needs `INSERT` — `register.controller.ts:365` (`upsert`) | `PF-185` |
+| `tenant` needs `UPDATE` — same call site | `PF-185` |
+| **0 / 792 call sites set the tenant GUC** — `withTenant` still has zero production callers | `S-E01-1` |
+| 6 raw-SQL sites carry no model/verb and are invisible to any grant matrix | **`PF-197`** |
+
+**`PF-197` (P2) is the nasty one.** Two of the six are boot-time `CREATE UNIQUE INDEX` through
+`$executeRawUnsafe` (`guardianship-claim-index.bootstrap.ts`, `booking-index.bootstrap.ts`). As a non-owner
+those raise `must be owner of relation`, and **both are wrapped in a try/catch that downgrades to
+`logger.warn`** — so after the cutover the `ADR-022` open-claim idempotency guard and the booking index
+**silently stop being ensured**. Soft-failing, invisible to any grant matrix, and it would have been found
+only in production.
+
+**`PF-195` and `PF-196` were pre-allocated on a hypothesis, MEASURED FALSE, and no id is spent on them.** The
+premise was "the 44 tenant-scoped tables hold `SELECT, INSERT` only"; they hold `UPDATE` and `DELETE` too
+(`20260813120000:480`). Both numbers remain **free**.
+
+## ▶ Recommended next story
+
+1. **`S-E01-1` — the cutover, and it is now blocked by ONE thing that is finally NAMED: `withTenant` has
+   0/792 callers.** Every other precondition is met. This is no longer a policy problem, it is an adoption
+   problem, and it is too big for one slice — it wants a *sequenced* plan (a first real call site, then a
+   ratchet that forbids a new unwrapped call site, then the flip). **`PF-02` half (a) closes only at the end
+   of that sequence.** Note `register.controller.ts:365` must be resolved first or the flip breaks
+   registration (`PF-185`).
+2. **`PF-197` (P2, small, and it is a SILENT failure) — take it early.** Two boot-time index creations that
+   swallow their own failure. Cheap now, undebuggable after the cutover.
+3. **`PF-194` / `PF-153` / `PF-08` — the custom-role tenancy decision.** These are one question wearing three
+   ids: *does a custom role belong to a tenant?* Today it does not, and that is why cross-tenant role writes
+   are accepted. It needs a product decision, then `role.tenant_id` or a controller that sets `schoolId`.
+4. **`TOOL-30` — renumber the six colliding ids.** Still untouched, still more expensive every run.
+5. **`TOOL-31`** — the drift gate's two timing-dependent cases and the 90 s stage cap, now applying a
+   **seven**-migration ledger.
+6. **Arm the skipped-count ratchet — still disarmed.**
+
+## State of the world at the end of run 57
+
+- **`PF-80` was handled PROACTIVELY for the first time in five runs.** `scripts/restore-drill-baseline.json`
+  gained its 7th ledger entry *in the sprint's own diff*, not after the gate caught it. Its reason is specific
+  to this shape: the first migration of the sequence that creates no column, no constraint and no index, so
+  the only thing a restore can lose is the two words `AS RESTRICTIVE` — and losing them fails **open**.
+- **The sprint wrote into the MAIN checkout**, and the session worktree was verified **byte-clean**. Same
+  direction as runs 53, 55 and 56; the bidirectional bug remains unpredictable, so keep checking.
+- **`INFLIGHT` was 0 at Step 0** and all six open PRs were dependabot, so id allocation against `main` alone
+  was sufficient **this run** — stated rather than assumed, because it will not hold next time.
+- **PostgreSQL was written to deliberately and left clean.** Scratch databases created, migrated, dropped.
+  The live `pilotage` database is **untouched**: 2 migrations, 0 policies, `role` holds 0 rows.
+- **No Docker was started and no container rebuilt.** None was needed — the database is the native Windows
+  service `postgresql-x64-15` on `127.0.0.1:5432`. **`TOOL-19` is untouched and the local Docker stack's
+  health remains UNKNOWN.**
+
+---
+
+# NEXT — written by run 56 (`S-E01-1b`), 2026-08-14 — superseded by run 57 above, kept for content
 
 ## ✅ The cutover's REFERENCE SURFACE exists, and `role` was never global
 
