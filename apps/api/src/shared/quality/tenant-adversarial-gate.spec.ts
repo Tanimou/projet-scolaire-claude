@@ -74,6 +74,12 @@ const checker = require(CHECKER_PATH) as {
   APPEND_ONLY_DML: string;
   FULL_DML: string;
   MIN_COVERED_TABLES: number;
+  // S-E01-1c / TOOL-32 — the verb-aware classifier, exported as PURE parts so
+  // this spec drives every branch with no database and no repository scan.
+  MIN_CLASSIFIED_CALL_SITES: number;
+  PRISMA_RECEIVERS: readonly string[];
+  VERB_PRIVILEGES: Record<string, readonly string[]>;
+  privilegesForVerb: (verb: string) => readonly string[] | null;
   OWN_PROBE_OFFSET: number;
   FOREIGN_PROBE_OFFSET: number;
   OUTBOX_DML: string;
@@ -106,6 +112,12 @@ const sibling = require(SIBLING_PATH) as {
   TENANT_B: string;
   TENANT_GUC: string;
   SCRATCH_NAME_PATTERN: RegExp;
+  // S-E01-1c — the guard family, IMPORTED from the sibling by both the checker
+  // and this spec, so "which tables the write guard covers" has ONE definition.
+  WRITE_GUARD_PREFIX: string;
+  WRITE_GUARD_TABLES: readonly string[];
+  WRITE_GUARD_COMMANDS: ReadonlyArray<{ suffix: string; polcmd: string; using: boolean; withCheck: boolean }>;
+  DERIVED_DELETE_ALLOWED: readonly string[];
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -639,20 +651,41 @@ describe('AC-4 — SEPT tables dérivées depuis S-E01-1b, CINQ prouvées ici, e
     expect(derivedInPlan).toHaveLength(5);
   });
 
-  it('les DEUX dérivées non couvertes sont NOMMÉES, et la raison est le grant `SELECT` seul', () => {
-    // ADR-046 §D5 : `role` et `role_permission` sont des données de PRIVILÈGE,
-    // donc `SELECT` et rien d'autre. Or la branche INSERT du vérificateur est un
-    // ÉCHEC DUR quand le grant manque — délibérément, parce qu'une table qu'il ne
-    // peut pas écrire rendrait ses dénis vacueux. Les mettre dans `PLAN`
-    // exigerait de RELÂCHER cette branche : une protection réelle échangée
-    // contre un chiffre de couverture. Elles sont prouvées PAR EXÉCUTION dans le
-    // frère, ce que la note d'en-tête doit dire noir sur blanc.
+  it('les DEUX dérivées non couvertes sont NOMMÉES, et leurs privilèges sont ceux qu’ADR-047 a DÉCIDÉS', () => {
+    // S-E01-1c / ADR-047 §D1 — CETTE ASSERTION EST INVERSÉE, PAS SUPPRIMÉE.
+    // Elle disait `privileges === 'SELECT'` et citait ADR-046 §D5 : `role` et
+    // `role_permission` sont des données de PRIVILÈGE, donc lecture seule. Cette
+    // phrase était, DANS SES PROPRES TERMES, un énoncé de périmètre pour
+    // `S-E01-1b`, et la dette qu'elle nommait était `PF-193`. ADR-047 prend la
+    // décision différée : les verbes d'écriture sont accordés, bornés par six
+    // policies `AS RESTRICTIVE` qui rendent un rôle SYSTÈME inécrivable — un
+    // RÉTRÉCISSEMENT par rapport à aujourd'hui, où l'app écrit ces tables comme
+    // PROPRIÉTAIRE, sur tous les tenants, sous aucun prédicat.
+    //
+    // L'ASYMÉTRIE EST LE POINT, et elle est MESURÉE : il n'existe aucun site
+    // `rolePermission.update*` dans `apps/api/src` ni `apps/worker/src`, donc
+    // `role_permission` ne reçoit PAS `UPDATE`. Une symétrie de rédaction aurait
+    // accordé un privilège sans appelant — exactement le « pure blast radius »
+    // qu'ADR-042 §D5 refuse, et que sa modification (ADR-047 §D4) préserve.
     expect([...checker.UNCOVERED_EXPECTED].sort()).toEqual(['role', 'role_permission']);
+    const decided: Record<string, string> = {
+      role: 'SELECT, INSERT, UPDATE, DELETE',
+      role_permission: 'SELECT, INSERT, DELETE',
+    };
     for (const table of ['role', 'role_permission']) {
       const entry = sibling.DERIVED_TABLES.find((d) => d.child === table);
-      expect(entry?.privileges).toBe('SELECT');
+      expect(entry?.privileges).toBe(decided[table]);
+      // Et le garde reste COMPLET PAR COMMANDE même là où le grant ne l'est pas :
+      // `role_permission` reçoit quand même sa policy `FOR UPDATE`, pour qu'un
+      // élargissement futur du GRANT ne puisse pas ouvrir un trou en une ligne.
+      expect(sibling.WRITE_GUARD_TABLES).toContain(table);
       expect(checker.PLAN.some((planned) => planned.table === table)).toBe(false);
     }
+    expect(sibling.WRITE_GUARD_COMMANDS.map((k) => k.suffix)).toEqual([
+      'insert',
+      'update',
+      'delete',
+    ]);
     // …et la liste n'est PAS devenue une liste d'exemption : la phrase qui
     // l'interdit reste, et l'en-tête nomme désormais le frère qui les prouve.
     expect(CHECKER).toContain('never a way to make a red go away');
@@ -913,6 +946,134 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
       const v = checker.cutoverVerdict({ files: 0, withTenantCallers: 0, prismaCallSites: 0 });
       expect(v.kind).toBe('vacuous');
       expect(v.detail).toContain('vacuous');
+    });
+  });
+
+  /**
+   * S-E01-1c / TOOL-32 — AC-10 : le bloc CUTOVER READINESS devient CONSCIENT DU
+   * VERBE et CONSCIENT DU RÉCEPTEUR.
+   *
+   * LE DÉFAUT MESURÉ QU'IL FERME, en deux moitiés indépendantes :
+   *
+   *   1. VERBE. L'ancienne rédaction ne posait qu'une question — « du code de
+   *      production mentionne-t-il une table qui ne détient AUCUNE ligne de
+   *      grant ? ». Une table détenant `SELECT` et ÉCRITE par la production
+   *      PASSAIT. C'est exactement l'état de `role` / `role_permission` après
+   *      `S-E01-1b`, c'est-à-dire `PF-193` : le contrôle censé dire « la bascule
+   *      est sûre » était aveugle au seul bloqueur de son propre chemin.
+   *   2. RÉCEPTEUR. L'ancre était `\bprisma\.`. MESURÉ sur ce checkout : 722
+   *      sites `prisma.<modèle>.<verbe>` et 86 sites `tx.<modèle>.<verbe>`. Les
+   *      CINQ écritures de PF-193 sont des appels `tx.` (elles sont dans un
+   *      `$transaction(async (tx …)`), comme `tx.tenant.upsert` (PF-185). Un
+   *      classifieur conscient du verbe posé sur l'ancienne ancre en aurait
+   *      rendu ZÉRO.
+   *
+   * Le classifieur est une fonction PURE, donc chaque branche est pilotée ici
+   * sans base de données et sans scan du dépôt.
+   */
+  describe('AC-10 — le classifieur verbe -> privilège est PUR, et un verbe inconnu est REMONTÉ', () => {
+    it('les quatre familles de verbes rendent le privilège que le moteur exigera', () => {
+      for (const verb of ['create', 'createMany', 'createManyAndReturn']) {
+        expect(checker.privilegesForVerb(verb)).toEqual(['INSERT']);
+      }
+      for (const verb of ['update', 'updateMany']) {
+        expect(checker.privilegesForVerb(verb)).toEqual(['UPDATE']);
+      }
+      for (const verb of ['delete', 'deleteMany']) {
+        expect(checker.privilegesForVerb(verb)).toEqual(['DELETE']);
+      }
+      for (const verb of [
+        'findFirst',
+        'findFirstOrThrow',
+        'findMany',
+        'findUnique',
+        'findUniqueOrThrow',
+        'count',
+        'aggregate',
+        'groupBy',
+      ]) {
+        expect(checker.privilegesForVerb(verb)).toEqual(['SELECT']);
+      }
+    });
+
+    it('`upsert` exige LES DEUX, et c’est la raison pour laquelle un contrôle par table ne pouvait rien dire', () => {
+      // `register.controller.ts` fait `tenant.upsert` sur une table qui détient
+      // `SELECT`. Un contrôle « la table a-t-elle une ligne de grant ? » répond
+      // oui ; la vérité est qu'il lui manque INSERT **et** UPDATE (PF-185).
+      expect(checker.privilegesForVerb('upsert')).toEqual(['INSERT', 'UPDATE']);
+    });
+
+    it('un verbe INCONNU rend `null` — remonté, jamais silencieusement ignoré', () => {
+      // Le mode de défaillance d'une table de correspondance est qu'un NOUVEAU
+      // verbe Prisma se classe « n'a besoin de rien ». `null` force la branche
+      // qui l'imprime.
+      expect(checker.privilegesForVerb('rollbackEverything')).toBeNull();
+      expect(checker.privilegesForVerb('constructor')).toBeNull();
+      expect(checker.privilegesForVerb('toString')).toBeNull();
+      expect(CHECKER_CODE).toContain('UNRECOGNISED verb was reported rather than dropped');
+    });
+
+    it('le jeu de RÉCEPTEURS est une constante nommée qui contient `tx`', () => {
+      expect([...checker.PRISMA_RECEIVERS].sort()).toEqual(['prisma', 'this.prisma', 'tx']);
+      // Le regex est CONSTRUIT depuis la constante : ajouter un récepteur est UNE
+      // seule édition, jamais deux littéraux qui divergent.
+      expect(CHECKER_CODE).toContain('PRISMA_RECEIVERS.map(');
+      // …et un alias de callback hors du jeu est REMONTÉ, pas supposé absent.
+      expect(CHECKER_CODE).toContain('foreignReceivers');
+      expect(CHECKER_CODE).toContain('TRANSACTION_ALIAS_RE');
+    });
+
+    it('la NON-VACUITÉ est asserée dans LES DEUX SENS', () => {
+      // Un scan qui ne classe rien imprimerait un bulletin de santé impeccable
+      // pour un corpus qu'il n'a jamais lu — le défaut de PF-02 lui-même.
+      expect(checker.MIN_CLASSIFIED_CALL_SITES).toBeGreaterThanOrEqual(400);
+      expect(CHECKER_CODE).toContain('MIN_CLASSIFIED_CALL_SITES');
+      // …et l'autre sens : une comparaison qui répond toujours « non » ferait de
+      // chaque `[LIMIT]` un faux positif.
+      expect(CHECKER_CODE).toContain('readiness.satisfied.length === 0');
+    });
+
+    it('le résidu est AGRÉGÉ par (table, verbe), avec le nombre de sites et UN exemple path:line', () => {
+      expect(CHECKER_CODE).toContain('AC-9 CUTOVER BLOCKER:');
+      expect(CHECKER_CODE).toContain('call site(s) via');
+      expect(CHECKER_CODE).toContain('entry.example');
+      // La logique de RATIO de `cutoverVerdict` n'est PAS touchée par AC-10 :
+      // « quelle proportion des sites pose le GUC » et « ce verbe a-t-il son
+      // privilège » sont deux questions, et fusionner les deux réponses est la
+      // façon dont l'une masque l'autre.
+      expect(CHECKER_CODE).toContain('uncovered > 0');
+      expect(CHECKER_CODE).toContain('withTenantCallers === 0');
+    });
+
+    it('AC-10 porte son propre fail-before / pass-after sur `role` et `role_permission`', () => {
+      // Les deux tables ÉTAIENT dans la liste des bloqueurs avant cette story
+      // (SELECT détenu, cinq sites d'écriture). Leur ABSENCE est ce que « PF-193
+      // est fermée » VEUT DIRE, et elle est assertée plutôt que racontée.
+      expect(CHECKER_CODE).toContain('AC-10 PF-193 is CLOSED');
+      expect(CHECKER_CODE).toContain('WRITE_GUARD_TABLES');
+      expect([...sibling.WRITE_GUARD_TABLES].sort()).toEqual(['role', 'role_permission']);
+    });
+
+    it('les bords honnêtes du scan sont IMPRIMÉS, y compris celui que la technique ne peut pas voir', () => {
+      // Le SQL brut ne porte ni modèle ni verbe : PF-197, deux `CREATE UNIQUE
+      // INDEX` au boot, tous deux emballés dans un try/catch qui les dégrade en
+      // `logger.warn` — donc silencieux après la bascule.
+      expect(CHECKER_CODE).toContain('rawSqlSites');
+      expect(CHECKER_CODE).toContain('PF-197');
+      // Et les écritures IMBRIQUÉES de Prisma, qui n'émettent aucun jeton
+      // `récepteur.modèle.verbe` : la LISTE de sites est incomplète même quand
+      // le VERDICT est juste, et le dire est la différence avec le taire.
+      expect(CHECKER_CODE).toContain('NESTED writes');
+    });
+
+    it('AC-11 — le résidu est REPORTÉ TEL QUE MESURÉ, et il falsifie deux findings pré-alloués', () => {
+      // MESURÉ ce run : `20260813120000` accorde `SELECT, INSERT, UPDATE,
+      // DELETE` à chaque table tenant-scopée non append-only. La prémisse « les
+      // 44 ne détiennent que SELECT, INSERT » — sur laquelle PF-195 et PF-196
+      // reposaient — est donc FAUSSE, et un id dépensé sur un défaut inexistant
+      // est pire que pas d'id du tout.
+      expect(CHECKER_CODE).toContain('falsifies two pre-allocated findings');
+      expect(CHECKER_CODE).toContain('20260813120000:480');
     });
   });
 

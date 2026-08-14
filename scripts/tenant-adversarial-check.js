@@ -162,6 +162,11 @@ const {
   REFERENCE_SURFACE,
   TENANT_GUC,
   VERDICT_EXIT_CODES,
+  // S-E01-1c — the two tables the write guard covers, IMPORTED and never
+  // re-typed: AC-10's fail-before / pass-after asserts that neither is a
+  // verb-aware cutover blocker any more, and a local literal here would be a
+  // second source of truth about which tables the sibling migration granted.
+  WRITE_GUARD_TABLES,
   fid,
   isLoopbackHost,
   lit,
@@ -221,6 +226,21 @@ const QUIESCE_SLEEP_SECONDS = 0.1;
  * five FK-derived ones are all seeded, so COVERED is 50.
  */
 const MIN_COVERED_TABLES = 40;
+
+/**
+ * S-E01-1c / TOOL-32 — the NON-VACUITY FLOOR of the verb-aware scan.
+ *
+ * Measured on this checkout: 722 `prisma.<model>.<verb>` sites plus 86 `tx.`
+ * ones, of which the great majority carry a recognised verb and a catalog table.
+ * A MINIMUM and not an expectation, so the corpus growing cannot make it red.
+ *
+ * It exists because every AC-10 line is a DIFFERENCE between what a verb needs
+ * and what a grant holds: a scan that matched nothing would print a clean bill
+ * of health for a corpus it never read. That is PF-02's own failure mode, and
+ * the previous anchor (`\bprisma\.`, which could not see one `tx.` call) is how
+ * close this block already came to it.
+ */
+const MIN_CLASSIFIED_CALL_SITES = 400;
 
 /**
  * AC-2 / ADR-045 §D3 — the UNCOVERED partition, NAMED with a reason per entry.
@@ -1812,6 +1832,81 @@ function prismaModelName(table) {
   return table.replace(/_([a-z0-9])/g, (_m, ch) => String(ch).toUpperCase());
 }
 
+// ---------------------------------------------------------------------------
+// S-E01-1c / TOOL-32 — AC-9 becomes VERB-AWARE and RECEIVER-AWARE.
+//
+// THE DEFECT THIS CLOSES, measured before it was written. The block below used
+// to ask ONE question: "does production code mention a table that holds NO grant
+// row at all?" A table granted `SELECT` and WRITTEN by production code passed —
+// which is exactly the state `role` and `role_permission` were in after
+// `S-E01-1b`, i.e. the very PF-193 the current slice exists to close. The check
+// built to say "the cutover is safe" was blind to the only blocker on its path.
+//
+// AND IT WAS AIMED AT THE WRONG TOKEN. The anchor was `\bprisma\.`, measured
+// against the corpus: 722 `prisma.<model>.<verb>` sites and 86 `tx.<model>.<verb>`
+// sites. ALL FIVE PF-193 writes are `tx.` calls (they are inside
+// `$transaction(async (tx …)`), as is `tx.tenant.upsert` (PF-185). A verb-aware
+// classifier on the old anchor would have returned ZERO of them.
+// ---------------------------------------------------------------------------
+
+/**
+ * The receivers a Prisma model call can be reached through, as a NAMED CONSTANT
+ * rather than a regex buried in a scan.
+ *
+ * `tx` is not a guess: it is the ONLY transaction-callback identifier in the
+ * corpus (measured, 47/47 matches of `$transaction(async (tx`), and the scan
+ * below REPORTS any other alias it finds instead of silently ignoring it — the
+ * difference between a closed set and a hopeful one.
+ */
+const PRISMA_RECEIVERS = Object.freeze(['prisma', 'this.prisma', 'tx']);
+
+/** Built from the constant, so adding a receiver is one edit and not two. */
+const PRISMA_CALL_SITE_RE = new RegExp(
+  `(?<![.\\w])(?:${PRISMA_RECEIVERS.map((r) => r.replace(/\./g, '\\.')).join('|')})` +
+    '\\.([A-Za-z][A-Za-z0-9_]*)\\.([A-Za-z][A-Za-z0-9_]*)',
+  'g',
+);
+
+/** Transaction callbacks whose parameter is NOT in `PRISMA_RECEIVERS`. */
+const TRANSACTION_ALIAS_RE = /\$transaction\s*\(\s*async\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)/g;
+
+/** Raw SQL, which carries no model and no verb and therefore no classification. */
+const RAW_SQL_RE = /\$(?:execute|query)Raw(?:Unsafe)?\s*[(`]/g;
+
+/**
+ * THE CLASSIFIER — a PURE function, so the guard spec drives every branch with
+ * no database and no repository scan.
+ *
+ * An UNRECOGNISED verb returns `null` and is REPORTED, never silently dropped:
+ * the failure mode of a lookup table is that a new Prisma verb (or a helper
+ * named like one) quietly classifies as "needs nothing".
+ */
+const VERB_PRIVILEGES = Object.freeze({
+  aggregate: Object.freeze(['SELECT']),
+  count: Object.freeze(['SELECT']),
+  create: Object.freeze(['INSERT']),
+  createMany: Object.freeze(['INSERT']),
+  createManyAndReturn: Object.freeze(['INSERT']),
+  delete: Object.freeze(['DELETE']),
+  deleteMany: Object.freeze(['DELETE']),
+  findFirst: Object.freeze(['SELECT']),
+  findFirstOrThrow: Object.freeze(['SELECT']),
+  findMany: Object.freeze(['SELECT']),
+  findUnique: Object.freeze(['SELECT']),
+  findUniqueOrThrow: Object.freeze(['SELECT']),
+  groupBy: Object.freeze(['SELECT']),
+  // `upsert` needs BOTH, and that is the whole reason a table-level check could
+  // never have said anything useful: `tenant.upsert` (PF-185) needs INSERT and
+  // UPDATE on a table that holds SELECT.
+  upsert: Object.freeze(['INSERT', 'UPDATE']),
+  update: Object.freeze(['UPDATE']),
+  updateMany: Object.freeze(['UPDATE']),
+});
+
+function privilegesForVerb(verb) {
+  return Object.prototype.hasOwnProperty.call(VERB_PRIVILEGES, verb) ? VERB_PRIVILEGES[verb] : null;
+}
+
 /**
  * The AC-9 `withTenant` verdict, as a PURE function so the guard spec can drive
  * every branch without a database.
@@ -1863,12 +1958,33 @@ function cutoverVerdict({ files, withTenantCallers, prismaCallSites }) {
   };
 }
 
-function cutoverReadiness(ungrantedTables) {
+/**
+ * S-E01-1c / TOOL-32 — the scan.
+ *
+ * `knownTables` is the LIVE catalog's table list, so the model -> table mapping
+ * is measured rather than frozen, and a model no table answers to is reported
+ * (`unmappedModels`) instead of being counted as satisfied.
+ *
+ * `grants` maps table -> `'DELETE|INSERT|SELECT'`, exactly as the census emits
+ * it, so this function compares a REQUIRED privilege against a HELD one. That is
+ * the whole change: the old form only asked whether the table had a grant ROW.
+ */
+function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map() } = {}) {
   const roots = [join(REPO_ROOT, 'apps', 'api', 'src'), join(REPO_ROOT, 'apps', 'worker', 'src')];
   const files = roots.flatMap((root) => sourceFiles(root));
+  const modelToTable = new Map(knownTables.map((table) => [prismaModelName(table), table]));
+
   let withTenantCallers = 0;
   let prismaCallSites = 0;
+  let rawSqlSites = 0;
+  let classified = 0;
   const reachable = new Map();
+  /** key `table\u0000PRIVILEGE` -> { table, privilege, verbs:Set, hits, example } */
+  const required = new Map();
+  const unknownVerbs = new Map();
+  const unmappedModels = new Map();
+  const foreignReceivers = new Map();
+
   for (const file of files) {
     let text;
     try {
@@ -1876,15 +1992,94 @@ function cutoverReadiness(ungrantedTables) {
     } catch {
       continue;
     }
+    const relative = file.slice(REPO_ROOT.length + 1).split('\\').join('/');
     withTenantCallers += (text.match(/\.withTenant\s*\(/g) ?? []).length;
-    prismaCallSites += (text.match(/\bprisma\.[a-zA-Z0-9_]+\.[a-zA-Z]/g) ?? []).length;
-    for (const table of ungrantedTables) {
-      const model = prismaModelName(table);
-      const hits = (text.match(new RegExp(`\\bprisma\\.${model}\\.`, 'g')) ?? []).length;
-      if (hits > 0) reachable.set(table, (reachable.get(table) ?? 0) + hits);
+    rawSqlSites += (text.match(RAW_SQL_RE) ?? []).length;
+    for (const [, alias] of text.matchAll(TRANSACTION_ALIAS_RE)) {
+      if (!PRISMA_RECEIVERS.includes(alias)) {
+        foreignReceivers.set(alias, (foreignReceivers.get(alias) ?? 0) + 1);
+      }
+    }
+    // The line index is built once per file: `String.prototype.split` over the
+    // whole text for every match would be quadratic on a 700-site corpus.
+    const lineStarts = [0];
+    for (let i = 0; i < text.length; i += 1) if (text[i] === '\n') lineStarts.push(i + 1);
+    const lineOf = (index) => {
+      let low = 0;
+      let high = lineStarts.length - 1;
+      while (low < high) {
+        const mid = (low + high + 1) >> 1;
+        if (lineStarts[mid] <= index) low = mid;
+        else high = mid - 1;
+      }
+      return low + 1;
+    };
+
+    for (const match of text.matchAll(PRISMA_CALL_SITE_RE)) {
+      const [, model, verb] = match;
+      prismaCallSites += 1;
+      const table = modelToTable.get(model);
+      if (table === undefined) {
+        // `$transaction`, `$connect` and friends never reach here (they start
+        // with `$`), so an unmapped model is a real gap: a model whose table the
+        // catalog does not enumerate, or a property that merely looks like one.
+        unmappedModels.set(model, (unmappedModels.get(model) ?? 0) + 1);
+        continue;
+      }
+      const privileges = privilegesForVerb(verb);
+      if (privileges === null) {
+        unknownVerbs.set(`${model}.${verb}`, (unknownVerbs.get(`${model}.${verb}`) ?? 0) + 1);
+        continue;
+      }
+      classified += 1;
+      for (const privilege of privileges) {
+        const key = `${table}\u0000${privilege}`;
+        const entry = required.get(key) ?? {
+          table,
+          privilege,
+          verbs: new Set(),
+          hits: 0,
+          example: `${relative}:${lineOf(match.index)}`,
+        };
+        entry.verbs.add(verb);
+        entry.hits += 1;
+        required.set(key, entry);
+      }
+      if (ungrantedTables.includes(table)) {
+        reachable.set(table, (reachable.get(table) ?? 0) + 1);
+      }
     }
   }
-  return { files: files.length, withTenantCallers, prismaCallSites, reachable };
+
+  // The verdict per (table, privilege): HELD or NOT. A table absent from
+  // `grants` holds nothing, which is the old check's case as a special case of
+  // the new one rather than a second code path.
+  const held = (table, privilege) =>
+    String(grants.get(table) ?? '')
+      .split('|')
+      .map((p) => p.trim().toUpperCase())
+      .includes(privilege);
+  const unsatisfied = [];
+  const satisfied = [];
+  for (const entry of required.values()) {
+    (held(entry.table, entry.privilege) ? satisfied : unsatisfied).push(entry);
+  }
+  unsatisfied.sort((a, b) => (a.table + a.privilege).localeCompare(b.table + b.privilege));
+
+  return {
+    files: files.length,
+    withTenantCallers,
+    prismaCallSites,
+    rawSqlSites,
+    classified,
+    reachable,
+    required,
+    satisfied,
+    unsatisfied,
+    unknownVerbs,
+    unmappedModels,
+    foreignReceivers,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2053,7 +2248,14 @@ async function main() {
                              AND g.table_name = c.relname);
        SELECT 'POLICIES|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
          JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname='public' AND p.polname=${lit(POLICY_NAME)};`,
+        WHERE n.nspname='public' AND p.polname=${lit(POLICY_NAME)};
+       -- S-E01-1c / TOOL-32 — EVERY base table, so the verb-aware scan maps a
+       -- Prisma model back to a table from the LIVE CATALOG rather than from a
+       -- frozen list. A model that answers to no table is REPORTED, never
+       -- counted as satisfied.
+       SELECT 'ALL_TABLES|' || coalesce(string_agg(c.relname, ',' ORDER BY c.relname), '')
+         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relkind='r';`,
     );
     if (census.status !== 0) {
       throw new ToolingUnavailable(`the enumeration query failed: ${census.stderr.trim()}`);
@@ -2520,11 +2722,153 @@ $mut$;`;
     //          conclusion "safe to cut over" is FALSE, which is PF-02 one level
     //          down. This block is a set of named assertions, not prose.
     const ungranted = names(cen.get('UNGRANTED')).filter((table) => table !== '_prisma_migrations');
-    const readiness = cutoverReadiness(ungranted);
+    const allTables = names(cen.get('ALL_TABLES'));
+    const readiness = cutoverReadiness(ungranted, { knownTables: allTables, grants });
     const verdict = cutoverVerdict(readiness);
     if (verdict.kind === 'vacuous') fail(verdict.label, verdict.detail);
     else if (verdict.kind === 'limit') limit(verdict.label, verdict.detail);
     else record(verdict.label, verdict.detail);
+
+    // ---- 14b. S-E01-1c / TOOL-32 — THE VERB-AWARE HALF.
+    //
+    //      NON-VACUITY FIRST, in both directions. Everything below is a
+    //      difference between "what a verb needs" and "what the grant holds", so
+    //      a scan that classified nothing would print a clean bill of health for
+    //      a corpus it never read — the exact shape of PF-02.
+    if (readiness.classified < MIN_CLASSIFIED_CALL_SITES) {
+      fail(
+        'AC-9 the verb-aware scan classified a real corpus',
+        `only ${readiness.classified} (table, verb) call sites were classified across ${readiness.files} ` +
+          `source files, below the floor of ${MIN_CLASSIFIED_CALL_SITES}. The old scan anchored on ` +
+          '`\\bprisma\\.` and could not see a single `tx.` site — all five PF-193 writes are `tx.` calls — ' +
+          'so a low number here is most likely the receiver set having regressed, not the corpus shrinking.',
+      );
+    } else if (readiness.satisfied.length === 0) {
+      fail(
+        'AC-9 the verb-aware scan can answer SATISFIED as well as UNSATISFIED',
+        'not one (table, privilege) pair was found satisfied, so every "[LIMIT]" below would be printed by ' +
+          'a comparison that always answers no',
+      );
+    } else {
+      record(
+        'AC-9 CUTOVER READINESS is VERB-AWARE (TOOL-32): each call site is classified by the privilege its ' +
+          'verb needs, and that privilege is required in role_table_grants — not merely a grant row for the table',
+        `${readiness.classified} classified call site(s) over ${readiness.required.size} (table, privilege) ` +
+          `pair(s) from receivers {${PRISMA_RECEIVERS.join(', ')}}; ${readiness.satisfied.length} satisfied, ` +
+          `${readiness.unsatisfied.length} not`,
+      );
+    }
+
+    // ONE aggregated [LIMIT] per unsatisfied (table, verb-privilege), naming the
+    // table, the verb, the call-site count and ONE path:line — enough to act on,
+    // and never one line per call site.
+    for (const entry of readiness.unsatisfied) {
+      limit(
+        `AC-9 CUTOVER BLOCKER: ${entry.table} needs ${entry.privilege} and ${app.user} does not hold it`,
+        `${entry.hits} call site(s) via ${[...entry.verbs].sort().join(', ')} — e.g. ${entry.example}. ` +
+          `Held today: ${grants.get(entry.table) || 'nothing'}. After the cutover each raises 42501.`,
+      );
+    }
+    // AC-10's own fail-before / pass-after, asserted rather than narrated: these
+    // two WERE in the list before this slice (SELECT held, five write call
+    // sites), and their absence from it is what PF-193 closing MEANS.
+    const blockedTables = new Set(readiness.unsatisfied.map((entry) => entry.table));
+    for (const table of WRITE_GUARD_TABLES) {
+      if (blockedTables.has(table)) {
+        fail(
+          `AC-10 PF-193 is CLOSED: ${table} is no longer a verb-aware cutover blocker`,
+          `it is still listed above. The write GRANT this slice ships did not reach it, so the admin ` +
+            'portal`s custom-role editor would still lose its write path at the cutover.',
+        );
+      } else {
+        record(`AC-10 PF-193 CLOSED for ${table}: every verb its call sites use is now granted`);
+      }
+    }
+    // AC-11 — WHAT THE VERB-AWARE SCAN ACTUALLY SURFACES BEYOND role /
+    // role_permission, MEASURED THIS RUN INSTEAD OF ASSUMED.
+    //
+    // The slice brief pre-allocated two findings on a premise this scan
+    // FALSIFIES, and reporting the measurement is the deliverable here — an id
+    // spent on a defect that does not exist is worse than no id at all:
+    //
+    //   • "the 44 tenant-scoped tables hold SELECT, INSERT only while ~47
+    //     (model, UPDATE) pairs exist" — FALSE. `20260813120000` line 480 grants
+    //     `SELECT, INSERT, UPDATE, DELETE` to every tenant-scoped table that is
+    //     not append-only; only `audit_log` and `conversation_message` are
+    //     narrowed, and no production call site updates or deletes either.
+    //   • "no DELETE is granted anywhere while 18 (model, DELETE) pairs exist" —
+    //     FALSE for the same reason. `ADR-042 §D5`'s "no caller exists" was a
+    //     measurement about the tenant-DERIVED five, never about the 44, and it
+    //     is amended by ADR-047 §D4 rather than overridden.
+    //
+    // What remains is exactly what the pre-mortem predicted: TWO pairs, both on
+    // `tenant`, both already owned by PF-185 — printed as [LIMIT] lines above by
+    // the loop, not narrated here. Plus the scan's own edges, below.
+    record(
+      'AC-11 the verb-aware residual is REPORTED AS MEASURED, and it falsifies two pre-allocated findings',
+      `${readiness.unsatisfied.length} unsatisfied (table, privilege) pair(s) repo-wide: ` +
+        `${readiness.unsatisfied.map((e) => `${e.table}/${e.privilege}`).join(', ') || 'none'}. The 44 ` +
+        'tenant-scoped tables DO hold UPDATE and DELETE (20260813120000:480), so the "SELECT, INSERT only" ' +
+        'premise behind PF-195 / PF-196 is false and no id is spent on it.',
+    );
+
+    // The scan's HONEST EDGES, printed rather than implied. A technique's limit
+    // stated is a limit; a technique's limit unstated is a false clean bill.
+    if (readiness.rawSqlSites > 0) {
+      limit(
+        `AC-9 SCAN LIMIT: ${readiness.rawSqlSites} raw-SQL call site(s) carry no model and no verb, so this ` +
+          'classifier cannot see them at all',
+        'PF-197 (P2): two of them are boot-time `CREATE UNIQUE INDEX` through `$executeRawUnsafe` ' +
+          '(`guardianship-claim-index.bootstrap.ts`, `booking-index.bootstrap.ts`). As a non-owner those ' +
+          'raise `must be owner of relation`, and BOTH are wrapped in a try/catch that downgrades to ' +
+          '`logger.warn` — so after the cutover the ADR-022 open-claim idempotency guard and the booking ' +
+          'index silently stop being ensured. Soft-failing, and invisible to any grant matrix.',
+      );
+    }
+    if (readiness.foreignReceivers.size > 0) {
+      limit(
+        'AC-9 SCAN LIMIT: a `$transaction` callback binds a receiver this scan does not follow',
+        [...readiness.foreignReceivers].map(([alias, hits]) => `${alias} (${hits})`).join(', ') +
+          `. The closed set is {${PRISMA_RECEIVERS.join(', ')}}, measured as complete when this was ` +
+          'written; an alias appearing here means model calls inside that callback are UNCLASSIFIED, not ' +
+          'that they are safe.',
+      );
+    } else {
+      record(
+        `AC-9 every \`$transaction\` callback binds one of {${PRISMA_RECEIVERS.join(', ')}} — the receiver ` +
+          'set is closed BY MEASUREMENT and re-measured on every run, not asserted once and trusted',
+      );
+    }
+    if (readiness.unknownVerbs.size > 0) {
+      limit(
+        'AC-9 SCAN LIMIT: an UNRECOGNISED verb was reported rather than dropped',
+        [...readiness.unknownVerbs].map(([name, hits]) => `${name} (${hits})`).join(', ') +
+          '. A lookup table`s failure mode is that a new verb classifies as "needs nothing"; these are ' +
+          'printed so that failure cannot be silent.',
+      );
+    }
+    if (readiness.unmappedModels.size > 0) {
+      limit(
+        'AC-9 SCAN LIMIT: a receiver property looks like a Prisma model but matches no catalog table',
+        [...readiness.unmappedModels].map(([name, hits]) => `${name} (${hits})`).join(', '),
+      );
+    }
+    // Prisma NESTED writes carry no `<receiver>.<model>.<verb>` token at all —
+    // `roles.controller.ts:161` attaches permissions through
+    // `rolePermissions: { create: [...] }`, a `role_permission` INSERT this scan
+    // structurally cannot see. The table is still surfaced (via :252), so the
+    // VERDICT is right and the call-site LIST is incomplete. Stated, because the
+    // day the only writer of some table is a nested write, it will not be.
+    record(
+      'AC-9 SCAN LIMIT stated: Prisma NESTED writes (`rolePermissions: { create: [...] }`, ' +
+        'roles.controller.ts:161) emit no receiver.model.verb token and are invisible to this classifier',
+      'measured harmless today — every table reached by a nested write is also reached by a direct one — ' +
+        'and recorded so that "every write is classified" is never read as a stronger claim than it is',
+    );
+
+    // The OLD table-level question is KEPT, not replaced: a table with NO grant
+    // row at all is a different failure from a table missing one verb, and the
+    // remedies differ (a GRANT versus a decision about whether to grant).
     if (readiness.reachable.size > 0) {
       limit(
         'AC-9 CUTOVER READINESS: production code reaches tables that are UNGRANTED to ' + app.user,
@@ -2671,7 +3015,10 @@ module.exports = {
   APPEND_ONLY_TABLES,
   APPEND_ONLY_DML,
   FULL_DML,
+  MIN_CLASSIFIED_CALL_SITES,
   MIN_COVERED_TABLES,
+  PRISMA_RECEIVERS,
+  VERB_PRIVILEGES,
   OUTBOX_DML,
   OWN_PROBE_OFFSET,
   FOREIGN_PROBE_OFFSET,
@@ -2688,5 +3035,9 @@ module.exports = {
   TENANT_B,
   UNCOVERED_EXPECTED,
   cutoverVerdict,
+  // S-E01-1c — the classifier is exported as a PURE function so the guard spec
+  // drives every branch (each verb, the unrecognised one, upsert's two
+  // privileges) with no database and no repository scan.
+  privilegesForVerb,
   prismaModelName,
 };
