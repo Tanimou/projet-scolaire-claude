@@ -39,8 +39,21 @@ const MIGRATION_DIR_NAME = '20260813120000_tenant_rls_policies';
 const MIGRATION_PATH = join(MIGRATIONS_DIR, MIGRATION_DIR_NAME, 'migration.sql');
 const CHECKER_PATH = join(REPO_ROOT, 'scripts', 'rls-isolation-check.js');
 
+/**
+ * S-E01-2c — la SECONDE migration, celle des tables tenant-DÉRIVÉES.
+ *
+ * Elle a son propre chemin et ses propres cliquets : `MIGRATION` ci-dessus est
+ * épinglée PAR NOM sur `20260813120000_tenant_rls_policies`, que cette story ne
+ * touche pas (une migration appliquée ne se réécrit pas — ni le ledger ni le
+ * cliquet des 44 noms ne le supporteraient). Les deux fichiers sont donc lus
+ * séparément, et aucune assertion de l'un ne peut passer grâce à l'autre.
+ */
+const DERIVED_MIGRATION_DIR_NAME = '20260813180000_tenant_rls_derived_policies';
+const DERIVED_MIGRATION_PATH = join(MIGRATIONS_DIR, DERIVED_MIGRATION_DIR_NAME, 'migration.sql');
+
 /** Chemins NOMMÉS : lecture directe, échec au chargement s'ils manquent (TOOL-17b). */
 const MIGRATION = readFileSync(MIGRATION_PATH, 'utf8');
+const DERIVED_MIGRATION = readFileSync(DERIVED_MIGRATION_PATH, 'utf8');
 const SCHEMA = readFileSync(SCHEMA_PATH, 'utf8');
 const CHECKER = readFileSync(CHECKER_PATH, 'utf8');
 
@@ -57,7 +70,92 @@ function executableJs(source: string): string {
 }
 
 const MIGRATION_CODE = executableSql(MIGRATION);
+const DERIVED_MIGRATION_CODE = executableSql(DERIVED_MIGRATION);
 const CHECKER_CODE = executableJs(CHECKER);
+
+/**
+ * Le tableau littéral 5 × 4 de la migration dérivée : enfant, colonne FK,
+ * parent, chaîne de privilèges.
+ *
+ * Extrait du SQL EXÉCUTABLE : les noms cités dans l'en-tête (les six exclues le
+ * sont, nommément) ne doivent pas être comptés comme placés sous policy.
+ */
+function derivedTuple(): Array<{ child: string; fk: string; parent: string; privileges: string }> {
+  const block = /derived\s+CONSTANT\s+text\[\]\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]\s*;/.exec(DERIVED_MIGRATION_CODE);
+  if (!block) return [];
+  return [
+    ...(block[1] ?? '').matchAll(/ARRAY\[\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*\]/g),
+  ].map((m) => ({
+    child: m[1] as string,
+    fk: m[2] as string,
+    parent: m[3] as string,
+    privileges: m[4] as string,
+  }));
+}
+
+/** Le jeu FERMÉ de chaînes de privilèges déclaré par la migration dérivée. */
+function derivedAllowedPrivileges(): string[] {
+  const block = /allowed_privileges\s+CONSTANT\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]\s*;/.exec(
+    DERIVED_MIGRATION_CODE,
+  );
+  if (!block) return [];
+  return [...(block[1] ?? '').matchAll(/'([^']*)'/g)].map((m) => m[1] as string);
+}
+
+/**
+ * Les tables tenant-DÉRIVÉES selon `schema.prisma` : les modèles qui ne
+ * déclarent PAS `tenantId String` et qui portent le côté PROPRIÉTAIRE d'une
+ * relation (`@relation(fields: […])`) vers un modèle qui, lui, le déclare.
+ *
+ * C'est la même dérivation que celle que `rls-isolation-check.js` calcule sur
+ * `pg_constraint`, mais lue depuis la source — donc HERMÉTIQUE (ADR-039) : un
+ * sixième modèle dérivé livré sans ligne dans le tuple échoue ICI, sur toute
+ * machine, sans base de données.
+ */
+function schemaDerivedTables(): string[] {
+  const models = new Map<string, { table: string; body: string; hasTenant: boolean }>();
+  const pattern = /^model\s+(\w+)\s*\{([\s\S]*?)^\}/gm;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(SCHEMA)) !== null) {
+    const name = match[1] as string;
+    const body = match[2] ?? '';
+    const mapped = /@@map\("([^"]+)"\)/.exec(body);
+    models.set(name, {
+      table: mapped ? (mapped[1] as string) : name,
+      body,
+      hasTenant: /^\s*tenantId\s+String/m.test(body),
+    });
+  }
+  const derived: string[] = [];
+  for (const [, model] of models) {
+    if (model.hasTenant) continue;
+    // Le côté PROPRIÉTAIRE de la relation seulement : la liste inverse portée
+    // par le parent n'a pas de `@relation(fields: …)`, donc elle ne compte pas.
+    const parents = [...model.body.matchAll(/^\s*\w+\s+(\w+)\??\s+@relation\(\s*fields:/gm)].map(
+      (m) => m[1] as string,
+    );
+    if (parents.some((parent) => models.get(parent)?.hasTenant)) derived.push(model.table);
+  }
+  return derived.sort();
+}
+
+const DERIVED_TUPLE = derivedTuple();
+const DERIVED_ALLOWED_PRIVILEGES = derivedAllowedPrivileges();
+const SCHEMA_DERIVED_TABLES = schemaDerivedTables();
+
+/**
+ * AC-5b — le RÉSIDU : les tables sans `tenant_id` que la dérivation n'atteint
+ * pas. NOMMÉES, chacune avec sa raison, jamais globbées, et jamais dans un
+ * ensemble qui SOUSTRAIT du compte de policies attendu.
+ */
+const NON_DERIVED_EXPECTED = [
+  '_prisma_migrations', // le ledger de migrations — pas de la donnée de tenant
+  'outbox_event', // PF-185 — aucune FK, aucun discriminant : non dérivable
+  'permission', // donnée de référence par conception (ADR-015)
+  'role', // idem
+  'role_permission', // idem
+  'tenant', // AUTO-DISCRIMINANTE : sa clé primaire EST le discriminant
+];
 
 /**
  * Les noms de tables du tableau littéral de la migration.
@@ -297,6 +395,252 @@ describe('AC-13 — les 44 noms ne peuvent pas dériver de `schema.prisma`', () 
   });
 });
 
+describe('S-E01-2c AC-1 — la migration DÉRIVÉE existe, relue à la main, et ne réécrit pas sa sœur', () => {
+  it('elle est à son chemin nommé, dans le répertoire de migrations du ledger', () => {
+    expect(existsSync(DERIVED_MIGRATION_PATH)).toBe(true);
+    expect(readdirSync(MIGRATIONS_DIR)).toContain(DERIVED_MIGRATION_DIR_NAME);
+    // Et elle ne remplace PAS celle des 44 : une migration appliquée ne se
+    // réécrit pas, ni le ledger ni le cliquet des 44 noms ne le supporteraient.
+    expect(readdirSync(MIGRATIONS_DIR)).toContain(MIGRATION_DIR_NAME);
+    expect(DERIVED_MIGRATION_PATH).not.toEqual(MIGRATION_PATH);
+  });
+
+  it('elle n’a été produite ni par `db push` ni par `migrate dev`, et le dit', () => {
+    expect(DERIVED_MIGRATION_CODE).not.toContain('db push');
+    expect(DERIVED_MIGRATION_CODE).not.toContain('migrate dev');
+    expect(DERIVED_MIGRATION).toContain('RELUE À LA MAIN');
+  });
+
+  it('les NOMS sont littéraux et diffables ; seule la boucle est factorisée', () => {
+    // Une migration qui découvrirait ses tables depuis `information_schema`
+    // aurait un effet dépendant de la base où elle atterrit : irrelisable, et
+    // non déterministe sur les bases scratch des gardes.
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/from\s+information_schema/i);
+    expect(DERIVED_MIGRATION_CODE).toMatch(/FOR\s+i\s+IN\s+1\s*\.\.\s*array_length\(derived,\s*1\)/);
+  });
+
+  it('elle est RE-JOUABLE : chaque CREATE POLICY est précédé d’un DROP … IF EXISTS', () => {
+    expect(DERIVED_MIGRATION_CODE).toContain('DROP POLICY IF EXISTS tenant_isolation ON public.%I');
+    const dropAt = DERIVED_MIGRATION_CODE.indexOf('DROP POLICY IF EXISTS tenant_isolation');
+    const createAt = DERIVED_MIGRATION_CODE.indexOf('CREATE POLICY tenant_isolation');
+    expect(dropAt).toBeGreaterThan(-1);
+    expect(createAt).toBeGreaterThan(dropAt);
+  });
+
+  it('elle REFUSE de s’appliquer plutôt que de SAUTER une ligne', () => {
+    // Sauter livrerait une policy manquante sous un `migrate deploy` VERT — la
+    // forme exacte du défaut que cette story referme.
+    for (const guard of [
+      /array_length\(derived, 1\) IS DISTINCT FROM expected/,
+      /la table enfant public\.% est introuvable/,
+      /la table parente public\.% est introuvable/,
+      /ne porte pas la colonne/,
+      /ne porte pas de colonne tenant_id/,
+      /hors du jeu fermé/,
+      /aucun index ne mène par/,
+    ]) {
+      expect(DERIVED_MIGRATION_CODE).toMatch(guard);
+    }
+    // Sept refus, sept `RAISE EXCEPTION` — jamais un `CONTINUE`.
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/\bCONTINUE\b/);
+  });
+
+  it('elle borne l’attente du verrou et dit la posture de reprise', () => {
+    // `ENABLE ROW LEVEL SECURITY` prend un ACCESS EXCLUSIVE : catalogue seul,
+    // donc immédiat — mais il fait la queue derrière un lecteur long et bloque
+    // alors tous les lecteurs suivants.
+    expect(DERIVED_MIGRATION_CODE).toMatch(/SET\s+lock_timeout\s*=\s*'5s'/);
+    expect(DERIVED_MIGRATION).toContain('Posture de reprise');
+  });
+
+  it('elle CITE ADR-042 et ADR-032 au lieu de prendre la décision en commentaire', () => {
+    // Un commentaire de migration ne peut pas supersédér une décision de record.
+    expect(DERIVED_MIGRATION).toContain('ADR-042');
+    expect(DERIVED_MIGRATION).toContain('ADR-032');
+    expect(existsSync(join(REPO_ROOT, 'docs', 'adr', 'ADR-042-fk-path-tenant-isolation.md'))).toBe(true);
+  });
+});
+
+describe('S-E01-2c AC-2 — le prédicat à chemin FK, et les façons de l’écrire faux', () => {
+  it('c’est une forme EXISTS sur le parent, avec missing_ok ET nullif', () => {
+    expect(DERIVED_MIGRATION_CODE).toMatch(/EXISTS\s*\(\s*SELECT 1/);
+    expect(DERIVED_MIGRATION_CODE).toContain(
+      `p.tenant_id = nullif(current_setting('${TENANT_GUC}', true), '')::uuid`,
+    );
+    expect(DERIVED_MIGRATION_CODE).toMatch(/p\.id = %I\.%I/);
+  });
+
+  it('USING et WITH CHECK sont identiques PAR CONSTRUCTION, pas par relecture', () => {
+    // La même variable `predicate` est injectée deux fois dans le même
+    // `format()`. Il n'y a donc pas deux textes à maintenir en accord — et le
+    // vérificateur assertit en plus l'égalité des DEUX expressions désérialisées
+    // (`QUAL_MISMATCH`), ce que `WITH_CHECK_NULL` seul ne voit pas.
+    expect(DERIVED_MIGRATION_CODE).toContain('USING (%s) WITH CHECK (%s)');
+    expect(DERIVED_MIGRATION_CODE).toMatch(/child, predicate, predicate\)/);
+    expect(CHECKER_CODE).toContain('QUAL_MISMATCH');
+    expect(CHECKER_CODE).toContain('IS DISTINCT FROM pg_get_expr(p.polwithcheck, p.polrelid)');
+  });
+
+  it('le second argument de current_setting (missing_ok) n’est jamais omis', () => {
+    for (const call of DERIVED_MIGRATION_CODE.match(/current_setting\([^)]*\)/g) ?? []) {
+      expect(call).toContain(', true)');
+    }
+  });
+
+  it('le `nullif` n’est jamais retiré au profit d’un cast nu (F-1, mesuré)', () => {
+    // Après le COMMIT d'un `set_config(…, true)` le GUC vaut `''` et NON NULL :
+    // un cast nu lèverait 22P02 à la DEUXIÈME requête de chaque connexion du
+    // pool, et sur l'ENFANT seulement — que l'assertion `school` ne voit pas.
+    const bareCast = new RegExp(
+      `current_setting\\('${TENANT_GUC.replace(/\./g, '\\.')}',\\s*true\\)\\s*::\\s*uuid`,
+    );
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(bareCast);
+    expect(CHECKER_CODE).toContain('POOLED_D');
+  });
+
+  it('il ne compare jamais en texte, dans aucun sens', () => {
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/tenant_id\s*::\s*text/i);
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/::\s*text\s*=\s*.*tenant_id/i);
+  });
+
+  it('il n’écrit JAMAIS la forme fail-open `IS NULL OR` (DNC-10)', () => {
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/IS\s+NULL\s+OR/i);
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/\bOR\s+true\b/i);
+  });
+
+  it('la policy porte le MÊME NOM que les 44, et reste FOR ALL TO PUBLIC', () => {
+    // Le recensement compte PAR NOM : un autre nom sortirait les cinq du compte.
+    expect(DERIVED_MIGRATION_CODE).toContain('CREATE POLICY tenant_isolation ON public.%I');
+    expect(DERIVED_MIGRATION_CODE).toMatch(/FOR\s+ALL\s+TO\s+PUBLIC/);
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/CREATE POLICY[\s\S]{0,200}TO\s+app_user/);
+  });
+
+  it('et la moitié SÉCURITÉ reste inconditionnelle, seuls les GRANTs sont gardés', () => {
+    expect(DERIVED_MIGRATION_CODE).toMatch(
+      /EXISTS\s*\(\s*SELECT 1 FROM pg_roles WHERE rolname = 'app_user'\s*\)/,
+    );
+    const enableAt = DERIVED_MIGRATION_CODE.indexOf('ENABLE ROW LEVEL SECURITY');
+    const guardAt = DERIVED_MIGRATION_CODE.indexOf('IF has_app_user THEN');
+    expect(enableAt).toBeGreaterThan(-1);
+    expect(enableAt).toBeLessThan(guardAt);
+  });
+});
+
+describe('S-E01-2c AC-4 — cinq lignes, quatre littéraux, et un jeu de privilèges FERMÉ', () => {
+  it('le tuple est NON VIDE et porte exactement cinq lignes de quatre littéraux', () => {
+    // Deux listes vides sont « égales ». Le plancher vient en premier.
+    expect(DERIVED_TUPLE.length).toBe(5);
+    expect(new Set(DERIVED_TUPLE.map((r) => r.child)).size).toBe(5);
+    for (const row of DERIVED_TUPLE) {
+      expect(row.child).not.toBe('');
+      expect(row.fk).not.toBe('');
+      expect(row.parent).not.toBe('');
+      expect(row.privileges).not.toBe('');
+    }
+  });
+
+  it('chaque chemin FK nommé est celui qui a été MESURÉ sur le catalogue', () => {
+    // Une transposition de tuple est une lecture inter-tenant entièrement verte
+    // du point de vue du recensement, qui ne lit jamais le prédicat.
+    expect(
+      DERIVED_TUPLE.map((r) => `${r.child}.${r.fk} -> ${r.parent}`).sort(),
+    ).toEqual([
+      'announcement_receipt.announcement_id -> announcement',
+      'branding.school_id -> school',
+      'grade_revision.grade_id -> grade',
+      'import_row.batch_id -> import_batch',
+      'user_role.user_profile_id -> user_profile',
+    ]);
+  });
+
+  it('`user_role` passe par `user_profile_id`, JAMAIS par `role_id`', () => {
+    // `role` ne porte pas de `tenant_id` : ce chemin est une impasse (ADR-042
+    // §D2). Une policy routée par lui n'aurait rien à comparer.
+    const userRole = DERIVED_TUPLE.find((r) => r.child === 'user_role');
+    expect(userRole?.fk).toBe('user_profile_id');
+    expect(userRole?.parent).toBe('user_profile');
+    expect(DERIVED_TUPLE.some((r) => r.parent === 'role')).toBe(false);
+  });
+
+  it('les chaînes de privilèges viennent d’un jeu FERMÉ, et AUCUNE ne porte DELETE', () => {
+    expect(DERIVED_ALLOWED_PRIVILEGES).toEqual(['SELECT, INSERT', 'SELECT, INSERT, UPDATE']);
+    for (const row of DERIVED_TUPLE) expect(DERIVED_ALLOWED_PRIVILEGES).toContain(row.privileges);
+    // ADR-042 §D5, sur MESURE : aucun appelant `delete`/`deleteMany` n'existe
+    // pour l'une des cinq dans `apps/**` ni `packages/**`. Un privilège sans
+    // appelant est du rayon de souffle pur (ADR-032 §D7).
+    for (const row of DERIVED_TUPLE) expect(row.privileges).not.toContain('DELETE');
+    expect(DERIVED_ALLOWED_PRIVILEGES.join(' ')).not.toContain('DELETE');
+  });
+
+  it('`grade_revision` est APPEND-ONLY, asserté PAR NOM (G-AUDIT)', () => {
+    // Elle EST la piste d'audit des notes, et elle est PLUS exposée
+    // qu'`audit_log` : celle-ci porte une chaîne hash/prev_hash qui rend une
+    // réécriture détectable, `grade_revision` n'a rien de tel.
+    expect(DERIVED_TUPLE.find((r) => r.child === 'grade_revision')?.privileges).toBe('SELECT, INSERT');
+    expect(CHECKER_CODE).toContain('GRADE_REVISION_WRITE');
+    expect(CHECKER_CODE).toContain("privilege_type NOT IN ('SELECT', 'INSERT')");
+  });
+
+  it('`user_role` ne porte JAMAIS DELETE, asserté PAR NOM', () => {
+    // La révocation est un SOFT DELETE (`updateMany` posant `revoked_at`) : un
+    // DELETE dur effacerait l'historique qu'audite l'échelle ADR-040.
+    const userRole = DERIVED_TUPLE.find((r) => r.child === 'user_role');
+    expect(userRole?.privileges).toBe('SELECT, INSERT, UPDATE');
+    expect(userRole?.privileges).not.toContain('DELETE');
+  });
+
+  it('les GRANTs ne sont jamais `ON ALL TABLES IN SCHEMA public`, et aucune séquence', () => {
+    // Cette forme donnerait aussi les six tables SANS policy — un accès non
+    // filtré offert par le geste même qui prétend restreindre.
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/ON\s+ALL\s+TABLES\s+IN\s+SCHEMA/i);
+    expect(DERIVED_MIGRATION_CODE).toContain("GRANT %s ON public.%I TO app_user");
+    expect(DERIVED_MIGRATION_CODE).not.toMatch(/GRANT[^;]*ON\s+(ALL\s+)?SEQUENCE/i);
+    // `GRANT USAGE ON SCHEMA public` a déjà été émis nominativement par la
+    // migration des 44 : le ré-émettre serait une seconde source de vérité.
+    expect(DERIVED_MIGRATION_CODE).not.toContain('GRANT USAGE ON SCHEMA public');
+  });
+});
+
+describe('S-E01-2c AC-12 — le tuple ne peut pas dériver de `schema.prisma`', () => {
+  it('les deux ensembles sont NON VIDES avant toute comparaison', () => {
+    expect(SCHEMA_DERIVED_TABLES.length).toBe(5);
+    expect(DERIVED_TUPLE.length).toBe(5);
+  });
+
+  it('ÉGALITÉ D’ENSEMBLES dans les DEUX sens avec ce que `schema.prisma` implique', () => {
+    // Un seul sens laisserait passer la moitié dangereuse : un sixième modèle
+    // dérivé livré sans policy. `prisma migrate diff` ne voit pas les policies,
+    // donc c'est ici — et dans le recensement exécuté — ou nulle part.
+    const children = DERIVED_TUPLE.map((r) => r.child).sort();
+    expect(SCHEMA_DERIVED_TABLES.filter((t) => !children.includes(t))).toEqual([]);
+    expect(children.filter((t) => !SCHEMA_DERIVED_TABLES.includes(t))).toEqual([]);
+  });
+
+  it('le RÉSIDU est NOMMÉ, et aucune de ses six tables n’est sous policy', () => {
+    // AC-5b : la dérivation est d'UN SEUL niveau. Une future table sans
+    // `tenant_id` dont la FK pointerait vers une table DÉRIVÉE tomberait hors
+    // des deux comptes. Nommer le résidu transforme ce trou en échec.
+    const children = DERIVED_TUPLE.map((r) => r.child);
+    for (const table of NON_DERIVED_EXPECTED) {
+      expect(children).not.toContain(table);
+      expect(MIGRATION_TABLES).not.toContain(table);
+    }
+    // `outbox_event` et `tenant` sont NOMMÉES avec leur raison dans la migration.
+    expect(DERIVED_MIGRATION).toContain('outbox_event');
+    expect(DERIVED_MIGRATION).toContain('PF-185');
+    expect(DERIVED_MIGRATION).toContain('ZÉRO clé étrangère');
+  });
+
+  it('`schema.prisma` n’est PAS touché par cette story, et la migration le dit', () => {
+    // Y toucher armerait le piège `prisma generate` (typecheck ROUGE tant que le
+    // client n'est pas régénéré) pour un fichier que le diff de dérive ne peut
+    // de toute façon pas voir. Les policies et les GRANTs ne sont pas
+    // modélisables en Prisma.
+    expect(DERIVED_MIGRATION).toContain("`schema.prisma` N'EST PAS TOUCHÉ par cette story");
+    expect(SCHEMA).not.toMatch(/tenant_isolation|ROW LEVEL SECURITY/i);
+  });
+});
+
 describe('AC-12 — le rollback est écrit EN ENTIER, et la logique expand/contract est explicite', () => {
   it('l’en-tête porte le DROP, le DISABLE et les REVOKE', () => {
     expect(MIGRATION).toContain('DROP POLICY IF EXISTS tenant_isolation ON public.%I');
@@ -314,6 +658,18 @@ describe('AC-12 — le rollback est écrit EN ENTIER, et la logique expand/contr
     // Un rollback jamais joué est une assertion sur un commentaire.
     expect(CHECKER_CODE).toContain('AC-12 the rollback removes every policy');
     expect(CHECKER_CODE).toContain('AC-12 the rollback returns relrowsecurity to false');
+  });
+
+  it('S-E01-2c — la migration DÉRIVÉE porte le sien, et il est EXPAND PUR lui aussi', () => {
+    expect(DERIVED_MIGRATION).toContain('DROP POLICY IF EXISTS tenant_isolation ON public.%I');
+    expect(DERIVED_MIGRATION).toContain('DISABLE ROW LEVEL SECURITY');
+    expect(DERIVED_MIGRATION).toContain('REVOKE SELECT, INSERT, UPDATE, DELETE ON public.%I FROM app_user');
+    expect(DERIVED_MIGRATION).toContain('EXPAND PUR');
+    expect(DERIVED_MIGRATION).toContain("Il n'y a pas de phase contract");
+    // Et le vérificateur PROUVE que le bloc générique (qui itère `relrowsecurity`)
+    // atteint réellement l'ensemble élargi, au lieu de le supposer — AC-11.
+    expect(CHECKER_CODE).toContain('ROLLBACK_TOUCHED');
+    expect(CHECKER_CODE).toContain('AFTER_GRANTS');
   });
 });
 
@@ -364,11 +720,86 @@ describe('Le vérificateur exécuté — il ÉCHOUE, il ne saute jamais, et il p
     expect(CHECKER_CODE).toContain('AC-14 the connection under test does not carry BYPASSRLS');
   });
 
-  it('il assertit l’ACCORD des trois comptes, jamais un 44 en dur (anti-dérive)', () => {
+  it('il assertit l’ACCORD des trois comptes, jamais un 44 ni un 49 en dur (anti-dérive)', () => {
     // Un 44 en dur serait satisfaisable en SUPPRIMANT une table. Un accord ne
     // l'est pas, et il survit à la croissance du schéma.
     expect(CHECKER_CODE).toContain('tenantCols');
-    expect(CHECKER_CODE).not.toMatch(/toBe\(\s*44\s*\)|===\s*44/);
+    // S-E01-2c élargit le cliquet : `49` (44 + 5) est la nouvelle tentation, et
+    // `5` / `6` sont les deux autres — le nombre de tables dérivées et la taille
+    // du résidu. Chacun de ces trois, écrit en dur, transformerait un ACCORD en
+    // constante et rendrait invisible la SIXIÈME table dérivée livrée sans
+    // policy, c'est-à-dire exactement le défaut que ce garde existe pour voir.
+    expect(CHECKER_CODE).not.toMatch(/toBe\(\s*(?:44|49|5|6)\s*\)|===\s*(?:44|49|5|6)\b/);
+    // …et la direction qui échoue échoue bien : le motif reconnaît la forme.
+    expect('expectEqual(x, 49)').not.toMatch(/toBe\(\s*(?:44|49|5|6)\s*\)|===\s*(?:44|49|5|6)\b/);
+    expect('expect(x).toBe(49)').toMatch(/toBe\(\s*(?:44|49|5|6)\s*\)|===\s*(?:44|49|5|6)\b/);
+    expect('if (n === 44) {').toMatch(/toBe\(\s*(?:44|49|5|6)\s*\)|===\s*(?:44|49|5|6)\b/);
+    // `=== 50` (MIN_EXPECTED_TABLES) n'est PAS un compte de policies : la borne
+    // de mot doit l'épargner, sans quoi le cliquet serait un faux rouge.
+    expect('n === 50').not.toMatch(/toBe\(\s*(?:44|49|5|6)\s*\)|===\s*(?:44|49|5|6)\b/);
+  });
+
+  it('le côté DROIT de l’accord est calculé sur la STRUCTURE, jamais sur les policies posées', () => {
+    // LE point d'AC-5, et la seule ligne de ce fichier qui mérite d'être relue
+    // deux fois. `RLS_ON == TENANT_COLS + DERIVED_POLICIED`, où la moitié dérivée
+    // compte les tables QUI ONT une policy, est VIDE DE SENS : une sixième table
+    // dérivée livrée sans policy est absente des DEUX côtés, les comptes
+    // s'équilibrent, et la porte s'ouvre sur le défaut qu'elle existe pour voir.
+    expect(CHECKER_CODE).toContain('DERIVED_EXPECTED');
+    expect(CHECKER_CODE).not.toContain('DERIVED_POLICIED');
+    // La dérivation lit `pg_constraint` (les FK multi-colonnes y sont visibles)
+    // et n'interroge JAMAIS `pg_policy` pour construire son attente.
+    const derivation = /const DERIVED_SET_SQL = `([\s\S]*?)`;/.exec(CHECKER_CODE)?.[1] ?? '';
+    expect(derivation).toContain('pg_constraint');
+    expect(derivation).toContain("contype = 'f'");
+    expect(derivation).not.toMatch(/pg_policy|polname|relrowsecurity|role_table_grants/i);
+    expect(derivation).not.toMatch(/information_schema\.table_constraints/i);
+  });
+
+  it('il PROUVE les CINQ dérivées, contrôle positif d’abord, et pas « une par forme »', () => {
+    // Le recensement compte les policies PAR NOM et ne lit JAMAIS le prédicat :
+    // une policy pointant vers le mauvais parent est comptée comme correcte, et
+    // quatre des cinq sortent d'un seul `format()` sur un tuple transposable.
+    expect(CHECKER_CODE).toContain('POSITIVE CONTROL: GUC = tenant A, the ${d.child} row');
+    expect(CHECKER_CODE).toContain('for (const d of DERIVED_TABLES)');
+    for (const row of DERIVED_TUPLE) {
+      expect(CHECKER_CODE).toContain(`child: '${row.child}'`);
+      expect(CHECKER_CODE).toContain(`parent: '${row.parent}'`);
+      expect(CHECKER_CODE).toContain(`fk: '${row.fk}'`);
+    }
+  });
+
+  it('il assertit AC-5b par ÉGALITÉ D’ENSEMBLES, avec les noms imprimés', () => {
+    expect(CHECKER_CODE).toContain('NON_DERIVED_EXPECTED');
+    expect(CHECKER_CODE).toContain('function expectSetEqual');
+    // Les deux directions, sans quoi la moitié dangereuse passe.
+    expect(CHECKER_CODE).toContain('const missing =');
+    expect(CHECKER_CODE).toContain('const unexpected =');
+    for (const table of NON_DERIVED_EXPECTED) expect(CHECKER_CODE).toContain(`'${table}'`);
+  });
+
+  it('il prouve `outbox_event` FAIL-CLOSED par EXÉCUTION, en nommant PF-185', () => {
+    // Sans cette assertion, la prochaine erreur de permission sur `outbox_event`
+    // sera « corrigée » par un GRANT — la seule branche que PF-183 exclut.
+    expect(CHECKER_CODE).toContain('OUTBOX_SQL');
+    expect(CHECKER_CODE).toContain('PF-185');
+    expect(CHECKER_CODE).toContain('OUTBOX_SELECT_ACCEPTED');
+    expect(CHECKER_CODE).toContain('is FAIL-CLOSED by execution');
+    // Il tourne dans SA PROPRE invocation psql : la garde générale qui traite
+    // « permission denied » comme un échec bruyant doit garder son sens partout
+    // ailleurs.
+    expect(CHECKER_CODE).toMatch(/const outboxRun = psql\([^)]*OUTBOX_SQL/);
+  });
+
+  it('il exécute la cascade d’AC-10 au lieu de la croire', () => {
+    // `user_role` n'a pas `DELETE` alors que `user_profile -> user_role` est ON
+    // DELETE CASCADE. Le moteur DEVRAIT quand même la faire partir ; c'est une
+    // croyance dans un chemin de sécurité, donc elle s'exécute.
+    expect(CHECKER_CODE).toContain('CASCADE_PARENT_GONE');
+    expect(CHECKER_CODE).toContain('OWNER_CASCADE_CHILD');
+    // Le contrôle qui rend l'assertion non vide : la ligne du tenant B, dont le
+    // parent n'a jamais été supprimé, est INTACTE.
+    expect(CHECKER_CODE).toContain('OWNER_CASCADE_CONTROL');
   });
 
   it('il nomme le même GUC que le TypeScript', () => {
@@ -451,13 +882,21 @@ describe('Règle ADR — une citation qui ne résout pas est pire que pas de cit
     // Un répertoire vide rendrait chaque « résout » vrai pour rien.
     expect(ADR_NUMBERS.size).toBeGreaterThanOrEqual(20);
     expect(ADR_NUMBERS.has('032')).toBe(true);
-    // Le numéro que ce diff a failli citer sans l'écrire.
-    expect(ADR_NUMBERS.has('042')).toBe(false);
-    expect(cited('voir ADR-042 D1')).toEqual(['042']);
+    // S-E01-2c : `ADR-042` EXISTE désormais — c'est la décision du chemin FK,
+    // écrite parce que S-E01-2b avait failli la citer sans l'écrire. L'ancienne
+    // ligne assertait son ABSENCE ; la garder aurait fait échouer ce spec au
+    // moment exact où le dépôt s'améliore, ce qui est le pire des cliquets.
+    expect(ADR_NUMBERS.has('042')).toBe(true);
+    // La direction qui ÉCHOUE est démontrée avec un numéro qui, lui, n'existe
+    // vraiment pas — sans quoi « ne cite que des ADR existants » ne prouverait
+    // rien : un résolveur qui répondrait « oui » à tout passerait aussi.
+    expect(ADR_NUMBERS.has('099')).toBe(false);
+    expect(cited('voir ADR-042 §D1 et ADR-099')).toEqual(['042', '099']);
   });
 
   it.each([
     ['migration.sql', MIGRATION],
+    ['derived/migration.sql', DERIVED_MIGRATION],
     ['rls-isolation-check.js', CHECKER],
   ])('%s ne cite QUE des ADR qui existent dans docs/adr/', (_name, source) => {
     // Un lecteur qui suit la citation pour comprendre POURQUOI il n'y a pas de
@@ -499,6 +938,7 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
   /** Les artefacts que cette story écrit ou réécrit, et qui parlent d'isolation. */
   const ARTEFACTS: Array<[string, string]> = [
     ['migration.sql', MIGRATION],
+    ['derived/migration.sql', DERIVED_MIGRATION],
     ['rls-isolation-check.js', CHECKER],
     [
       'prisma.service.ts',
