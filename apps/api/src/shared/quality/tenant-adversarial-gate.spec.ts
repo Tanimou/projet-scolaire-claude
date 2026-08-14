@@ -68,7 +68,7 @@ function executableJs(source: string): string {
 
 const CHECKER_CODE = executableJs(CHECKER);
 
-/* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-require-imports */
 const checker = require(CHECKER_PATH) as {
   APPEND_ONLY_TABLES: readonly string[];
   APPEND_ONLY_DML: string;
@@ -102,7 +102,7 @@ const sibling = require(SIBLING_PATH) as {
   TENANT_GUC: string;
   SCRATCH_NAME_PATTERN: RegExp;
 };
-/* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-assignment */
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 describe('AC-11 — le vérificateur existe, et sa forme est celle des autres gardes', () => {
   it('il est à son chemin nommé, exécutable, et il ne tourne PAS à l’import', () => {
@@ -213,7 +213,9 @@ describe('AC-11 — AUCUN drapeau, AUCUNE variable ne peut changer un verdict (D
 
 describe('AC-11 — le RECENSEMENT n’a AUCUNE liste gelée de son côté', () => {
   /** Le bloc SQL du recensement, extrait tel quel. */
-  const enumeration = /const census = psql\(([\s\S]*?)\n    \);/.exec(CHECKER_CODE)?.[1] ?? '';
+  // `\n {4}\)` plutôt que quatre espaces littéraux : même langage, mais `no-regex-spaces`
+  // interdit la forme littérale (des espaces comptés à l'œil sont une source de bug).
+  const enumeration = /const census = psql\(([\s\S]*?)\n {4}\);/.exec(CHECKER_CODE)?.[1] ?? '';
 
   it('le bloc de recensement a bien été extrait (plancher avant toute assertion)', () => {
     expect(enumeration.length).toBeGreaterThan(500);
