@@ -141,6 +141,21 @@ its checker cite `ADR-032 §D5`–`§D8`.
 > The three seams are neighbours and easy to confuse, which is why this note lives here rather than only in
 > `ADR-043` §Numbering. Nothing about §D5–§D8 changes.
 
+> **Annotated in place, 2026-08-13 by `S-E01-2c` — `ADR-042` now exists, and the sentence above was right about
+> its own scope and wrong about the next one.** The claim held for *this* seam: tenant enforcement for the tables
+> that **carry a `tenant_id` column**. `S-E01-2c` isolates a different class — tables that carry **no** `tenant_id`
+> and belong to a tenant only **through a parent row** — and that class needs decisions this ADR does not make and
+> cannot be stretched to make: the `EXISTS`-over-parent predicate, the rule for a child with two tenant-bearing
+> parents, an agreement whose *derived* half is computed from `pg_constraint`, the `ON DELETE CASCADE` limit on
+> append-only, and a **named** deferral for `outbox_event` (no FK, no discriminant). Under the ADR rule
+> (`GUARDRAILS` §2) that is a new architectural decision, so it lands as a record rather than as a comment.
+>
+> The risk the struck sentence named is real and is mitigated rather than ignored: **`ADR-042` declares itself an
+> *extension*, not a fork.** It reuses `§D6`'s `nullif(current_setting(…, true), '')::uuid` **verbatim** and cites
+> it instead of restating it, keeps the policy name `tenant_isolation`, and repeats `§D5`'s limit — the application
+> still connects as the owner and is still **not** RLS-isolated. Nothing in `§D5`–`§D8` is superseded. **`PF-02`
+> still stays `in-progress`.**
+
 The four artefacts are `apps/api/prisma/migrations/20260813120000_tenant_rls_policies/migration.sql`,
 `scripts/rls-isolation-check.js` (the executed proof), `apps/api/src/shared/quality/rls-isolation-gate.spec.ts`
 (the text ratchet), and the `Prisma.TransactionClient` narrowing in `prisma.service.ts`.
@@ -206,6 +221,15 @@ written **identically** in `USING` and in `WITH CHECK`, on a `FOR ALL TO PUBLIC`
   the 11 tables that carry **no** policy, i.e. unfiltered access granted by the very gesture that claims to
   restrict. Those 11 each need their own decision, which belongs to the cutover slice. No sequence grants —
   there are zero sequences in `public` (uuid primary keys), and an unnecessary grant is a widened blast radius.
+  > **Annotated 2026-08-13 by `S-E01-2c` (`ADR-042`).** *"Which belongs to the cutover slice"* is superseded on
+  > **timing**, not on substance: the decision is taken **before** `S-E01-1`, not during it, because deciding it
+  > mid-cutover forces the wrong branch under pressure. Of the 11, **five** — `grade_revision`,
+  > `announcement_receipt`, `branding`, `import_row`, `user_role` — are decided by `ADR-042 §D1`/`§D5` (an
+  > `EXISTS`-over-parent policy plus a per-table grant, none receiving `DELETE`). `outbox_event` is deferred
+  > **by name** and stays fail-closed (`ADR-042 §D7`, `PF-185`) — it holds **no** FK, so there is no path to
+  > predicate on. `tenant`, `permission`, `role`, `role_permission` and `_prisma_migrations` stay outside, named
+  > with reasons (`ADR-042 §D4`). The count `11` is unchanged and correct; what changes is that ten of them now
+  > have an owner and a record.
 - **Guarded by `EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user')`.** Roles are **cluster** state while
   migrations apply to a **database**; the drift gate creates scratch databases and CI provisions a fresh
   container. The `ENABLE` / `CREATE POLICY` half stays **unconditional** — it is the security property and it

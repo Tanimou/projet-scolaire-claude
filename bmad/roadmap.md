@@ -187,10 +187,15 @@ fallback~~ **done in `ensureUser` by `S-E01-1a`** — what remains of step 1 is 
 migration, `G-MIGRATION`) and the `PF-185`/`D-02` decision that is what actually *mints* the claim; (2) **write the first real
 `withTenant` call site** on the request path; (3) flip `DATABASE_URL` to `app_user` and prove the four portals still
 work — the grants are deliberately **incomplete** for role/permission/tenant tables, so that gap is part of the slice,
-not a surprise; (4) decide the six FK-derived tables (`grade_revision`, `announcement_receipt`, `branding`,
-`import_row`, `user_role`, `outbox_event`) — a policy through their parent, or a documented acceptance. Carry the
-`S-E01-2b` merge conditions forward: `app_user` must exist **before** the migration on every long-lived cluster, or
-its GRANT half silently never runs. Detail and the full residual list: `docs/spec/features/v3-e01/PROGRESS.md`.
+not a surprise; (4) ~~decide the six FK-derived tables~~ — **discharged for five by `S-E01-2c` (`ADR-042`), 2026-08-13**:
+`grade_revision`, `announcement_receipt`, `branding`, `import_row` and `user_role` now carry an FK-path policy and a
+per-table grant, so the cutover meets them **already decided** instead of deciding them under pressure — which is
+exactly what `PF-183` asked for. What survives into this slice is `outbox_event` alone (no FK, fail-closed by design,
+`PF-185`: **do not** grant it to silence a `permission denied`) plus the reference-data grant call for
+`tenant`/`permission`/`role`/`role_permission` (`ADR-042 §D4`). Carry the `S-E01-2b` **and** `S-E01-2c` merge
+conditions forward: `app_user` must exist **before** the migration on every long-lived cluster, or the GRANT half
+silently never runs — a condition that now covers **49** tables, not 44. Detail and the full residual list:
+`docs/spec/features/v3-e01/PROGRESS.md`.
 
 **Next V3 slice → `S-E04-8` — the hash chain from a declared genesis, its verification, and the documented gap. It
 is the LAST slice of the epic: shipping it moves `V3-E04` to `shipped`.**
