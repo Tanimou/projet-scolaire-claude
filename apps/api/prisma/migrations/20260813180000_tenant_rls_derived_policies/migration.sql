@@ -58,11 +58,49 @@
 -- est `user_profile_id`, JAMAIS `role_id` (ADR-042 §D2). Une policy routée par
 -- `role_id` évaluerait `p.tenant_id` sur une colonne inexistante.
 --
+-- ┌── ANNOTATION S-E01-1b / PF-191 (2026-08-14) — NE PAS RELIRE LE PARAGRAPHE ──┐
+-- │ CI-DESSUS SANS CELLE-CI. Le paragraphe reste VRAI sur sa conclusion et      │
+-- │ FAUX sur sa raison, et les deux moitiés comptent :                          │
+-- │                                                                             │
+-- │ • VRAI, et inchangé : le chemin tenant de `user_role` est bien              │
+-- │   `user_profile_id` et JAMAIS `role_id`. `20260814180000` ne touche pas à   │
+-- │   cette policy. Un `role` peut être GLOBAL (`school_id IS NULL`), donc      │
+-- │   router `user_role` par `role_id` rendrait un rattachement d'utilisateur   │
+-- │   à un rôle système visible de TOUS les tenants. L'impasse est maintenue    │
+-- │   PAR DÉCISION, pas par absence de chemin.                                  │
+-- │ • FAUX depuis `20260814180000` : « `role` ne porte pas de `tenant_id` »     │
+-- │   décrivait une colonne, pas une dérivabilité. `role.school_id` ->          │
+-- │   `school.tenant_id` (NOT NULL) EST un chemin FK — il était simplement      │
+-- │   INVISIBLE au catalogue, parce que `school_id` existait depuis le baseline │
+-- │   SANS contrainte de clé étrangère (`pg_constraint` : zéro ligne            │
+-- │   `contype='f'` pour `role`). `20260814180000` MATÉRIALISE                  │
+-- │   `role_school_id_fkey`, et `role` ENTRE dans l'ensemble dérivé — ce que    │
+-- │   `scripts/rls-isolation-check.js` avait annoncé mot pour mot.              │
+-- └─────────────────────────────────────────────────────────────────────────────┘
+--
 -- `role_permission` détient deux FK (`role`, `permission`) dont AUCUN parent ne
 -- porte `tenant_id` : elle reste donc HORS de la dérivation, naturellement — pas
 -- par une liste de soustraction. Idem `permission`, `role`, `tenant` et
 -- `_prisma_migrations`. Voir §« LE RÉSIDU », et l'assertion d'égalité
 -- d'ensembles dans `scripts/rls-isolation-check.js`.
+--
+-- ┌── ANNOTATION S-E01-1b / PF-191 (2026-08-14) ────────────────────────────────┐
+-- │ CE PARAGRAPHE EST PÉRIMÉ POUR TROIS DES CINQ NOMS QU'IL CITE, et il est le  │
+-- │ genre de justification écrite qui survit à ce qu'elle justifiait :          │
+-- │   `role`            -> DÉRIVÉE par `school_id` (voir l'annotation ci-dessus)│
+-- │   `role_permission` -> DÉRIVÉE par `role_id`, en DEUX sauts, une fois que   │
+-- │                        `role` l'est. « Aucun parent ne porte `tenant_id` »  │
+-- │                        confondait « le parent porte la colonne » avec « le  │
+-- │                        parent est atteignable » : la dérivation est         │
+-- │                        TRANSITIVE, et ne pas l'avoir vue est la même erreur │
+-- │                        que pour `role`, d'un saut plus loin.                │
+-- │   `tenant`          -> sous policy `id = <GUC>` depuis `20260814180000` ;   │
+-- │                        sa clé PRIMAIRE est le discriminant (ADR-046 §D4).   │
+-- │ RESTENT hors dérivation, et le restent délibérément : `permission` et       │
+-- │ `_prisma_migrations` — vraiment globales, `SELECT` accordé sans policy.     │
+-- │ L'assertion d'égalité d'ensembles n'a PAS été élargie à la main : le        │
+-- │ recensement lit `pg_constraint`, donc il a suivi la FK nouvellement posée.  │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 --
 -- ============================================================================
 -- LE PRÉDICAT : `EXISTS` SUR LE PARENT (ADR-042 §D1)

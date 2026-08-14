@@ -1,5 +1,115 @@
 # Next story
 
+# NEXT — written by run 56 (`S-E01-1b`), 2026-08-14 — **this section supersedes every section below**
+
+## ✅ The cutover's REFERENCE SURFACE exists, and `role` was never global
+
+`PF-02` half (a) is **advanced, not closed**. The blocker was not the connection string — it was that
+`app_user` could not complete a single authorization join. Measured before touching anything:
+
+```
+$ psql -U app_user -d pilotage -c "select count(*) from public.role;"
+ERROR:  permission denied for table role
+```
+
+Migration `20260814180000_role_reference_surface_rls` grants `SELECT` — **and only `SELECT`** — on the five
+tables the cutover needs, two of them under a policy:
+
+| table | treatment | why |
+|---|---|---|
+| `role` | policy, FK path via `school_id` | **`PF-191`** — it is NOT global |
+| `role_permission` | policy, **two-hop** via `role` → `school` | derivation is transitive |
+| `tenant` | policy `id = <GUC>` | its primary key IS the discriminant |
+| `permission` | grant only | genuinely global |
+| `_prisma_migrations` | grant only | boot-critical, see below |
+
+## 🛑 `PF-191` was WORSE than the brief said, and the sprint proved it
+
+The routine's brief said *"its FK is nullable"*. **`role.school_id` carried no foreign key at all** —
+`pg_constraint` returns zero `contype='f'` rows for `role`. The column has held tenant data since the
+baseline while being structurally invisible, so no amount of FK-path derivation could ever have found it.
+The migration therefore **materialises `role_school_id_fkey`** first, behind an orphan pre-check that
+refuses with a count rather than creating an unvalidated constraint.
+
+**Consequence for the ledger:** this slice is **NOT expand-pure**, and the proof says so — `AC-4h` asserts
+the rollback drops the FK and the index too, because a `DROP POLICY` / `DISABLE` pair is no longer a
+sufficient reversal. The routine's AC-8 asserted expand-only; the implementation measured otherwise and was
+right.
+
+## ✅ `PF-189` closed by a verdict that flipped WITHOUT ITS OWN CODE BEING EDITED
+
+Runs 56a (`S-E01-3`, PR #248) and 56b (this one) ran in parallel, blind to each other. #248's adversarial
+suite independently measured the same gap and recorded it as `PF-189`; this slice shipped the grants. The
+closure evidence is the strongest kind available: `AC-9 CUTOVER READINESS` went from `[LIMIT]` to
+`[OK] … checked 0 ungranted table(s)` because it reads `information_schema.role_table_grants` off the live
+scratch database — **the verdict followed the migration, not a literal.**
+
+## ⚠️ `PF-192` is real, but the shipped test proved it against ONE of three ratchets — repaired at land
+
+The DNC-10 fail-open ratchet was evadable by this repository's own idiom: `\([^)]*\)` cannot cross the inner
+`)` of `nullif(`, and `\s*` cannot cross the 43 characters of `, '')::uuid `. **But the evasion string the
+sprint chose ended in `tenant_id`, which the SECOND ratchet catches** — so the test asserted
+`not.toMatch(R1)` only, passed, and its comment claimed the idiom *« la font échapper aux trois »*, which is
+false for that string.
+
+The genuine hole is the **derived-table** shape, which chains onto `EXISTS` and escapes all three — and
+there are now **six** derived tables, so it is the *likeliest* shape, not a curiosity. Measured at land:
+
+| evasion string | R1 | R2 `IS NULL OR tenant_id` | R3 | old trio |
+|---|---|---|---|---|
+| the one the spec used | ✗ | **✓** | ✗ | **caught** |
+| `… IS NULL OR EXISTS (…)` | ✗ | ✗ | ✗ | **escapes** |
+
+Repaired: the demonstration string now chains onto `EXISTS`, and **all three** old patterns are asserted to
+miss it. `68/68` in `prisma.service.spec.ts`.
+
+## 🛑 `PF-193` — the surface is `SELECT`-only, and the admin portal WRITES it
+
+`roles.controller.ts` calls `role.create` (:154), `role.update` (:242), `rolePermission.deleteMany` (:250),
+`rolePermission.create` (:252), `role.delete` (:294). All five work **only because the app connects as the
+owner**, and all four probed writes are **proven refused** as `app_user` (`AC-4g`), with the refusal shown to
+be the *privilege* one, not a policy violation. This is recorded, not fixed: a role that can rewrite
+`role_permission` can grant itself every permission in the schema. The sibling is `PF-185` — granting
+`INSERT` on `tenant` "so registration keeps working" would make the application role able to **mint
+tenants**, i.e. `PF-185` made permanent.
+
+## ▶ Recommended next story
+
+1. **`S-E01-1` — the connection cutover itself.** Every database precondition is now met: 53 policied
+   tables, the authorization join proven to complete as `app_user`, `_prisma_migrations` readable so
+   `assertMigrationsClean` (`main.ts:81`, a **boot** gate) survives. What remains is application work: the
+   first real `withTenant` call site, `DATABASE_URL` → `app_user`, and the `pending` `UserStatus` enum.
+   **It cannot ship until `PF-193` is decided** — the admin role editor loses its write path at the flip.
+2. **`PF-193` — decide the write path** (a separate administration role? a narrow `SECURITY DEFINER` writer
+   with an audit row?). This is a decision, not a `GRANT`. It is now the critical path, ahead of the cutover.
+3. **`TOOL-30` — renumber the six colliding ids.** Untouched, and more expensive every run.
+4. **`TOOL-31`** — the drift gate's two timing-dependent cases and the 90 s stage cap, now applying a
+   **six**-migration ledger.
+5. **Arm the skipped-count ratchet — still disarmed.**
+
+## State of the world at the end of run 56
+
+- **`main` moved UNDER this run again**: PR #248 merged at **12:12 UTC**, mid-sprint. The branch was cut from
+  `e53f2d9` and a sprint agent fast-forwarded it onto `fd11481`, so **no rebase was needed** — verified with
+  `git merge-base --is-ancestor`. `project-midrun-merge-hazard` paid out for the second consecutive run.
+- **The sprint wrote into the MAIN checkout**, not the session worktree (same direction as runs 53 and 55;
+  the worktree stayed byte-clean). The bidirectional bug remains unpredictable — keep checking.
+- **PostgreSQL was written to deliberately and left clean.** Scratch databases created, migrated, dropped;
+  `rls_isolation_%` / `schema_drift_%` / `restore_drill_%` / `tenant_adv%` all verified `(none)`
+  **independently** of the scripts that assert their own cleanup. The live `pilotage` database is
+  **untouched**: 2 migrations, 0 policies.
+- **No Docker was started and no container rebuilt.** None was needed — the database is the native Windows
+  service `postgresql-x64-15` on `127.0.0.1:5432`. **`TOOL-19` is untouched and the local Docker stack's
+  health remains UNKNOWN.**
+- **Ids were allocated against `main` PLUS open PR #248** — `TOOL-30`'s anti-recurrence half, applied by hand
+  because the mechanism is still unbuilt. It worked: `ADR-045` was already taken by #248 and this run took
+  `ADR-046` without a collision.
+- **`INFLIGHT` was 1 at Step 0** (PR #248, merged by the operator mid-run).
+
+---
+
+
+
 # NEXT — written by run 55 (`S-E01-2d`), 2026-08-14 — **this section supersedes every section below**
 
 ## ✅ Policy coverage is COMPLETE in the catalog sense — 50 = 45 + 5, and the count moved without a number being edited

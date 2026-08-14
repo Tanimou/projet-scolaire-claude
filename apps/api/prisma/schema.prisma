@@ -302,6 +302,10 @@ model School {
   // E7 — remediation & tutoring catalogue (additive back-relations).
   tutors              Tutor[]
   tutorAvailabilities TutorAvailability[]
+  /// S-E01-1b / ADR-046 §D2 — le côté INVERSE de `role_school_id_fkey`. Prisma
+  /// exige les deux côtés ; sans celui-ci le garde de dérive verrait la FK
+  /// disparaître du modèle et rougirait.
+  roles Role[]
 
   @@index([tenantId])
   @@map("school")
@@ -909,6 +913,14 @@ model Role {
   isSystem    Boolean @default(false) @map("is_system")
   portal      Portal?
 
+  /// S-E01-1b / ADR-046 §D2 — la relation qui MATÉRIALISE `role_school_id_fkey`.
+  /// `school_id` existait depuis le baseline SANS clé étrangère : `role` portait
+  /// donc de la donnée de tenant que la dérivation structurelle ne pouvait pas
+  /// voir (PF-191). `onDelete: Cascade` est la convention des 13 autres FK
+  /// `school_id` du schéma, et la seule forme pour laquelle `prisma migrate diff`
+  /// reste `No difference detected` face au SQL de la migration.
+  school School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
   rolePermissions RolePermission[]
   userRoles       UserRole[]
 
@@ -940,6 +952,12 @@ model UserRole {
   role        Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@unique([userProfileId, roleId, schoolId])
+  /// S-E01-1b / R-11 — `role` devenant tenant-DÉRIVÉE, l'arête
+  /// `user_role.role_id -> role` entre dans la dérivation structurelle, et le
+  /// cliquet exige un index de TÊTE sur toute colonne FK dérivée. L'index unique
+  /// ci-dessus mène par `user_profile_id`, PAS par `role_id`. Il est de toute
+  /// façon dû : la cascade `role -> user_role` est un balayage séquentiel sans lui.
+  @@index([roleId])
   @@map("user_role")
 }
 

@@ -35,6 +35,28 @@
  * that notices the column, the policy or the grant being dropped out of band —
  * and the drift gate cannot see two of those three.
  *
+ * WHAT S-E01-1b CHANGED — THE DERIVATION IS NOW TRANSITIVELY CLOSED
+ * ----------------------------------------------------------------
+ * S-E01-2c's derivation was ONE LEVEL DEEP and said so. That was survivable only
+ * while no derived table had a child of its own. `S-E01-1b` materialises
+ * `role_school_id_fkey`, so `role` ENTERS the derived set — exactly as the
+ * comment on `NON_DERIVED_EXPECTED` predicted it would — and the moment it does,
+ * `role_permission` becomes the TWO-LEVEL residue that a one-level derivation
+ * cannot see. It was MEASURED as a real cross-tenant read (`A_SEES_B_ROLEPERM|1`
+ * under a bare grant), so the derivation below became a RECURSIVE CTE. No
+ * literal moved; the closure did the work.
+ *
+ * And a THIRD catalog-derived term joined the agreement: the AUTO-DISCRIMINANT
+ * tables — the parents of every foreign key whose LEADING child column is named
+ * `tenant_id`. Measured: exactly `{tenant}`. `tenant` is neither tenant-scoped
+ * (its discriminant is its own primary key) nor tenant-derived (it has no FK
+ * out), so before this slice it sat in the residue. It is now policied, so it
+ * must count — and it counts through a CATALOG QUERY, never through a literal 1.
+ *
+ * The remaining residue is therefore exactly `{permission, _prisma_migrations}`,
+ * and both are GENUINELY global: `permission` carries `id/code/label/
+ * resource_type/action/description` — no discriminant, no FK to one.
+ *
  * WHY THIS EXISTS, AND WHY NOTHING ELSE CAN DO ITS JOB
  * ---------------------------------------------------
  * `prisma migrate diff --from-schema-datasource --to-schema-datamodel` — the
@@ -247,9 +269,14 @@ const DERIVED_TABLES = Object.freeze([
     privileges: 'SELECT, INSERT, UPDATE',
   }),
   Object.freeze({
-    // `user_role` holds a SECOND foreign key, `role_id -> role`, and `role`
-    // carries no `tenant_id`: that path is a dead end (ADR-042 §D2). The tenant
-    // path is `user_profile_id`, never `role_id`.
+    // `user_role` holds a SECOND foreign key, `role_id -> role`. Since
+    // `S-E01-1b` that edge is no longer a DEAD END for the DERIVATION — `role`
+    // is tenant-derived now — but it is still not the POLICY path, and the
+    // reason changed rather than disappeared: a SYSTEM role (`school_id IS
+    // NULL`) is visible to everyone, so routing `user_role` through `role_id`
+    // would make every assignment to a system role visible to every tenant.
+    // The tenant path is `user_profile_id`, never `role_id` (ADR-042 §D2, as
+    // amended by ADR-046 §D2).
     child: 'user_role',
     fk: 'user_profile_id',
     parent: 'user_profile',
@@ -258,6 +285,44 @@ const DERIVED_TABLES = Object.freeze([
     // two: the member's assignment, and the one AC-10's cascade will remove.
     expectedRows: 2,
     privileges: 'SELECT, INSERT, UPDATE',
+  }),
+  Object.freeze({
+    // S-E01-1b — the table this slice DRAGS into the derived set by giving it
+    // the foreign key it never had. Its FK is NULLABLE, which is the whole
+    // reason it was missed: `school_id IS NULL` means SYSTEM role, global
+    // reference data by design (ADR-015), and the predicate admits it
+    // explicitly. See ADR-046 §D3 for why that `IS NULL OR` is not the DNC-10
+    // fail-open shape.
+    child: 'role',
+    fk: 'school_id',
+    parent: 'school',
+    key: 'id',
+    rowSlot: 'customRole',
+    // two under a context: the tenant's own custom role, and the SHARED system
+    // role, which is visible under every context AND under none.
+    expectedRows: 2,
+    privileges: 'SELECT',
+    // …which is why this table is the FIRST in this file whose no-context count
+    // is not zero. Written as a MEASURED number per table, never as a relaxed
+    // assertion: the day the system role stops being visible without a context,
+    // every portal loses its seeded roles and this line goes red.
+    noContextRows: 1,
+  }),
+  Object.freeze({
+    // S-E01-1b / C-1 — the TWO-LEVEL residue. Nothing saw it until the
+    // derivation was closed transitively, and a bare grant on it was MEASURED
+    // to leak tenant B's custom-role privilege composition to tenant A.
+    child: 'role_permission',
+    fk: 'role_id',
+    parent: 'role',
+    // Addressed by its FK, not by a surrogate key — it has none (its PRIMARY KEY
+    // is `(role_id, permission_id)`), which is a third key shape after
+    // `branding`'s FK-as-PK and the surrogate-keyed four.
+    key: 'role_id',
+    rowSlot: 'customRole',
+    expectedRows: 2,
+    privileges: 'SELECT',
+    noContextRows: 1,
   }),
 ]);
 
@@ -272,7 +337,18 @@ const DERIVED_TABLES = Object.freeze([
  * already fixed the principle — an unnecessary grant is a widened blast radius —
  * so the ruling in `ADR-042 §D5` is that none of the five receives `DELETE`.
  */
-const DERIVED_PRIVILEGE_SETS = Object.freeze(['SELECT, INSERT', 'SELECT, INSERT, UPDATE']);
+const DERIVED_PRIVILEGE_SETS = Object.freeze([
+  // S-E01-1b / ADR-046 §D5 — `SELECT` ALONE joins the closed set, and the reason
+  // is written beside it because a THIRD string in a closed set looks like a
+  // widening and is the opposite: `role` and `role_permission` are PRIVILEGE
+  // data. A role that can rewrite `role_permission` can grant itself every
+  // permission in the schema, so this slice gives them READ only. That is a
+  // scope statement for THIS slice, not a claim that the app never writes them —
+  // `roles.controller.ts` does, and the write path is deferred as PF-193.
+  'SELECT',
+  'SELECT, INSERT',
+  'SELECT, INSERT, UPDATE',
+]);
 
 /**
  * The derived table that is APPEND-ONLY, for the same reason as `audit_log` and
@@ -285,30 +361,43 @@ const APPEND_ONLY_DERIVED = Object.freeze(['grade_revision']);
 /**
  * AC-5b — the RESIDUE, named and reasoned, never globbed.
  *
- * The structural derivation is ONE LEVEL DEEP: a future table with no
- * `tenant_id` whose foreign key points at a DERIVED table would fall outside
- * both counts and be invisible again. This closes that hole by SET EQUALITY in
- * both directions — the base tables in `public` with no `tenant_id` and outside
- * the derived set must be EXACTLY these six. A new table landing here FAILS the
- * gate, printing its name, until someone names it and says why.
+ * The base tables in `public` that carry no `tenant_id`, that the (now
+ * transitively closed) derivation does not reach, and that are not
+ * AUTO-DISCRIMINANT, must be EXACTLY these two. A new table landing here FAILS
+ * the gate, printing its name, until someone names it and says why.
  *
  * This set NEVER subtracts from the policy agreement. It is a partition check,
- * not an exemption list: `role` already carries a `school_id` column with no FK
- * constraint, and the day `ADR-015` custom roles add `role_school_id_fkey`,
- * `role` correctly ENTERS the derived set and the agreement correctly goes red.
- * A subtracting list would swallow exactly that alarm.
+ * not an exemption list.
+ *
+ * S-E01-1b — THREE NAMES LEFT THIS LIST, AND NOT ONE OF THEM BY DELETION:
+ *   • `role`            — it now HAS `role_school_id_fkey`, so the derivation
+ *                         RETURNS it. The comment that used to stand here
+ *                         predicted exactly this ("the day ADR-015 custom roles
+ *                         add `role_school_id_fkey`, `role` correctly ENTERS the
+ *                         derived set"). It was right, and PF-191 records that
+ *                         classifying it as globally scoped was wrong.
+ *   • `role_permission` — the derivation is now TRANSITIVELY closed, so it is
+ *                         reached through `role`. Under a one-level derivation
+ *                         plus a bare grant it was a MEASURED cross-tenant read.
+ *   • `tenant`          — it is AUTO-DISCRIMINANT (its primary key IS the
+ *                         discriminant) and is counted by its own catalog term
+ *                         below, never by a literal. The reason it used to be
+ *                         excluded — "the identity seam must read `tenant` BY
+ *                         SLUG before any tenant is resolved" — was MEASURED
+ *                         FALSE after S-E01-1a: there is no by-slug read left in
+ *                         `apps/api/src` (ADR-046 §D4).
+ *
+ * Removing any of those names WITHOUT shipping the structure would fail here
+ * with the name printed, in both directions. That is the whole point.
  */
 const NON_DERIVED_EXPECTED = Object.freeze([
-  // the migration ledger — not tenant data
+  // the migration ledger — not tenant data. Granted SELECT anyway: `main.ts`
+  // reads it at boot and `health.controller.ts` on every probe.
   '_prisma_migrations',
-  // reference data by design (ADR-015): no tenant discriminant, no FK to one
+  // GENUINELY global (ADR-046 §D5): `id`, `code`, `label`, `resource_type`,
+  // `action`, `description` — no discriminant, and no FK to a table with one.
+  // Unlike `role`, this classification was MEASURED rather than inherited.
   'permission',
-  'role',
-  'role_permission',
-  // AUTO-DISCRIMINANT: its PRIMARY KEY is the discriminant. A policy here would
-  // break the identity seam, which must read `tenant` BY SLUG before any tenant
-  // is resolved (S-E01-1). Excluded deliberately, not forgotten.
-  'tenant',
 ]);
 // S-E01-2d: `outbox_event` LEFT this list. It did not leave because someone
 // deleted a name — it left because it now HAS a `tenant_id`, so the residue
@@ -316,6 +405,53 @@ const NON_DERIVED_EXPECTED = Object.freeze([
 // returns it. The set equality is measured against the catalog in BOTH
 // directions, so removing the name without shipping the column would fail here
 // with the name printed, which is the whole point of a residue check.
+
+/**
+ * S-E01-1b — THE REFERENCE SURFACE: everything `app_user` may READ that is NOT
+ * one of the policied tables.
+ *
+ * Before this slice the census asserted `GRANTED == policiedExpected` — "the
+ * app role is granted exactly the policied tables". That equality is what makes
+ * `GRANT … ON ALL TABLES IN SCHEMA public` impossible to ship, and it must NEVER
+ * be relaxed to an inequality: doing so would delete the only protection against
+ * handing out every unpolicied table in one line.
+ *
+ * The connection cutover needs `app_user` to complete
+ * `user_profile -> user_role -> role -> role_permission -> permission`, and
+ * `permission` will never carry a policy because it has no tenant to filter by.
+ * So the invariant is RESTATED, not weakened:
+ *
+ *     GRANTED == POLICIED ∪ REFERENCE_SURFACE
+ *
+ * — a NAMED set, both directions, plus a second assertion that every table in it
+ * holds EXACTLY `SELECT` and nothing more.
+ *
+ * `_prisma_migrations` is in the set and is ABSENT from the scratch database
+ * (see `LEDGER_TABLE`), so it is expected only on the branch where it exists,
+ * and the branch taken is printed.
+ */
+const REFERENCE_SURFACE = Object.freeze(['_prisma_migrations', 'permission']);
+
+/** The privilege every reference-surface table holds, and the only one. */
+const REFERENCE_PRIVILEGES = 'SELECT';
+
+/**
+ * S-E01-1b / ADR-046 §D5 — the privilege the AUTO-DISCRIMINANT table holds, and
+ * the only one.
+ *
+ * Kept as its OWN constant rather than folded into `REFERENCE_PRIVILEGES`,
+ * because the two name different things and a reader who conflates them will
+ * widen the wrong one: the reference surface is UNPOLICIED by nature
+ * (`permission` has no tenant to filter by), whereas `tenant` IS policied — its
+ * primary key is the discriminant, so `id = <GUC>` is a real predicate. They
+ * happen to agree on the string today; the day one of them widens, the diff must
+ * show WHICH.
+ *
+ * Exported because `scripts/tenant-adversarial-check.js` asserts the same
+ * privilege matrix by set equality, and two literals for one grant is exactly
+ * the drift `ADR-042 §D3` forbids.
+ */
+const AUTO_DISCRIMINANT_PRIVILEGES = 'SELECT';
 
 /**
  * PF-185, CLOSED by S-E01-2d. This table has no foreign key and no derivable
@@ -332,46 +468,103 @@ const OUTBOX_TABLE = 'outbox_event';
 const OUTBOX_PRIVILEGES = 'SELECT, INSERT, UPDATE';
 
 /**
- * The migration ledger's own table, which is in `NON_DERIVED_EXPECTED` because
- * it is in every REAL database — and which is ABSENT from the scratch database
- * this check builds, because the ledger is applied here by `psql` file by file,
- * not by `prisma migrate deploy`. Prisma's CLI creates this table; the SQL does
- * not. So the residue assertion expects it only when it is actually there, and
- * WHICH branch was taken is printed, so this reasoning cannot rot silently the
- * day the harness changes how it applies the ledger.
+ * The migration ledger's own table.
+ *
+ * It is created by Prisma's CLI, never by a `migration.sql`, and this harness
+ * applies the ledger with `psql` file by file — so until `S-E01-1b` it was
+ * simply ABSENT here, and two things were therefore unprovable: that the
+ * reference-surface GRANT on it lands, and that `app_user` can read it. Both
+ * matter at the cutover (`main.ts` at boot, `health.controller.ts` per probe),
+ * so the harness now CREATES it explicitly before applying the ledger, with
+ * Prisma 5.22's own shape (step 3b).
+ *
+ * The presence branch is KEPT rather than simplified away: the migration's own
+ * `to_regclass` guard still has to work on a database where the table is absent,
+ * and printing which branch was taken is what stops this paragraph rotting the
+ * day someone changes how the harness bootstraps.
  */
 const LEDGER_TABLE = '_prisma_migrations';
 
 /**
  * THE DERIVATION ITSELF — written ONCE, in SQL, over catalog STRUCTURE.
  *
- * > base tables in `public` with NO `tenant_id` column that hold at least one
- * > foreign key to a table which DOES have one.
+ * > base tables in `public` with NO `tenant_id` column, reachable by a chain of
+ * > foreign keys from a table which DOES have one.
  *
  * It never asks whether a policy exists. That is not a stylistic choice, it is
  * the entire point (ADR-042 §D3): the obvious formula
  * `RLS_ON == TENANT_COLS + DERIVED_POLICIED`, where the derived half counts the
- * tables that HAVE a policy, is VACUOUS — a sixth derived table shipped with no
- * policy is absent from BOTH sides, the counts still balance, and the gate
- * passes on exactly the defect it exists to catch. Against DERIVED_EXPECTED the
- * right-hand side rises to 6 while `RLS_ON` stays at 49, and the gate FAILS.
+ * tables that HAVE a policy, is VACUOUS — a derived table shipped with no policy
+ * is absent from BOTH sides, the counts still balance, and the gate passes on
+ * exactly the defect it exists to catch.
+ *
+ * S-E01-1b — WHY IT IS NOW RECURSIVE, and why that is a CORRECTION and not a
+ * refactor. ADR-042 §D3 recorded the derivation as ONE LEVEL DEEP and named the
+ * hole out loud: "a future table with no `tenant_id` whose foreign key points at
+ * a DERIVED table would fall outside both counts and be invisible again."
+ * `role_permission` IS that table, and it stopped being hypothetical the moment
+ * `role_school_id_fkey` landed. Measured, as `app_user` under GUC = tenant A,
+ * against a `role_permission` row belonging to tenant B's custom role and a bare
+ * grant: `A_SEES_B_ROLEPERM|1`. So the closure is transitive, ADR-042 §D3 is
+ * annotated in place, and ADR-046 cites the amendment.
+ *
+ * Termination: the recursive term draws from the FINITE `fk` relation and the
+ * `UNION` de-duplicates whole rows, so a foreign-key cycle cannot loop.
  *
  * Read from `pg_constraint` rather than `information_schema.table_constraints`
  * so that multi-column foreign keys are seen. `conkey[1]` is the FK's LEADING
  * column, which is the one R-11 cares about.
  */
 const DERIVED_SET_SQL = `
-  SELECT DISTINCT child.oid AS child_oid, child.relname AS child,
-         parent.relname AS parent, k.conkey[1] AS fk_attnum
+  WITH RECURSIVE fk AS (
+    SELECT child.oid AS child_oid, child.relname AS child, parent.oid AS parent_oid,
+           parent.relname AS parent, k.conkey[1] AS fk_attnum
+      FROM pg_constraint k
+      JOIN pg_class child ON child.oid = k.conrelid
+      JOIN pg_class parent ON parent.oid = k.confrelid
+      JOIN pg_namespace n ON n.oid = child.relnamespace
+     WHERE k.contype = 'f' AND n.nspname = 'public' AND child.relkind = 'r'
+  ), scoped AS (
+    SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind = 'r'
+       AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid
+                     AND a.attname = 'tenant_id' AND a.attnum > 0 AND NOT a.attisdropped)
+  ), closure AS (
+    SELECT f.child_oid, f.child, f.parent, f.fk_attnum FROM fk f
+     WHERE f.parent_oid IN (SELECT oid FROM scoped)
+       AND f.child_oid NOT IN (SELECT oid FROM scoped)
+    UNION
+    SELECT f.child_oid, f.child, f.parent, f.fk_attnum FROM fk f
+      JOIN closure c ON c.child_oid = f.parent_oid
+     WHERE f.child_oid NOT IN (SELECT oid FROM scoped)
+  )
+  SELECT DISTINCT child_oid, child, parent, fk_attnum FROM closure`;
+
+/**
+ * S-E01-1b — THE THIRD TERM: the AUTO-DISCRIMINANT tables, derived and never
+ * written as a literal `1`.
+ *
+ * > the PARENTS of every foreign key whose LEADING child column is `tenant_id`.
+ *
+ * A table that other tables point at THROUGH their `tenant_id` column IS the
+ * tenant dimension. It carries no `tenant_id` of its own (its primary key is the
+ * discriminant) and it has no FK out, so it is neither tenant-scoped nor
+ * tenant-derived — it fell in the residue, which is why it went unpoliced for
+ * three slices. Measured on the catalog: exactly `{tenant}`.
+ *
+ * Written as a query rather than as `+ 1` for the same reason as the other two
+ * terms: a SECOND auto-discriminant table shipped without a policy must make the
+ * agreement fail, not be swallowed by a constant.
+ */
+const AUTO_DISCRIMINANT_SQL = `
+  SELECT DISTINCT parent.relname AS name
     FROM pg_constraint k
     JOIN pg_class child ON child.oid = k.conrelid
     JOIN pg_class parent ON parent.oid = k.confrelid
     JOIN pg_namespace n ON n.oid = child.relnamespace
+    JOIN pg_attribute a ON a.attrelid = child.oid AND a.attnum = k.conkey[1]
    WHERE k.contype = 'f' AND n.nspname = 'public' AND child.relkind = 'r'
-     AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = child.oid
-                       AND a.attname = 'tenant_id' AND a.attnum > 0 AND NOT a.attisdropped)
-     AND     EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = parent.oid
-                       AND a.attname = 'tenant_id' AND a.attnum > 0 AND NOT a.attisdropped)`;
+     AND a.attname = 'tenant_id'`;
 
 /**
  * Fixture ids are GENERATED, not typed.
@@ -415,6 +608,14 @@ const SLOT = Object.freeze({
   // and UNCONSTRAINED, which is exactly why no FK path could ever be written for
   // this table and why it needed a denormalised column instead (ADR-044 §D1).
   outboxEvent: 61,
+  // S-E01-1b — the tenant's own CUSTOM role: `school_id` -> a school of THIS
+  // tenant. It is the row that proves `role`'s policy, and it is deliberately a
+  // row the PRODUCT cannot currently create — `roles.controller.ts` never sets
+  // `schoolId`, so every role it makes is a SYSTEM role. That gap is named in
+  // ADR-046 §D3 as the residue (PF-08 / ADR-015 D8.6); it is NOT silently fixed
+  // here, and the fixture exists so the policy is proven against the shape it
+  // was written for rather than against the shape that happens to exist today.
+  customRole: 62,
 });
 
 /** Tenant A is slot 1, tenant B is slot 2. Used only to build fixture ids. */
@@ -423,6 +624,23 @@ const SLOT_B = 2;
 
 /** The `role` row SHARED by both tenants — see `FIXTURES_SQL`. */
 const SHARED_ROLE = '99999999-0000-4000-8000-000000000099';
+
+/**
+ * S-E01-1b — the ONE `permission` row. `permission` is genuinely global, so a
+ * single row is enough: what has to be proven about it is that `app_user` can
+ * READ it (the authorization join dead-ends on it otherwise) and that it holds
+ * nothing beyond `SELECT`.
+ */
+const SHARED_PERMISSION = '66666666-0000-4000-8000-000000000066';
+
+/**
+ * The `role` row the proof ATTEMPTS to create with a FOREIGN-tenant `school_id`.
+ * `role` holds no INSERT privilege this slice, so this attempt must be refused
+ * — and the assertion below reads WHICH refusal arrived, because
+ * `permission denied` and `violates row-level security policy` mean opposite
+ * things about whether the policy works.
+ */
+const ROLE_FOREIGN_INSERT = fid(SLOT_A, 75);
 
 /** Rows the PROOF creates: an own-tenant INSERT, and two that must be refused. */
 const RECEIPT_OWN_INSERT = fid(SLOT_A, 70);
@@ -710,6 +928,16 @@ INSERT INTO user_role (id, user_profile_id, role_id) VALUES
   (${id(SLOT.userRole)}, ${id(SLOT.member)}, ${lit(SHARED_ROLE)}),
   (${id(SLOT.cascadeRole)}, ${id(SLOT.cascadeMember)}, ${lit(SHARED_ROLE)});
 
+-- ${tag} · S-E01-1b · the tenant's own CUSTOM role, and its permission row. This
+--          is the pair that S-E01-1b exists to hide from the other tenant: the
+--          role carries the tenant's identity ONLY through \`school_id\`, and
+--          \`role_permission\` carries it only through TWO hops. Both were
+--          MEASURED visible across tenants under a bare grant.
+INSERT INTO role (id, school_id, name, slug)
+  VALUES (${id(SLOT.customRole)}, ${s}, ${lit(`Custom ${tag}`)}, ${lit(`custom-${tag.toLowerCase()}`)});
+INSERT INTO role_permission (role_id, permission_id)
+  VALUES (${id(SLOT.customRole)}, ${lit(SHARED_PERMISSION)});
+
 -- ${tag} · the grade chain, eleven rows, ending at ONE grade_revision.
 INSERT INTO academic_year (id, tenant_id, school_id, name, start_date, end_date, updated_at)
   VALUES (${id(SLOT.academicYear)}, ${t}, ${s}, ${lit(`Year ${tag}`)}, DATE '2026-09-01', DATE '2027-06-30', now());
@@ -778,7 +1006,20 @@ INSERT INTO school (id, tenant_id, name, school_code, country, updated_at) VALUE
 -- single most valuable fixture in this file: it is what distinguishes a policy
 -- routed through \`user_profile_id\` (correct) from one routed through \`role_id\`
 -- (the dead end of ADR-042 §D2).
+-- Its \`school_id\` is NULL, which S-E01-1b makes load-bearing rather than
+-- incidental: it is a SYSTEM role, so it must be visible under BOTH GUCs and
+-- under NONE. That is the branch of \`role\`'s predicate that keeps every seeded
+-- portal role reachable after the cutover.
 INSERT INTO role (id, name, slug) VALUES (${lit(SHARED_ROLE)}, 'RLS proof role', 'rls-proof-role');
+
+-- S-E01-1b · the one \`permission\` row and the SYSTEM role's grant of it. Both
+-- are global reference data; together with the row above they are what the
+-- authorization join \`user_profile -> user_role -> role -> role_permission ->
+-- permission\` walks, and that join raised \`permission denied\` before this slice.
+INSERT INTO permission (id, code, label, resource_type, action)
+  VALUES (${lit(SHARED_PERMISSION)}, 'rls.proof.read', 'RLS proof permission', 'rls_proof', 'read');
+INSERT INTO role_permission (role_id, permission_id)
+  VALUES (${lit(SHARED_ROLE)}, ${lit(SHARED_PERMISSION)});
 ${derivedFixtures(SLOT_A, TENANT_A, SCHOOL_A, 'A')}
 ${derivedFixtures(SLOT_B, TENANT_B, SCHOOL_B, 'B')}
 ${outboxFixture(SLOT_A, TENANT_A, 'A')}
@@ -851,6 +1092,19 @@ SELECT 'FRESH_NO_CTX|' || count(*) FROM school;
 ${derivedCountSteps('FRESH_D')}
 SELECT 'FRESH_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE};
 
+-- (C2) S-E01-1b — the reference surface with NO context at all, stated rather
+--      than left to be discovered. This is the honest exposure ADR-046 §D3
+--      records: global reference data IS readable without a tenant, and the
+--      school-scoped half is NOT. Both halves are asserted, because "no rows"
+--      here would be a broken cutover and "all rows" would be a leak.
+SELECT 'NOCTX_SYSTEM_ROLE|' || count(*) FROM role WHERE id = ${lit(SHARED_ROLE)};
+SELECT 'NOCTX_SCOPED_ROLE|' || count(*) FROM role WHERE id = ${lit(fid(SLOT_A, SLOT.customRole))};
+SELECT 'NOCTX_PERMISSIONS|' || count(*) FROM permission;
+-- …and the one that would be an ENUMERATION ORACLE if it answered (epic §10):
+-- with no context, \`app_user\` must not be able to list a single tenant.
+SELECT 'NOCTX_TENANTS|' || count(*) FROM tenant;
+SELECT 'NOCTX_LEDGER|' || count(*) FROM ${LEDGER_TABLE};
+
 BEGIN;
 SELECT set_config(${lit(TENANT_GUC)}, ${lit(TENANT_A)}, true);
 -- (A) THE POSITIVE CONTROL. Without this, everything below passes on a database
@@ -871,6 +1125,51 @@ ${derivedVisibilitySteps('A', SLOT_A, SLOT_B, { totals: true })}
 SELECT 'CTX_A_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_A, SLOT.outboxEvent))};
 SELECT 'CTX_A_FOREIGN_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))};
 SELECT 'CTX_A_TOTAL_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE};
+
+-- (A4) S-E01-1b — THE AUTHORIZATION JOIN, END TO END. This is the reason the
+--      slice exists: before this migration the very same statement raised
+--      \`permission denied for table role\` as \`app_user\` (measured, and the
+--      fail-before half is executed by this harness's own "before" comparison —
+--      a run against the ledger WITHOUT the new migration still reports it).
+--      Its result is the tenant's OWN reachable permissions, so it doubles as a
+--      positive control: a zero here would mean the join completes and returns
+--      nothing, which is a broken cutover wearing a green badge.
+SELECT 'AUTHZ_JOIN|' || count(*) FROM user_profile up
+  JOIN user_role ur ON ur.user_profile_id = up.id
+  JOIN role r ON r.id = ur.role_id
+  JOIN role_permission rp ON rp.role_id = r.id
+  JOIN permission p ON p.id = rp.permission_id
+ WHERE up.id = ${lit(fid(SLOT_A, SLOT.member))};
+-- …and the same join for a user of the OTHER tenant returns NOTHING from here:
+-- the join completing is not the same claim as the join staying tenant-scoped.
+SELECT 'AUTHZ_JOIN_FOREIGN|' || count(*) FROM user_profile up
+  JOIN user_role ur ON ur.user_profile_id = up.id
+  JOIN role r ON r.id = ur.role_id
+  JOIN role_permission rp ON rp.role_id = r.id
+  JOIN permission p ON p.id = rp.permission_id
+ WHERE up.id = ${lit(fid(SLOT_B, SLOT.member))};
+
+-- (A5) S-E01-1b — the SYSTEM role under a context. It is visible here, under
+--      GUC = B below, and under NO GUC above: three readings of one row, which
+--      together say "global reference data" rather than "leak".
+SELECT 'CTX_A_SYSTEM_ROLE|' || count(*) FROM role WHERE id = ${lit(SHARED_ROLE)};
+-- …and the tenant dimension itself: exactly ONE tenant is visible, and it is
+-- tenant A. A bare grant with no policy would have shown both.
+SELECT 'CTX_A_TENANTS|' || count(*) FROM tenant;
+SELECT 'CTX_A_OWN_TENANT|' || count(*) FROM tenant WHERE id = ${lit(TENANT_A)};
+SELECT 'CTX_A_FOREIGN_TENANT|' || count(*) FROM tenant WHERE id = ${lit(TENANT_B)};
+-- …and the ledger, which \`main.ts\` reads at boot and the health probe reads per
+-- request. It carries no tenant, so a context must not change it.
+SELECT 'CTX_A_LEDGER|' || count(*) FROM ${LEDGER_TABLE};
+
+-- (A6) The WRITE half of the reference surface is deliberately NOT here.
+--      \`role\`, \`role_permission\` and \`tenant\` hold NO write privilege at all
+--      this slice (ADR-046 §D5), so an attempted write raises
+--      \`permission denied\` — the one string this script treats as a LOUD
+--      FAILURE anywhere in the visibility path. It therefore runs in its OWN
+--      psql invocation (\`REFERENCE_WRITE_SQL\`), exactly as \`outbox_event\` did
+--      while it was fail-closed, so the stderr guard over THIS script stays
+--      armed over the reference surface too.
 
 -- (D+) the WITH CHECK positive control: an OWN-tenant INSERT must SUCCEED.
 INSERT INTO school (id, tenant_id, name, school_code, country, updated_at)
@@ -1008,7 +1307,68 @@ SELECT 'CTX_B_FOREIGN|' || count(*) FROM school WHERE id = ${lit(SCHOOL_A)};
 ${derivedVisibilitySteps('B', SLOT_B, SLOT_A)}
 SELECT 'CTX_B_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_B, SLOT.outboxEvent))};
 SELECT 'CTX_B_FOREIGN_OUTBOX|' || count(*) FROM ${OUTBOX_TABLE} WHERE id = ${lit(fid(SLOT_A, SLOT.outboxEvent))};
+-- S-E01-1b — the SYSTEM role is visible under B as well. Read together with
+-- CTX_A_SYSTEM_ROLE and NOCTX_SYSTEM_ROLE, these three say "global reference
+-- data", which one of them alone could not distinguish from a leak.
+SELECT 'CTX_B_SYSTEM_ROLE|' || count(*) FROM role WHERE id = ${lit(SHARED_ROLE)};
+SELECT 'CTX_B_OWN_TENANT|' || count(*) FROM tenant WHERE id = ${lit(TENANT_B)};
+SELECT 'CTX_B_FOREIGN_TENANT|' || count(*) FROM tenant WHERE id = ${lit(TENANT_A)};
 COMMIT;
+`;
+
+/**
+ * S-E01-1b — THE WRITE REFUSALS, in their OWN psql process.
+ *
+ * `role`, `role_permission` and `tenant` are granted `SELECT` and nothing else,
+ * so every statement here is EXPECTED to raise `permission denied` — the exact
+ * string `PROOF_SQL`'s stderr guard treats as a loud failure. Running them there
+ * would make the whole check red for succeeding.
+ *
+ * Why execute this at all when the catalog already says `role=SELECT`? Because
+ * "the grant string is SELECT" and "a write is actually refused" are different
+ * claims, and the second is the one G-AUTHZ is about. `ON_ERROR_STOP` is off so
+ * every statement runs and each refusal is read independently.
+ *
+ * Two of these are REAL application call sites, named rather than hypothetical:
+ * `roles.controller.ts` creates and edits custom roles, and
+ * `register.controller.ts` upserts a tenant by slug. Both work today because the
+ * app connects as the OWNER; both would fail after the cutover. That is recorded
+ * (PF-193 for the role write path, PF-185 for the tenant upsert) and is NOT
+ * silently unblocked by widening a grant here.
+ */
+const REFERENCE_WRITE_SQL = `
+\\pset footer off
+SET ${TENANT_GUC} = ${lit(TENANT_A)};
+-- Each probe is wrapped in its OWN transaction, and that is not decoration: with
+-- \`ON_ERROR_STOP\` off and OUTSIDE a transaction, a failed statement does not
+-- stop the next one, so the \`…_ACCEPTED\` marker below it would print
+-- unconditionally and every one of these assertions would be green for the
+-- opposite of the right reason. Inside a transaction the failure ABORTS it, the
+-- marker cannot run, and its absence is the evidence. (Measured: the first
+-- version of this block reported four false failures for exactly this reason.)
+BEGIN;
+INSERT INTO role (id, school_id, name, slug)
+  VALUES (${lit(ROLE_FOREIGN_INSERT)}, ${lit(SCHOOL_A)}, 'Smuggled', 'smuggled');
+SELECT 'ROLE_INSERT_ACCEPTED|1';
+ROLLBACK;
+BEGIN;
+UPDATE role SET name = 'Escalated' WHERE id = ${lit(SHARED_ROLE)};
+SELECT 'ROLE_UPDATE_ACCEPTED|1';
+ROLLBACK;
+BEGIN;
+DELETE FROM role_permission WHERE role_id = ${lit(SHARED_ROLE)};
+SELECT 'ROLE_PERMISSION_DELETE_ACCEPTED|1';
+ROLLBACK;
+BEGIN;
+INSERT INTO tenant (id, name, slug, updated_at)
+  VALUES (${lit(fid(SLOT_A, 76))}, 'Minted', 'minted', now());
+SELECT 'TENANT_INSERT_ACCEPTED|1';
+ROLLBACK;
+-- The floor that makes the four absences above mean something: this connection
+-- CAN still read. Without it, "no marker printed" would also be the reading on a
+-- connection that died after the first statement.
+SELECT 'WRITE_PROBE_STILL_READS|' || count(*) FROM role WHERE id = ${lit(SHARED_ROLE)};
+SELECT 'WRITE_PROBE_RAN|1';
 `;
 
 /**
@@ -1055,6 +1415,83 @@ SELECT 'OWNER_FOREIGN_OUTBOX_UNTOUCHED|' || count(*) FROM ${OUTBOX_TABLE}
 -- GUC = A could never tell the difference.
 SELECT 'OWNER_OUTBOX_FOREIGN_INSERT|' || count(*) FROM ${OUTBOX_TABLE}
   WHERE id = ${lit(OUTBOX_FOREIGN_INSERT)};
+
+`;
+
+/**
+ * S-E01-1b — THE STRUCTURE, asked of the only connection that can ask it, and in
+ * its OWN process because one of its two statements is EXPECTED to raise.
+ *
+ * (1) The foreign key REFUSES an orphan. Before this slice `role.school_id`
+ *     carried no foreign key at all, so a role could point at a deleted school —
+ *     and under the new policy such a row would be invisible to EVERY tenant,
+ *     silently removing its permissions from the authorization join. That is
+ *     fail-closed presenting as a WRONG ANSWER rather than a denial, which is
+ *     the worst shape a security control can have. The FK makes the state
+ *     unreachable; this proves the refusal instead of asserting it.
+ *
+ * (2) What `ON DELETE CASCADE` actually DOES (ADR-046 §D2): deleting a school
+ *     now removes its custom roles, where they were previously left behind. That
+ *     is a real semantic change, so it is EXECUTED rather than written in a
+ *     comment — and rolled back, because the fixtures below it still matter.
+ */
+const OWNER_STRUCTURE_SQL = `
+\\pset footer off
+BEGIN;
+INSERT INTO role (id, school_id, name, slug)
+  VALUES (${lit(fid(SLOT_A, 77))}, ${lit(fid(SLOT_A, 78))}, 'Orphan', 'orphan');
+SELECT 'OWNER_ORPHAN_ROLE_ACCEPTED|1';
+ROLLBACK;
+BEGIN;
+SELECT 'OWNER_ROLES_BEFORE_CASCADE|' || count(*) FROM role WHERE school_id = ${lit(SCHOOL_B)};
+DELETE FROM school WHERE id = ${lit(SCHOOL_B)};
+SELECT 'OWNER_ROLES_AFTER_CASCADE|' || count(*) FROM role WHERE school_id = ${lit(SCHOOL_B)};
+SELECT 'OWNER_SYSTEM_ROLE_SURVIVES|' || count(*) FROM role WHERE id = ${lit(SHARED_ROLE)};
+ROLLBACK;
+
+-- (3) THE PREDICATE, EVALUATED AS THE OWNER — the assertion a mutation test
+--     forced into existence, and the most important one in this block.
+--
+--     MEASURED: removing \`AND s.tenant_id = <GUC>\` from \`role\`'s predicate —
+--     a real cross-tenant defect — left the ENTIRE harness green. Every
+--     visibility assertion runs as \`app_user\`, and there the \`school\`
+--     sub-query is ALREADY filtered by \`school\`'s own policy, so the clause is
+--     genuinely dead code for that role. It is the OWNER — who runs the
+--     migrations, the seeds and the whole application today, and to whom no
+--     policy applies — for whom that clause is the only thing working. This is
+--     ADR-042 §D1 clause 3 stated as an executable test instead of a paragraph.
+--
+--     The predicate is not re-typed here: it is read back from \`pg_policy\` with
+--     \`pg_get_expr\` and EXECUTED against the table as an ordinary WHERE. So
+--     this reads whatever was actually installed, including a transposition the
+--     census (which counts policies BY NAME and never reads a predicate) cannot
+--     see.
+SET ${TENANT_GUC} = ${lit(TENANT_A)};
+DO $owner_pred$
+DECLARE
+  e text;
+  n integer;
+BEGIN
+  CREATE TEMP TABLE owner_predicate_witness (name text, rows integer);
+  FOREACH e IN ARRAY ARRAY['role', 'role_permission'] LOOP
+    DECLARE expr text; cnt integer;
+    BEGIN
+      SELECT pg_get_expr(p.polqual, p.polrelid) INTO expr
+        FROM pg_policy p
+       WHERE p.polname = ${lit(POLICY_NAME)} AND p.polrelid = format('public.%I', e)::regclass;
+      IF expr IS NULL THEN
+        RAISE EXCEPTION 'no % policy installed on public.%', ${lit(POLICY_NAME)}, e;
+      END IF;
+      EXECUTE format('SELECT count(*) FROM public.%I WHERE %s', e, expr) INTO cnt;
+      INSERT INTO owner_predicate_witness VALUES (e, cnt);
+    END;
+  END LOOP;
+  n := 0;
+END
+$owner_pred$;
+SELECT 'OWNER_PRED_' || name || '|' || rows FROM owner_predicate_witness;
+RESET ${TENANT_GUC};
+SELECT 'STRUCTURE_PROBE_RAN|1';
 `;
 
 function facts(result) {
@@ -1154,6 +1591,43 @@ async function main() {
   }
 
   try {
+    // ---- 3b. S-E01-1b / AC-4d — CREATE THE LEDGER TABLE, BEFORE the ledger.
+    //
+    // `_prisma_migrations` is created by Prisma's CLI, not by any `migration.sql`
+    // — and this harness applies the ledger file by file with `psql`, so until
+    // now the table simply did not exist here. That made TWO things unprovable:
+    // that the reference-surface GRANT on it lands at all, and that `app_user`
+    // can read it. Both are load-bearing at the cutover: `apps/api/src/main.ts`
+    // runs `assertMigrationsClean` at BOOT and `health.controller.ts` calls
+    // `readMigrationState` on EVERY health probe, so a missing SELECT here would
+    // break the cutover twice over.
+    //
+    // The shape is Prisma 5.22's own. The row is inserted so the SELECT below is
+    // not vacuously green on an empty table, and it carries the two columns
+    // `readMigrationState` actually reads (`finished_at`, `rolled_back_at`)
+    // besides `migration_name` — it never reads `checksum`.
+    const ledgerCreate = psql(
+      client.command,
+      scratchOwner,
+      `CREATE TABLE public._prisma_migrations (
+         id                  varchar(36) PRIMARY KEY NOT NULL,
+         checksum            varchar(64) NOT NULL,
+         finished_at         timestamptz,
+         migration_name      varchar(255) NOT NULL,
+         logs                text,
+         rolled_back_at      timestamptz,
+         started_at          timestamptz NOT NULL DEFAULT now(),
+         applied_steps_count integer NOT NULL DEFAULT 0
+       );
+       INSERT INTO public._prisma_migrations
+         (id, checksum, finished_at, migration_name, applied_steps_count)
+       VALUES ('00000000-0000-0000-0000-000000000000', 'rls-isolation-check', now(),
+               '0_baseline', 1);`,
+    );
+    if (ledgerCreate.status !== 0) {
+      throw new ToolingUnavailable(`could not create the ledger table: ${ledgerCreate.stderr.trim()}`);
+    }
+
     // ---- 4. Apply the ledger. A migration that does not execute is a broken one.
     for (const file of migrations) {
       const applied = psql(client.command, scratchOwner, readFileSync(file, 'utf8'));
@@ -1190,6 +1664,26 @@ async function main() {
         WHERE n.nspname='public' AND c.relforcerowsecurity;
        SELECT 'GRANTED|' || count(DISTINCT table_name) FROM information_schema.role_table_grants
         WHERE grantee=${lit(app.user)} AND table_schema='public';
+       -- S-E01-1b — the same thing BY NAME. The count alone cannot express
+       -- \`GRANTED == POLICIED ∪ REFERENCE_SURFACE\`, and the tempting repair for
+       -- the count going out of balance is relaxing it to an inequality — which
+       -- would delete the one thing that makes \`GRANT … ON ALL TABLES IN SCHEMA
+       -- public\` impossible to ship.
+       SELECT 'GRANTED_NAMES|' || coalesce(string_agg(DISTINCT table_name, ',' ORDER BY table_name), '')
+         FROM information_schema.role_table_grants
+        WHERE grantee=${lit(app.user)} AND table_schema='public';
+       SELECT 'POLICIED_NAMES|' || coalesce(string_agg(c.relname, ',' ORDER BY c.relname), '')
+         FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND p.polname=${lit(POLICY_NAME)};
+       -- Every reference-surface table holds EXACTLY SELECT — read per table, so
+       -- a balancing count can never stand in for it (G-AUTHZ).
+       SELECT 'REFERENCE_GRANTS|' || coalesce(string_agg(entry, ';' ORDER BY entry), '') FROM (
+         SELECT g.table_name || '=' || string_agg(g.privilege_type, ', ' ORDER BY g.privilege_type) AS entry
+           FROM information_schema.role_table_grants g
+          WHERE g.grantee=${lit(app.user)} AND g.table_schema='public'
+            AND g.table_name IN (${REFERENCE_SURFACE.map(lit).join(', ')})
+          GROUP BY g.table_name) e;
        SELECT 'WITH_CHECK_NULL|' || count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
          JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND p.polname=${lit(POLICY_NAME)} AND p.polwithcheck IS NULL;
@@ -1212,13 +1706,33 @@ async function main() {
        SELECT 'DERIVED_EXPECTED|' || count(*) FROM (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s) d;
        SELECT 'DERIVED_NAMES|' || coalesce(string_agg(child, ',' ORDER BY child), '')
          FROM (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s) d;
-       -- AC-5b: everything with no tenant_id that the derivation does NOT reach.
+       -- S-E01-1b — THE THIRD TERM, derived and never a literal 1. See
+       -- AUTO_DISCRIMINANT_SQL. Names as well as count: a count alone would let
+       -- a SECOND auto-discriminant table swap places with \`tenant\`.
+       SELECT 'AUTODISC_EXPECTED|' || count(*) FROM (${AUTO_DISCRIMINANT_SQL}) a;
+       SELECT 'AUTODISC_NAMES|' || coalesce(string_agg(name, ',' ORDER BY name), '')
+         FROM (${AUTO_DISCRIMINANT_SQL}) a;
+       -- AC-5b: everything with no tenant_id that neither the derivation NOR the
+       -- auto-discriminant term reaches. The third exclusion joined the query in
+       -- S-E01-1b; without it \`tenant\` would be both policied AND in the
+       -- residue, i.e. counted on one side and excused on the other.
        SELECT 'RESIDUE_NAMES|' || coalesce(string_agg(c.relname, ',' ORDER BY c.relname), '')
          FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relkind='r'
           AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid
                             AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped)
-          AND c.relname NOT IN (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s);
+          AND c.relname NOT IN (SELECT DISTINCT child FROM (${DERIVED_SET_SQL}) s)
+          AND c.relname NOT IN (SELECT name FROM (${AUTO_DISCRIMINANT_SQL}) a);
+       -- S-E01-1b — the STRUCTURE this slice adds, without which \`role\` is not
+       -- derivable at all. \`confdeltype='c'\` is CASCADE: \`SET NULL\` ('n') would
+       -- PROMOTE a school-scoped role to GLOBAL the day its school is deleted,
+       -- which is the most severe escalation shape this repository knows how to
+       -- report. Asserted as an equality on the ACTION, not on mere existence.
+       SELECT 'ROLE_FK_CASCADE|' || count(*) FROM pg_constraint k
+        WHERE k.conname='role_school_id_fkey' AND k.conrelid='public.role'::regclass
+          AND k.contype='f' AND k.confrelid='public.school'::regclass AND k.confdeltype='c';
+       SELECT 'ROLE_FK_SETNULL|' || count(*) FROM pg_constraint k
+        WHERE k.conrelid='public.role'::regclass AND k.contype='f' AND k.confdeltype='n';
        -- AC-3: an index whose LEADING column is the FK column, on every derived
        -- table. Without it an FK-path policy is a sequential scan per row read.
        SELECT 'DERIVED_FK_INDEX_MISSING|' || count(*) FROM (${DERIVED_SET_SQL}) d
@@ -1322,10 +1836,29 @@ async function main() {
       );
       return;
     }
-    const policiedExpected = tenantCols + derivedExpected;
+    // ---- 5b-bis. S-E01-1b — THE THIRD TERM. Catalog-derived like the other two.
+    //          A zero here would silently collapse the agreement back to its
+    //          pre-S-E01-1b form and let `tenant` go unpoliced again.
+    const autoDiscExpected = Number(c.get('AUTODISC_EXPECTED'));
+    if (!Number.isFinite(autoDiscExpected) || autoDiscExpected < 1) {
+      fail(
+        'the schema carries an AUTO-DISCRIMINANT tenant table',
+        `AUTODISC_EXPECTED = ${c.get('AUTODISC_EXPECTED')} — the parents of the tenant_id foreign keys ` +
+          'must be discoverable, or the third term of the agreement is vacuous',
+      );
+      return;
+    }
+    expectSetEqual(
+      'S-E01-1b the AUTO-DISCRIMINANT set derived from pg_constraint is exactly the tenant dimension ' +
+        '(the parents of every FK whose LEADING child column is tenant_id) — names, not just a count',
+      names(c.get('AUTODISC_NAMES')),
+      ['tenant'],
+    );
+    const policiedExpected = tenantCols + derivedExpected + autoDiscExpected;
     record(
-      'AC-5 the census is an AGREEMENT: expected = tenant-scoped + tenant-DERIVED, both catalog-computed',
-      `${tenantCols} + ${derivedExpected} (never written as a literal)`,
+      'AC-5 the census is an AGREEMENT: expected = tenant-scoped + tenant-DERIVED + AUTO-DISCRIMINANT, ' +
+        'all three catalog-computed',
+      `${tenantCols} + ${derivedExpected} + ${autoDiscExpected} (never written as a literal)`,
     );
 
     // The frozen tuple in this file NAMES the tables the per-table proof runs
@@ -1350,8 +1883,10 @@ async function main() {
     record(
       `AC-5b the ledger table ${LEDGER_TABLE} is ${ledgerTablePresent ? 'PRESENT' : 'ABSENT'} in the scratch database`,
       ledgerTablePresent
-        ? 'the harness applied the ledger through Prisma; it counts in the residue'
-        : 'the harness applied the ledger with psql, which does not create it; excluded from the residue',
+        ? 'created by this harness before the ledger (S-E01-1b / AC-4d), with Prisma 5.22`s own shape, so ' +
+          'the reference-surface GRANT on it and its readability are both PROVEN rather than skipped'
+        : 'ABSENT — the ledger was applied with psql, which does not create it. This is now the UNEXPECTED ' +
+          'branch: step 3b creates it explicitly, so reaching here means that step was removed',
     );
     expectSetEqual(
       `AC-5b the tables with no tenant_id outside the derived set are exactly the NAMED ones ` +
@@ -1370,10 +1905,60 @@ async function main() {
       c.get('POLICIES'),
       policiedExpected,
     );
+    // S-E01-1b — RESTATED, never RELAXED. The old form was
+    // `GRANTED == policiedExpected` ("granted exactly the policied tables").
+    // The cutover needs `permission` and `_prisma_migrations` too, and neither
+    // will ever carry a policy: `permission` has no tenant to filter by and the
+    // ledger is not tenant data. The locally cheapest repair — turning the
+    // equality into `>=` — would delete the ONE thing that makes
+    // `GRANT … ON ALL TABLES IN SCHEMA public` impossible to ship. So the
+    // invariant becomes a NAMED set equality, in both directions, with the
+    // offending names printed.
+    const referenceSurfacePresent = REFERENCE_SURFACE.filter(
+      (name) => name !== LEDGER_TABLE || ledgerTablePresent,
+    );
+    expectSetEqual(
+      `AC-4f ${app.user} is granted exactly POLICIED ∪ REFERENCE_SURFACE (${referenceSurfacePresent.join(', ')}) ` +
+        '— never relaxed to an inequality, which is how ON ALL TABLES would get in',
+      names(c.get('GRANTED_NAMES')),
+      [...names(c.get('POLICIED_NAMES')), ...referenceSurfacePresent],
+    );
+    // The count is KEPT beside the set equality, and it is not redundant: the
+    // set above is measured against POLICIED_NAMES (tables that HAVE a policy),
+    // while this one is measured against the STRUCTURAL expectation. A policy
+    // missing from a table that structurally needs one makes the set equality
+    // still pass and this line fail — which is the defect the whole file exists
+    // to catch, one level up.
     expectEqual(
-      `${app.user} is granted exactly the policied tables`,
+      `${app.user} is granted exactly the policied tables, plus the ${referenceSurfacePresent.length}-table ` +
+        'reference surface the authorization join needs',
       c.get('GRANTED'),
-      policiedExpected,
+      policiedExpected + referenceSurfacePresent.length,
+    );
+    // G-AUTHZ, per table and never by a balancing count: privilege data the
+    // application role could WRITE is a privilege-escalation path.
+    expectSetEqual(
+      `AC-4f every reference-surface table holds EXACTLY "${REFERENCE_PRIVILEGES}" for ${app.user} ` +
+        '(ADR-046 §D5 — read-only for this slice; the write path is deferred as PF-193)',
+      String(c.get('REFERENCE_GRANTS') ?? '')
+        .split(';')
+        .map((entry) => canonicalGrant(entry.trim()))
+        .filter((entry) => entry !== ''),
+      referenceSurfacePresent.map((table) => canonicalGrant(`${table}=${REFERENCE_PRIVILEGES}`)),
+    );
+    // S-E01-1b — the STRUCTURE the derivation depends on. Without this FK,
+    // `role` is not derivable and `DERIVED_EXPECTED` never moves; with it as
+    // `SET NULL`, deleting a school would PROMOTE its roles to global.
+    expectEqual(
+      'AC-2b role_school_id_fkey exists, points at school, and is ON DELETE CASCADE (ADR-046 §D2)',
+      c.get('ROLE_FK_CASCADE'),
+      1,
+    );
+    expectEqual(
+      'AC-2b no foreign key on role is ON DELETE SET NULL — that action would turn a school-scoped role ' +
+        'into a GLOBAL one at the moment its school is deleted',
+      c.get('ROLE_FK_SETNULL'),
+      0,
     );
     // FORCE is absent DELIBERATELY, and its absence is asserted so nobody adds it
     // without reading why: the app still connects as the owner, so FORCE today
@@ -1527,6 +2112,74 @@ async function main() {
     record('AC-14 connected as', String(f.get('WHO')));
 
     expectEqual('AC-7c a fresh connection with NO tenant context sees zero rows', f.get('FRESH_NO_CTX'), 0);
+
+    // ---- S-E01-1b — THE REASON THIS SLICE EXISTS, asserted before anything
+    //      else it touches. `permission denied for table role` is what this
+    //      exact statement raised as `app_user` against the ledger WITHOUT the
+    //      new migration; a count of 1 here is the fail-before/pass-after pair
+    //      closing. It is ALSO a positive control: the join completing and
+    //      returning zero rows would be a broken cutover wearing a green badge.
+    expectEqual(
+      'AC-4a POSITIVE CONTROL: the authorization join user_profile -> user_role -> role -> ' +
+        'role_permission -> permission COMPLETES as ' +
+        `${app.user} (it raised "permission denied for table role" before this slice)`,
+      f.get('AUTHZ_JOIN'),
+      1,
+    );
+    expectEqual(
+      'AC-4a …and the SAME join for a user of the OTHER tenant returns nothing — completing the join and ' +
+        'keeping it tenant-scoped are two different claims',
+      f.get('AUTHZ_JOIN_FOREIGN'),
+      0,
+    );
+    // The three readings of ONE system role. Separately, each is ambiguous;
+    // together they say "global reference data" and not "leak" (ADR-046 §D3).
+    expectEqual('AC-4c a SYSTEM role (school_id IS NULL) is visible under GUC = tenant A', f.get('CTX_A_SYSTEM_ROLE'), 1);
+    expectEqual('AC-4c …and under GUC = tenant B', f.get('CTX_B_SYSTEM_ROLE'), 1);
+    expectEqual('AC-4c …and under NO tenant context at all — the honest exposure ADR-046 §D3 records', f.get('NOCTX_SYSTEM_ROLE'), 1);
+    // …paired with the half that makes those three mean something: the SCHOOL-
+    // SCOPED role is NOT visible without a context. Without this pair, "roles
+    // are visible" would be indistinguishable from "role has no policy".
+    expectEqual(
+      'AC-4c CONTROL: a SCHOOL-SCOPED role is NOT visible without a tenant context — so the three ' +
+        'lines above are about the IS NULL branch, not about a missing policy',
+      f.get('NOCTX_SCOPED_ROLE'),
+      0,
+    );
+    expectEqual(
+      'AC-4a `permission` is readable with no context — it is genuinely global (no discriminant, no FK ' +
+        'to one), which is why it is in the reference surface and not under a policy',
+      f.get('NOCTX_PERMISSIONS'),
+      1,
+    );
+    // AC-3 — the enumeration oracle the epic §10 forbids, closed by execution.
+    expectEqual(
+      'AC-3 with NO tenant context, `app_user` cannot enumerate a single tenant — the plain `id = <GUC>` ' +
+        'policy closes the oracle, so no SECURITY DEFINER lookup function was needed (ADR-046 §D4)',
+      f.get('NOCTX_TENANTS'),
+      0,
+    );
+    expectEqual('AC-3 with GUC = tenant A, exactly ONE tenant row is visible', f.get('CTX_A_TENANTS'), 1);
+    expectEqual('AC-3 …and it is tenant A', f.get('CTX_A_OWN_TENANT'), 1);
+    expectEqual('AC-3 …and tenant B is NOT visible from it', f.get('CTX_A_FOREIGN_TENANT'), 0);
+    expectEqual('AC-3 switching to GUC = tenant B makes B visible', f.get('CTX_B_OWN_TENANT'), 1);
+    expectEqual('AC-3 …and tenant A disappears', f.get('CTX_B_FOREIGN_TENANT'), 0);
+    // AC-4d — the ledger. `main.ts` reads it at BOOT (`assertMigrationsClean`)
+    // and `health.controller.ts` reads it on EVERY probe (`readMigrationState`),
+    // so a missing SELECT here breaks the cutover twice. It carries no tenant,
+    // so it must read the SAME with and without a context.
+    expectEqual(
+      `AC-4d ${LEDGER_TABLE} is readable by ${app.user} with NO context — main.ts asserts migrations ` +
+        'clean at BOOT, before any tenant exists',
+      f.get('NOCTX_LEDGER'),
+      1,
+    );
+    expectEqual(
+      `AC-4d …and identically under a context — health.controller.ts reads it on every probe, and it ` +
+        'carries no tenant, so a context must not change it',
+      f.get('CTX_A_LEDGER'),
+      1,
+    );
     expectEqual('AC-6  POSITIVE CONTROL: with GUC = tenant A, A rows ARE VISIBLE', f.get('CTX_A_VISIBLE'), 1);
     expectEqual('AC-7b with GUC = tenant A, tenant B rows are NOT visible', f.get('CTX_A_FOREIGN'), 0);
 
@@ -1550,10 +2203,16 @@ async function main() {
         f.get(`CTX_A_TOTAL_${d.child}`),
         d.expectedRows,
       );
+      // `noContextRows` is 0 for the five FK-path tables and 1 for `role` /
+      // `role_permission`, and that difference is the POINT rather than a
+      // tolerance: a SYSTEM role (`school_id IS NULL`) is global reference data
+      // and MUST stay readable without a tenant context, or every portal loses
+      // its seeded roles at the cutover. It is written as a measured number per
+      // table so a change is a diff, not a silently loosened assertion.
       expectEqual(
-        `AC-6  a fresh connection with NO tenant context sees zero ${d.child} rows`,
+        `AC-6  a fresh connection with NO tenant context sees exactly ${d.noContextRows ?? 0} ${d.child} row(s)`,
         f.get(`FRESH_D_${d.child}`),
-        0,
+        d.noContextRows ?? 0,
       );
     }
 
@@ -1688,14 +2347,16 @@ async function main() {
     // assertions above would not see it.
     for (const d of DERIVED_TABLES) {
       expectEqual(
-        `F-1 the SAME connection, after COMMIT, with no context: zero ${d.child} rows AND NO ERROR`,
+        `F-1 the SAME connection, after COMMIT, with no context: exactly ${d.noContextRows ?? 0} ` +
+          `${d.child} row(s) AND NO ERROR`,
         f.get(`POOLED_D_${d.child}`),
-        0,
+        d.noContextRows ?? 0,
       );
       expectEqual(
-        `AC-6  an explicitly EMPTY tenant context sees zero ${d.child} rows and raises nothing`,
+        `AC-6  an explicitly EMPTY tenant context sees exactly ${d.noContextRows ?? 0} ${d.child} row(s) ` +
+          'and raises nothing',
         f.get(`EMPTY_D_${d.child}`),
-        0,
+        d.noContextRows ?? 0,
       );
       expectEqual(
         `AC-6  switching the GUC to tenant B makes B's ${d.child} row reappear`,
@@ -1761,6 +2422,57 @@ async function main() {
       'a "permission denied" on it is once again a LOUD failure, like every other table under test',
     );
 
+    // ---- 7c. S-E01-1b / G-AUTHZ — THE WRITE REFUSALS, in their own process.
+    //
+    //      Separate because `permission denied` is the EXPECTED result here and
+    //      the guard above treats that string as a loud failure. "The grant
+    //      string is SELECT" and "a write is actually refused" are different
+    //      claims; the catalog answers the first, only execution answers the
+    //      second, and privilege data the application role could write is a
+    //      privilege-escalation path (ADR-046 §D5).
+    const referenceWrite = psql(client.command, scratchApp, REFERENCE_WRITE_SQL, { onErrorStop: false });
+    const w = facts(referenceWrite);
+    // Non-vacuity first: if the script never reached its last line, every
+    // `has(...)` below would be false for the wrong reason.
+    expectEqual('AC-4g the write-refusal probe actually ran to the end', w.get('WRITE_PROBE_RAN'), 1);
+    expectEqual(
+      'AC-4g …and the probing connection can still READ — otherwise "no marker printed" would also be ' +
+        'the reading on a connection that simply died',
+      w.get('WRITE_PROBE_STILL_READS'),
+      1,
+    );
+    for (const [label, marker] of [
+      ['an INSERT into `role` (roles.controller.ts creates custom roles — PF-193)', 'ROLE_INSERT_ACCEPTED'],
+      ['an UPDATE of `role` (roles.controller.ts edits them — PF-193)', 'ROLE_UPDATE_ACCEPTED'],
+      [
+        'a DELETE from `role_permission` (roles.controller.ts replaces a role`s permission set — PF-193)',
+        'ROLE_PERMISSION_DELETE_ACCEPTED',
+      ],
+      ['an INSERT into `tenant` (register.controller.ts upserts by slug — PF-185)', 'TENANT_INSERT_ACCEPTED'],
+    ]) {
+      if (w.has(marker)) {
+        fail(
+          `AC-4g ${label} is REFUSED for ${app.user}`,
+          'it was ACCEPTED — the reference surface is not read-only, and a role that can rewrite ' +
+            'privilege data can grant itself every permission in the schema',
+        );
+      } else {
+        record(`AC-4g ${label} is REFUSED for ${app.user}`);
+      }
+    }
+    if (/permission denied/i.test(referenceWrite.stderr)) {
+      record(
+        'AC-4g …and the refusal is the PRIVILEGE one (`permission denied`), not a policy violation',
+        'the grant is absent, so the write never reaches WITH CHECK at all',
+      );
+    } else {
+      fail(
+        'AC-4g the write refusals are privilege refusals',
+        `no "permission denied" was reported, so the writes were stopped by something else — or not at ` +
+          `all:\n${referenceWrite.stderr.trim()}`,
+      );
+    }
+
     // ---- 8. AC-8 — the recorded LIMIT. Named so nobody reads it as a defect.
     const ownerRun = psql(client.command, scratchOwner, OWNER_SQL);
     if (ownerRun.status !== 0) {
@@ -1824,6 +2536,65 @@ async function main() {
       0,
     );
 
+    // ---- 8b. S-E01-1b — the STRUCTURE, as the owner, in its own process
+    //      because the orphan INSERT is EXPECTED to raise.
+    const structure = psql(client.command, scratchOwner, OWNER_STRUCTURE_SQL, { onErrorStop: false });
+    const st = facts(structure);
+    expectEqual('AC-2b the structure probe actually ran to the end', st.get('STRUCTURE_PROBE_RAN'), 1);
+    if (st.has('OWNER_ORPHAN_ROLE_ACCEPTED')) {
+      fail(
+        'AC-2b role_school_id_fkey REFUSES a role pointing at a non-existent school',
+        'the orphan row was ACCEPTED — such a row is invisible to EVERY tenant under the new policy, so ' +
+          'its permissions vanish from the authorization join with no error raised anywhere',
+      );
+    } else if (/violates foreign key constraint/i.test(structure.stderr)) {
+      record('AC-2b role_school_id_fkey REFUSES a role pointing at a non-existent school (FK violation)');
+    } else {
+      fail(
+        'AC-2b role_school_id_fkey REFUSES a role pointing at a non-existent school',
+        `no foreign-key violation was reported:\n${structure.stderr.trim()}`,
+      );
+    }
+    // Reached FIRST: "after the cascade there are zero" is vacuously green if
+    // there were zero to begin with.
+    expectEqual(
+      'AC-2b CONTROL: tenant B really has a school-scoped role before the cascade',
+      st.get('OWNER_ROLES_BEFORE_CASCADE'),
+      1,
+    );
+    expectEqual(
+      'AC-2b ON DELETE CASCADE removes a school`s custom roles — EXECUTED, because it is a real change ' +
+        'of what deleting a school does (they used to be left behind, orphaned and invisible)',
+      st.get('OWNER_ROLES_AFTER_CASCADE'),
+      0,
+    );
+    expectEqual(
+      'AC-2b …and the SYSTEM role survives it: the cascade follows school_id, so a role belonging to no ' +
+        'school is untouched',
+      st.get('OWNER_SYSTEM_ROLE_SURVIVES'),
+      1,
+    );
+    // ---- THE PREDICATE, EVALUATED AS THE OWNER. Read the long comment in
+    //      OWNER_STRUCTURE_SQL before touching these two numbers: a mutation
+    //      test proved that deleting `AND s.tenant_id = <GUC>` from `role`'s
+    //      predicate — a real cross-tenant defect — left EVERY other assertion
+    //      in this file green, because as `app_user` the sub-query is already
+    //      filtered by `school`'s own policy. These two lines are the only
+    //      thing in the repository that fails on it.
+    //
+    //      Two, not three: tenant A's own custom role, plus the SYSTEM role.
+    //      Tenant B's custom role must NOT be counted, and it is the one the
+    //      defect lets through.
+    for (const child of ['role', 'role_permission']) {
+      expectEqual(
+        `AC-2 the installed ${child} predicate, read back with pg_get_expr and evaluated AS THE OWNER ` +
+          '(to whom NO policy applies), still admits ONLY tenant A`s row plus the global one — this is the ' +
+          'assertion that fails when the redundant-for-app_user tenant comparison is deleted as "dead code"',
+        st.get(`OWNER_PRED_${child}`),
+        2,
+      );
+    }
+
     // ---- 9. AC-12 — the rollback is EXECUTED, not merely written in a header.
     //
     //         S-E01-2c: the block below iterates every table carrying
@@ -1847,6 +2618,19 @@ async function main() {
            EXECUTE format('REVOKE SELECT, INSERT, UPDATE, DELETE ON public.%I FROM ${app.user}', t);
            touched := touched + 1;
          END LOOP;
+         -- S-E01-1b — the generic loop above iterates \`relrowsecurity\`, so it
+         -- CANNOT reach the reference-surface tables that hold a grant and no
+         -- policy. Leaving them granted would make \`AFTER_GRANTS = 0\` false and,
+         -- worse, would leave a real privilege behind after a "complete"
+         -- rollback. Named explicitly, guarded on existence like the migration.
+         FOREACH t IN ARRAY ARRAY[${REFERENCE_SURFACE.map(lit).join(', ')}] LOOP
+           IF to_regclass(format('public.%I', t)) IS NOT NULL THEN
+             EXECUTE format('REVOKE SELECT, INSERT, UPDATE, DELETE ON public.%I FROM ${app.user}', t);
+           END IF;
+         END LOOP;
+         -- …and the STRUCTURE this slice added, which no DROP POLICY reverses.
+         ALTER TABLE public.role DROP CONSTRAINT IF EXISTS role_school_id_fkey;
+         DROP INDEX IF EXISTS public.user_role_role_id_idx;
          REVOKE USAGE ON SCHEMA public FROM ${app.user};
          CREATE TEMP TABLE rollback_witness AS SELECT touched AS touched;
        END
@@ -1856,7 +2640,11 @@ async function main() {
        SELECT 'AFTER_RLS|' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relrowsecurity;
        SELECT 'AFTER_GRANTS|' || count(DISTINCT table_name) FROM information_schema.role_table_grants
-        WHERE grantee=${lit(app.user)} AND table_schema='public';`,
+        WHERE grantee=${lit(app.user)} AND table_schema='public';
+       SELECT 'AFTER_ROLE_FK|' || count(*) FROM pg_constraint
+        WHERE conname='role_school_id_fkey' AND conrelid='public.role'::regclass;
+       SELECT 'AFTER_ROLE_INDEX|' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname='user_role_role_id_idx';`,
     );
     if (rollback.status !== 0) {
       fail('AC-12 the stated rollback executes', rollback.stderr.trim());
@@ -1872,6 +2660,20 @@ async function main() {
       expectEqual(
         'AC-11 the rollback also revokes the enlarged privilege sets — nothing is left granted',
         r.get('AFTER_GRANTS'),
+        0,
+      );
+      // S-E01-1b — the two things a DROP POLICY / DISABLE RLS pair cannot undo.
+      // This slice is the first that is not an EXPAND PUR, so "the generic block
+      // covers it" stopped being true and had to be verified rather than assumed.
+      expectEqual(
+        'AC-4h the rollback also drops role_school_id_fkey — this slice is NOT an expand PUR, so a ' +
+          'DROP POLICY / DISABLE pair is no longer a sufficient reversal',
+        r.get('AFTER_ROLE_FK'),
+        0,
+      );
+      expectEqual(
+        'AC-4h …and the index the FK made necessary (user_role_role_id_idx)',
+        r.get('AFTER_ROLE_INDEX'),
         0,
       );
     }
@@ -1966,13 +2768,25 @@ module.exports = {
   APPEND_ONLY_DERIVED,
   APPEND_ONLY_TABLES,
   APP_DATABASE_URL_VAR,
+  // S-E01-1b — the DERIVATION ITSELF is exported, not just its result. The
+  // adversarial sibling used to carry its own ONE-LEVEL census SQL, which agreed
+  // with `DERIVED_TABLES` only for as long as no derived table had a derived
+  // child. `role_permission` is that child, so the two disagreed the moment this
+  // slice closed the derivation transitively — a disagreement between two
+  // hand-written queries about the same catalog fact, i.e. `ADR-042 §D3` drift
+  // one layer below the constants it was written for.
+  AUTO_DISCRIMINANT_PRIVILEGES,
+  AUTO_DISCRIMINANT_SQL,
   DERIVED_PRIVILEGE_SETS,
+  DERIVED_SET_SQL,
   DERIVED_TABLES,
   MIN_EXPECTED_TABLES,
   NON_DERIVED_EXPECTED,
   OUTBOX_PRIVILEGES,
   OUTBOX_TABLE,
   POLICY_NAME,
+  REFERENCE_PRIVILEGES,
+  REFERENCE_SURFACE,
   SCRATCH_NAME_PATTERN,
   TENANT_A,
   TENANT_B,

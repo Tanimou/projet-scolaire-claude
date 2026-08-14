@@ -5,21 +5,28 @@ satisfied: `S-E02-3` done 2026-08-07) · **Blocks** `V3-E03`, and transitively e
 **Closes** PF-01, PF-02, PF-18, VAL-02, VAL-04 · **Gates** G-TENANT, G-AUTHZ, G-MIGRATION · **DNC** DNC-10
 **Epic brief** [`docs/daily-improvement-v3/epics/V3-E01-tenant-isolation.md`](../../../daily-improvement-v3/epics/V3-E01-tenant-isolation.md)
 
-**Status (2026-08-14)** `in-progress` — **five partial slices and one WHOLE one landed**: `S-E01-2` (one of its three
+**Status (2026-08-14)** `in-progress` — **five partial slices and TWO whole ones landed**: `S-E01-2` (one of its three
 thirds), `S-E01-2b` (the policies on the 44 tables that carry a `tenant_id`, proven to refuse for a real non-owner
 role — but **not** the connection cutover), `S-E01-2c` (the FK-path policies on the **five** tenant-DERIVED tables,
 plus `ADR-042`), `S-E01-2d` (`outbox_event`'s denormalised `tenant_id`, plus `ADR-044`), `S-E01-1a` (the identity seam
-stops inventing a tenant — `PF-01` half (a)) and **`S-E01-3`** (the two-tenant adversarial suite at
-catalog-enumerated breadth, plus `ADR-045` — the epic's first slice to land **whole**, and it closes **`VAL-02`'s DATABASE half** — the application half stays open, see the ledger).
+stops inventing a tenant — `PF-01` half (a)), **`S-E01-3`** (the two-tenant adversarial suite at
+catalog-enumerated breadth, plus `ADR-045` — the epic's first slice to land **whole**, and it closes **`VAL-02`'s DATABASE half** — the application half stays open, see the ledger)
+and **`S-E01-1b`** (the cutover's REFERENCE SURFACE — the authorization join `app_user` could not complete, `role`
+re-classified as tenant-derived rather than global, plus `ADR-046`; the second slice to land whole, and still **not**
+the cutover).
 The epic is **not** `shipped`, and **four** sentences must not be misread:
 
 1. **The running application is still not RLS-isolated**, and no policy slice changed that. It connects as
    `pilotage`, the table owner; `FORCE ROW LEVEL SECURITY` is deliberately absent; the remaining step is a
    **connection cutover**, which belongs to `S-E01-1`.
-2. **Policy coverage is now complete in the catalog sense — 50 of 55 base tables** (45 by column + 5 by FK path).
-   The residue is `tenant`, `permission`, `role`, `role_permission` and `_prisma_migrations`, each outside **by name
-   and with a reason** (`ADR-042 §D4`). **No base table is outside all three classes any more** — that was
-   `outbox_event`, and the `outbox_event` finding is closed. Complete coverage is *not* isolation; see (1).
+2. **Policy coverage is now complete in the catalog sense — 53 of 55 base tables** (45 by `tenant_id` column,
+   **7** by FK path after `S-E01-1b` made the derivation **transitively** closed, and **1** auto-discriminant:
+   `tenant` itself, under `id = <GUC>`). The residue is **two** tables — `permission` (global reference data) and
+   `_prisma_migrations` (the ledger) — each outside **by name and with a reason** (`ADR-042 §D4`, `ADR-046 §D1`).
+   *(This paragraph read `50 … 45 + 5`, residue of five, until `S-E01-1b`; `role` and `role_permission` moved from
+   the residue into the derived set, and `tenant` into a class of its own.)* **No base table is outside all three
+   classes any more** — that was `outbox_event`, and the `outbox_event` finding is closed. Complete coverage is
+   *not* isolation; see (1).
 3. **After `S-E01-1a`, the tenancy of a request is resolved rather than invented — but a subject with no profile is
    still admitted through `@RequiresPermission`.** `permissions.guard.ts:28` unions realm-role permissions without
    requiring a `UserProfile`, so the refusal only bites where the handler body calls `ensureUser`. That is `PF-165`
@@ -62,7 +69,8 @@ The epic is **not** `shipped`, and **four** sentences must not be misread:
 | Story | Title | State | Run | Evidence |
 |---|---|---|---|---|
 | **S-E01-1a** | The identity seam stops **inventing** a tenant — `ensureUser` refuses an unprovisioned subject instead of upserting a `demo` tenant around it | 🟡 **shipped in part — 2026-08-14, ⚠️ NOT auto-merged (P1 · `[auth][security][tenancy]`)** — [`stories/S-E01-1a.md`](./stories/S-E01-1a.md) | 53 | **Evidence, executed:** `jest apps/api/src/shared/auth/user-sync.service.spec.ts` **22/22 pass** (new file, 470 lines — before it the tenant origin of the whole API had *no* test); `jest src/modules/identity src/shared/quality src/shared/auth` **1717 pass**; `pnpm typecheck` **13/13 exit 0** with `@pilotage/api` a genuine cache miss that compiled the changed sources and `prisma/seed-demo.ts`; `git diff --check` exit 0; `node scripts/production-artefact-check.js` **green** (it went RED mid-run on two *comments* naming the demo slug — rule `A4` scans raw source, comments included — and both were reworded, not exempted). **Closes `PF-01` half (a)** only. Deletes `DEMO_TENANT_SLUG` + the creation branch from `user-sync.service.ts:9,38-56`; refuses with an exported `UnprovisionedUserError` (`403`, `code: ACCOUNT_NOT_PROVISIONED`, one French sentence for all three refusal reasons) and **writes nothing** while refusing, proven on the fake client's call record rather than only on the thrown error. Ships **`ADR-043`**. **Three refusal branches shipped where the story specified one** (`no-match`, `ambiguous-email`, `email-bound-to-another-subject`) — tested (T-4/T-5/T-6), reconciled into `ADR-043` §D7. **Half (b) stays open as `PF-185`; `PF-186` records the unscoped email lookup.** No schema change (`G-MIGRATION` does not trigger), no cutover, no `pending` enum. **Four residuals a human owns — see [`S-E01-1a` — what landed, and the four residuals](#s-e01-1a--what-landed-and-the-four-residuals)** |
-| **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **next, RE-SCOPED 2026-08-14** — steps 1 partially taken by `S-E01-1a` | — | `PF-01` half (a) is taken by `S-E01-1a`; what remains under this id is **steps 2–5** of [Next slice](#next-slice): the first real `withTenant` call site, the `DATABASE_URL` → `app_user` cutover with the missing GRANTs, the decision on the six FK-derived tables (`PF-183`, held PR #245), and the `ADR-032` §D3 one-line correction. The `pending` `UserStatus` is an **enum change** (`schema.prisma:31-35` has only `active|suspended|deleted`), so it carries `G-MIGRATION` and belongs here, not in `1a`. **This is still the slice that mints the first real tenant claim** — but note the *source* of that claim forks on `D-02` (`PF-185`) |
+| **S-E01-1b** | The connection cutover's **REFERENCE SURFACE**: `app_user` can complete an authorization join, and `role` stops being mis-classified as global | 🟢 **shipped — 2026-08-14** — proven by execution | 56 | **Evidence, executed against real PostgreSQL:** `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0, 165 assertions**. The fail-before / pass-after pair, both halves run: the join `user_profile -> user_role -> role -> role_permission -> permission` raises **`permission denied for table role`** on the ledger *without* this migration and returns **`AUTHZ_JOIN|1`** with it (and `AUTHZ_JOIN_FOREIGN|0`). Census agreement moved **`45 + 5` → `45 + 7 + 1 = 53`** with **no literal edited**: the derivation became a recursive CTE and a third catalog-derived term (`AUTODISC|tenant`) joined it. `A_SEES_B_ROLE|0` / `B_SEES_B_ROLE|1`; **`A_SEES_B_ROLEPERM` went `1` → `0`** (a cross-tenant read measured under a bare grant, closed before it shipped); system role visible under A, under B and under **no** context, with the school-scoped one invisible as its control; `NOCTX_TENANTS|0` (no enumeration oracle, no `SECURITY DEFINER` function); `_prisma_migrations` readable with and without a context. **E-8 mutation check: 3 predicate defects injected, 3 killed** — and the FIRST run of it killed only 2, which is what forced the `pg_get_expr` **owner-side predicate evaluation** into existence. Rollback EXECUTED (`AFTER_POLICIES\|0`, `AFTER_RLS\|0`, `AFTER_GRANTS\|0`, `AFTER_ROLE_FK\|0`, `AFTER_ROLE_INDEX\|0`); scratch DB dropped and verified. Ships **`ADR-046`**, amends **`ADR-042 §D2/§D3`** in place. Records **`PF-191`** (closed), **`PF-192`** (closed), **`PF-193`** (open). **No cutover, no `DATABASE_URL` change.** See the section below |
+| **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **next, RE-SCOPED 2026-08-14** — steps 1 partially taken by `S-E01-1a`; the GRANT half of step 3 is taken by `S-E01-1b` | — | `PF-01` half (a) is taken by `S-E01-1a`; what remains under this id is **steps 2–5** of [Next slice](#next-slice): the first real `withTenant` call site, the `DATABASE_URL` → `app_user` cutover with the missing GRANTs, the decision on the six FK-derived tables (`PF-183`, held PR #245), and the `ADR-032` §D3 one-line correction. The `pending` `UserStatus` is an **enum change** (`schema.prisma:31-35` has only `active|suspended|deleted`), so it carries `G-MIGRATION` and belongs here, not in `1a`. **This is still the slice that mints the first real tenant claim** — but note the *source* of that claim forks on `D-02` (`PF-185`) |
 | **S-E01-2** | RLS policies + real `withTenant` call sites + **parameterised GUC** | 🟡 **partial — the parameterisation third only** | 2026-08-11 | 57/57 jest in `apps/api/src/shared/prisma/prisma.service.spec.ts` (no DB, no `DATABASE_URL`, no generated client), `pnpm typecheck` 13/13 exit 0, `git diff --check` exit 0. Ships **`ADR-032`**; annotates `ADR-002`. Closes **`PF-02` half (b)**; **half (a) stays open**; records **`PF-179`**. See the section below |
 | **S-E01-2b** | The RLS half: 44 policies, the `nullif` NULL-context decision, the append-only grant split, and the `Prisma.TransactionClient` narrowing — **without** `FORCE` and **without** a call site, both on purpose | 🟡 **partial — the policy half, proven; not the cutover** | 2026-08-13 | `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0** against the real local PostgreSQL (44/44 RLS enabled, 44/44 `tenant_isolation` policies, connected as `app_user` owning 0 tables without `BYPASSRLS`, positive control first, executed rollback). `pnpm typecheck` **13/13 exit 0**; `git diff --check` exit 0. **5 mutants injected into the migration, 5 killed.** Ships `ADR-032` §D5–§D8. **`PF-02` half (a) closes only PARTIALLY.** See the section below |
 | **S-E01-2c** | The tenant-**DERIVED** half: 5 FK-path `EXISTS` policies, a derived set computed from `pg_constraint` rather than listed, a per-table grant with **no `DELETE` anywhere**, and `outbox_event` deferred by name | 🟡 **partial — the five FK-derivable tables; `outbox_event` deferred, and still not the cutover** | 2026-08-13 | `apps/api/prisma/migrations/20260813180000_tenant_rls_derived_policies/migration.sql` (hand-reviewed, `schema.prisma` untouched so the `prisma generate` RED trap stays disarmed); `scripts/rls-isolation-check.js` extended from 44 to **44 + 5**, with `DERIVED_EXPECTED` derived from `pg_constraint` and an `AC-5b` **set-equality** residue check; `rls-isolation-gate.spec.ts` +450 lines. `pnpm typecheck` **13/13 exit 0** (`@pilotage/api` a genuine cache **miss** that compiled the new spec); `git diff --check` exit 0, extended by `--no-index` over the three untracked files. Ships **`ADR-042`** (extends `ADR-032`, supersedes nothing); annotates `ADR-032` in two places **in place**. Advances `PF-02` half (a); records **`PF-185`** (`outbox_event`) and **`PF-186`** (`ON DELETE CASCADE` vs append-only). **⚠️ The checker's own green is NOT established by this run's gate** — see the section below |
@@ -436,6 +444,12 @@ did: it **enumerates the tables from the live catalog of that database** rather 
 A and GUC = B, with the **positive control asserted first**. 675 assertions, 4 named limits, 0 failures, exit 0,
 three consecutive runs byte-identical modulo the generated scratch name.
 
+> **Annotated by `S-E01-1b`, which merged next and moved every number in this section.** The census is now
+> **45 + 7 = 52**, the derivation is **transitive**, and `UNCOVERED_EXPECTED` holds two names instead of none. The
+> paragraph below on the rebase is what predicted this — it happened again, in the same shape, one slice later, and
+> the same repair applied: **the disagreement was fixed at the layer that caused it, not at the assertion.** Details
+> under `S-E01-1b — the rebase, the second time`.
+
 **Four shapes carry the whole value, and each closes a false green this programme has actually met.**
 
 1. **The expected outcome per `(table, verb)` is read from `role_table_grants`.** Without it, a `42501` from a
@@ -459,6 +473,13 @@ the **owner bypass** is asserted as a **present** leak on two tables, with an in
 `FORCE` lands; and production code reaches **three** tables ungranted to `app_user` (`role` ×7, `permission` ×3,
 `tenant` ×2), which become `42501` on the AuthZ path at the **first request after the cutover**. That honesty is the
 best part of the diff, and it is the reason this row closes `VAL-02`’s DATABASE half without touching `PF-02` half (a).
+
+> **Annotated: the third limit is GONE, and the way it went is the point.** `S-E01-1b` granted those three tables
+> `SELECT` (`ADR-046 §D5`) and the block **re-measured itself** — `AC-9 CUTOVER READINESS: no production Prisma call
+> site reaches a table ungranted to app_user — checked 0 ungranted table(s)`. Nobody edited the block: the ungranted
+> set is read from `information_schema.role_table_grants` on the live database, so a `[LIMIT]` written against a
+> measurement turned into an `[OK]` the moment the measurement changed. `PF-189` is closed on that evidence. The
+> **other three limits stand**, `withTenant` at 0/722 included.
 
 **The rebase is the durable lesson, and it belongs in this file more than the suite does.** The branch was first
 measured at `51b4634` — **before `S-E01-2d` (`e53f2d9`) merged** — and its first evidence line (*"661 assertions,
@@ -516,6 +537,110 @@ from the merged sibling, so a replicated pre-existing pattern rather than a regr
 guarantee covers the scratch **database** names but not the cluster-wide **role**, which both scripts create and drop
 under the same guard. Finally: `.gitattributes` pins `*.ts`/`*.sh`/`*.yml` to `eol=lf` but **not `*.js`** — a
 repo-wide renormalisation is the real repair, deliberately not taken here.
+## `S-E01-1b` — the reference surface: what landed, and what it deliberately did **not**
+
+**Run 56, 2026-08-14.** Ships `apps/api/prisma/migrations/20260814180000_role_reference_surface_rls/`, `ADR-046`,
+two `schema.prisma` relation fields plus one index, and the harness/spec work that proves all of it.
+**This slice does not perform the cutover.** `DATABASE_URL` is untouched, the application still connects as the table
+owner, `FORCE ROW LEVEL SECURITY` is still absent, and no runtime module under `apps/api/src` changed behaviour.
+
+**What was blocking, in the code's own words.** `20260813120000_tenant_rls_policies` §LES GRANTS: *« Le jeu de GRANTs
+est DÉLIBÉRÉMENT INCOMPLET pour la bascule … la première jointure d'autorisation échouerait. »* Measured, as
+`app_user`, against the full ledger without this migration: `ERROR: permission denied for table role`.
+
+**Three premises of that sentence were re-measured, and three were wrong or stale.**
+
+1. **`user_role` is no longer ungranted** — `S-E01-2c` made it one of the five derived tables; it holds
+   `SELECT, INSERT, UPDATE`. Verified in that migration's tuple, not inferred from the prose.
+2. **`role` was mis-classified as globally scoped — `PF-191`.** `role.school_id` → `school.tenant_id NOT NULL`. A bare
+   `SELECT` grant would have been a cross-tenant read at the second of the cutover.
+3. **`role`'s foreign key is not "nullable" — there is none.** `pg_constraint` returns zero `contype='f'` rows for
+   `role`, and `schema.prisma` declared no `@relation`. That absence is precisely what hid (2) from the structural
+   derivation, and the harness had already written the remedy down: *"the day ADR-015 custom roles add
+   `role_school_id_fkey`, `role` correctly ENTERS the derived set."*
+
+And a fourth, from the story's own AC-3: **the by-slug `tenant` read the exclusion was built around no longer
+exists.** After `S-E01-1a` there is no by-slug `tenant` read anywhere in `apps/api/src`. So the "preferred"
+`SECURITY DEFINER` lookup function would have shipped with **zero callers** — a standing privilege-escalation surface
+added for a problem already solved. It was **not written** (`ADR-046 §D4`), and the plain `id = <GUC>` policy closes
+the enumeration oracle by execution: `NOCTX_TENANTS|0`.
+
+**The finding this slice created for itself, and closed before shipping it.** Once `role` becomes tenant-derived,
+`role_permission` is the **two-level** residue that a one-level derivation cannot see — and the story as written put it
+in the granted-but-unpolicied surface. Executed, as `app_user` under `GUC = tenant A`, against a `role_permission` row
+belonging to tenant B's custom role: **`A_SEES_B_ROLEPERM|1`** — tenant B's custom-role ids *and their full privilege
+composition*. It is closed by its own two-hop policy, written out in full rather than leaning on `role`'s policy
+(`ADR-042 §D1` clause 3 applied one level deeper), and by making the derivation **transitively closed** on both sides
+— a recursive CTE in the checker, a fixpoint in the hermetic spec. `ADR-042 §D3` is annotated in place.
+
+**The census agreement moved without a literal being edited**, which was the load-bearing acceptance criterion:
+
+```
+BEFORE   TENANT_COLS|45   DERIVED|5 (…, user_role)              RLS_ON|50
+AFTER    TENANT_COLS|45   DERIVED|7 (… role, role_permission)   AUTODISC|tenant   RLS_ON|53
+```
+
+**The mutation check earned its place.** Three predicate defects were injected and the harness re-run on each. Two went
+red immediately. **The third — deleting `AND s.tenant_id = <GUC>` from `role`'s predicate, a real cross-tenant defect —
+left the harness entirely green, exit 0.** Not from a missing assertion: every visibility assertion runs as `app_user`,
+and there the `school` sub-query is *already* filtered by `school`'s own policy, so the clause is genuinely dead code
+for that role. It is the **owner** — migrations, seeds, and the whole application today — for whom it is the only thing
+working. `ADR-042 §D1` clause 3 said so in prose; this run turned it into an executable assertion that reads the
+**installed** predicate back with `pg_get_expr` and evaluates it as the owner. Re-run: **3 injected, 3 killed.**
+
+**NOT delivered, and named rather than left silent.**
+
+- **The application is still not RLS-isolated.** Same sentence as after `S-E01-2b`, `2c` and `2d`. What remains is the
+  cutover — and it now has **two named blockers instead of an unnamed one**: `PF-193` (`roles.controller.ts` writes
+  `role` / `role_permission`, and this slice grants `SELECT` only) and `PF-185` (`register.controller.ts` upserts
+  `tenant` by slug). Both refusals are **executed**, in a separate `psql` process, so they cannot be discovered under
+  cutover pressure.
+- **The `role` policy isolates a shape the product cannot currently create.** `roles.controller.ts` never sets
+  `schoolId`, so every role it makes is a *system* role and falls in the `IS NULL` branch. Named in `ADR-046 §D3` as
+  `PF-08` / `ADR-015 D8.6` territory; fixing it would be a product-behaviour change disguised as a migration. The
+  forbidden repair — making `school_id IS NULL` **deny** — would hide every seeded role and lock all four portals out.
+- **With no tenant context, `app_user` reads every system role and every `permission` row.** Intended (global
+  reference data), recorded, and paired with the control that makes it meaningful: `NOCTX_SCOPED_ROLE|0`.
+- **`ON DELETE CASCADE` changes what deleting a school does** — its custom roles now go with it, where they were
+  previously orphaned. Chosen deliberately (an orphan would be invisible to *every* tenant, i.e. a wrong answer rather
+  than a denial), executed rather than asserted, and live risk is zero: `role` holds no rows.
+
+### `S-E01-1b` — the rebase, the second time, and why the repair went in the derivation and not in the assertion
+
+**This slice was measured on `e53f2d9` and `S-E01-3` (`fd11481`, `ADR-045`) merged underneath it.** Everything above
+was therefore true of a tree that no longer existed — the same sentence `S-E01-3` wrote about itself one slice
+earlier, in this same file, about its own stale base. Two runs in a row, so it is a property of the routine and not
+of a slice: **parallel tracks allocate against `main` and measure against `main`, and the thing that breaks is the
+consumer neither of them can see.**
+
+**What actually broke, and it was not a count.** `S-E01-3` shipped `scripts/tenant-adversarial-check.js`, which
+`require()`s eight constants from `scripts/rls-isolation-check.js` *precisely so the two cannot disagree* — and then
+carried its **own, hand-written, ONE-LEVEL** census SQL for the FK-derived set. That second query agreed with the
+imported `DERIVED_TABLES` for exactly as long as no derived table had a derived child of its own. `role_permission`
+is that child. So the moment this slice closed the derivation **transitively**, the constant said 7 and the query
+said 6, and **four independent set-equality assertions went red** — the derived set, the residue, the privilege
+matrix, and the `COVERED`/`UNCOVERED` partition — in a suite this branch had never run.
+
+**The repair is the part worth keeping.** The cheap fix was to patch the four literals. What landed instead:
+`DERIVED_SET_SQL` and `AUTO_DISCRIMINANT_SQL` are now **exported by the sibling and imported**, exactly like the
+constants beside them, so the derivation has **one** definition rather than two. `ADR-042 §D3` forbade two literals
+for one set; this is the same rule one layer down — two *queries* about one catalog fact — and it had to be paid for
+before it was seen. The privilege matrix gained the reference surface as **named groups**
+(`AUTO_DISCRIMINANT_PRIVILEGES`, `REFERENCE_PRIVILEGES`, both imported), never by relaxing the equality to a superset
+check, which is the locally cheapest repair and the one that would delete the only barrier to
+`GRANT … ON ALL TABLES IN SCHEMA public`.
+
+**`role` and `role_permission` are NAMED in `UNCOVERED_EXPECTED`, and that is a decision, not a shortcut.** Every
+table in that suite's `PLAN` is driven on four verbs, and its INSERT branch is a **hard failure** when the grant is
+missing — deliberately, because a table it cannot write is a table whose denials are vacuous. `ADR-046 §D5` grants
+these two `SELECT` and nothing else. Seeding them into `PLAN` would have meant relaxing that branch: a real
+protection traded for a coverage number. They are proven **by execution** in the sibling instead, cross-tenant read
+included. `ADR-045`'s own `Consequence` clause prescribes exactly this move, so it was used rather than amended.
+
+**Measured after the rebase, on the merged tree** — the only tree whose measurement is worth anything:
+`node scripts/tenant-adversarial-check.js` → **exit 0**, twice, `45 tenant-bearing + 7 FK-derived = 52`,
+`RESIDUE = permission`, `AUTODISC = tenant`, `COVERED = 50` against a floor of 40, privilege matrix equal by set on
+all 54 granted tables, three named `[LIMIT]` lines and no fourth.
 
 ## Merge conditions and inherited obligations
 
@@ -620,8 +745,18 @@ The slice, in the order it must be done:
    under the policy, silently and forever, which is the failure shape this programme has repeatedly ruled worse than a
    loud one.
 
-**Recommended before `S-E01-1`, and new on 2026-08-14: `S-E01-1b` — the demo identities stop being a standing
-credential, and `status` starts being enforced.** It is small, it is entirely inside the seam `S-E01-1a` just touched,
+> **⚠️ STORY-ID COLLISION, recorded 2026-08-14 (run 56) — the `S-E01-1b` named just below is NOT the `S-E01-1b`
+> that shipped.** This paragraph allocated `S-E01-1b` to the *demo-identity / `status`-enforcement* detour. Run 56 was
+> handed `S-E01-1b` by **operator override** for a different story — the connection cutover's **reference surface**
+> (see the row in *Slice status* and the section
+> [`S-E01-1b` — the reference surface](#s-e01-1b--the-reference-surface-what-landed-and-what-it-deliberately-did-not))
+> — and the SLICE wins per the override rule. This is the `TOOL-30` shape one level down: an id allocated twice by two
+> actors that could not see each other. **The detour described below is neither cancelled nor done**; it needs a new
+> id when it is picked up. It is recorded rather than silently renumbered, because renumbering by pattern is exactly
+> what `TOOL-30` says not to do.
+
+**Recommended before `S-E01-1`, and new on 2026-08-14 (id superseded — see the note above): the demo identities stop
+being a standing credential, and `status` starts being enforced.** It is small, it is entirely inside the seam `S-E01-1a` just touched,
 and it retires three of that slice's four residuals in one pass: (a) remove the `credentials` block from
 `infra/keycloak/realm-export.json` and extend `seed-keycloak-users.ts`'s `DEMO_USERS` to cover `admin@` / `teacher@` /
 `parent@pilotage.local`, which both rotates the repo-literal password to `KEYCLOAK_DEMO_PASSWORD` and gives those
@@ -643,7 +778,10 @@ five FK-derived tables; `S-E01-3` proves it on **all 50**, four verbs, both dire
 paragraph described **is** the cutover, `S-E01-1`, and it can only be written after step (2) above lands the first
 call site. `VAL-02`’s DATABASE half is closed (the application half is owned by `S-E01-1`); `S-E01-4` stays blocked on `D-02`.
 
-**The pointer is therefore unchanged: `S-E01-1b`, then `S-E01-1`.** `S-E01-3` was the one `V3-E01` slice that could
+~~**The pointer is therefore unchanged: `S-E01-1b`, then `S-E01-1`.**~~ **Superseded the same day: the `S-E01-1b`
+that shipped is the *reference surface* story, not the detour this paragraph meant (see the collision note above), and
+it **consumed the pointer**. The pointer is now `S-E01-1` — the detour keeps its place in the queue but needs a new
+id.** `S-E01-3` was the one `V3-E01` slice that could
 land without touching the identity seam or the connection, so it took itself off the board and consumed nothing.
 What it hands forward is **measurement instead of intention**, and three items above become concrete because of it:
 step (3)'s "the grant set is deliberately incomplete" is now a **counted** list of three tables production code
