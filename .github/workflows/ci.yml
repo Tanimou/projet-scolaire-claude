@@ -228,6 +228,24 @@ jobs:
       # (DNC-08). Kept in step with scripts/ci-gate.sh stage "rls isolation" — the
       # two must not drift (S-E02-2 AC-4).
       - run: node scripts/rls-isolation-check.js
+      # S-E01-3 / VAL-02 — the two-tenant ADVERSARIAL suite. It is NOT the step
+      # above with a different name: that one proves the policies exist, agree
+      # with the catalog and deny on `school` plus the five FK-derived tables.
+      # This one enumerates EVERY tenant-bearing table from the live catalog of
+      # its own scratch database and runs four verbs against each, in both
+      # directions, with the positive control asserted FIRST and the expected
+      # outcome per (table, verb) read from `role_table_grants` — so a `42501`
+      # from a missing privilege can never be scored as isolation, and a table
+      # with no seeded row for the second tenant is named UNCOVERED rather than
+      # counted as three green denials on an empty table.
+      #
+      # It also prints the CUTOVER READINESS block, which is what stops a green
+      # here from being read as "safe to switch DATABASE_URL to app_user".
+      #
+      # No continue-on-error: a check that cannot run is a failure, never a skip
+      # (DNC-08). Kept in step with scripts/ci-gate.sh stage "tenant adversarial"
+      # — the two must not drift (S-E02-2 AC-4).
+      - run: node scripts/tenant-adversarial-check.js
       - run: pnpm --filter @pilotage/api prisma generate
       - run: pnpm build
       # Every stage before this one proves the code compiles; not one of them
