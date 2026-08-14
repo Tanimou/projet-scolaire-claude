@@ -88,6 +88,11 @@ const checker = require(CHECKER_PATH) as {
   TENANT_A: string;
   TENANT_B: string;
   UNCOVERED_EXPECTED: readonly string[];
+  cutoverVerdict: (counts: {
+    files: number;
+    withTenantCallers: number;
+    prismaCallSites: number;
+  }) => { kind: 'vacuous' | 'limit' | 'ok'; label: string; detail: string };
   prismaModelName: (table: string) => string;
 };
 const sibling = require(SIBLING_PATH) as {
@@ -773,6 +778,47 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
     expect(adr).toContain('never says the application is isolated');
     expect(adr).toContain('CUTOVER READINESS');
     expect(adr).toContain('withTenant');
+  });
+
+  /**
+   * AC-9 — corrigé au land par le run 54. La première rédaction testait
+   * `withTenantCallers === 0` : UN SEUL appelant sur 722 faisait donc passer la
+   * ligne « prêt à basculer » au vert affirmatif, alors que 721 sites ne posent
+   * toujours aucun GUC et renverraient ZÉRO LIGNE après la bascule. C'est le
+   * défaut de `PF-02` lui-même, reproduit dans le bloc écrit pour le refuser.
+   *
+   * Les quatre cas ci-dessous sont écrits pour ÉCHOUER sur l'ancienne rédaction :
+   * le cas « partiel » est celui qu'elle déclarait vert.
+   */
+  describe('AC-9 — la lecture « prêt à basculer » ne peut pas devenir verte sur une couverture partielle', () => {
+    it('zéro appelant reste une LIMITE', () => {
+      const v = checker.cutoverVerdict({ files: 223, withTenantCallers: 0, prismaCallSites: 722 });
+      expect(v.kind).toBe('limit');
+      expect(v.label).toContain('ZERO production callers');
+      expect(v.detail).toContain('NOT READY TO CUT OVER');
+    });
+
+    it('UN appelant sur 722 reste une LIMITE — la régression que ce correctif ferme', () => {
+      const v = checker.cutoverVerdict({ files: 223, withTenantCallers: 1, prismaCallSites: 722 });
+      expect(v.kind).toBe('limit');
+      expect(v.kind).not.toBe('ok');
+      expect(v.label).toContain('PARTIAL');
+      // Le nombre de sites NON couverts est nommé, pas seulement celui des couverts.
+      expect(v.detail).toContain('721');
+      expect(v.detail).toContain('NOT READY TO CUT OVER');
+    });
+
+    it('la couverture COMPLÈTE est la seule qui autorise le vert affirmatif', () => {
+      const v = checker.cutoverVerdict({ files: 223, withTenantCallers: 722, prismaCallSites: 722 });
+      expect(v.kind).toBe('ok');
+      expect(v.label).toContain('every production Prisma call site');
+    });
+
+    it('une lecture de sources vide reste un ÉCHEC, jamais une limite tolérée (DNC-08)', () => {
+      const v = checker.cutoverVerdict({ files: 0, withTenantCallers: 0, prismaCallSites: 0 });
+      expect(v.kind).toBe('vacuous');
+      expect(v.detail).toContain('vacuous');
+    });
   });
 
   it('le vérificateur ne contient AUCUN « isolated » nu dans sa bannière de succès', () => {

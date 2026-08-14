@@ -1771,6 +1771,57 @@ function prismaModelName(table) {
   return table.replace(/_([a-z0-9])/g, (_m, ch) => String(ch).toUpperCase());
 }
 
+/**
+ * The AC-9 `withTenant` verdict, as a PURE function so the guard spec can drive
+ * every branch without a database.
+ *
+ * WHY THIS IS NOT `withTenantCallers === 0 ? limit : ok` (the shape shipped in
+ * the first draft of this slice, corrected at land by run 54):
+ *
+ *   After the `DATABASE_URL` cutover, EVERY Prisma call site that does not set
+ *   the tenant GUC returns ZERO ROWS — that is AC-5, proven above. So a single
+ *   `withTenant` caller out of 722 is not progress towards safety, it is one
+ *   covered site and 721 outages. A `=== 0` threshold turns that state into an
+ *   affirmative green line, which is `PF-02`'s own failure mode — "the guardrail
+ *   is claimed, the guardrail is not there" — reproduced INSIDE the block built
+ *   to refuse it.
+ *
+ *   So the affirmative branch requires coverage to be COMPLETE. Anything short
+ *   of it stays a `[LIMIT]` that names the ratio. This is deliberately a wall
+ *   rather than a tunable floor: a knob here is a bypass flag wearing a
+ *   different hat (`DNC-10`), and the rule for what "covered" means once the
+ *   cutover starts belongs to `S-E01-1`, which owns the cutover — it is the only
+ *   slice entitled to redefine it, and it must do so consciously.
+ */
+function cutoverVerdict({ files, withTenantCallers, prismaCallSites }) {
+  if (files === 0) {
+    return {
+      kind: 'vacuous',
+      label: 'AC-9 the CUTOVER READINESS block could read the application sources at all',
+      detail: 'zero .ts files found under apps/api/src and apps/worker/src — the counts below would be vacuous',
+    };
+  }
+  const uncovered = prismaCallSites - withTenantCallers;
+  if (uncovered > 0) {
+    const zero = withTenantCallers === 0;
+    return {
+      kind: 'limit',
+      label:
+        'AC-9 CUTOVER READINESS: `PrismaService.withTenant` has ' +
+        (zero ? 'ZERO production callers' : `only PARTIAL production coverage (${withTenantCallers}/${prismaCallSites})`),
+      detail:
+        `${withTenantCallers}/${prismaCallSites} Prisma call sites set the tenant GUC across ${files} source ` +
+        `files, so ${uncovered} would return ZERO ROWS after the DATABASE_URL cutover. AC-5 above ("no GUC means ` +
+        'zero rows") therefore describes the OUTAGE, not the safety. THE APPLICATION IS NOT READY TO CUT OVER.',
+    };
+  }
+  return {
+    kind: 'ok',
+    label: 'AC-9 CUTOVER READINESS: every production Prisma call site sets the tenant GUC',
+    detail: `${withTenantCallers}/${prismaCallSites} call sites across ${files} source files`,
+  };
+}
+
 function cutoverReadiness(ungrantedTables) {
   const roots = [join(REPO_ROOT, 'apps', 'api', 'src'), join(REPO_ROOT, 'apps', 'worker', 'src')];
   const files = roots.flatMap((root) => sourceFiles(root));
@@ -2379,24 +2430,10 @@ $mut$;`;
     //          down. This block is a set of named assertions, not prose.
     const ungranted = names(cen.get('UNGRANTED')).filter((table) => table !== '_prisma_migrations');
     const readiness = cutoverReadiness(ungranted);
-    if (readiness.files === 0) {
-      fail(
-        'AC-9 the CUTOVER READINESS block could read the application sources at all',
-        'zero .ts files found under apps/api/src and apps/worker/src — the counts below would be vacuous',
-      );
-    } else if (readiness.withTenantCallers === 0) {
-      limit(
-        'AC-9 CUTOVER READINESS: `PrismaService.withTenant` has ZERO production callers',
-        `${readiness.withTenantCallers}/${readiness.prismaCallSites} Prisma call sites set the tenant GUC across ` +
-          `${readiness.files} source files. After the DATABASE_URL cutover no request would set it, so AC-5 above ` +
-          '("no GUC means zero rows") describes the OUTAGE, not the safety. THE APPLICATION IS NOT READY TO CUT OVER.',
-      );
-    } else {
-      record(
-        'AC-9 CUTOVER READINESS: `PrismaService.withTenant` has production callers',
-        `${readiness.withTenantCallers} call(s) across ${readiness.files} source files`,
-      );
-    }
+    const verdict = cutoverVerdict(readiness);
+    if (verdict.kind === 'vacuous') fail(verdict.label, verdict.detail);
+    else if (verdict.kind === 'limit') limit(verdict.label, verdict.detail);
+    else record(verdict.label, verdict.detail);
     if (readiness.reachable.size > 0) {
       limit(
         'AC-9 CUTOVER READINESS: production code reaches tables that are UNGRANTED to ' + app.user,
@@ -2559,5 +2596,6 @@ module.exports = {
   TENANT_A,
   TENANT_B,
   UNCOVERED_EXPECTED,
+  cutoverVerdict,
   prismaModelName,
 };
