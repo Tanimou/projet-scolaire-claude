@@ -1,5 +1,121 @@
 # Next story
 
+# NEXT — written by run 53 (`S-E01-1a`), 2026-08-14 — **this section supersedes every section below**
+
+## ✅ A login no longer MINTS a tenant. `PF-01` half (a) is closed by execution.
+
+`UserSyncService.ensureUser` is the tenant origin of the entire API — **242** call sites do
+`const me = await this.users.ensureUser(jwt)` and then scope everything by `me.tenantId`. Until this run, a subject
+matching no `UserProfile` made it **upsert a `demo` Tenant into existence** and create an `active` profile inside it.
+With `ADR-004` putting every tenant in ONE Keycloak realm, and `realm-export.json` shipping three enabled,
+profile-less identities, **any realm identity that had never logged in silently became a member of a tenant its own
+login created**, carrying its realm-role permissions. Tenancy was assigned by a string literal.
+
+The seam now **resolves or refuses** (403 `ACCOUNT_NOT_PROVISIONED`, exported `UnprovisionedUserError`).
+
+**Fail-before/pass-after was EXECUTED by the routine, not claimed by the sprint:** the new
+`user-sync.service.spec.ts` was run against the *old* implementation restored from `HEAD` — **14 of 22 failed** —
+and against the new one — **22/22 pass**. Full suite `69/69`, **0 skipped**.
+
+## 🛑 The two things this run changed that NOBODY ASKED FOR, and both were load-bearing
+
+**Read these before assuming the slice was the obvious deletion it looks like.**
+
+1. **The surviving email-adoption branch was returning an ARBITRARY row.** `findFirst({ where: { email } })` — but
+   `email` is unique only **per tenant** (`schema.prisma:879`). Deleting the creation branch alone would have replaced
+   *"tenancy by constant"* with *"tenancy by arbitrary row in an unspecified order"*: the **same `G-TENANT` violation,
+   plus non-determinism**. It now reads `findMany({ take: 2 })` and **refuses ambiguity**.
+2. **Adoption no longer overwrites an existing `authProviderId`.** That column is unique *globally*
+   (`schema.prisma:838`), so overwriting a live binding would have **stolen an identity** — and the legitimate holder,
+   whose `findUnique` would then miss, would be refused instead of silently re-provisioned.
+
+Neither was in the brief. Both were found by reading the code the brief told the sprint to change.
+
+## ⚠️ THIS PR IS OPEN, NOT MERGED — and the reason is `TOOL-27`, not this diff
+
+`scripts/ci-gate.sh` was run **three times on one committed tree**: **`PASS`, `FAIL`, `PASS`**, with
+**byte-identical** ratchets in all three (`test-ratchet[api] 2715/2726 · 11 failing · 11 known-failing`,
+`worker 293/300 · 7 · 7`). Nothing stopped running; no test flipped.
+
+The single failure is the **last line of the RLS stage** — its scratch-database *teardown*. Every one of the 27
+substantive assertions passed in the failing run too, positive controls included.
+
+```
+✗ the scratch database was dropped — rls_isolation_103552_1786670883305:
+  ERROR: must be a member of the role whose process is being terminated or member of pg_signal_backend
+```
+
+`DROP DATABASE … WITH (FORCE)` must terminate every remaining session; the drop runs as `pilotage`, the proof connects
+as **`app_user`**, and `pilotage` is a member of neither `app_user` nor `pg_signal_backend`. **Confirmed by execution:**
+the leftover database showed **zero** backends afterwards and dropped **instantly** as `pilotage`. It is a *timing*
+race, not a privilege wall, and **the server was left clean**.
+
+**Do not "fix" it with `GRANT pg_signal_backend TO pilotage`** — that buys a green teardown with a standing privilege
+escalation for the very role `S-E01-1` is about to cut the application over to. Close the `app_user` connection
+deterministically before dropping, or drop without `FORCE` and retry.
+
+**It was deliberately NOT fixed in this PR:** `scripts/rls-isolation-check.js` is the **core file of open PR #245**,
+and repairing it here would conflict with the PR that is already waiting for a human.
+
+## 🔢 An ADR id collision that only the ledger could catch — renumbered at land
+
+The sprint wrote `ADR-042`; **open PR #245 had already claimed `042`** for FK-path tenant isolation (`PF-183`).
+Invisible from `main`, because #245 is held. Renumbered to **`ADR-043`**, and two consequences taken rather than noted:
+
+- `ADR-032`'s clause *« No `ADR-042` exists and none is intended »* is **annotated in place**, naming who holds 042 and
+  who holds 043 — not rewritten.
+- `rls-isolation-gate.spec.ts`'s negative control was anchored on `042`, **the then-next-free number**, so whichever
+  slice landed first would have turned `main` RED on a file neither had any reason to open. **Re-anchored on `000`,
+  reserved by construction.** *A negative control must not double as a number reservation.*
+
+## ▶ Recommended next story
+
+1. **`TOOL-27` (P1, small) — fix the teardown race and MERGE THIS PR.** It is the only thing between `S-E01-1a` and
+   `main`, it now flakes every slice that touches `apps/api/prisma/` (including seed-only ones), and it puts
+   `AUTO-LAND`'s `green` back out of reach of a single gate run. **Sequence it against #245**, whose diff owns that
+   file — ideally review/merge #245 first, then repair on top.
+2. **`PF-186` (P1, discovered this run) — two-token fixes, and the third one is UI.** The email lookup is not
+   tenant-scoped and **never reads `email_verified`**, so a Keycloak account with a server-forced verified address can
+   adopt an unbound profile in *someone else's* tenant. `status` is consulted nowhere, so a `suspended` or
+   soft-deleted profile still resolves. And the refusal **has no UI**: `apps/web/src/lib/me.ts:34` catches 401 only, so
+   a 403 lands on `error.tsx`, whose message Next redacts to a digest — a refused user reads a generic crash screen
+   whose "Réessayer" CTA is a guaranteed-losing loop. `ACCOUNT_NOT_PROVISIONED` appears **nowhere** in `apps/web`.
+3. **`PF-165` half (b) — the refusal does not yet cover the guard.** `effectivePermissions` only ADDS realm-role
+   permissions and never requires a profile, so `permissions.guard.ts:28` still lets an unprovisioned subject through
+   `@RequiresPermission`; the refusal bites only where a handler calls `ensureUser`. Moving the requirement into the
+   guard changes refusal semantics for ~50 controllers at once — its own story, on purpose.
+4. **`PF-185` (P1) — `register.controller.ts` still upserts `demo`.** Deliberately deferred: a public registrant
+   belongs to no school yet, and inventing a resolution rule there would contradict the seam meant to define it.
+   It needs the `D-02` discriminant.
+5. **`S-E01-1` proper (the connection cutover) — still sequenced behind `PF-183`/#245.** Unchanged by this run.
+
+## State of the world at the end of run 53
+
+- **`GATE: PASS (fast)` on the committed tree (runs 1 and 3); run 2 `FAIL (1 stage)` = `TOOL-27` above.** Verdict lines
+  read from logs checked by **mtime** as well as content (run 50's near-miss), never from `$?` of a pipeline (`R-23`).
+  api denominator **2704 → 2726** (+22, all this slice, **0 skipped**). No excess failure in any of the three.
+- **`pnpm --filter @pilotage/api build` — the run's single build, verified by its ARTEFACT** (`apps/api/dist/main.js`
+  rewritten 65 s after the build began), not by an exit code.
+- **No Docker was started and no container rebuilt.** None was needed: this host's database is the native Windows
+  service `postgresql-x64-15` on `127.0.0.1:5432`. **`TOOL-19` is untouched and the local Docker stack's health remains
+  UNKNOWN** — do not read this run as evidence about it.
+- **PostgreSQL was written to and LEFT CLEAN.** Scratch databases created and dropped by the RLS and drift stages; the
+  one leftover from the failing run was found, inspected (`0` backends) and dropped by hand. `rls_isolation_%` verified
+  `(none)` **independently of the script that asserts its own cleanup**.
+- **The sprint wrote into the MAIN checkout this time** — `git status` in the session worktree was empty. The
+  bidirectional worktree-path bug did not bite; it was still checked rather than assumed.
+- **`INFLIGHT` was 1 at Step 0** — PR #245 (`S-E01-2c`/`PF-183`) is held, and it was **excluded from selection**, which
+  is why this run did not re-implement it. Its files were fenced off in the brief; the one the sprint touched anyway
+  (`rls-isolation-gate.spec.ts`, for the ADR-number trap) is called out above.
+- **The brief was wrong again, and the sprint was right — the fourth consecutive run.** It asserted the realm export
+  carries `id`s for the three demo users. It does not (`realm-export.json:105-136` declares none; Keycloak mints UUIDs
+  at import), so the seed provisions them **without** `authProviderId` and they adopt through the email branch — which
+  is what makes `AC-3` load-bearing rather than cosmetic.
+
+---
+
+# Next story
+
 # NEXT — written by run 52 (`S-E01-2b`), 2026-08-13 — **this section supersedes every section below**
 
 ## ✅ RLS exists, and it is proven to deny — the oldest open L0 trust finding finally moved
