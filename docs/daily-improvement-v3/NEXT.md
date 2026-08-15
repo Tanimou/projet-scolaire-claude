@@ -1,6 +1,141 @@
 # Next story
 
-# NEXT — written by run 60 (`S-E01-4a`), 2026-08-15 — **this section supersedes every section below**
+# NEXT — written by run 61 (`S-E01-1e`), 2026-08-15 — **this section supersedes every section below**
+
+## ✅ The SECOND module is in the tenant scope — `PF-02` half (a) advances, and `PF-199` / `PF-217` are CLOSED
+
+`lessons` joins `calendar` inside the seam: five handlers, `this.scope.run(...)` **lexically** in each, `tx` inside,
+identity resolved **outside** by necessity. Two roadmap-adjacent findings close and the roadmap finding advances.
+
+```
+BEFORE  13 scoped + 111 enumerated / 800
+AFTER   24 scoped + 120 enumerated / 803    → 659 sites still return ZERO ROWS after the cutover
+```
+
+**Re-derived by the script, never edited as a literal.** The application is **not** ready to cut over and the suite
+says so as a **named LIMIT**, not as a ratio with a floor.
+
+## 🛑 THE FINDING IS THE COUNTER, NOT THE MODULE — it moved the WRONG WAY until it was repaired
+
+Read this before trusting any previous run's attribution number. Until this slice, `PRISMA_CALL_SITE_RE` matched
+`prisma.`, `this.prisma.` and `tx.` **identically**, and `covers()` was purely **positional**. So:
+
+```ts
+this.scope.run(id, async (tx) => { await this.prisma.grade.findMany(); })   // ← counted as SCOPED
+```
+
+The statement runs on the **OWNER** connection, which escapes its own policies, while the counter credits it to the
+callback. **A half-converted handler therefore produced a HIGHER scoped count than a correct one: the metric moved
+in the wrong direction exactly when the code was wrong.** This is the dangerous inverse of `PF-200`, and the
+adversarial reviewer named it as its top refusal condition before a line was written.
+
+Closed by `SCOPE_SAFE_RECEIVERS = ['tx']` and `classifyCallSite` — a **pure** function with four outcomes including
+`owner-inside-scope`, driven directly by the gate spec rather than inferred from a corpus. **Order carries the
+property:** the receiver test runs **before** the enumeration test, so a covered site can never be laundered into
+the enumerated column by an allow-listed file (`ADR-051 §D1`).
+
+## 🔭 `PF-199` settled as TWO KINDS, ratcheted by set equality in BOTH directions
+
+`kind` is mandatory and there is no default, because a default is what a new entry inherits without anyone choosing
+it. **`surface`** = a whole-tree property true of every statement by construction (boot globs,
+`apps/worker/src/**`). **`bootstrap`** = identity/context resolution, where every statement carries its **own**
+reason. A `surface` entry naming a single module file is **refused** — that is the discretion a converting module
+would otherwise use to hide behind the coarser kind.
+
+The `bootstrap` kind is compared for **equality in both directions** against the same matcher that produces the
+arithmetic: an unlisted statement fails, a **dead** entry fails, a reasonless entry fails. Keys are
+`(glob, model.verb)` — **never `file:line`**, which drifts on reflow and then gets "repaired" by an `--update` mode.
+
+**The `PF-199` set was recorded as 3 files / 11 statements. It is 4 files / 21.** `teacher-profile.service.ts`
+resolves `teacherProfileId` and **writes while doing so**, measured at **7** sites, not the 6 predicted. That entry
+*increases* the enumerated term, which is arithmetically indistinguishable from a manufactured green — so it is
+justified on the measurement and its before/after is stated rather than absorbed.
+
+## ⚠️ THE SPRINT DIED MID-IMPLEMENTATION AND THE WORK WAS UNCOMMITTED — read this before the next run
+
+The driving session exited during an `Edit`. On recovery: **~2,700 lines in the main checkout, ZERO commits on the
+branch** — `project-routine-commits-to-main-unpushed` for the **third** time in three days. It was committed
+protectively before anything else was done, then pushed as soon as the classifier allowed.
+
+Three items were finished **by the orchestrator, not the sprint**, and are labelled as such:
+
+1. **`ADR-051` did not exist.** The shipped code already cited `ADR-051 §D2` — a dangling citation, `TOOL-30`'s
+   disease inside a single diff. Written from the source that shipped, not from the story, and the story's
+   `structural`/`identity` naming is reconciled against the implementation's `surface`/`bootstrap` **in the ADR**
+   rather than silently.
+2. **One failing test**, and it is worth keeping in the record: the slice's own anti-vacuity guard refused three
+   **pre-existing** `calendar_event` entries whose reasons were `create` / `update` / `remove` — the handler name
+   and nothing more, 6 characters, inherited from `S-E01-5`. **Repaired, not baselined.** `36/36` after.
+3. The traceability, this file, and the `PROGRESS.md` pointer.
+
+**The lock also has to be said out loud.** Step 0 returned `GATE=BUSY` for a holder whose **pid did not exist**:
+`lock_fresh()` checks only heartbeat age and never pid liveness, and `write.lock/pid` records the *lock script's*
+own pid, which has always exited — so it is dead on arrival and cannot ever be used for liveness. A crashed run
+therefore blocks the routine for a **full hour**. Recorded as **`TOOL-34`**.
+
+## 🛑 What this slice does NOT claim
+
+- **`lessons` is PARTIALLY converted (`PF-218`).** The notification fan-out cannot be reached from the controller:
+  `NotificationsService` closes over its own `PrismaService` and takes no `tx`, so it stays on the **owner**
+  connection. Leaving it outside was deliberate and the reason is stronger than ergonomics — inside a scope it
+  would enqueue BullMQ e-mail jobs **before commit** (a rolled-back lesson would still have notified every
+  guardian) and fan O(guardians) statements into a 5 s budget. Its `teachingAssignment` lookup **was** tenant-scoped
+  here, so the caller discipline it relied on is now structural.
+- **The executed denial proof is at TABLE level, not handler level.** `lesson_entry` sits inside the adversarial
+  suite's catalog-enumerated proof against real PostgreSQL as `app_user` (exit 0). The controller conversion is
+  proven by **36** source/double-level assertions. Both are real; they are **not** the same claim, and collapsing
+  them would be the kind of sentence this routine exists to refuse.
+- **Nothing here isolates the running application.** It still connects as the table **owner**, which escapes its own
+  policies without `FORCE ROW LEVEL SECURITY`. The suite asserts that as a **present leak**, so the day `FORCE`
+  lands it goes red and says so.
+- **Intra-tenant ABAC gaps in `lessons` are untouched and pre-existing:** an unfiltered `GET /lessons` returns every
+  published lesson in the tenant to any `lessons.read` holder, and `isStaff` is a **role union**, so a teacher who
+  is also a parent sees drafts. RLS does not close either — same tenant.
+
+## 🔧 `TOOL-19` IS STALE — Docker is UP, and Keycloak answered for the first time in this programme
+
+Measured read-only this run: **12 containers, all healthy**, including the `obs` profile (Prometheus, Grafana,
+Loki, Jaeger) **and Keycloak**. Many runs have recorded *"the local Docker stack's health remains UNKNOWN"*. It is
+not unknown any more.
+
+Two probes against the **local** realm (never the VPS — it is an audit fixture):
+
+| probe | result |
+|---|---|
+| `portal-admin` / `portal-teacher` / `portal-parent` authorization request | **302** — the clients exist and accept their own callback |
+| `portal-student` | **400, "Client not found."** — read from the error body, not inferred from the status |
+| `portal-parent` with a `/student/*` redirect (the `PF-209` shape) | **400 — refused** |
+
+So run 60's *predicted* rollout caveat is now **proven by execution**: an already-imported realm does **not**
+receive the new client, which is one of `VAL-04`'s five open points measured for real. And the local realm does
+**not** carry the `PF-209` collapse — consistent with `PF-209` being scoped to the production provisioner
+(`infra/kc-prod-redirects.mjs`) rather than to `realm-export.json`. Do not over-read it in either direction.
+
+**Caveat that matters:** the containers were started from an **older env than the current `.env`** (the postgres
+container publishes **5433** while `.env` targets the native Windows service on **5432**), so the running stack is
+not a faithful image of this checkout. Nothing in this slice depended on it.
+
+## ▶ Recommended next story
+
+1. **`S-E01-1f` — convert a THIRD module, and take `PF-219` WITH it.** The boot-probe closure is now one
+   hand-maintained list **plus** one derivation spec **per converted module**; a third module makes that three of
+   each — the two-lists disease one level up. Derive it **once**, corpus-wide, from every `tx.<model>.<verb>(`
+   inside every attributed scope range. A missing entry does not fail the boot probe: it certifies
+   `enforcing: true` over a closure nobody checked, and every request of that module then answers 42501 on all its
+   portals.
+2. **`PF-208` (P1) — `announcements` is the same `ADR-049` shape and it is a cross-tenant WRITE.** Third instance
+   found by hand, still the sharpest unfixed one: a foreign `userProfileId` is returned **verbatim** as the
+   recipient set, writing an `announcement_receipt` and a notification into the **victim** tenant's feed.
+3. **`PF-218`** — give `NotificationsService` a `tx`-accepting entry point, or the fan-out stays on the owner
+   connection for every module that ever converts.
+4. **`S-E01-4b` / `VAL-04` — now genuinely executable for the first time**, because Keycloak is up. The measurement
+   above is one of the five points; the other four (import the amended export, complete the code round trip, assert
+   `azp: "portal-student"` on the minted token, confirm the wildcard is gone) need a realm re-import.
+5. **`TOOL-34`** — the lock's liveness check. One hour of routine time per crashed run, and it cost this run a
+   `GATE=BUSY` that was false.
+6. **`TOOL-30`** — renumber the colliding ids. Still untouched, still more expensive every run.
+
+# NEXT — written by run 60 (`S-E01-4a`), 2026-08-15 — superseded by run 61 above, kept for content
 
 ## ✅ `PF-18` is CLOSED — a ROADMAP finding, the first this programme has closed since `PF-178`
 
