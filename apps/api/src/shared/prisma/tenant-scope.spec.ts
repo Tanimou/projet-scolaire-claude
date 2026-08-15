@@ -525,7 +525,22 @@ describe('cliquets de source de la couture', () => {
     expect(controller).toContain('DÉLIBÉRÉMENT HORS DE LA PORTÉE TENANT');
     // P2025 -> 404 : le plancher base et la garde applicative restent
     // extérieurement indiscernables (pas d'oracle d'existence).
-    expect(code).toContain("error.code === 'P2025'");
+    //
+    // S-E01-1e — LA PROPRIÉTÉ N'A PAS BOUGÉ, SON ADRESSE SI. `mapWriteRefusal`
+    // était une fonction locale de ce contrôleur ; le deuxième module en avait
+    // besoin à l'identique, et une SECONDE copie est précisément la dérive que
+    // ce dépôt collectionne. Elle vit donc dans `shared/prisma/write-refusal.ts`.
+    //
+    // Ce cliquet asserte maintenant les DEUX moitiés, parce qu'aucune ne suffit :
+    // le contrôleur PASSE bien par le mappeur, et le mappeur mappe bien `P2025`.
+    // N'en garder qu'une laisserait passer soit un contrôleur qui laisse remonter
+    // un 500, soit un mappeur devenu l'identité.
+    expect(code).toContain('mapWriteRefusal');
+    const refusal = stripComments(
+      readFileSync(join(__dirname, 'write-refusal.ts'), 'utf8'),
+    );
+    expect(refusal).toContain("error.code === 'P2025'");
+    expect(refusal).toContain('NotFoundException');
   });
 
   it('`calendarVisibilityWhere` est intacte — G-AUTHZ ne dépend pas de la couture', () => {
