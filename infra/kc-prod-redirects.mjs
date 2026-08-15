@@ -41,7 +41,9 @@ const CLIENTS = {
 // The two callback paths NextAuth actually emits for a portal. `keycloak-<portal>`
 // is the live provider id (`portalProviderId` in apps/web/src/lib/keycloak-clients.ts);
 // the bare `<portal>` form is the legacy URI the three pre-existing clients carry
-// (PF-214). Both are written out in full ON PURPOSE: the previous shape wildcarded
+// (PF-216 — this line cited PF-214 when written, but PF-214 is the hard-coded
+// three-client list in `kc-fix-redirects.mjs`. Corrected at land: one id, one
+// meaning, TOOL-30). Both are written out in full ON PURPOSE: the previous shape wildcarded
 // the whole callback segment, which made every portal client a valid target for
 // every other portal's callback — the same collapse as above, at a second address
 // (ADR-050 §D4). Do not reintroduce a `*` anywhere under `/api/auth/callback/`.

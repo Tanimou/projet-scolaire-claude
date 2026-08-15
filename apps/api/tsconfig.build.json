@@ -1,4 +1,24 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // `rootDir` lives HERE and not in `tsconfig.json`, because it is an EMIT
+    // concern: it fixes the layout under `dist/`, and nothing else. `tsconfig.json`
+    // is also what `pnpm typecheck` (`tsc --noEmit`) reads, and there the
+    // constraint has no output to govern — it only forbids the program from
+    // *mentioning* a file outside `src/`.
+    //
+    // That mattered once, concretely (S-E01-4a / PF-18). The repo-wide gate
+    // `src/shared/quality/keycloak-client-identity-gate.spec.ts` must import the
+    // REAL production accessor `apps/web/src/lib/keycloak-clients.ts`, because
+    // re-typing its portal→client rules inside the test would recreate the second
+    // hand-maintained copy that PF-18 *was*. ts-jest ran that import; `--noEmit`
+    // refused it with TS6059.
+    //
+    // The build-time guard is NOT weakened by the move: this file still sets
+    // `rootDir` and still excludes `**/*.spec.ts`, so a cross-package import
+    // reaching PRODUCTION code still fails `nest build` — which is the case worth
+    // refusing. Only test files may reach across, and only to read a contract.
+    "rootDir": "./src"
+  },
   "exclude": ["node_modules", "dist", "test", "**/*.spec.ts", "**/*.test.ts"]
 }

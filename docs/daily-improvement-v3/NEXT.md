@@ -1,6 +1,123 @@
 # Next story
 
-# NEXT — written by run 58 (`S-E01-1d` + `S-E01-1d (b)`), 2026-08-15 — **this section supersedes every section below**
+# NEXT — written by run 60 (`S-E01-4a`), 2026-08-15 — **this section supersedes every section below**
+
+## ✅ `PF-18` is CLOSED — a ROADMAP finding, the first this programme has closed since `PF-178`
+
+The student portal has its own confidential OIDC client. The alias is **deleted**, not emptied, and the two seams
+that used to carry independent copies of the portal→client rule now call one accessor.
+
+```
+S-E01-4a / PF-18 — per-portal OIDC client identity   (jest, exit 0)
+  AFTER   13 / 13 pass
+  BEFORE   2 fail / 11 pass  ← executed against HEAD, restored byte-for-byte after
+    · "portal 'student' has no client 'portal-student' in the realm export"
+    · "realm role 'student' is not declared, so no student can be provisioned"
+    · CLIENT_PORTAL_OVERRIDE still present in auth.ts
+```
+
+**The blast radius was larger than the audit line, and three of the four discoveries were not in the brief.**
+`portal-parent` registered redirect URIs for `/parent/*` only, so student SSO login **and** student password reset
+were both refused `invalid_redirect_uri` — the portal was not merely mis-clienteed, it was unreachable. The string
+`student` appeared **zero times** in `realm-export.json`: no client, no realm role, no user. And
+`keycloak-admin.service.ts#assignRealmRoles` **throws** `Unknown realm roles: student` rather than creating a missing
+role, so no student account could be provisioned at all.
+
+## 🛑 `PF-209` — production's provisioner was ITSELF the cross-portal collapse, and it exited 0 about it
+
+The most important thing this run found is not in the realm export; it is in `infra/kc-prod-redirects.mjs`:
+
+```js
+'portal-parent': ['parent', 'student'],   // ← two portals, one client
+```
+
+So the deployment script *deliberately* handed `portal-parent` the student portal's redirect URIs, and additionally
+wildcarded the whole callback segment. Student SSO "worked" in production precisely **because** the collapse was
+provisioned — every student token carrying `azp: portal-parent`, indistinguishable from a parent's. Worse, a missing
+client printed `! client not found (skipped)` and **exited 0**: the student portal could stay unprovisioned while the
+deploy read green. Both are fixed — one segment per client, a `process.exit(1)` on a multi-portal binding, and a
+missing client now counts as a failure (`DNC-08`).
+
+## ⚠️ Read this before writing "the student portal works": `PF-210` (P1) is the immediate successor
+
+The realm role now **exists**. **No identity holds it.** The export ships exactly three demo users
+(`admin@`, `teacher@`, `parent@pilotage.local`) and declares **no user ids** — Keycloak mints them at import, so
+profile adoption goes through the *email* branch (`PF-01` / run 53). A demo student was **deliberately not invented**:
+minting one decides a password, a tenant and a `Student.userProfileId` link, which is `ADR-021`'s provisioning story,
+not this slice's. **Take `PF-210` first next run** — it is small, it is P1, and until it is done the fourth portal has
+a client, a role, and nobody who can log into it.
+
+## 🔭 The reusable output is the gate, and where it had to live
+
+`apps/web` has **no unit test runner at all** — no jest, no vitest, zero `.spec.ts`, only Playwright. The routine's
+own brief asked for the gate "in `apps/web`", which was **unbuildable as written**; that was the routine's error, not
+the sprint's, and it is why the sprint returned `landed: true` with no test. The gate went to
+`apps/api/src/shared/quality/keycloak-client-identity-gate.spec.ts`, the house location for repo-wide gates.
+
+It **imports the real production accessor** rather than re-typing its rules — which is the entire point, since a
+re-typed expectation is the second hand-maintained list that `PF-18` *was*. That import cost one real change:
+`apps/api`'s `rootDir` moved from `tsconfig.json` to `tsconfig.build.json`, because `rootDir` governs **emit** and
+`tsconfig.json` is also what `tsc --noEmit` reads. **The build guard is not weakened** — the build config still sets
+`rootDir` and still excludes `**/*.spec.ts`, so a cross-package import reaching *production* code still fails
+`nest build`. Verified by execution: emit layout unchanged (`dist/main.js` at top level, 0 specs, no web files).
+
+Four negative controls prove the gate bites, and `AC-2` names the forbidden repair: adding `/student/*` to
+`portal-parent` is refused **by name**, because it hides the symptom and leaves `azp` collapsed.
+
+## 🛑 `VAL-04` stays OPEN, and the distinction matters
+
+Docker is down (`TOOL-19`), so this proves the **artefact** (`realm-export.json`, `kc-prod-redirects.mjs`) and the
+**code** — legitimate, since the export is the file that provisions the realm — but it is **NOT** the claim that a
+live Keycloak accepted these redirects. Five things a live run must still prove, none of them proven here:
+(1) a real Keycloak imports the amended export and materialises `portal-student`; (2) `signIn('keycloak-student')`
+completes the code round trip; (3) **the minted token carries `azp: "portal-student"`** — the security half, and the
+only assertion that distinguishes this fix from the forbidden one; (4) the reset link is accepted; (5) the running
+realm no longer holds the `/api/auth/callback/*` wildcard. Tracked as `S-E01-4b`.
+
+## ▶ Recommended next story
+
+1. **`PF-210` (P1) — provision a student identity.** Small, and it is the only thing between this slice and a
+   demonstrable fourth portal. Needs the `ADR-021` provisioning decision (password, tenant, `Student.userProfileId`).
+2. **`PF-211` (P1) — the admin invite path cannot invite a student, and holds a THIRD copy of the portal→client
+   rule.** The rule was reduced from three copies to one *for the login/reset seams*; the invite controller was out of
+   this slice's scope and still re-types it. Fold it into the same accessor.
+3. **`S-E01-1e` — convert a SECOND module to `withTenant`, and settle the bootstrap allow-list (`PF-199`).** This is
+   the roadmap's own stated next `V3-E01` slice and it was **consumed out of order** by this run — deliberately, and
+   flagged by the sprint's own analyst rather than hidden. `PF-02` half (a) is still the oldest open L0 trust finding.
+4. **`PF-212` (P2) — the reset `redirect_uri` uses `window.location.origin` (`:3100`) while the export registers
+   `:3000`**, so « Mot de passe oublié ? » is refused on a local/hybrid run for **all four** portals. Pre-existing;
+   this slice's gate compares PATHS on purpose so it neither hides nor inherits it.
+5. **`TOOL-31` / `TOOL-10` — the drift gate's TCP-preflight cases are still flaky**, and cost this run a `FAIL`
+   verdict it did not cause (see below). Neither is baselined, and **neither should be** — baselining a host-timing
+   assertion is how a real regression gets tolerated later.
+6. **`TOOL-30` — renumber the six colliding ids.** Still untouched. Note this run had to allocate **`PF-216`** at land
+   because two files cited `PF-214` for a finding `PF-214` does not mean — the same disease, inside a single diff,
+   caught only because the routine read the sprint's comments against the ledger it had just written.
+
+## State of the world at the end of run 60
+
+- **The sprint wrote into the MAIN checkout**; the session worktree was verified **byte-clean**. Same direction as
+  runs 53, 55, 56, 57, 58, 59 — the bidirectional bug remains unpredictable, so keep checking.
+- **`GATE: FAIL (2 stage(s))` on run 1, and BOTH stages were diagnosed rather than assumed.** `typecheck` was
+  genuinely the routine's own (`TS6059`, the cross-package import) and is **fixed**. `test:api` named
+  `schema-drift-gate.spec.ts` `AC-4`; this branch touches **no** drift-related file, and the sibling case `AC-P16`
+  **passed in the gate and failed standalone** — a case that flips between runs is flaky, not broken. `TOOL-31`.
+- **Two build invocations, and the second is declared rather than hidden.** `pnpm --filter @pilotage/web build` was
+  the run's single `pnpm build` (exit 0, verified by artefact — `.next/BUILD_ID` rewritten). A direct
+  `npx nest build` in `apps/api` was then run **for evidence**, because moving `rootDir` changes emit and asserting
+  "the build is unaffected" without running it would be exactly the unevidenced claim this routine forbids.
+- **No Docker was started and no container rebuilt** — the engine is down (`TOOL-19`), which is *why* `VAL-04` could
+  not be discharged. The local Docker stack's health remains **UNKNOWN**.
+- **PostgreSQL was untouched by this slice.** No migration, no SQL, no Prisma query — `G-TENANT`, `G-MIGRATION`,
+  `G-AUDIT` and `G-TRUTH` are all genuinely not triggered, and the story says so rather than leaving them blank.
+- **`INFLIGHT` was 0 at Step 0** and all six open PRs were dependabot, so id allocation against `main` alone was
+  sufficient **this run** — stated rather than assumed.
+- **`git push` was refused by the permission classifier twice** at the commit step and re-tried at the end, per
+  `project-scheduled-task-pr-denial`.
+
+---
+
+# NEXT — written by run 58 (`S-E01-1d` + `S-E01-1d (b)`), 2026-08-15 — superseded by run 60 above, kept for content
 
 ## ✅ `withTenant` HAS PRODUCTION CALLERS, and PostgreSQL was watched refusing a foreign tenant through the real seam
 
