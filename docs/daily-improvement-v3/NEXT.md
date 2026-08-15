@@ -73,6 +73,31 @@ Three items were finished **by the orchestrator, not the sprint**, and are label
 own pid, which has always exited — so it is dead on arrival and cannot ever be used for liveness. A crashed run
 therefore blocks the routine for a **full hour**. Recorded as **`TOOL-34`**.
 
+## 🛑 `PF-220` — the gate's own comment-stripper could be opened by a GLOB IN A STRING
+
+The single most important thing found after the sprint died, and it was **latent on `main`**. The tenancy gate's
+spec blanks comments before asserting on the checker's source, using
+`source.replace(/\/\*[\s\S]*?\*\//g, …)` — which has no notion of string literals. This slice added enumeration
+reasons that **quote globs** (`apps/worker/src/` + two stars). Inside a string, that fragment opened a fake block
+comment: **measured, 54 305 characters of executable code blanked in one span**, including
+`postgresClient('psql')`.
+
+**The loud half is not the dangerous half.** A `toContain` over blanked code *fails* — that is what turned ~112
+cases red at once and is why it was caught at all. But **every negative assertion in that file would have passed
+vacuously**: "no bypass flag" (`DNC-10`), "no frozen list", every `not.toMatch(…)` — the forbidden pattern having
+been blanked along with everything else. A guard whose prohibitions are cancelled by quoting a glob is not a guard.
+
+Replaced by a state-tracking scan that blanks only real comments. **A second desync was then found by measurement,
+not by reasoning:** `RAW_SQL_RE` holds a **backtick inside a character class**, so a scan that ignores regex
+literals enters template state and desyncs for the rest of the file — the symptom was the word `skipped` surviving
+from a docblock 160 lines later. Regex literals are skipped too now.
+
+**Two of this slice's own new assertions had never been executed**, and both were wrong in ways only running them
+reveals: one expected a phrase that straddles a string-concatenation boundary (`…wearing ' + 'a different hat`) and
+therefore could never pass; the anti-vacuity guard refused three **pre-existing** `calendar_event` reasons. Neither
+was baselined. This is the cost of a sprint dying before its verification phase, and it is worth stating plainly:
+**agent-written assertions that have never run are not evidence.**
+
 ## 🛑 What this slice does NOT claim
 
 - **`lessons` is PARTIALLY converted (`PF-218`).** The notification fan-out cannot be reached from the controller:

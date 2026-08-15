@@ -59,11 +59,120 @@ const lf = (source: string): string => source.replace(/\r\n/g, '\n');
 /** Chemin NOMMÉ : lecture directe, échec au chargement s'il manque (TOOL-17b). */
 const CHECKER = lf(readFileSync(CHECKER_PATH, 'utf8'));
 
-/** Commentaires JS retirés, longueur préservée — un garde commenté ne garde rien. */
+/**
+ * Commentaires JS retirés, longueur préservée — un garde commenté ne garde rien.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ PF-220 — POURQUOI CE N'EST PLUS DEUX `.replace()` : l'ancienne forme a    │
+ * │ EFFACÉ 54 305 CARACTÈRES DE CODE EXÉCUTABLE                              │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * L'ancienne forme était `source.replace(/\/\*[\s\S]*?\*\//g, …)`, qui ne
+ * connaît pas les chaînes. `S-E01-1e` a introduit des raisons d'énumération qui
+ * CITENT des globs — `apps/worker/src/` suivi de deux étoiles. Ce fragment,
+ * **à l'intérieur d'une chaîne de caractères**, ouvre un faux commentaire de
+ * bloc qui court jusqu'à la fermeture suivante : MESURÉ, 54 305 caractères
+ * blanchis d'un coup, dont `postgresClient('psql')` à la ligne 3017.
+ *
+ * **La moitié bruyante n'est pas la dangereuse.** Un `toContain` sur du code
+ * effacé ÉCHOUE, donc il se voit — c'est ce qui a rendu ~100 cas rouges d'un
+ * coup. Mais toute assertion NÉGATIVE de ce fichier — « aucun drapeau de
+ * contournement » (DNC-10), « aucune liste gelée », chaque `not.toMatch(…)` —
+ * serait passée **VACUEUSEMENT VERTE**, puisque le motif interdit aurait été
+ * blanchi avec le reste. Un garde dont on annule les interdits en citant un glob
+ * n'est pas un garde.
+ *
+ * Donc : un balayage qui suit l'ÉTAT (chaîne simple, double, gabarit,
+ * commentaire de ligne, commentaire de bloc) et ne blanchit que les VRAIS
+ * commentaires. Longueurs et `\n` préservés comme avant, parce que plusieurs
+ * assertions comparent des OFFSETS (`indexOf` de `main()` APRÈS
+ * `require.main === module`).
+ */
 function executableJs(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+  const out = source.split('');
+  let state: 'code' | 'line' | 'block' | "'" | '"' | '`' = 'code';
+
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    if (state === 'code') {
+      if (ch === '/' && next === '*') {
+        state = 'block';
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 1;
+      } else if (ch === '/' && next === '/') {
+        state = 'line';
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 1;
+      } else if (ch === '/') {
+        // LITTÉRAL REGEX, et il FAUT le sauter : `RAW_SQL_RE` (ligne 1907)
+        // contient un backtick DANS une classe de caractères. Un balayage qui
+        // ignore les regex y entre en état « gabarit » et se désynchronise pour
+        // tout le reste du fichier — mesuré : le mot « skipped » d'un docblock
+        // de la ligne 2067 survivait, parce que ce commentaire n'était plus vu
+        // comme un commentaire.
+        //
+        // Division ou regex ? On regarde le dernier caractère SIGNIFIANT : après
+        // une valeur (identifiant, chiffre, `)`, `]`) c'est une division ; sinon
+        // c'est un littéral regex. C'est l'heuristique usuelle, et elle suffit
+        // ici parce qu'aucune division de ce fichier n'est suivie d'un guillemet.
+        let k = i - 1;
+        while (k >= 0 && /\s/.test(source[k] as string)) k -= 1;
+        const prev = k >= 0 ? (source[k] as string) : '';
+        const isDivision = prev !== '' && /[\w$)\]]/.test(prev);
+        if (!isDivision) {
+          let j = i + 1;
+          let inClass = false;
+          for (; j < source.length; j += 1) {
+            const c = source[j];
+            if (c === '\\') {
+              j += 1;
+              continue;
+            }
+            if (c === '[') inClass = true;
+            else if (c === ']') inClass = false;
+            else if (c === '/' && !inClass) break;
+            else if (c === '\n') break; // regex non terminée : on abandonne
+          }
+          i = j;
+        }
+      } else if (ch === "'" || ch === '"' || ch === '`') {
+        state = ch;
+      }
+      continue;
+    }
+
+    if (state === 'line') {
+      if (ch === '\n') state = 'code';
+      else out[i] = ' ';
+      continue;
+    }
+
+    if (state === 'block') {
+      if (ch === '*' && next === '/') {
+        out[i] = ' ';
+        out[i + 1] = ' ';
+        i += 1;
+        state = 'code';
+      } else if (ch !== '\n') {
+        out[i] = ' ';
+      }
+      continue;
+    }
+
+    // Dans une chaîne : on ne blanchit RIEN, et un échappement saute le
+    // caractère suivant pour qu'un `\'` ne referme pas la chaîne.
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === state) state = 'code';
+  }
+
+  return out.join('');
 }
 
 const CHECKER_CODE = executableJs(CHECKER);
@@ -1464,7 +1573,16 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
 
     it('AUCUN plancher de ratio n’est introduit : le mur reste `scoped + enumerated === total` (DNC-10)', () => {
       expect(CHECKER_CODE).not.toMatch(/RATIO_FLOOR|MIN_SCOPED_RATIO|COVERAGE_FLOOR/);
-      expect(CHECKER_CODE).toContain('a knob here is a bypass flag wearing a');
+      // La règle doit vivre dans du code qui S'EXÉCUTE (la chaîne que le
+      // vérificateur IMPRIME), pas seulement dans un commentaire — `CHECKER_CODE`
+      // a justement les commentaires blanchis, donc cette assertion ne peut pas
+      // être satisfaite par de la prose.
+      //
+      // Le fragment attendu s'arrête AVANT `wearing a` : la phrase est écrite en
+      // concaténation et la coupure tombe entre « wearing » et « a different
+      // hat ». La version d'origine de ce cas réclamait le mot d'après et ne
+      // pouvait donc JAMAIS passer — elle n'avait jamais été exécutée.
+      expect(CHECKER_CODE).toContain('No ratio floor: a floor is a knob');
       // Le mur lui-même, inchangé.
       const short = checker.cutoverVerdict({
         files: 228,
