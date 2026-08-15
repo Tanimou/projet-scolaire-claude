@@ -59,6 +59,45 @@ export class TeacherProfileService {
     });
   }
 
+  /**
+   * S-E01-1e / ADR-051 §D1 — la variante LECTURE SEULE d'`ensureForUser`, pour
+   * les chemins d'AUTORISATION.
+   *
+   * Pourquoi elle existe, et pourquoi `ensureForUser` ne pouvait pas servir.
+   * `lessons.controller.ts` compare le `teacherProfileId` d'une ligne à celui de
+   * l'appelant. Cette résolution doit désormais se faire AVANT d'ouvrir la
+   * portée tenant (`ensureForUser` fait quatre instructions dont un `upsert` sur
+   * la connexion du PROPRIÉTAIRE ; l'appeler DEPUIS la portée ferait détenir au
+   * processus une connexion propriétaire ET une connexion applicative pendant
+   * toute la transaction interactive — l'inverse dangereux de PF-200, invisible
+   * à tout garde de compilation). Mais avancer la résolution la place AVANT la
+   * garde `findUnique` : un professeur demandant une entrée INEXISTANTE ou d'un
+   * AUTRE tenant déclencherait alors un `upsert` — une ÉCRITURE sur un chemin de
+   * REFUS, non auditée — et pourrait recevoir `NotFoundException('Aucune école
+   * dans le tenant…')` à la place de son 404 nu.
+   *
+   * `null` n'est PAS une erreur ici : un appelant sans profil professeur ne
+   * possède AUCUNE ligne dont le `teacher_profile_id` pointe vers lui, par
+   * construction de la clé étrangère. Le comparateur pur le traduit donc en
+   * exactement le même 403, avec exactement le même message. Aucune provision
+   * automatique n'est déclenchée par un refus.
+   *
+   * `tenantId` EXPLICITE bien que `userProfileId` soit `@unique` (ADR-042 §D1) :
+   * sur `degraded_no_app_url` — c'est-à-dire TOUS les déploiements
+   * d'aujourd'hui — le propriétaire échappe à ses propres policies et cette
+   * clause est la SEULE chose qui travaille.
+   *
+   * Elle reste sur la connexion du PROPRIÉTAIRE, comme toute la résolution
+   * d'identité (PF-199), et elle est déclarée à ce titre dans l'énumération
+   * `ENUMERATED_OUTSIDE_SCOPE` de `scripts/tenant-adversarial-check.js`.
+   */
+  async findForUser(user: { id: string; tenantId: string }): Promise<{ id: string } | null> {
+    return this.prisma.teacherProfile.findFirst({
+      where: { userProfileId: user.id, tenantId: user.tenantId },
+      select: { id: true },
+    });
+  }
+
   /** Look up by id, scoped to tenant. */
   async getById(id: string, tenantId: string) {
     const tp = await this.prisma.teacherProfile.findUnique({

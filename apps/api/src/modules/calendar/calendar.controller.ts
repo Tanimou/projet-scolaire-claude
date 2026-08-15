@@ -13,8 +13,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-// `Prisma` est importé en VALEUR pour le seul `instanceof
-// Prisma.PrismaClientKnownRequestError` du chemin porté (mapping P2025 -> 404).
+// `Prisma` reste importé pour le typage `Prisma.TransactionClient` du helper
+// `resolveParentClassSectionIds`. Le seul usage en VALEUR qu'il avait
+// (`instanceof Prisma.PrismaClientKnownRequestError`) est parti avec
+// `mapWriteRefusal` dans `shared/prisma/write-refusal.ts` (S-E01-1e).
 import { CalendarEventScope, CalendarEventType, CalendarEventVisibility, Prisma } from '@prisma/client';
 import {
   IsBoolean,
@@ -41,7 +43,9 @@ import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
+import { isSuppliedScopeId } from '../../shared/prisma/scope-fk';
 import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
+import { mapWriteRefusal } from '../../shared/prisma/write-refusal';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
 
@@ -132,14 +136,13 @@ export const CREATE_OWNED_SCOPE_FIELDS = ['academicYearId', ...SCOPE_ID_FIELDS] 
 type ScopeIdCarrier = Partial<Record<OwnedScopeField, string | null>>;
 
 /**
- * Un id est FOURNI s'il est une chaîne non vide. `null` et `''` sont la valeur
- * « efface ce champ » de l'UI : les vérifier ferait échouer chaque
- * enregistrement `school_wide` ordinaire (et `findFirst({ where: { id: null } })`
- * est une erreur de validation Prisma, donc un 500).
+ * `isSuppliedScopeId` — un id est FOURNI s'il est une chaîne non vide — vit
+ * désormais dans `shared/prisma/scope-fk.ts` (S-E01-1e / ADR-051 §D3) : le
+ * module converti n°2 en a besoin à l'identique, et un prédicat de sécurité
+ * recopié à la main est le défaut que ce dépôt a déjà payé. Le prédicat est PUR
+ * et sans Prisma ; la boucle `findFirst`, elle, reste écrite EN LIGNE dans
+ * chaque callback (PF-200 — l'attribution est lexicale).
  */
-function isSuppliedScopeId(value: string | null | undefined): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
 
 /**
  * ADR-049 §D3 — AU PLUS UNE portée par corps de requête.
@@ -250,32 +253,17 @@ export class SeedHolidaysDto {
 }
 
 /**
- * S-E01-1d — le refus RLS d'une écriture doit garder la MÊME forme HTTP que la
- * garde applicative, sinon la sécurisation crée un ORACLE D'EXISTENCE.
+ * `mapWriteRefusal` (P2025 -> 404, l'oracle d'existence de S-E01-1d §D9) vit
+ * désormais dans `shared/prisma/write-refusal.ts` : `lessons.controller.ts` en a
+ * besoin à l'identique, et une deuxième copie tenue à la main d'une règle de
+ * refus se trompe EN SILENCE — une copie qui oublie le mapping ne casse rien,
+ * elle rouvre seulement l'oracle.
  *
- * Aujourd'hui, l'`if` de `update` / `remove` renvoie 404 pour l'événement d'un
- * autre tenant. Sous un GUC posé sur une connexion non propriétaire,
- * `calendarEvent.update({ where: { id } })` sur une ligne non visible lève
- * `P2025`, que Nest transforme en **500**. Un 500 là où la garde donne un 404
- * distingue « existe chez un autre tenant » de « n'existe pas » — un oracle que
- * le code d'AVANT cette story n'avait pas, introduit par le durcissement
- * lui-même.
- *
- * On mappe donc `P2025` sur `NotFoundException` : le plancher base et la garde
- * applicative deviennent EXTÉRIEUREMENT INDISCERNABLES. La garde applicative
- * n'est PAS supprimée pour autant — défense en profondeur, et la retirer serait
- * un changement de visibilité déguisé en correctif.
- *
- * Conséquence côté UI, et c'est le contrat de copie de cette story : `aucun
- * changement visible`. `CalendarManager.tsx` affiche `res.error` verbatim ; un
- * message Postgres brut y atterrirait non traduit devant un administrateur.
+ * Conséquence côté UI, inchangée et toujours le contrat de copie de cette
+ * story : `aucun changement visible`. `CalendarManager.tsx` affiche `res.error`
+ * verbatim ; un message Postgres brut y atterrirait non traduit devant un
+ * administrateur.
  */
-function mapWriteRefusal(error: unknown): unknown {
-  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-    return new NotFoundException();
-  }
-  return error;
-}
 
 @ApiTags('calendar')
 @ApiBearerAuth()
