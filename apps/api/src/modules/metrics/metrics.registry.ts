@@ -1,4 +1,4 @@
-import { Registry, collectDefaultMetrics, Histogram, Counter } from 'prom-client';
+import { Registry, collectDefaultMetrics, Gauge, Histogram, Counter } from 'prom-client';
 
 /**
  * Registre Prometheus de l'API (S-E02-13 / PF-56).
@@ -67,6 +67,43 @@ export const httpRequestsTotal = new Counter({
   labelNames: ['method', 'route', 'status_code'] as const,
   registers: [registry],
 });
+
+/**
+ * S-E01-1d — la portée tenant est-elle RÉELLEMENT enforcée par la base ?
+ *
+ * `1` = la couture tourne sur une DEUXIÈME connexion non propriétaire
+ * (`DATABASE_URL_APP`), dont la sonde de démarrage a prouvé qu'elle n'est ni le
+ * propriétaire, ni `BYPASSRLS`, ni membre du propriétaire, et qu'elle détient
+ * les privilèges de la clôture relationnelle du module converti.
+ * `0` = tout le reste, et « tout le reste » se décline en DEUX états nommés dans
+ * les logs : `degraded_no_app_url` (variable absente : la portée s'ouvre sur le
+ * client propriétaire, donc rien n'est enforcé) et `refused_unusable` (variable
+ * déclarée mais inutilisable : les sites convertis REFUSENT, ils ne se rabattent
+ * pas).
+ *
+ * POURQUOI UNE JAUGE ET PAS UNE PHRASE DANS `/readyz` : la couverture de la
+ * bascule est une propriété du DÉPLOIEMENT, pas de l'arbre source. Un compteur
+ * de sites d'appel dans le dépôt peut monter pendant que chaque conteneur tourne
+ * en mode dégradé parce que la variable n'est déclarée nulle part sous `infra/`.
+ * C'est la forme même de PF-02 — la garde est proclamée, la garde n'est pas
+ * déployée — et seule une métrique scrappée depuis le PROCESSUS peut la
+ * contredire.
+ *
+ * AUCUNE ÉTIQUETTE. Ni tenant, ni hôte, ni rôle, ni nom de base : `/metrics` est
+ * une surface NON authentifiée, et une étiquette d'identifiant y serait à la fois
+ * une explosion de cardinalité et une fuite (G-TENANT). L'état détaillé se lit
+ * dans les logs de démarrage, qui sont authentifiés par construction.
+ *
+ * Semée à 0 à la déclaration : « non prouvé » est la valeur par défaut, et une
+ * absence de série ne doit jamais pouvoir se lire comme un vert.
+ */
+export const tenantScopeEnforced = new Gauge({
+  name: 'pilotage_tenant_scope_enforced',
+  help: 'La portée tenant tourne-t-elle sur une connexion non propriétaire soumise à RLS (1) ou en mode dégradé/refusé (0)',
+  registers: [registry],
+});
+
+tenantScopeEnforced.set(0);
 
 /** Étiquette utilisée quand aucune route ne correspond (404, middleware terminal). */
 export const UNMATCHED_ROUTE = '<unmatched>';

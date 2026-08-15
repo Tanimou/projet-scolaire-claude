@@ -1,6 +1,124 @@
 # Next story
 
-# NEXT — written by run 57 (`S-E01-1c`), 2026-08-14 — **this section supersedes every section below**
+# NEXT — written by run 58 (`S-E01-1d` + `S-E01-1d (b)`), 2026-08-15 — **this section supersedes every section below**
+
+## ✅ `withTenant` HAS PRODUCTION CALLERS, and PostgreSQL was watched refusing a foreign tenant through the real seam
+
+`PF-02` half (a) is **advanced further than it has ever been, and still not closed.** For seven slices the policies
+were complete and enforced **nothing**, because the application connects as `pilotage`, which owns the tables. This
+run landed the *application* half for **one module**:
+
+```
+TENANT SCOPE: PROVEN — the compiled seam is refused by PostgreSQL for a non-owner role   (exit 0, ×2)
+  ✓ AC-2.1 appRoleVerdict — the SAME function production boots on — qualifies this connection as ENFORCING
+  ✓ AC-2.2 POSITIVE CONTROL — tenant A READS / UPDATES (1 row) / CREATES its own calendar_event
+  ✓ AC-2.3 DENIAL — tenant B's calendar_event is INVISIBLE to findUnique BY PRIMARY KEY — null
+  ✓ AC-2.3 DENIAL — updateMany / deleteMany by primary key affect ZERO rows — 0 / 0
+  ✓ AC-2.3 DENIAL — a unique `update` RAISES, asserted on the Prisma error code — P2025
+  ✓ AC-2.4 NO-SCOPE CONTROL — the same client OUTSIDE any scope sees ZERO rows — the GUC is the difference
+```
+
+**The design that makes this possible is the reusable output: TWO CONNECTIONS, not a flip.** A second, non-owner
+`PrismaClient` on `DATABASE_URL_APP` serves only the call sites a module has explicitly converted; the owner client
+keeps the other ~788. The cutover stops being an event that must be right on 794 call sites the same day, and becomes
+a **per-module migration** where each module is genuinely enforced the day it converts. `ADR-048` records it.
+
+## 🛑 READ THIS BEFORE WRITING "THE APP IS ISOLATED": the honest ratio is **6 + 113 / 794**
+
+`AC-9` was redefined this run from *"how many times does the string `.withTenant(` appear"* to *"how many call sites
+sit inside a scope, and is every site outside one **enumerated with a reason**"*. It lands, deliberately, on a
+`[LIMIT]`:
+
+> `6 scoped + 113 enumerated / 794 across 226 files` — **675 would return ZERO ROWS after the `DATABASE_URL` cutover.
+> THE APPLICATION IS NOT READY TO CUT OVER.**
+
+**A green there would have been the finding, not the win.** The wall is `scoped + enumerated === total` with every
+enumerated entry carrying its own reason string — not a ratio with a floor, because a floor is a knob and a knob here
+is a bypass flag wearing a different hat.
+
+Two numbers in that line are honest defects, both recorded rather than smoothed:
+- **6, not 7** (`PF-200`): the attribution is **lexical**. `resolveParentClassSectionIds` takes its `tx` as a
+  parameter — correct and safe — but its *text* sits outside the callback range. The dangerous inverse is the same
+  blindness pointing the other way: a helper called from *inside* a scope that issues on `this.prisma` runs on the
+  **owner** connection and the compile-time guard cannot see it either.
+- **794, not 792** (`PF-201`): the string `prisma.service.ts` **in a docblock** matches the call-site regex as
+  receiver `prisma`, model `service`, verb `ts`. **Left unfixed on purpose** — the fix moves the ratio in the
+  *favourable* direction, and a security number that improves inside the same diff that redefines how it is computed
+  is a number nobody can audit afterwards.
+
+## 🛑 `PF-204` (P1) — the leak this slice walked past, and it reaches the PARENT portal today
+
+`calendar_event`'s scope FKs (`cycleId`, `gradeLevelId`, `classSectionId`, `academicYearId`) are **mono-column**, and
+`createEvent`/`updateEvent` validate scope *coherence* but never *ownership*. **RLS does not close it, and the reason
+is structural:** PostgreSQL evaluates referential integrity **outside row security**, so `tenant_isolation`'s
+`WITH CHECK` sees only `calendar_event.tenant_id` — a foreign `cycleId` inserts under a perfectly correct policy. The
+`include` then renders **another tenant's** cycle/level/class **name**, and a `cycle_scope` event satisfies
+`calendarVisibilityWhere`'s non-`class_section_scope` branch, so **every parent of tenant A sees it**.
+
+Pre-existing, **not introduced here** — but this slice converted this module on a "relational closure" argument and
+missed it. Not fixed in the diff because `AC-14` freezes `calendar.controller.ts` for the gate half, and a P1 tenancy
+fix smuggled into the diff that *proves* the seam would corrupt the evidence. **Take it first next run.**
+
+## ⚠️ `PF-202` — `refused_unusable` is the state of the only database that exists
+
+`.env:20` on this machine declares `DATABASE_URL_APP` against the live `pilotage`, which has **2 migrations and 0
+policies** by design — so `has_table_privilege('app_user','calendar_event','SELECT')` is `f`, the boot probe fails on
+the privileges branch, and **the calendar module answers 503 on all four portals**. The design does not bend: falling
+back to the owner would be `DNC-10`, and 503 on one module is smaller and louder than claiming enforcement that is not
+there. Two of three remedies landed (`.env.example` now ships the variable **commented out** — a fresh checkout
+otherwise 503s, because the RLS migration **never creates `app_user`**; plus the rollout order *apply the ledger, then
+declare the variable*). **The third is carried open:** the boot error must name `prisma migrate deploy`, and it lives
+inside a file `AC-14` freezes. Note the state is fixed at `onModuleInit` and **never re-probed** — repairing grants
+needs a restart.
+
+## ▶ Recommended next story
+
+1. **`PF-204` (P1) — the cross-tenant scope-FK leak. Small, local, and live on the parent portal today.** A
+   `findFirst({ where: { id, tenantId } })` per supplied id, inside the scope, before `create` and before `update`.
+   It is the cheapest P1 on the board and the only one currently reachable by a real user.
+2. **`S-E01-1e` — convert a SECOND module, and settle the bootstrap allow-list (`PF-199`).** The second module is
+   where the seam's ergonomics are actually judged. `PF-199` — identity resolution *cannot* sit inside the scope it
+   resolves, because `ensureUser` **produces** the `tenantId` a scope would need — must be answered as a **named
+   allow-list** (the statements that legitimately run with no GUC), **never as a widened grant**, because a grant that
+   makes them work also makes every unconverted site work silently.
+3. **`PF-203` + `PF-202`'s third remedy — both live inside the frozen seam files.** `probeAppRole` never reads
+   `relrowsecurity` and never counts `pg_policy`, so a database with the **grants** but not the **policies** satisfies
+   every question it asks: gauge reads `1`, nothing is enforced. Strictly worse than degraded, because the gauge
+   *asserts* safety. Asserted in the executed proof today; it belongs in `appRoleVerdict` as a fourth fail-closed
+   family. **The next slice that may edit the seam owns both.**
+4. **`TOOL-33`'s carried limit — the proof is `--full`-only.** A fast-tier PR reports `GATE: PASS` without ever
+   running it. Promoting it means a build in tier 2, which is a decision about the gate's contract.
+5. **`TOOL-30` — renumber the six colliding ids.** Still untouched, still more expensive every run.
+6. **Arm the skipped-count ratchet — still disarmed.**
+
+## State of the world at the end of run 58
+
+- **This run RESCUED an interrupted one.** Step 0's gate stashed a dirty tree; `stash@{0}` plus four untracked files
+  were **1937 lines of finished seam** from a run that died before writing its proof, with **zero commits** on its
+  branch. Recovered, committed as `6504887` and **pushed immediately** — then the sprint was scoped to the *missing
+  half only*. **Check `git stash list` and untracked files at Step 0 before selecting a story**; this is the second
+  time work has been left uncommitted on a `ci/` branch (`project-routine-commits-to-main-unpushed`).
+- **The story was SPLIT, and the split is what made the evidence trustworthy.** `AC-14` freezes the seam for the gate
+  half, so the transcript in condition 1 is evidence about `6504887` rather than about whatever the gate half
+  preferred. Three P1 items were deferred *because* of it, each with a named owner.
+- **The sprint wrote what it could NOT prove, and set a minimum bar. The routine took the bar literally and three of
+  its four merge conditions fell.** This is run 51's pattern paying out again and it is worth keeping: agents never
+  build and never run jest, so a sprint that writes *"this has never executed"* is doing its job, not failing.
+- **The sprint wrote into the MAIN checkout**; the session worktree was verified **byte-clean**. Same direction as
+  runs 53, 55, 56, 57 — the bidirectional bug remains unpredictable, so keep checking.
+- **PostgreSQL was written to deliberately and left clean.** Scratch databases created, migrated and dropped by four
+  separate checks; `tenant_scope_%`, `tenant_adv%`, `rls_isolation_%`, `schema_drift_%`, `restore_drill_%` all
+  verified `(none)` **independently** of the scripts that assert their own cleanup. `app_user` in its pre-run state.
+  The live `pilotage` database is **untouched**: 2 migrations, 0 policies.
+- **No Docker was started and no container rebuilt.** None was needed — the database is the native Windows service
+  `postgresql-x64-15` on `127.0.0.1:5432`. **`TOOL-19` is untouched and the local Docker stack's health remains
+  UNKNOWN.**
+- **`INFLIGHT` was 0 at Step 0** and all six open PRs were dependabot, so id allocation against `main` alone was
+  sufficient **this run** — stated rather than assumed.
+
+---
+
+# NEXT — written by run 57 (`S-E01-1c`), 2026-08-14 — superseded by run 58 above, kept for content
 
 ## ✅ `PF-193` is closed: `app_user` may edit CUSTOM roles and may NEVER touch a SYSTEM one
 

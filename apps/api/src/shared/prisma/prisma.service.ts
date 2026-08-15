@@ -235,10 +235,25 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    *    pas posé. `FORCE` est absent DÉLIBÉRÉMENT : posé aujourd'hui, il rendrait
    *    zéro ligne à toutes les requêtes de toute l'application. Le correctif est
    *    la BASCULE DE CONNEXION vers `app_user`, pas davantage de policy.
-   * 5. Ce helper a toujours ZÉRO appelant. Les appelants (chemin requête, chemin
-   *    job) vivent dans la couture identité (S-E01-1), qui n'est pas commencée.
-   *    La narrowing de type ci-dessous atterrit donc AVANT le premier appelant,
-   *    exprès : c'est le seul moment où elle ne casse rien.
+   *    — DATÉ S-E01-1d (ADR-048). Cette phrase reste VRAIE pour CE service : il
+   *    est et reste le client PROPRIÉTAIRE. Ce qui a changé, c'est qu'il n'est
+   *    plus le seul : `AppRolePrismaService` ouvre une SECONDE connexion, non
+   *    propriétaire, sur `DATABASE_URL_APP`, et `TenantScopeService` y fait
+   *    passer les sites d'appel qu'un module a explicitement convertis (le
+   *    module `calendar`, sept sites, pour l'instant). La bascule cesse d'être un
+   *    événement tout-ou-rien et devient une migration par module. Les ~782
+   *    autres sites restent ici, sur le propriétaire, non isolés — et sur un
+   *    déploiement où `DATABASE_URL_APP` n'est pas déclarée, MÊME les sites
+   *    convertis y restent (mode dégradé, nommé au démarrage et publié par
+   *    `pilotage_tenant_scope_enforced` = 0).
+   * 5. ~~Ce helper a toujours ZÉRO appelant.~~ — DATÉ S-E01-1d. Cette phrase
+   *    était vraie de `S-E01-2b` à `S-E01-1c` incluses ; elle ne l'est plus.
+   *    `TenantScopeService.run` (`tenant-scope.service.ts`) est le PREMIER
+   *    appelant de production, et il est délibérément le seul : la couture ne
+   *    s'atteint que par lui. La narrowing de type ci-dessous a bien atterri
+   *    AVANT ce premier appelant, ce qui était son intention — elle a fait son
+   *    office dès la conversion du seed calendrier, qui ne compile pas dans une
+   *    portée et se retrouve donc exclu par NOM plutôt que par oubli.
    * 6. La couverture des policies est désormais COMPLÈTE au sens du catalogue,
    *    et cette phrase a changé DEUX fois — elle est datée pour cette raison.
    *    - `S-E01-2b` : les 44 tables portant `tenant_id`.
