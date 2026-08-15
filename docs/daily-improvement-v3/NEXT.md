@@ -140,6 +140,33 @@ receive the new client, which is one of `VAL-04`'s five open points measured for
 container publishes **5433** while `.env` targets the native Windows service on **5432**), so the running stack is
 not a faithful image of this checkout. Nothing in this slice depended on it.
 
+## State of the world at the end of run 61
+
+- **`GATE: PASS (fast)` TWICE on the committed tree, with byte-identical ratchets** — `test-ratchet[api]
+  3075/3086 · 11 failing · 11 known-failing`, `worker 293/300 · 7 · 7`, **no drift, no excess** in either run. The
+  verdict line was read, never `$?` of a pipeline (`R-23`). No `TOOL-31` flakiness this time.
+- **The first gate run was `FAIL (2 stages)` and BOTH were this diff's own.** `typecheck` — ~22 `TS2532`/`TS2345`
+  in the two specs the sprint died before compiling — and `test:api`, which resolved into three distinct real
+  defects (`PF-220`, the never-executed assertion, the stale calendar ratchet). **Nothing was baselined and
+  `known-test-failures.json` was not touched.**
+- **A stale ratchet was repaired rather than deleted.** `mapWriteRefusal` moved out of `calendar.controller.ts`
+  into `shared/prisma/write-refusal.ts` (the adversarial panel's own recommendation — a second copy at module two
+  is the drift). The `P2025 → 404` ratchet now asserts **both** halves: the controller goes *through* the mapper,
+  and the mapper still maps. Either half alone would tolerate a 500 or an identity mapper.
+- **One `pnpm build`** (`pnpm --filter @pilotage/api build`), verified by **artefact** — `dist/main.js` rewritten,
+  and `APP_ROLE_REQUIRED_PRIVILEGES` in `dist` carrying `lesson_entry` / `class_session`, which is what makes the
+  boot-probe closure visible to `tenant-scope-check.js` at all.
+- **The sprint wrote into the MAIN checkout**; the session worktree was verified **byte-clean**. Same direction as
+  runs 53, 55–60 — the bidirectional bug remains unpredictable, so keep checking.
+- **PostgreSQL was written to deliberately and left clean** — scratch databases created, migrated and dropped by
+  the adversarial suite. The live `pilotage` database is **untouched**: 2 migrations, 0 policies.
+- **Docker was NOT rebuilt and no container was recreated.** None was needed; the stack was already up (see
+  `TOOL-19` above) and this slice's proofs run against the native Windows service on 5432.
+- **`INFLIGHT` was 0 at Step 0** and all six open PRs were dependabot, so id allocation against `main` alone was
+  sufficient **this run** — stated rather than assumed.
+- **`git push` was refused by the permission classifier once**, then allowed on retry, per
+  `project-scheduled-task-pr-denial`.
+
 ## ▶ Recommended next story
 
 1. **`S-E01-1f` — convert a THIRD module, and take `PF-219` WITH it.** The boot-probe closure is now one
