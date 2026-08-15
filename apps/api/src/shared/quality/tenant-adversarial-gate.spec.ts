@@ -1299,6 +1299,24 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
       ['guardianship.findMany', 1],
       ['student.findFirst', 1],
     ]);
+    /**
+     * L'élément `index`, ou une ERREUR NOMMÉE s'il est absent.
+     *
+     * `noUncheckedIndexedAccess` a raison : `drift[0]` peut être `undefined`, et
+     * un `!` transformerait « le cliquet n'a RIEN signalé » — le mode de
+     * défaillance que ces cas existent pour attraper — en un `TypeError`
+     * illisible une ligne plus loin. La longueur est déjà assertie juste avant
+     * chaque appel ; ceci en fait une propriété du TYPE plutôt qu'une convention
+     * tacite entre deux lignes voisines.
+     */
+    const at = <T>(items: readonly T[], index: number): T => {
+      const item = items[index];
+      if (item === undefined) {
+        throw new Error(`dérive attendue à l’index ${index}, mais il y en a ${items.length}`);
+      }
+      return item;
+    };
+
     /** Le verdict complet, pour prouver que le cliquet REFUSE et ne se contente pas de signaler. */
     const verdictWith = (drift: ReturnType<typeof checker.enumerationDrift>) =>
       checker.cutoverVerdict({
@@ -1327,8 +1345,8 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
         ]),
       );
       expect(drift).toHaveLength(1);
-      expect(drift[0].kind).toBe('undeclared-statement');
-      expect(drift[0].detail).toContain('student.findMany');
+      expect(at(drift, 0).kind).toBe('undeclared-statement');
+      expect(at(drift, 0).detail).toContain('student.findMany');
       expect(verdictWith(drift).kind).toBe('unreasoned');
     });
 
@@ -1343,26 +1361,26 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
         ]),
       );
       expect(drift).toHaveLength(1);
-      expect(drift[0].kind).toBe('undeclared-statement');
-      expect(drift[0].detail).toContain('2×');
+      expect(at(drift, 0).kind).toBe('undeclared-statement');
+      expect(at(drift, 0).detail).toContain('2×');
     });
 
     it('M2 une entrée MORTE (déclarée, jamais observée) échoue — l’énumération ne s’élargit pas en silence', () => {
       const entries = declared();
-      entries[1].statements!.push({
+      at(entries, 1).statements!.push({
         model: 'school',
         verb: 'findMany',
         reason: 'une excuse maintenue en vie après la suppression du code qu’elle excusait',
       });
       const drift = checker.enumerationDrift(entries, truth);
       expect(drift).toHaveLength(1);
-      expect(drift[0].kind).toBe('dead-entry');
+      expect(at(drift, 0).kind).toBe('dead-entry');
       expect(verdictWith(drift).kind).toBe('unreasoned');
     });
 
     it('M3 une instruction qui PERD sa raison échoue', () => {
       const entries = declared();
-      entries[1].statements![0].reason = '   ';
+      at(at(entries, 1).statements!, 0).reason = '   ';
       const drift = checker.enumerationDrift(entries, truth);
       expect(drift.map((d) => d.kind)).toContain('statement-without-reason');
       expect(verdictWith(drift).kind).toBe('unreasoned');
@@ -1370,10 +1388,10 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
 
     it('M4 une entrée SANS `kind` est inclassable, donc REFUSÉE (DNC-08) — jamais rabattue sur le kind grossier', () => {
       const entries = declared();
-      delete entries[1].kind;
+      delete at(entries, 1).kind;
       const drift = checker.enumerationDrift(entries, truth);
       expect(drift).toHaveLength(1);
-      expect(drift[0].kind).toBe('unknown-kind');
+      expect(at(drift, 0).kind).toBe('unknown-kind');
     });
 
     it('M5 un `surface` qui nomme UN fichier .ts sous modules/** échoue — la porte du module qui se cache', () => {
@@ -1388,7 +1406,7 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
         new Map(),
       );
       expect(drift).toHaveLength(1);
-      expect(drift[0].kind).toBe('surface-hides-a-module-file');
+      expect(at(drift, 0).kind).toBe('surface-hides-a-module-file');
     });
 
     it('M6 un `bootstrap` SANS `statements` échoue : ce kind existe pour nommer les instructions', () => {
@@ -1397,7 +1415,7 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
         new Map(),
       );
       expect(drift).toHaveLength(1);
-      expect(drift[0].kind).toBe('bootstrap-without-statements');
+      expect(at(drift, 0).kind).toBe('bootstrap-without-statements');
     });
 
     it('M7 un `surface` qui porte AUSSI des `statements` échoue : deux unités dans une entrée, c’est la dérive', () => {

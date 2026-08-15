@@ -111,35 +111,50 @@ function makeDb(seed?: Partial<Record<string, Row[]>>) {
       value !== null && typeof value === 'object' ? true : row[key] === value,
     );
 
+  /**
+   * `tables` est indexé par nom de modèle, et `noUncheckedIndexedAccess` a
+   * raison de rendre `Row[] | undefined`. On LÈVE plutôt que de poser un `!` :
+   * dans un double, un modèle non déclaré est un défaut DU TEST, et le silencer
+   * produirait un `TypeError` plus loin, à l'intérieur d'une assertion qui n'a
+   * rien à voir avec la cause.
+   */
+  const rowsOf = (name: string): Row[] => {
+    const rows = tables[name];
+    if (rows === undefined) {
+      throw new Error(`double Prisma : le modèle « ${name} » n’est pas déclaré dans ce harnais`);
+    }
+    return rows;
+  };
+
   const model = (name: string) => ({
     findFirst: async ({ where }: { where?: Row } = {}) => {
       statements.push({ model: name, verb: 'findFirst', where });
       scopeAtStatement.push(currentTenantScopeFrame()?.tenantId);
-      return tables[name].find((row) => matches(row, where)) ?? null;
+      return rowsOf(name).find((row) => matches(row, where)) ?? null;
     },
     findUnique: async ({ where }: { where?: Row } = {}) => {
       statements.push({ model: name, verb: 'findUnique', where });
       scopeAtStatement.push(currentTenantScopeFrame()?.tenantId);
       // `findUnique` par CLÉ PRIMAIRE, comme en production : il ne connaît pas
       // le tenant, ce qui est précisément pourquoi la garde applicative reste.
-      return tables[name].find((row) => row.id === where?.id) ?? null;
+      return rowsOf(name).find((row) => row.id === where?.id) ?? null;
     },
     findMany: async ({ where }: { where?: Row } = {}) => {
       statements.push({ model: name, verb: 'findMany', where });
       scopeAtStatement.push(currentTenantScopeFrame()?.tenantId);
-      return tables[name].filter((row) => matches(row, where));
+      return rowsOf(name).filter((row) => matches(row, where));
     },
     create: async ({ data }: { data: Row }) => {
       statements.push({ model: name, verb: 'create' });
       scopeAtStatement.push(currentTenantScopeFrame()?.tenantId);
       const row = { id: 'new-' + name, ...data };
-      tables[name].push(row);
+      rowsOf(name).push(row);
       return row;
     },
     update: async ({ where, data }: { where: Row; data: Row }) => {
       statements.push({ model: name, verb: 'update', where });
       scopeAtStatement.push(currentTenantScopeFrame()?.tenantId);
-      const row = tables[name].find((r) => r.id === where.id);
+      const row = rowsOf(name).find((r) => r.id === where.id);
       if (!row) throw new Error('P2025');
       Object.assign(row, data);
       return row;
@@ -147,9 +162,9 @@ function makeDb(seed?: Partial<Record<string, Row[]>>) {
     delete: async ({ where }: { where: Row }) => {
       statements.push({ model: name, verb: 'delete', where });
       scopeAtStatement.push(currentTenantScopeFrame()?.tenantId);
-      const index = tables[name].findIndex((r) => r.id === where.id);
+      const index = rowsOf(name).findIndex((r) => r.id === where.id);
       if (index < 0) throw new Error('P2025');
-      tables[name].splice(index, 1);
+      rowsOf(name).splice(index, 1);
       return { id: where.id };
     },
   });
@@ -555,13 +570,20 @@ describe('AC-11 / G-PORTAL — les trois portails qui LISENT, et l’ABAC parent
   it('TEACHER — `mine=true` filtre sur le profil résolu DEHORS ; ADMIN — aucun filtre de publication', async () => {
     const teacher = makeHarness({ roles: ['teacher'] });
     await teacher.controller.list(teacher.jwt, undefined, undefined, undefined, undefined, undefined, 'true');
-    const teacherWhere = teacher.db.statements[0].where as Row;
+    // « une PREMIÈRE instruction a été émise » fait PARTIE de ce que ce test
+    // affirme : sans elle, lire `[0]` sur un journal vide passerait pour une
+    // absence de filtre. On l'assied donc, au lieu de l'assener avec un `!`.
+    const teacherFirst = teacher.db.statements[0];
+    expect(teacherFirst).toBeDefined();
+    const teacherWhere = teacherFirst?.where as Row;
     expect(teacherWhere.teacherProfileId).toBe(MY_TP);
     expect(teacherWhere.status).toBeUndefined();
 
     const admin = makeHarness({ roles: ['school_admin'] });
     await admin.controller.list(admin.jwt);
-    expect((admin.db.statements[0].where as Row).status).toBeUndefined();
+    const adminFirst = admin.db.statements[0];
+    expect(adminFirst).toBeDefined();
+    expect((adminFirst?.where as Row).status).toBeUndefined();
   });
 });
 
@@ -814,12 +836,19 @@ describe('AC-9 — les sites d’appel Prisma de lessons ⊆ la clôture déclar
     );
     expect(unclassified).toEqual([]);
 
-    const relations = [...keys].filter((key) => RELATION_TO_TABLE[key] !== undefined);
+    // UNE seule résolution par clé, portée jusqu'à l'assertion : l'ancienne
+    // forme cherchait `RELATION_TO_TABLE[key]` DEUX fois — une pour filtrer, une
+    // pour construire la clé de privilège — et deux lectures de la même table
+    // peuvent diverger. Ici la table résolue voyage avec sa clé.
+    const relations = [...keys].flatMap((key) => {
+      const table = RELATION_TO_TABLE[key];
+      return table === undefined ? [] : [{ key, table }];
+    });
     expect(relations.length).toBeGreaterThanOrEqual(6);
 
     const declared = new Set(APP_ROLE_REQUIRED_PRIVILEGES.map((r) => privilegeKey(r.table, r.privilege)));
     const missing = relations
-      .map((key) => privilegeKey(RELATION_TO_TABLE[key], 'SELECT'))
+      .map(({ table }) => privilegeKey(table, 'SELECT'))
       .filter((key) => !declared.has(key))
       .sort();
     expect(missing).toEqual([]);
