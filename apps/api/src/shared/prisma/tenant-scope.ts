@@ -146,9 +146,27 @@ export interface AppRolePrivilegeRequirement {
 export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[] = Object.freeze([
   // ── calendar (S-E01-1d, S-E01-5) ────────────────────────────────────────
   { table: 'calendar_event', privilege: 'SELECT', why: 'list + les deux gardes findUnique' },
-  { table: 'calendar_event', privilege: 'INSERT', why: 'create' },
-  { table: 'calendar_event', privilege: 'UPDATE', why: 'update' },
-  { table: 'calendar_event', privilege: 'DELETE', why: 'remove' },
+  // S-E01-1e — ces trois raisons disaient « create » / « update » / « remove »,
+  // soit le nom du handler et rien de plus. La garde anti-vacuité d'AC-9 les a
+  // refusées (6 caractères), et elle a eu raison : une raison qui répète le verbe
+  // n'apprend rien à qui relit cette liste pour décider si une entrée est encore
+  // due. Dette PRÉEXISTANTE de S-E01-5, corrigée ici parce que c'est la garde de
+  // cette tranche qui l'a levée — pas parce que cette tranche l'a produite.
+  {
+    table: 'calendar_event',
+    privilege: 'INSERT',
+    why: '`createEvent` écrit la ligne DANS la portée, après ses sondes de propriété',
+  },
+  {
+    table: 'calendar_event',
+    privilege: 'UPDATE',
+    why: '`update` réécrit la ligne dans la MÊME portée que sa lecture de garde (pas de TOCTOU)',
+  },
+  {
+    table: 'calendar_event',
+    privilege: 'DELETE',
+    why: '`remove` supprime après la garde findUnique, dans la portée qui l’a lue',
+  },
   {
     table: 'enrollment',
     privilege: 'SELECT',

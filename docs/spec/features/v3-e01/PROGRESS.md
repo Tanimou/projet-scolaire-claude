@@ -1064,7 +1064,101 @@ two portals to one client and stops writing a cross-portal callback wildcard.
    `?? portalClientId(accent)` fallback, which types at a new address exactly the login/reset divergence `§D3`
    refuses — all four pages already pass it, so making it required costs nothing.
 
+## `S-E01-1e` — the SECOND module, and the counter that moved the WRONG WAY until it was repaired
+
+**Landed 2026-08-15 (run 61).** Closes `PF-217`, settles `PF-199`, records `PF-218` / `PF-219` / `ADR-051`,
+advances `PF-02` half (a). **No SQL, no `schema.prisma` change** — `G-MIGRATION` is genuinely untriggered, so
+`scripts/restore-drill-baseline.json` is untouched and `PF-80` never armed.
+
+### What landed
+
+`lessons` is the second production module inside the tenant seam: five handlers, `this.scope.run(...)`
+**lexically** in each, `tx` inside, identity resolved **outside** by necessity. The attribution is **re-derived,
+never edited as a literal**:
+
+```
+BEFORE  13 scoped + 111 enumerated / 800
+AFTER   24 scoped + 120 enumerated / 803     → 659 sites would return ZERO ROWS after the cutover
+```
+
+**The application is still NOT ready to cut over, and the suite says so as a named LIMIT rather than a ratio.**
+
+### The finding that matters more than the movement
+
+Until this slice the coverage counter was **receiver-blind**. `PRISMA_CALL_SITE_RE` matched `prisma.`,
+`this.prisma.` and `tx.` identically and `covers()` was purely **positional**, so
+
+```ts
+this.scope.run(id, async (tx) => { await this.prisma.grade.findMany(); })
+```
+
+counted as **scoped** — the statement running on the **owner** connection, which escapes its own policies, while the
+counter credited it to the callback. **A half-converted handler produced a HIGHER scoped count than a correct one:
+the metric moved in the wrong direction exactly when the code was wrong.** `SCOPE_SAFE_RECEIVERS = ['tx']` and
+`classifyCallSite` — a **pure** function with four outcomes including `owner-inside-scope` — close it, and the order
+carries the property: the receiver test runs **before** the enumeration test, so a covered site can never be
+laundered into the enumerated column by an allow-listed file (`ADR-051 §D1`).
+
+### `PF-199`, settled as two kinds rather than one list
+
+`kind` is mandatory. **`surface`** = a whole-tree property true of every statement by construction (boot,
+`apps/worker/src/**`); **`bootstrap`** = identity/context resolution, where every statement carries its **own**
+reason and the declared set is compared for **equality in both directions** against the same matcher that produces
+the arithmetic — unlisted fails, **dead** fails, reasonless fails. A `surface` entry naming a single module file is
+refused outright. **No ratio floor** (`DNC-10`). The `PF-199` set was recorded as 3 files / 11 statements; it is
+**4 files / 21 statements** — `teacher-profile.service.ts` resolves `teacherProfileId` and **writes while doing
+so**, measured at **7** sites, not the 6 predicted.
+
+### Two things the routine had to finish, and one it had to repair
+
+The sprint's session died mid-implementation, so three items were completed by the orchestrator and are marked as
+such rather than attributed to the sprint: **`ADR-051` was never written** (the shipped code already cited
+`ADR-051 §D2`, i.e. a dangling citation — `TOOL-30`'s disease); the ledger updates; and **one failing test**. That
+failure is worth keeping in the record because it is the new guard biting on **pre-existing** debt: the anti-vacuity
+assertion refused three `calendar_event` entries whose reasons were `create` / `update` / `remove` — the handler
+name and nothing more, 6 characters, inherited from `S-E01-5`. They were **repaired, not baselined**.
+
+### What this slice does NOT claim
+
+- **`lessons` is PARTIALLY converted.** The notification fan-out cannot be reached from the controller
+  (`PF-218`): `NotificationsService` closes over its own `PrismaService` and takes no `tx`, so it stays on the
+  **owner** connection. Keeping it outside was deliberate — inside, it would enqueue e-mail jobs **before commit**
+  and fan O(guardians) statements into a 5 s budget.
+- **The executed denial proof is at TABLE level, not handler level.** `lesson_entry` is covered by the adversarial
+  suite's catalog-enumerated proof against real PostgreSQL as `app_user` (exit 0). The controller conversion itself
+  is proven by 36 source/double-level assertions. Both are real; they are not the same claim.
+- **`analytics.service.ts` still reads `lesson_entry` on the owner connection.** "The lessons module is scoped" is
+  not "lesson data is scoped." Two modules is the slice.
+- Intra-tenant ABAC gaps in `lessons` (an unfiltered `GET /lessons` returns every published lesson in the tenant to
+  any `lessons.read` holder; the `isStaff` role **union** shows drafts to a teacher-who-is-also-a-parent) are
+  **pre-existing and untouched**. RLS does not close them — same tenant.
+
 ## Next slice
+
+> **⚠️ POINTER CONSUMED 2026-08-15 by `S-E01-1e` (run 61). Everything below this block is HISTORY.**
+>
+> `S-E01-1e` is the slice every note under this heading pointed at, and it has landed: the second module is
+> converted, `PF-199` is settled as a two-kind statement-ratcheted allow-list (`ADR-051`), and the attribution moved
+> `13 + 111 / 800` → **`24 + 120 / 803`** on a counter that was **repaired first**.
+>
+> **→ The next slice is `S-E01-1f` — convert a THIRD module, and derive the boot-probe closure ONCE (`PF-219`).**
+> Take `PF-219` *with* the third module rather than before it: the closure is now one hand-maintained list **plus**
+> one derivation spec **per converted module**, and a third module makes that three of each. Derive it corpus-wide
+> from every `tx.<model>.<verb>(` inside every attributed scope range, include-targets closed relationally, and the
+> per-module specs collapse into one. A missing entry does not fail the boot probe — it certifies `enforcing: true`
+> over a closure nobody checked, and then every request of that module answers 42501 on all its portals.
+>
+> **`S-E01-1` — the global `DATABASE_URL` flip — stays AFTER it**, and its blockers are unchanged and now
+> *measured* rather than believed: **659 / 803** call sites would return zero rows; `tenant` needs `INSERT` and
+> `UPDATE` that `app_user` does not hold (`register.controller.ts:365`, `PF-185`); and **9** raw-SQL sites carry no
+> model or verb, so no grant matrix can see them (`PF-197`), two of which soft-fail into a `logger.warn`.
+>
+> **Operator precondition, unchanged (`PF-202`, `ADR-048 §D5`):** apply the RLS ledger to a database, **then**
+> declare `DATABASE_URL_APP` against it — never the reverse. This checkout is still on the wrong side of that line.
+>
+> Also queued behind it, from this run: **`PF-218`** (the notification seam needs a `tx`-accepting entry point) and
+> the `announcements` controller **`PF-208`** — the same `ADR-049` shape, a **cross-tenant WRITE**, now the third
+> instance found by hand and still the sharpest unfixed one.
 
 > **POINTER RE-READ 2026-08-15 by `S-E01-4a` (run 60), and it is UNCHANGED — for the same reason as `S-E01-5`.**
 >
