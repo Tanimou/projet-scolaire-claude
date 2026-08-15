@@ -1873,6 +1873,359 @@ const TRANSACTION_ALIAS_RE = /\$transaction\s*\(\s*async\s*\(\s*([A-Za-z_$][A-Za
 /** Raw SQL, which carries no model and no verb and therefore no classification. */
 const RAW_SQL_RE = /\$(?:execute|query)Raw(?:Unsafe)?\s*[(`]/g;
 
+// ---------------------------------------------------------------------------
+// S-E01-1d (b) — AC-9's UNIT CHANGES: from "how many times does the string
+// `.withTenant(` appear" to "how many Prisma call sites sit INSIDE a tenant
+// scope, and is every site outside one ENUMERATED with a reason".
+//
+// WHY THE OLD UNIT WAS WRONG, AND THE SHIPPED CODE PROVES IT
+// ----------------------------------------------------------
+// `withTenantCallers += (text.match(/\.withTenant\s*\(/g) ?? []).length` counted
+// SCOPE OPENINGS, not COVERED SITES. `calendar.controller.ts` opens FOUR scopes
+// that between them cover SIX Prisma call sites, so the old counter under-reports
+// by construction — and it under-reports in the direction that makes a converted
+// module look less converted than it is, which is the direction that eventually
+// gets "fixed" by widening a matcher. It is replaced here by attribution:
+// brace-match each scope callback's byte range, and a call site whose index falls
+// inside one is covered.
+//
+// Everything below is PURE — text in, numbers out, no database and no repository
+// scan — so `tenant-adversarial-gate.spec.ts` drives every branch, including the
+// ones that only occur on pathological source.
+// ---------------------------------------------------------------------------
+
+/**
+ * The receivers whose `.run(` OPENS a tenant scope. A CLOSED set, and the reason
+ * it must be closed was measured on this corpus rather than imagined.
+ *
+ * `\.(?:withTenant|run)\s*\(` alone matches ANY `.run(`. There are five in the
+ * tree today: four `this.scope.run(` in `calendar.controller.ts` — the real ones
+ * — and **`store.run(` in `tenant-scope.ts:89` itself**, the `AsyncLocalStorage`
+ * call the seam is built on. No Prisma site sits inside that one today, so
+ * coverage is unaffected today. Tomorrow a `this.queue.run(async () => { await
+ * this.prisma.x.findMany() })` would silently manufacture coverage on the OWNER
+ * connection — a green produced by a refactor in an unrelated module.
+ *
+ * So the receiver is CAPTURED and compared, and every other `.run(` receiver is
+ * REPORTED, exactly as `TRANSACTION_ALIAS_RE` / `foreignReceivers` already does
+ * for transaction aliases. A hopeful set would be the defect; a closed set that
+ * prints what it rejected is the control.
+ *
+ * `.withTenant(` needs no receiver check: it is `PrismaService`'s own method and
+ * nothing else in the tree carries the name.
+ */
+const SCOPE_RECEIVERS = Object.freeze(['scope', 'this.scope', 'tenantScope', 'this.tenantScope']);
+
+/** `<dotted.receiver>.withTenant(` / `<dotted.receiver>.run(`, receiver captured. */
+const SCOPE_OPENING_RE =
+  /(?<![.\w$])((?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*[A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(withTenant|run)\s*\(/g;
+
+/**
+ * Where a `/` may legally begin a REGEX LITERAL rather than a division.
+ *
+ * This is the standard preceding-token heuristic, and it is here for one reason:
+ * a `(` or `)` inside a regex literal must not move the brace matcher's depth.
+ * The failure it prevents is not cosmetic — see `matchingParen`.
+ */
+function startsRegexLiteral(previousSignificant) {
+  return previousSignificant === '' || '(,=:[!&|?{};+-*%^~<>'.includes(previousSignificant);
+}
+
+/** The closing quote of a `'…'` / `"…"` literal, or -1 if it does not close. */
+function skipQuoted(text, start, quote) {
+  for (let i = start + 1; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '\\') {
+      i += 1;
+      continue;
+    }
+    if (c === quote) return i;
+    // A newline inside a single/double-quoted literal means the lexer has lost
+    // its place. Bail rather than run to EOF: see `matchingParen`'s fail-closed
+    // rule.
+    if (c === '\n') return -1;
+  }
+  return -1;
+}
+
+/** The closing `/` of a regex literal, character classes included, or -1. */
+function skipRegexLiteral(text, start) {
+  for (let i = start + 1; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '\\') {
+      i += 1;
+      continue;
+    }
+    if (c === '[') {
+      // Inside a character class `/` and `)` are literal and `]` is the exit.
+      for (i += 1; i < text.length; i += 1) {
+        if (text[i] === '\\') {
+          i += 1;
+          continue;
+        }
+        if (text[i] === ']') break;
+        if (text[i] === '\n') return -1;
+      }
+      continue;
+    }
+    if (c === '/') return i;
+    if (c === '\n') return -1;
+  }
+  return -1;
+}
+
+/** The closing backtick of a template literal, `${…}` substitutions included. */
+function skipTemplateLiteral(text, start) {
+  for (let i = start + 1; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '\\') {
+      i += 1;
+      continue;
+    }
+    if (c === '`') return i;
+    if (c === '$' && text[i + 1] === '{') {
+      let depth = 1;
+      i += 2;
+      for (; i < text.length; i += 1) {
+        const d = text[i];
+        if (d === '\\') {
+          i += 1;
+          continue;
+        }
+        if (d === '`') {
+          const end = skipTemplateLiteral(text, i);
+          if (end === -1) return -1;
+          i = end;
+          continue;
+        }
+        if (d === "'" || d === '"') {
+          const end = skipQuoted(text, i, d);
+          if (end === -1) return -1;
+          i = end;
+          continue;
+        }
+        if (d === '{') depth += 1;
+        else if (d === '}') {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+      if (i >= text.length) return -1;
+      continue;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The index of the `)` matching the `(` at `openIndex`, or **-1**.
+ *
+ * A NAIVE DEPTH COUNTER OVER RAW TEXT IS NOT SAFE HERE, and the unsafe direction
+ * is the silent one:
+ *
+ *  - a `)` inside a string closes the range EARLY, so sites really inside it are
+ *    reported uncovered — noisy, and therefore self-correcting;
+ *  - a `(` inside a string, a regex or a comment NEVER closes, so the range runs
+ *    to END OF FILE and **every remaining Prisma call site in that file counts as
+ *    covered**. That is mass phantom coverage, expressed as a number, which no
+ *    reviewer sees. It is a manufactured green with no author.
+ *
+ * So strings, template literals (including `${…}`), regex literals and both
+ * comment forms are skipped, and an unbalanced result is **-1** rather than a
+ * guess. The caller's rule for -1 is FAIL-CLOSED: the file is REPORTED and every
+ * site in it counts UNCOVERED. Under-reporting coverage is a limit; over-reporting
+ * it is a lie.
+ */
+function matchingParen(text, openIndex) {
+  let depth = 0;
+  let previousSignificant = '';
+  for (let i = openIndex; i < text.length; i += 1) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === '/' && next === '/') {
+      const eol = text.indexOf('\n', i);
+      if (eol === -1) return -1;
+      i = eol;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) return -1;
+      i = end + 1;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      const end = skipQuoted(text, i, c);
+      if (end === -1) return -1;
+      i = end;
+      previousSignificant = c;
+      continue;
+    }
+    if (c === '`') {
+      const end = skipTemplateLiteral(text, i);
+      if (end === -1) return -1;
+      i = end;
+      previousSignificant = '`';
+      continue;
+    }
+    if (c === '/' && startsRegexLiteral(previousSignificant)) {
+      const end = skipRegexLiteral(text, i);
+      if (end !== -1) {
+        i = end;
+        previousSignificant = '/';
+        continue;
+      }
+    }
+    if (c === '(') depth += 1;
+    else if (c === ')') {
+      depth -= 1;
+      if (depth === 0) return i;
+      if (depth < 0) return -1;
+    }
+    if (!/\s/.test(c)) previousSignificant = c;
+  }
+  return -1;
+}
+
+/**
+ * Every tenant-scope callback's byte range in one file, PURE.
+ *
+ * Returns `{ ranges, foreignScopeReceivers, unbalanced }`. `unbalanced > 0` is
+ * the fail-closed signal described on `matchingParen`.
+ */
+function scopeCallbackRanges(text) {
+  const ranges = [];
+  const foreignScopeReceivers = new Map();
+  let unbalanced = 0;
+  for (const match of text.matchAll(SCOPE_OPENING_RE)) {
+    const receiver = String(match[1]).replace(/\s+/g, '');
+    const verb = match[2];
+    if (verb === 'run' && !SCOPE_RECEIVERS.includes(receiver)) {
+      const key = `${receiver}.run`;
+      foreignScopeReceivers.set(key, (foreignScopeReceivers.get(key) ?? 0) + 1);
+      continue;
+    }
+    // The regex ends with `\(`, so the opening parenthesis is the match's last
+    // character. Nothing is re-searched for, so nothing can drift.
+    const open = match.index + match[0].length - 1;
+    const close = matchingParen(text, open);
+    if (close === -1) {
+      unbalanced += 1;
+      continue;
+    }
+    ranges.push({ start: open, end: close });
+  }
+  return { ranges, foreignScopeReceivers, unbalanced };
+}
+
+/**
+ * `apps/api/src/**` -> a regex over the repository-relative, forward-slashed path.
+ *
+ * `**` crosses directory separators, `*` does not. Everything else is escaped, so
+ * a `.` in a filename is a `.` and not "any character" — the difference between
+ * enumerating `user-sync.service.ts` and enumerating `user-syncXservice.ts` too.
+ */
+function globToRegExp(glob) {
+  let out = '^';
+  for (let i = 0; i < glob.length; i += 1) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        out += '.*';
+        i += 1;
+      } else {
+        out += '[^/]*';
+      }
+      continue;
+    }
+    out += /[a-zA-Z0-9_/-]/.test(c) ? c : `\\${c}`;
+  }
+  return new RegExp(out + '$');
+}
+
+/**
+ * THE ENUMERATION — the file globs whose Prisma call sites are legitimately
+ * OUTSIDE any tenant scope, **each with the reason it is outside one**.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ THE TRAP THIS CONSTANT IS THE ENTRANCE TO                                │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * The affirmative branch fires when `scoped + enumerated === total`. There are
+ * therefore TWO ways to reach it: convert call sites, or widen this list. The
+ * second is free, invisible in a diff summary, and produces exactly the green a
+ * reviewer is looking for. **It is the manufactured green, and it is the failure
+ * mode of this whole block.**
+ *
+ * The discipline that makes the list safe is that it is a list of REASONS, not a
+ * list of paths. **"Not converted yet" is not a reason — it belongs in the
+ * uncovered count.** Every entry below names a property of the code that makes a
+ * tenant scope *impossible* or *wrong*, not merely absent. `cutoverVerdict`
+ * enforces the shape (an entry without a reason string makes the verdict
+ * UNREASONED, which fails), and `tenant-adversarial-gate.spec.ts` carries a
+ * mutant that inflates the enumeration to close the gap without covering
+ * anything and asserts the verdict is not affirmative.
+ *
+ * It is deliberately NOT a directory sweep. `apps/api/src/shared/**` would
+ * enumerate the identity seam and forty unrelated files with it.
+ */
+const ENUMERATED_OUTSIDE_SCOPE = Object.freeze([
+  Object.freeze({
+    glob: 'apps/api/src/main.ts',
+    reason: 'bootstrap: runs before any request exists, so there is no tenant to scope to',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/shared/config/config-preflight.ts',
+    reason: 'bootstrap: preflight decides whether the process may serve at all, before any tenant',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/shared/migrations/**',
+    reason:
+      'migration-state reader: `assertMigrationsClean` runs at boot and the health probe reads it on ' +
+      'every call — it must answer while the tenant scope is degraded or refused',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/shared/release/**',
+    reason:
+      'release-manifest reader: same obligation as the migration state — it must answer when the ' +
+      'second connection is refused, which is precisely when someone is reading it',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/modules/health/**',
+    reason: 'health: a liveness answer that needs a working tenant scope is not a liveness answer',
+  }),
+  Object.freeze({
+    glob: 'apps/worker/src/**',
+    reason:
+      'the worker has no request tenant: a job carries its tenant in its payload, and converting ' +
+      'that seam is its own slice (touchesWorker false here)',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/shared/auth/user-sync.service.ts',
+    reason:
+      'PF-199 — IT RESOLVES THE TENANT. `ensureUser` reads `user_profile` from the Keycloak `sub` ' +
+      'to PRODUCE the tenantId a scope would need; a scope cannot be opened before its own key exists',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/modules/school-structure/school-context.service.ts',
+    reason:
+      'PF-199 — `forTenant` resolves the school context a request runs in; same ordering constraint ' +
+      'as `ensureUser`, one layer down',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/modules/students/student-access.service.ts',
+    reason:
+      'PF-199 — `scopeForUser` resolves the ABAC scope itself; calling it from inside a scope would ' +
+      'hold an owner connection AND an app connection for the transaction’s duration',
+  }),
+  Object.freeze({
+    glob: 'apps/api/src/modules/calendar/calendar-seed.service.ts',
+    reason:
+      'PF-198 — it opens its OWN `$transaction` for a bulk import plus its audit row; it cannot nest ' +
+      'inside an interactive transaction and would not compile against `Prisma.TransactionClient`',
+  }),
+]);
+
 /**
  * THE CLASSIFIER — a PURE function, so the guard spec drives every branch with
  * no database and no repository scan.
@@ -1928,8 +2281,35 @@ function privilegesForVerb(verb) {
  *   different hat (`DNC-10`), and the rule for what "covered" means once the
  *   cutover starts belongs to `S-E01-1`, which owns the cutover — it is the only
  *   slice entitled to redefine it, and it must do so consciously.
+ *
+ * WHAT `S-E01-1d (b)` CHANGED, AND WHY IT IS NOT A RELAXATION
+ * ----------------------------------------------------------
+ * The wall did not move; the UNIT under it did, and one term was added.
+ *
+ *  - `scopedCallSites` replaces `withTenantCallers`. The old input counted scope
+ *    OPENINGS; four openings in `calendar.controller.ts` cover six call sites, so
+ *    it under-reported by construction. It now counts sites ATTRIBUTED to a
+ *    brace-matched callback range.
+ *  - `enumeratedCallSites` is the new term, and it is the only way a site outside
+ *    every scope can stop being counted against readiness. It is bounded by
+ *    `ENUMERATED_OUTSIDE_SCOPE`, a named in-source constant where **every entry
+ *    carries its reason**, and the `unreasoned` branch below refuses the verdict
+ *    outright when one does not.
+ *
+ * The equality `scoped + enumerated === total` is the SAME wall as before with
+ * the honest denominator: before this slice, `enumerated` was implicitly zero and
+ * every bootstrap and worker site counted as a future outage, which was true of
+ * the cutover but useless as a target. It is still not a floor and still has no
+ * knob. **This slice is EXPECTED to land on the `limit` branch; a green here
+ * would be the finding, not the pass.**
  */
-function cutoverVerdict({ files, withTenantCallers, prismaCallSites }) {
+function cutoverVerdict({
+  files,
+  scopedCallSites,
+  enumeratedCallSites = 0,
+  prismaCallSites,
+  enumeratedOutsideScope = ENUMERATED_OUTSIDE_SCOPE,
+}) {
   if (files === 0) {
     return {
       kind: 'vacuous',
@@ -1937,24 +2317,71 @@ function cutoverVerdict({ files, withTenantCallers, prismaCallSites }) {
       detail: 'zero .ts files found under apps/api/src and apps/worker/src — the counts below would be vacuous',
     };
   }
-  const uncovered = prismaCallSites - withTenantCallers;
-  if (uncovered > 0) {
-    const zero = withTenantCallers === 0;
+
+  // THE ENUMERATION IS CHECKED BEFORE IT IS TRUSTED, and this branch runs first
+  // on purpose: an enumeration whose entries carry no reason is the manufactured
+  // green in its purest form — the gap closes, nothing was converted, and the
+  // only thing missing is the sentence that would have made someone object.
+  // Unclassifiable, therefore refused (DNC-08), and refused LOUDLY rather than
+  // downgraded to a limit, because a limit is a state of the CORPUS while this is
+  // a defect in the CHECKER'S OWN constant.
+  const unreasoned = (Array.isArray(enumeratedOutsideScope) ? enumeratedOutsideScope : []).filter(
+    (entry) =>
+      entry === null ||
+      typeof entry !== 'object' ||
+      typeof entry.reason !== 'string' ||
+      entry.reason.trim().length === 0,
+  );
+  if (enumeratedCallSites > 0 && unreasoned.length > 0) {
+    return {
+      kind: 'unreasoned',
+      label:
+        'AC-9 the OUT-OF-SCOPE ENUMERATION carries a reason for every entry — ' +
+        `${unreasoned.length} entr(y/ies) do not`,
+      detail:
+        `${enumeratedCallSites} call site(s) are being excused by an enumeration whose entries do not ` +
+        'all say WHY. The enumeration is a list of REASONS, not of paths: an entry without one closes ' +
+        'the coverage gap without covering anything, which is the manufactured green this branch exists ' +
+        'to refuse. "Not converted yet" is not a reason — it belongs in the uncovered count.',
+    };
+  }
+
+  const uncovered = prismaCallSites - scopedCallSites - enumeratedCallSites;
+  if (uncovered !== 0) {
+    // A NEGATIVE residue means the two counts overlap or the enumeration exceeds
+    // the corpus — arithmetic that cannot describe any real tree. Never
+    // affirmative.
+    if (uncovered < 0) {
+      return {
+        kind: 'unreasoned',
+        label: 'AC-9 CUTOVER READINESS: the coverage arithmetic is impossible',
+        detail:
+          `scoped ${scopedCallSites} + enumerated ${enumeratedCallSites} EXCEEDS ${prismaCallSites} total ` +
+          'call sites. Either a site was counted twice or the enumeration is wider than the corpus; ' +
+          'both are defects in this checker, and neither may resolve to a green.',
+      };
+    }
+    const zero = scopedCallSites === 0;
     return {
       kind: 'limit',
       label:
-        'AC-9 CUTOVER READINESS: `PrismaService.withTenant` has ' +
-        (zero ? 'ZERO production callers' : `only PARTIAL production coverage (${withTenantCallers}/${prismaCallSites})`),
+        'AC-9 CUTOVER READINESS: the tenant scope covers ' +
+        (zero
+          ? 'ZERO production Prisma call sites'
+          : `only PART of the corpus (${scopedCallSites} scoped + ${enumeratedCallSites} enumerated / ${prismaCallSites})`),
       detail:
-        `${withTenantCallers}/${prismaCallSites} Prisma call sites set the tenant GUC across ${files} source ` +
-        `files, so ${uncovered} would return ZERO ROWS after the DATABASE_URL cutover. AC-5 above ("no GUC means ` +
+        `${scopedCallSites}/${prismaCallSites} Prisma call sites sit inside a tenant scope across ${files} ` +
+        `source files, and ${enumeratedCallSites} more are enumerated as legitimately outside one, so ` +
+        `${uncovered} would return ZERO ROWS after the DATABASE_URL cutover. AC-5 above ("no GUC means ` +
         'zero rows") therefore describes the OUTAGE, not the safety. THE APPLICATION IS NOT READY TO CUT OVER.',
     };
   }
   return {
     kind: 'ok',
-    label: 'AC-9 CUTOVER READINESS: every production Prisma call site sets the tenant GUC',
-    detail: `${withTenantCallers}/${prismaCallSites} call sites across ${files} source files`,
+    label: 'AC-9 CUTOVER READINESS: every production Prisma call site is inside a tenant scope or enumerated',
+    detail:
+      `${scopedCallSites} scoped + ${enumeratedCallSites} enumerated === ${prismaCallSites} call sites ` +
+      `across ${files} source files`,
   };
 }
 
@@ -1974,11 +2401,22 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
   const files = roots.flatMap((root) => sourceFiles(root));
   const modelToTable = new Map(knownTables.map((table) => [prismaModelName(table), table]));
 
-  let withTenantCallers = 0;
+  let scopedCallSites = 0;
+  let enumeratedCallSites = 0;
   let prismaCallSites = 0;
   let rawSqlSites = 0;
   let classified = 0;
   const reachable = new Map();
+  /** Files whose scope callbacks did not brace-match — every site in them counts UNCOVERED. */
+  const unbalancedScopes = new Map();
+  /** `.run(` receivers that are NOT scope openings, reported rather than assumed absent. */
+  const foreignScopeReceivers = new Map();
+  /** glob -> how many call sites it excused, so a dead enumeration entry is visible. */
+  const enumeratedByGlob = new Map();
+  const enumerationMatchers = ENUMERATED_OUTSIDE_SCOPE.map((entry) => ({
+    entry,
+    matches: globToRegExp(entry.glob),
+  }));
   /** key `table\u0000PRIVILEGE` -> { table, privilege, verbs:Set, hits, example } */
   const required = new Map();
   const unknownVerbs = new Map();
@@ -1993,7 +2431,22 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
       continue;
     }
     const relative = file.slice(REPO_ROOT.length + 1).split('\\').join('/');
-    withTenantCallers += (text.match(/\.withTenant\s*\(/g) ?? []).length;
+
+    // S-E01-1d (b) — ATTRIBUTION, not occurrence counting. The ranges are
+    // computed once per file; `covers()` is a linear scan over a list that holds
+    // FOUR entries on the only converted file in the tree today.
+    const scopes = scopeCallbackRanges(text);
+    if (scopes.unbalanced > 0) unbalancedScopes.set(relative, scopes.unbalanced);
+    for (const [receiver, hits] of scopes.foreignScopeReceivers) {
+      foreignScopeReceivers.set(receiver, (foreignScopeReceivers.get(receiver) ?? 0) + hits);
+    }
+    // FAIL-CLOSED: a file whose scope callbacks did not brace-match contributes
+    // ZERO coverage. See `matchingParen` — the alternative is a range that runs to
+    // EOF and marks every remaining site in the file covered.
+    const covers = (index) =>
+      scopes.unbalanced === 0 && scopes.ranges.some((range) => index > range.start && index < range.end);
+    const enumeration = enumerationMatchers.find(({ matches }) => matches.test(relative));
+
     rawSqlSites += (text.match(RAW_SQL_RE) ?? []).length;
     for (const [, alias] of text.matchAll(TRANSACTION_ALIAS_RE)) {
       if (!PRISMA_RECEIVERS.includes(alias)) {
@@ -2018,6 +2471,16 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
     for (const match of text.matchAll(PRISMA_CALL_SITE_RE)) {
       const [, model, verb] = match;
       prismaCallSites += 1;
+      // Attribution is decided BEFORE the model lookup, deliberately: a site
+      // whose model the catalog does not know is still a site that either sits
+      // in a scope or does not, and dropping it here would let the two counts
+      // disagree with `prismaCallSites` — the arithmetic the wall depends on.
+      if (covers(match.index)) {
+        scopedCallSites += 1;
+      } else if (enumeration !== undefined) {
+        enumeratedCallSites += 1;
+        enumeratedByGlob.set(enumeration.entry.glob, (enumeratedByGlob.get(enumeration.entry.glob) ?? 0) + 1);
+      }
       const table = modelToTable.get(model);
       if (table === undefined) {
         // `$transaction`, `$connect` and friends never reach here (they start
@@ -2068,7 +2531,12 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
 
   return {
     files: files.length,
-    withTenantCallers,
+    scopedCallSites,
+    enumeratedCallSites,
+    enumeratedByGlob,
+    enumeratedOutsideScope: ENUMERATED_OUTSIDE_SCOPE,
+    unbalancedScopes,
+    foreignScopeReceivers,
     prismaCallSites,
     rawSqlSites,
     classified,
@@ -2725,9 +3193,37 @@ $mut$;`;
     const allTables = names(cen.get('ALL_TABLES'));
     const readiness = cutoverReadiness(ungranted, { knownTables: allTables, grants });
     const verdict = cutoverVerdict(readiness);
-    if (verdict.kind === 'vacuous') fail(verdict.label, verdict.detail);
+    // MAPPED FAIL-CLOSED, and the order matters more than it looks. The previous
+    // shape was `vacuous -> fail / limit -> limit / else -> record`, so ANY kind
+    // added later — `unreasoned` among them — would have landed on the
+    // AFFIRMATIVE branch by default. Only the explicitly affirmative kind may
+    // reach `record`; everything unrecognised is a failure (DNC-08).
+    if (verdict.kind === 'ok') record(verdict.label, verdict.detail);
     else if (verdict.kind === 'limit') limit(verdict.label, verdict.detail);
-    else record(verdict.label, verdict.detail);
+    else fail(verdict.label, verdict.detail);
+
+    // S-E01-1d (b) — the attribution's own honest edges, PRINTED. Both of these
+    // are silent-over-report shapes if they are only counted (`PF-200`).
+    if (readiness.unbalancedScopes.size > 0) {
+      fail(
+        'AC-9 every tenant-scope callback brace-matched',
+        `${readiness.unbalancedScopes.size} file(s) hold a scope call whose callback did not close: ` +
+          [...readiness.unbalancedScopes].map(([file, hits]) => `${file} (${hits})`).join(', ') +
+          '. Their call sites are counted UNCOVERED — an unmatched range would otherwise run to end of ' +
+          'file and mark every remaining site in it covered.',
+      );
+    }
+    if (readiness.foreignScopeReceivers.size > 0) {
+      record(
+        'AC-9 `.run(` receivers OUTSIDE the scope set are reported, never assumed to open a scope',
+        [...readiness.foreignScopeReceivers].map(([receiver, hits]) => `${receiver} ×${hits}`).join(', ') +
+          `; the closed set is {${SCOPE_RECEIVERS.join(', ')}}`,
+      );
+    }
+    for (const entry of readiness.enumeratedOutsideScope) {
+      const hits = readiness.enumeratedByGlob.get(entry.glob) ?? 0;
+      record(`AC-9 enumerated outside a scope: ${entry.glob} (${hits} site(s))`, entry.reason);
+    }
 
     // ---- 14b. S-E01-1c / TOOL-32 — THE VERB-AWARE HALF.
     //
@@ -3034,7 +3530,17 @@ module.exports = {
   TENANT_A,
   TENANT_B,
   UNCOVERED_EXPECTED,
+  // S-E01-1d (b) — the ATTRIBUTION family is exported for the same reason
+  // `cutoverVerdict` is: the gate spec drives the brace matcher over synthetic
+  // source (a `)` in a string, a `(` in a regex, a foreign `.run(` receiver) with
+  // no repository scan and no database. A matcher that is only ever exercised by
+  // the real corpus is a matcher whose pathological branches are never tested.
+  ENUMERATED_OUTSIDE_SCOPE,
+  SCOPE_RECEIVERS,
   cutoverVerdict,
+  globToRegExp,
+  matchingParen,
+  scopeCallbackRanges,
   // S-E01-1c — the classifier is exported as a PURE function so the guard spec
   // drives every branch (each verb, the unrecognised one, upsert's two
   // privileges) with no database and no repository scan.

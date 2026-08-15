@@ -302,7 +302,11 @@ if changed_match "$CODE_RE"; then
   #
   # Kept in step with .github/workflows/ci.yml — the two must not drift
   # (S-E02-2 AC-4).
-  if changed_match '^(apps/api/prisma/|apps/api/src/shared/prisma/|scripts/tenant-adversarial-check\.js|scripts/rls-isolation-check\.js|\.env)'; then
+  # S-E01-1d (b) — `scripts/tenant-scope-check.js` joins the trigger, and that is
+  # not decoration: without it a diff touching ONLY the new checker would skip
+  # this stage, which is the one its own edit is most likely to move (the two
+  # share `apps/api/src/shared/prisma/` as a subject).
+  if changed_match '^(apps/api/prisma/|apps/api/src/shared/prisma/|scripts/tenant-adversarial-check\.js|scripts/tenant-scope-check\.js|scripts/rls-isolation-check\.js|\.env)'; then
     run_stage 300 "tenant adversarial" node scripts/tenant-adversarial-check.js
   else
     skip_stage "tenant adversarial" "no prisma, identity-seam or checker change"
@@ -359,6 +363,49 @@ if [ "$MODE" = full ]; then
   run_stage 600 "lint:warnings (ratchet)" node scripts/lint-ratchet.js
   run_stage 1800 "build" pnpm build
   run_stage 300 "boot (module graph + route table)" node scripts/boot-check.js
+  # TOOL-33 / S-E01-1d (b) — THE TENANT SCOPE SEAM, PROVEN BY EXECUTION.
+  #
+  # ORDERING DEPENDENCY, stated where the stage is created because that is the
+  # only place it can be honoured: this check drives the COMPILED seam
+  # (`apps/api/dist/shared/prisma/prisma.service.js` + `tenant-scope.js` +
+  # `app-role-prisma.service.js`), so it must run AFTER `prisma generate` (:312, tier 2)
+  # and AFTER `build` (:360) — the same guarantee `boot-check.js` immediately
+  # above already relies on. It therefore sits HERE, immediately after boot, and
+  # nowhere else.
+  #
+  # WHAT IT ADDS THAT NEITHER NEIGHBOUR CAN. `rls isolation` and `tenant
+  # adversarial` prove the POLICIES deny for a real non-owner role — but they set
+  # the GUC with a hand-written `SET`, so they say nothing about whether the
+  # APPLICATION's seam sets it. `tenant-scope.spec.ts` proves the seam's logic
+  # against a fake client, with no database. This is the only thing in the tree
+  # that runs a statement through the real seam and watches PostgreSQL refuse it:
+  # positive control FIRST (the row is readable, updatable and creatable for its
+  # own tenant), then the cross-tenant denial by primary key, plus a no-scope
+  # control proving the GUC is what makes the difference.
+  #
+  # NAMED LIMIT, and it must not be discovered later: tier 3 is `--full` only, so
+  # a fast-tier PR reports GATE: PASS without ever having run this stage. That is
+  # forced by the ordering above (there is no build in tier 2 to drive) and is the
+  # reason TOOL-33 exists as a finding rather than as a line of shell.
+  #
+  # The 180 s bound is DERIVED FROM A MEASURED TRIPLE on this checkout, not copied
+  # from a neighbour: the scratch lifecycle (CREATE DATABASE + `prisma migrate
+  # deploy` of the 55-table / 59-policy ledger + DROP) took 20.9 s / 16.0 s /
+  # 16.2 s, and the Prisma client connect, seed and ~20 assertions add a few
+  # seconds on top — 180 s is roughly 6x the worst observed, which is cold-cluster
+  # headroom rather than optimism. A flaky blocking stage is worse than no stage.
+  #
+  # It FAILS and never skips (DNC-08): missing `dist/` or a missing generated
+  # client each exit 1 naming the command that produces it (`pnpm build`,
+  # `pnpm --filter @pilotage/api exec prisma generate`), exactly as
+  # `scripts/boot-check.js:147-152` does. No `continue-on-error`, no skip branch.
+  # Note that :305 above already triggers the `tenant adversarial` stage on
+  # `^apps/api/src/shared/prisma/`, so both stages fire on a diff to the seam.
+  # Decision record: docs/adr/ADR-048-tenant-scope-two-connections.md.
+  #
+  # Kept in step with .github/workflows/ci.yml — the two must not drift
+  # (S-E02-2 AC-4).
+  run_stage 180 "tenant scope (executed proof)" node scripts/tenant-scope-check.js
   run_stage 180 "web artefact" node scripts/web-artifact-check.js
   run_stage 300 "observability" node scripts/observability-check.js
   run_stage 300 "tracing" node scripts/tracing-check.js

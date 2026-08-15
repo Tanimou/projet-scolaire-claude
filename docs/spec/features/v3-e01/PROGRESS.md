@@ -15,12 +15,23 @@ and **`S-E01-1b`** (the cutover's REFERENCE SURFACE — the authorization join `
 re-classified as tenant-derived rather than global, plus `ADR-046`; the second slice to land whole, and still **not**
 the cutover) and **`S-E01-1c`** (the cutover's **WRITE** surface — `app_user` may edit a CUSTOM role, and a SYSTEM
 role is made unwritable **by the database** through six `AS RESTRICTIVE` per-command policies, plus `ADR-047`;
-the third slice to land whole, closing `PF-193`, and **still not** the cutover).
+the third slice to land whole, closing `PF-193`, and **still not** the cutover)
+and — **2026-08-15** — **`S-E01-1d`** + **`S-E01-1d (b)`** (the tenant scope **SEAM**: a second, non-owner
+`PrismaClient` on `DATABASE_URL_APP`, `calendar` converted as the first module whose handlers run inside
+`withTenant`, and `AC-9` redefined from scope *openings* to attributed *call sites*, landing on a truthful
+`[LIMIT]` of **6 scoped + 113 enumerated / 794 across 226 files**, plus `ADR-048`; **still not** the global cutover —
+`DATABASE_URL` is untouched — and its executed proof has **not yet run green**, see the section below).
 The epic is **not** `shipped`, and **four** sentences must not be misread:
 
 1. **The running application is still not RLS-isolated**, and no policy slice changed that. It connects as
    `pilotage`, the table owner; `FORCE ROW LEVEL SECURITY` is deliberately absent; the remaining step is a
    **connection cutover**, which belongs to `S-E01-1`.
+   > **Annotated 2026-08-15 by `S-E01-1d`, and the correction is narrow.** The default connection is still the owner
+   > and this sentence still holds for the application as a whole. What changed is that **one module** — `calendar` —
+   > now runs its four handlers on a **second**, non-owner client **when `DATABASE_URL_APP` is declared against a
+   > migrated database**; absent that variable it stays in `degraded_no_app_url` and behaves exactly as before. The
+   > cutover is therefore no longer a single event to be scheduled: it is a per-module migration with a measured
+   > counter (`6 + 113 / 794`) and a named refusal state. `S-E01-1` still owns the **global** `DATABASE_URL` flip.
 2. **Policy coverage is now complete in the catalog sense — 53 of 55 base tables** (45 by `tenant_id` column,
    **7** by FK path after `S-E01-1b` made the derivation **transitively** closed, and **1** auto-discriminant:
    `tenant` itself, under `id = <GUC>`). The residue is **two** tables — `permission` (global reference data) and
@@ -73,7 +84,9 @@ The epic is **not** `shipped`, and **four** sentences must not be misread:
 | **S-E01-1a** | The identity seam stops **inventing** a tenant — `ensureUser` refuses an unprovisioned subject instead of upserting a `demo` tenant around it | 🟡 **shipped in part — 2026-08-14, ⚠️ NOT auto-merged (P1 · `[auth][security][tenancy]`)** — [`stories/S-E01-1a.md`](./stories/S-E01-1a.md) | 53 | **Evidence, executed:** `jest apps/api/src/shared/auth/user-sync.service.spec.ts` **22/22 pass** (new file, 470 lines — before it the tenant origin of the whole API had *no* test); `jest src/modules/identity src/shared/quality src/shared/auth` **1717 pass**; `pnpm typecheck` **13/13 exit 0** with `@pilotage/api` a genuine cache miss that compiled the changed sources and `prisma/seed-demo.ts`; `git diff --check` exit 0; `node scripts/production-artefact-check.js` **green** (it went RED mid-run on two *comments* naming the demo slug — rule `A4` scans raw source, comments included — and both were reworded, not exempted). **Closes `PF-01` half (a)** only. Deletes `DEMO_TENANT_SLUG` + the creation branch from `user-sync.service.ts:9,38-56`; refuses with an exported `UnprovisionedUserError` (`403`, `code: ACCOUNT_NOT_PROVISIONED`, one French sentence for all three refusal reasons) and **writes nothing** while refusing, proven on the fake client's call record rather than only on the thrown error. Ships **`ADR-043`**. **Three refusal branches shipped where the story specified one** (`no-match`, `ambiguous-email`, `email-bound-to-another-subject`) — tested (T-4/T-5/T-6), reconciled into `ADR-043` §D7. **Half (b) stays open as `PF-185`; `PF-186` records the unscoped email lookup.** No schema change (`G-MIGRATION` does not trigger), no cutover, no `pending` enum. **Four residuals a human owns — see [`S-E01-1a` — what landed, and the four residuals](#s-e01-1a--what-landed-and-the-four-residuals)** |
 | **S-E01-1b** | The connection cutover's **REFERENCE SURFACE**: `app_user` can complete an authorization join, and `role` stops being mis-classified as global | 🟢 **shipped — 2026-08-14** — proven by execution | 56 | **Evidence, executed against real PostgreSQL:** `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0, 165 assertions**. The fail-before / pass-after pair, both halves run: the join `user_profile -> user_role -> role -> role_permission -> permission` raises **`permission denied for table role`** on the ledger *without* this migration and returns **`AUTHZ_JOIN|1`** with it (and `AUTHZ_JOIN_FOREIGN|0`). Census agreement moved **`45 + 5` → `45 + 7 + 1 = 53`** with **no literal edited**: the derivation became a recursive CTE and a third catalog-derived term (`AUTODISC|tenant`) joined it. `A_SEES_B_ROLE|0` / `B_SEES_B_ROLE|1`; **`A_SEES_B_ROLEPERM` went `1` → `0`** (a cross-tenant read measured under a bare grant, closed before it shipped); system role visible under A, under B and under **no** context, with the school-scoped one invisible as its control; `NOCTX_TENANTS|0` (no enumeration oracle, no `SECURITY DEFINER` function); `_prisma_migrations` readable with and without a context. **E-8 mutation check: 3 predicate defects injected, 3 killed** — and the FIRST run of it killed only 2, which is what forced the `pg_get_expr` **owner-side predicate evaluation** into existence. Rollback EXECUTED (`AFTER_POLICIES\|0`, `AFTER_RLS\|0`, `AFTER_GRANTS\|0`, `AFTER_ROLE_FK\|0`, `AFTER_ROLE_INDEX\|0`); scratch DB dropped and verified. Ships **`ADR-046`**, amends **`ADR-042 §D2/§D3`** in place. Records **`PF-191`** (closed), **`PF-192`** (closed), **`PF-193`** (open). **No cutover, no `DATABASE_URL` change.** See the section below |
 | **S-E01-1c** | The connection cutover's **WRITE SURFACE**: `app_user` may edit a **CUSTOM** role, and a **SYSTEM** role becomes unwritable **by the database** rather than by a handler | 🟢 **shipped — 2026-08-14, ⚠️ NOT auto-merged (P1 · `[schema][security][authz][migration][rls][tenancy][db-grants]`)** — [`stories/S-E01-1c.md`](./stories/S-E01-1c.md) | 57 | **Evidence, executed against real PostgreSQL:** `node scripts/rls-isolation-check.js` **×2** → `RLS ISOLATION: PROVEN for the non-owner role`, exit 0, byte-stable across both runs; `node scripts/tenant-adversarial-check.js` → green, **791 call sites classified over 167 `(table, privilege)` pairs, 165 satisfied**; `pnpm typecheck` → exit 0, 13/13, `@pilotage/api` a genuine cache **miss** that ran `tsc --noEmit && tsc --noEmit -p prisma/tsconfig.json`; `git diff --check` exit 0, extended by `--no-index` over the three untracked files. `apps/api/prisma/migrations/20260814210000_role_write_surface_rls/migration.sql` (487 lines, hand-written, ADR-027/G-MIGRATION) grants `INSERT, UPDATE, DELETE` on `role` and `INSERT, DELETE` on `role_permission`, under **six** `AS RESTRICTIVE`, per-command, `TO PUBLIC` policies named `system_role_write_guard_{insert,update,delete}` on each table. **`schema.prisma` is NOT touched** — no column, no constraint, no index — so the `prisma generate` RED trap (`P-05`) is **not armed**, the first `V3-E01` migration since `S-E01-2c` for which that is true, and it is a measurement (no `schema.prisma` hunk in the diff), not a hope. The load-bearing assertions genuinely fired: **`WRITE_GUARD_PERMISSIVE == 0`** (a guard that lost `AS RESTRICTIVE` would **OR** with `tenant_isolation` and allow every write, silently), `TOTAL_POLICIES == POLICIES + 6` (the six are invisible to every `polname = 'tenant_isolation'` census term, so they get their own), the six-policy `WRITE_GUARD_SHAPE` set equality, `DERIVED_DELETE_NAMES` set-equal to `['role','role_permission']` (`ADR-042 §D5`'s zero becomes a **named** two, `ADR-047 §D4`), **AC-8b mutant killed by execution** (`before=1, weakened=0, restored=1`), and the header rollback **executed** with `tenant_isolation` surviving and both tables reading back exactly `SELECT`. Ships **`ADR-047`**; amends `ADR-042 §D5`; supersedes one clause of `ADR-046 §D5`. **Closes `PF-193`** and **`TOOL-32`**; **records `PF-194` (P1)** and **`PF-197` (P2)**. **The harness falsified the spec that commissioned it:** `PF-195`/`PF-196` were pre-allocated on the premise that the 44 tenant-scoped tables hold `SELECT, INSERT` only; the checker measured `20260813120000:480` and **refused to spend the ids** — no finding was written for a premise that is false. **⚠️ NOT the cutover** — `DATABASE_URL` untouched, `FORCE ROW LEVEL SECURITY` still absent, no runtime module changed, zero `withTenant` call sites, and the app still connects as owner `pilotage`, which is why nothing regresses and why `PF-194` is inert **today**. See the section below |
-| **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **next, RE-SCOPED 2026-08-14** — steps 1 partially taken by `S-E01-1a`; the GRANT half of step 3 is taken by `S-E01-1b` | — | `PF-01` half (a) is taken by `S-E01-1a`; what remains under this id is **steps 2–5** of [Next slice](#next-slice): the first real `withTenant` call site, the `DATABASE_URL` → `app_user` cutover with the missing GRANTs, the decision on the six FK-derived tables (`PF-183`, held PR #245), and the `ADR-032` §D3 one-line correction. The `pending` `UserStatus` is an **enum change** (`schema.prisma:31-35` has only `active|suspended|deleted`), so it carries `G-MIGRATION` and belongs here, not in `1a`. **This is still the slice that mints the first real tenant claim** — but note the *source* of that claim forks on `D-02` (`PF-185`) |
+| **S-E01-1d** | The tenant scope **SEAM**: a second, non-owner `PrismaClient` on `DATABASE_URL_APP`, and `calendar` becomes the first module whose handlers run inside `withTenant` | 🟡 **shipped in part — 2026-08-15, ⚠️ NOT auto-merged (P1 · `[security][tenancy][rls][auth][db][api]`)** — [`stories/S-E01-1d.md`](./stories/S-E01-1d.md) | 58 | **What landed:** `app-role-prisma.service.ts` (new, 291 lines) **composes** `PrismaService` rather than extending it, is provided by the already-`@Global()` `PrismaModule`, and is injected in **exactly one** place — `TenantScopeService`; `calendar.module.ts` wires nothing new, so no module can reach the second client except through the seam (`ADR-048 §D1`, AC-4's structural proof). `calendar.controller.ts`'s four handlers become the first production callers of `withTenant`/`runWithTenant` — the seam itself (`runWithTenant`, `TenantTransactionRunner`, `assertTenantId`) already existed on `main` from `S-E01-2b`, so this is its **first caller**, not a new convention. **Every handler KEEPS its application filter** (`where: { tenantId, schoolId }` in `list`, `tenantId: me.tenantId` in `create`, the `if (!event \|\| event.tenantId !== tenantId) throw NotFoundException()` guard in `update`/`remove`): RLS **doubles** the guard, it does not replace it. The GUC is transaction-local (`set_config(..., true)`), so no context leaks onto a pooled connection. `list`'s parent branch is refactored (hoisting `scopeForUser` out of the scope) and is **semantically identical** — `studentIds === null \|\| length === 0 → []` → `school_wide` fallback, so G-PORTAL parent visibility is preserved. Degraded mode is **three** states, not two (`§D5`): `enforced` / `degraded_no_app_url` / `refused_unusable`, the third **refusing** rather than falling back to the owner, surfaced as an unlabelled `pilotage_tenant_scope_enforced` gauge on `/metrics`. **`§D9` is the reusable decision:** `P2025` from the database floor maps to the same `NotFoundException` the application guard throws, because a hardening that answered 500-vs-404 would have created an **existence oracle** the pre-story code did not have. Ships **`ADR-048`**. **NOT the cutover** — `DATABASE_URL` untouched, `schema.prisma` untouched, no migration |
+| **S-E01-1d (b)** | The **GATE** and its executed proof: `AC-9` redefined from scope *openings* to attributed *call sites*, plus `scripts/tenant-scope-check.js` | 🟡 **shipped in part — 2026-08-15, ⚠️ NOT auto-merged (P1 · `[security][tenancy][rls][ci-gate][adr-drift][gate-red]`)** — [`stories/S-E01-1d-b.md`](./stories/S-E01-1d-b.md) | 58 | **Evidence, executed:** `pnpm typecheck` → **exit 0, 13/13**, `@pilotage/api` a genuine cache **miss** (a `noUncheckedIndexedAccess` error in the new `tenant-scope.spec.ts:462` DNC-10 ratchet was found by the gate and fixed in-run with an explicit `undefined` guard, not a `!`); `node scripts/tenant-adversarial-check.js` → **exit 0**, `[LIMIT] 6 scoped + 113 enumerated / 794 across 226 files`; `git diff --check` exit 0 on the working tree **and** vs `origin/main`; **no `schema.prisma`, no migration** (so `P-05` is disarmed and `restore-drill-baseline.json`/`PF-80` untouched). **The `AC-9` redefinition is the deliverable and it is a WALL, not a knob:** the old input counted the string `.withTenant(` — scope *openings* — and four openings in `calendar.controller.ts` cover **six** call sites, so it under-reported by construction; it is now `scopedCallSites + enumeratedCallSites === prismaCallSites`, every enumerated entry carrying its own reason, and the verdict switch was inverted **fail-closed** (`else record` → `else fail`). Landing on a truthful `[LIMIT]` at 6/794 is the honest outcome; a green there would have been the finding (`ADR-048 §D6`). **✅ `AC-1` IS MET — the executed proof RAN GREEN TWICE at land, taken by the routine because agents never build (GUARDRAILS §4).** `pnpm --filter @pilotage/api build` exit 0 (verified by **artefact mtime**, not exit code), then `node scripts/tenant-scope-check.js` ×2 → **`TENANT SCOPE: PROVEN — the compiled seam is refused by PostgreSQL for a non-owner role`, exit 0 both times**: `app_user` proven non-owner / no `BYPASSRLS` / not a member of the owner and owning **0** tables under test, `appRoleVerdict` — *the same function production boots on* — returning `enforcing`, the `PF-203` `relrowsecurity`/`pg_policy` arming check green, **positive control first** (tenant A reads, updates 1 row and creates its own `calendar_event`), **then** the denial (tenant B invisible to `findUnique` by primary key → `null`; `updateMany`/`deleteMany` by primary key → **0** rows; a unique `update` raising **`P2025`**; B's row read back UNCHANGED by the owner), plus a **no-scope control** proving the GUC is what makes the difference (0 rows outside any scope). **`TOOL-27`/`TOOL-31` did not recur** — the deterministic disconnect-before-drop held on both runs. Cleanup verified **out of band**: `tenant_scope_%` → `(none)`, `app_user` in its pre-run state, live `pilotage` untouched (`_prisma_migrations = 2`, `pg_policies = 0`). **Three of the sprint's four merge conditions were discharged at land** (the proof, the `.env.example` default, the missing `AC-14`); the fourth is now **`PF-204`**. Records **`PF-198`–`PF-204`** and **`TOOL-33`**. **See [the conditions](#s-e01-1d--the-seam-and-the-proof-that-has-never-run-green--ran-green-twice-at-land) below** |
+| **S-E01-1** | Explicit tenant resolution, `pending` state, remove the `demo` fallback — **plus the `app_user` connection cutover** | ⬜ **RE-SCOPED 2026-08-14, and now BEHIND `S-E01-1e`** — steps 1 partially taken by `S-E01-1a`; the GRANT half of step 3 is taken by `S-E01-1b` | — | `PF-01` half (a) is taken by `S-E01-1a`; what remains under this id is **steps 2–5** of [Next slice](#next-slice): the first real `withTenant` call site, the `DATABASE_URL` → `app_user` cutover with the missing GRANTs, the decision on the six FK-derived tables (`PF-183`, held PR #245), and the `ADR-032` §D3 one-line correction. The `pending` `UserStatus` is an **enum change** (`schema.prisma:31-35` has only `active|suspended|deleted`), so it carries `G-MIGRATION` and belongs here, not in `1a`. **This is still the slice that mints the first real tenant claim** — but note the *source* of that claim forks on `D-02` (`PF-185`) |
 | **S-E01-2** | RLS policies + real `withTenant` call sites + **parameterised GUC** | 🟡 **partial — the parameterisation third only** | 2026-08-11 | 57/57 jest in `apps/api/src/shared/prisma/prisma.service.spec.ts` (no DB, no `DATABASE_URL`, no generated client), `pnpm typecheck` 13/13 exit 0, `git diff --check` exit 0. Ships **`ADR-032`**; annotates `ADR-002`. Closes **`PF-02` half (b)**; **half (a) stays open**; records **`PF-179`**. See the section below |
 | **S-E01-2b** | The RLS half: 44 policies, the `nullif` NULL-context decision, the append-only grant split, and the `Prisma.TransactionClient` narrowing — **without** `FORCE` and **without** a call site, both on purpose | 🟡 **partial — the policy half, proven; not the cutover** | 2026-08-13 | `node scripts/rls-isolation-check.js` → **`RLS ISOLATION: PROVEN for the non-owner role`, exit 0** against the real local PostgreSQL (44/44 RLS enabled, 44/44 `tenant_isolation` policies, connected as `app_user` owning 0 tables without `BYPASSRLS`, positive control first, executed rollback). `pnpm typecheck` **13/13 exit 0**; `git diff --check` exit 0. **5 mutants injected into the migration, 5 killed.** Ships `ADR-032` §D5–§D8. **`PF-02` half (a) closes only PARTIALLY.** See the section below |
 | **S-E01-2c** | The tenant-**DERIVED** half: 5 FK-path `EXISTS` policies, a derived set computed from `pg_constraint` rather than listed, a per-table grant with **no `DELETE` anywhere**, and `outbox_event` deferred by name | 🟡 **partial — the five FK-derivable tables; `outbox_event` deferred, and still not the cutover** | 2026-08-13 | `apps/api/prisma/migrations/20260813180000_tenant_rls_derived_policies/migration.sql` (hand-reviewed, `schema.prisma` untouched so the `prisma generate` RED trap stays disarmed); `scripts/rls-isolation-check.js` extended from 44 to **44 + 5**, with `DERIVED_EXPECTED` derived from `pg_constraint` and an `AC-5b` **set-equality** residue check; `rls-isolation-gate.spec.ts` +450 lines. `pnpm typecheck` **13/13 exit 0** (`@pilotage/api` a genuine cache **miss** that compiled the new spec); `git diff --check` exit 0, extended by `--no-index` over the three untracked files. Ships **`ADR-042`** (extends `ADR-032`, supersedes nothing); annotates `ADR-032` in two places **in place**. Advances `PF-02` half (a); records **`PF-185`** (`outbox_event`) and **`PF-186`** (`ON DELETE CASCADE` vs append-only). **⚠️ The checker's own green is NOT established by this run's gate** — see the section below |
@@ -505,6 +518,16 @@ is only true of the tree it was measured on.**
    floor discipline. `readiness.prismaCallSites` is computed and printed but **never asserted**, so a regex that stops
    matching call sites degrades the denominator silently. Express `AC-9` as a **ratio with a floor**, or hard-pin it
    as a `[LIMIT]` only `S-E01-1` may discharge. Do not let it self-clear.
+
+   > **✅ Discharged, and the resolution is NOT the one this paragraph proposed.** Run 54 replaced the zero-threshold
+   > with a **wall** rather than a *ratio with a floor* — a floor is a knob, and a knob here is a bypass flag wearing a
+   > different hat (`DNC-10`). `S-E01-1d (b)` then fixed the remaining half of the sentence: the **unit**. The old input
+   > counted the string `.withTenant(`, i.e. scope OPENINGS, and four openings in `calendar.controller.ts` cover six
+   > call sites — so it under-reported by construction, which is why the text above reads
+   > `readiness.withTenantCallers === 0`. It is now `scopedCallSites` (sites **attributed** to a brace-matched callback
+   > range) `+ enumeratedCallSites` (sites named in `ENUMERATED_OUTSIDE_SCOPE`, **each with its reason**)
+   > `=== prismaCallSites`. Measured on 2026-08-15: **6 scoped + 113 enumerated / 794 across 226 files** — a truthful
+   > `[LIMIT]`, which is the deliverable; a green there would have been the finding. `ADR-048 §D6`.
 2. **Every could-not-run condition exits `2` (`not_isolated`), never `1` (`tooling_unavailable`).** Teardown and
    precondition problems call `fail()`, so they land in the same `failures` array as isolation breaches, and
    `report(failures.length === 0 ? 'isolated' : 'not_isolated')` then prints *"NOT PROVEN — cross-tenant access was
@@ -828,7 +851,169 @@ Annotations are inline below rather than deletions, so the reasoning stays reada
    > `Prisma` is imported with a `type` specifier so no client runtime enters the DB-free spec. Landed at zero call
    > sites, exactly as this obligation asked.
 
+## `S-E01-1d` — the seam, and the proof that ~~has never run green~~ **RAN GREEN TWICE AT LAND**
+
+**Delivered.** The cutover stops being an *event* and becomes a *seam*. `AppRolePrismaService` **composes**
+`PrismaService` (never extends it), is provided by the already-`@Global()` `PrismaModule`, and is injected in exactly
+one place — `TenantScopeService`. `calendar.module.ts` wires nothing new, so no module can reach the second client
+except through the seam; that is AC-4's structural proof and it is a grep, not an argument. `calendar.controller.ts`'s
+four handlers become the first production callers of a seam (`runWithTenant`, `TenantTransactionRunner`,
+`assertTenantId`) that already shipped with `S-E01-2b` — this slice invents no convention, it supplies the caller the
+seam never had.
+
+**Defence in depth, verified line by line, not assumed.** Every converted handler **keeps** its application filter and
+its guard. The GUC is transaction-local (`set_config(..., true)`), so nothing leaks onto a reused pooled connection.
+`list`'s parent branch was refactored (`scopeForUser` hoisted out of the scope) and is **semantically identical**:
+`studentIds === null` and `[]` both still land on `classSectionIds = []` → the `school_wide` fallback, so G-PORTAL
+parent visibility is preserved and no child's visibility widens.
+
+**`§D9` is the decision worth carrying forward.** Mapping `P2025 → NotFoundException` while *keeping* the application
+`if` closes an existence oracle that the hardening itself would otherwise have opened: a 500-vs-404 split would have
+distinguished "exists in another tenant" from "does not exist", which the pre-story code could not do. The general
+rule — **when a database refusal replaces an application refusal, the two must be indistinguishable from outside** —
+is the reusable part.
+
+**⚠️ Four conditions a human owns before this merges.** — **THREE WERE DISCHARGED AT LAND BY THE ROUTINE, 2026-08-15.
+Read the annotations under each; the text of each condition is left exactly as the sprint wrote it, because a
+condition that is silently deleted once satisfied teaches the next run nothing about why it existed.**
+
+> **This is the run-51 pattern paying out again, and it is the point of the split.** The sprint could not take these
+> measurements — agents never build (`GUARDRAILS §4`) and never run jest — so it did the honest thing: it wrote down
+> exactly what it had not proven, and set a *minimum bar* for whoever could. **The routine then took that bar
+> literally**, from the main checkout, and three of the four conditions fell. Condition 4 is a genuine P1 and is now a
+> traced finding rather than a paragraph.
+
+1. **`AC-1` is UNMET: the executed proof has never executed green.** `scripts/tenant-scope-check.js` drives the
+   **compiled** seam, agents never build (GUARDRAILS §4), and only its `DNC-08` refusal path has run — exit 1, naming
+   `pnpm build`, which is the correct refusal but is not the transcript `AC-1` asks for. Everything downstream of the
+   artefact guard has run **zero times**: the `INSERT` fixtures against the real DDL, the `P2025` from
+   `tx.calendarEvent.update`, `probe.privileges`' key shape, `appRoleVerdict` returning `enforcing`, the `PF-203`
+   arming check, and the **AC-4 teardown** — which is precisely the `TOOL-27`/`TOOL-31` hazard this repo has already
+   been bitten by twice. The stage is wired **blocking** into `ci-gate.sh --full` and `ci.yml` with no
+   `continue-on-error`, and it does DDL (`CREATE DATABASE`, `migrate deploy`, `CREATE ROLE`/`DROP ROLE`) on the
+   operator's live cluster. **Minimum bar:** `pnpm build`, then `node scripts/tenant-scope-check.js` **twice** (the
+   second run is what proves the teardown left the cluster clean), banner quoted; then out of band
+   `SELECT datname FROM pg_database WHERE datname LIKE 'tenant_scope_%'` → 0 rows and `app_user` in its pre-run state.
+   The alternative honest landing is to ship the script **without** the two gate wirings and carry the transcript in
+   the follow-up — but that is a decision about the gate's contract, so it belongs to the operator.
+
+   > ### ✅ DISCHARGED 2026-08-15 — the bar was met exactly as written, and the alternative landing was not needed.
+   >
+   > `pnpm --filter @pilotage/api build` → **exit 0**, verified by **artefact mtime** (`dist/main.js`,
+   > `dist/shared/prisma/tenant-scope.js`, `dist/shared/prisma/app-role-prisma.service.js` all rewritten at 11:16–11:17)
+   > rather than by an exit code. Then `node scripts/tenant-scope-check.js` **twice**, both **exit 0**:
+   >
+   > ```
+   > TENANT SCOPE: PROVEN — the compiled seam is refused by PostgreSQL for a non-owner role
+   >   ✓ AC-2.1 current_user (app_user) is NOT the table owner (pilotage) — true
+   >   ✓ AC-2.1 the role does NOT carry BYPASSRLS — false
+   >   ✓ AC-2.1 appRoleVerdict — the SAME function production boots on — qualifies this connection as ENFORCING
+   >   ✓ PF-203 ROW LEVEL SECURITY is ENABLED on public.calendar_event / public.enrollment — true, policies present
+   >   ✓ AC-2.2 POSITIVE CONTROL — tenant A READS / UPDATES (1 row) / CREATES its own calendar_event
+   >   ✓ AC-2.3 DENIAL — tenant B's calendar_event is INVISIBLE to findUnique BY PRIMARY KEY — null
+   >   ✓ AC-2.3 DENIAL — updateMany / deleteMany by primary key affect ZERO rows — 0 / 0
+   >   ✓ AC-2.3 DENIAL — a unique `update` RAISES, asserted on the Prisma error code — P2025
+   >   ✓ AC-2.3 …and tenant B's row is still there, UNCHANGED, read back by the OWNER
+   >   ✓ AC-2.4 NO-SCOPE CONTROL — the same client OUTSIDE any scope sees ZERO rows — 0
+   >   ✓ AC-4 the app_user client was disconnected DETERMINISTICALLY, before the drop
+   >   ✓ AC-4 no session remains attached to the scratch database (verified from a SEPARATE connection) — 0
+   > ```
+   >
+   > **Every path the condition listed as having run zero times has now run twice**: the `INSERT` fixtures against the
+   > real DDL, the `P2025` from `tx.calendarEvent.update`, `probe.privileges`' key shape, `appRoleVerdict` returning
+   > `enforcing`, the `PF-203` arming check, and the AC-4 teardown. **`TOOL-27`/`TOOL-31` did not recur** — the
+   > deterministic disconnect before the drop held on both runs, which is the specific thing the second run exists to
+   > prove.
+   >
+   > **Out-of-band verification, from a connection independent of the script that asserts its own cleanup:**
+   > `tenant_scope_%` → `(none)`; the wider pattern `^(tenant_scope|tenant_adv|rls_isolation|schema_drift|restore_drill)`
+   > → `(none)`; `app_user` in its pre-run state (`bypassrls=false login=true super=false`); and the live `pilotage`
+   > database **untouched** — `_prisma_migrations = 2`, `pg_policies = 0`, exactly as before the run.
+2. **`apps/api/.env.example` ships `DATABASE_URL_APP` UNCOMMENTED, and `ADR-048 §D5(2)`'s premise for that is
+   falsified by this repo's own migration.** §D5(2) keeps it declared on the reasoning that a fresh checkout applies
+   the full ledger and therefore lands in `enforced`. But `20260813120000_tenant_rls_policies` **never creates
+   `app_user`** — it guards every GRANT behind `has_app_user` and exits 0 with a `RAISE NOTICE` when the role is
+   absent. So `cp .env.example .env && prisma migrate deploy` on a clean cluster yields no `app_user` → `$connect()`
+   throws → `refused_unusable` → **503 on the calendar in all four portals**, on a module that works today. The
+   ledger already knows the answer and disagrees with itself: both `ADR-048`'s `PF-202` row and `OPEN.md` describe the
+   remedy as *"the **commented-out** `.env.example` entry"*. **Fix is one `#`, plus deleting the false premise clause
+   in §D5(2).** The refusal design itself is correct and must not be weakened.
+
+   > ### ✅ DISCHARGED 2026-08-15 — fixed exactly as prescribed, and not one character further.
+   > `apps/api/.env.example:71` now ships **commented out**, carrying the measured reason: the RLS migration guards
+   > every GRANT behind `has_app_user` and **never creates the role**, so `cp .env.example .env && prisma migrate
+   > deploy` on a clean cluster produces no `app_user`, `$connect()` throws, and the calendar 503s in all four portals
+   > — on a module that works today. Commented out, that same fresh checkout lands in `degraded_no_app_url`: the
+   > pre-story behaviour, named, gauge 0, nothing broken. `ADR-048 §D5(2)`'s false premise clause is corrected in
+   > place. **The refusal design is untouched** — the fix moves the *default*, never the *semantics*, which is what
+   > the condition asked for and the only version of this fix that is not `DNC-10`.
+3. **Two P1 security deferrals are justified by an acceptance criterion that was never written.** `ADR-048` and
+   `OPEN.md` both defer `PF-202`'s third remedy and `PF-203`'s runtime half on the grounds that
+   *"`S-E01-1d (b)` AC-14 forbids editing the seam this half"*. **There is no AC-14** —
+   [`stories/S-E01-1d-b.md`](./stories/S-E01-1d-b.md) ends at **AC-13** (verified: zero occurrences of `AC-14` in that
+   file). Either add AC-14 to the story, or the deferral has no basis and `PF-203`'s fourth failure family belongs in
+   `appRoleVerdict` now.
+
+   > ### ✅ DISCHARGED 2026-08-15 — the first branch was taken, because the constraint was real all along.
+   > **`AC-14` is now written** into [`stories/S-E01-1d-b.md`](./stories/S-E01-1d-b.md). It was the operating
+   > constraint from the first line of this half's brief — *"DO NOT re-implement it, DO NOT rewrite it, DO NOT
+   > 'improve' it"* — and the two deferrals were therefore **substantively justified and merely mis-cited**. Deleting
+   > them would have been the dishonest repair: it would have moved a P1 fix into the diff whose whole purpose is to
+   > prove the seam it would have edited.
+   >
+   > **And the AC is verified rather than asserted:** `git diff 6504887 --` over the six frozen files
+   > (`tenant-scope.ts`, `app-role-prisma.service.ts`, `tenant-scope.service.ts`, `prisma.module.ts`,
+   > `prisma.service.ts`, `calendar.controller.ts`) returns **zero hunks**, and the single permitted exception
+   > `tenant-scope.spec.ts` carries **+6/−1**, exactly the §3.3 edit. `PF-202`'s third remedy and `PF-203`'s runtime
+   > half stay **carried open with a named owner** — the next slice entitled to edit the seam.
+4. **A pre-existing hole the conversion argument walked past, and it reaches the parent portal.**
+   `calendar_event`'s scope FKs (`cycle`, `gradeLevel`, `classSection`, `academicYear`) are **mono-column**
+   (`schema.prisma:707-711`), and `createEvent`/`updateEvent` validate scope *coherence* but never *ownership*. RLS
+   does **not** close it: PostgreSQL's referential-integrity checks run outside row security, so `tenant_isolation`'s
+   `WITH CHECK` sees only `calendar_event.tenant_id` and a foreign `cycleId` inserts. On the
+   `degraded_no_app_url` path — i.e. **every deployment today** — the `include` at `calendar.controller.ts:242-246`
+   then renders **another tenant's** cycle/level/class name, and a `cycle_scope` event satisfies
+   `calendarVisibilityWhere`'s non-`class_section_scope` branch, so **every parent of tenant A sees it**. Pre-existing,
+   **not introduced here** — but this slice converted this module on a "relational closure" argument and missed it.
+   The fix is local and does not widen the slice: a `findFirst({ where: { id, tenantId } })` on each supplied id,
+   **inside the scope**, before the `create`, and the same on `update`.
+
+   > ### 🛑 NOT DISCHARGED — deliberately. It is now `PF-204` (P1), a traced finding with a named fix direction.
+   > **This is the one condition the routine did NOT take, and the reason is the same `AC-14` that justifies the other
+   > deferrals:** the fix edits `calendar.controller.ts`, which this half freezes. Smuggling a P1 tenancy fix into the
+   > diff that exists to *prove* the seam would corrupt the evidence — the transcript in condition 1 is only evidence
+   > about `6504887` because the subject did not move. **Recording it is the win available here**, and the finding is
+   > sharper than the paragraph was: it names the structural reason RLS cannot close it (PostgreSQL evaluates
+   > referential integrity **outside** row security, so `WITH CHECK` sees only `calendar_event.tenant_id` and a foreign
+   > `cycleId` inserts under a perfectly correct policy), and it names the portal the leak surfaces on. **It is
+   > pre-existing and inert-by-nobody's-design** — it reaches the parent portal on `degraded_no_app_url`, i.e. on every
+   > deployment today. It should be the first thing the next slice takes.
+
 ## Next slice
+
+> **⚠️ POINTER CORRECTED 2026-08-15 by `S-E01-1d (b)` — read this before the paragraphs below it.**
+>
+> **The pointer that stood here (`S-E01-1`, the whole cutover) was CONSUMED IN PART and is one slice out of date.**
+> `S-E01-1d` and `S-E01-1d (b)` landed the thing every paragraph below assumed did not exist yet: `withTenant` has
+> production callers, one module is converted, and the seam is **proven by execution** against PostgreSQL as a
+> non-owner role. `docs/daily-improvement-v3/NEXT.md` is stale in the same way — it recommends *"a first call site,
+> then a ratchet, then the flip"*; the first call site exists and the ratchet is the wall in
+> `tenant-adversarial-check.js`. Both are refuted by the gate's own docblock at `tenant-adversarial-check.js:1914`.
+>
+> **→ The next slice is `S-E01-1e` — convert a SECOND module, and settle the bootstrap allow-list (`PF-199`).**
+> It is the smallest step that moves 6 / 794 and it is the one that turns a per-module migration into a *pattern*: the
+> second module is where the seam's ergonomics are actually judged, and `PF-199` (identity resolution cannot sit inside
+> the scope it resolves) must be answered as a **named allow-list** before any module whose handlers touch the
+> identity seam can convert. `S-E01-1` — the global `DATABASE_URL` flip — stays **after** it and stays blocked on
+> `PF-185` (`register.controller.ts:365`) and `PF-197` (six raw-SQL sites).
+>
+> **Operator precondition, and it applies before either of them (`PF-202`, `ADR-048 §D5`):** the rollout order is
+> **apply the RLS ledger to a database, THEN declare `DATABASE_URL_APP` against it** — never the reverse. This
+> checkout's own `.env:19-20` is currently on the wrong side of that line: the live `pilotage` database has 2
+> migrations and 0 policies, so booting the API today puts the calendar module into `refused_unusable` and answers
+> **503 in all four portals**. Unsetting the variable returns it to `degraded_no_app_url` — working, honest, gauge 0.
+
+*(Historical, kept because the reasoning still holds where it is not superseded.)*
 
 **→ `S-E01-1` — the identity seam, and the connection cutover that makes the shipped policies protect the application
 instead of a test role.**

@@ -256,6 +256,36 @@ jobs:
       # step with scripts/ci-gate.sh stage 7 — the two must not drift
       # (S-E02-2 AC-4).
       - run: node scripts/boot-check.js
+      # TOOL-33 / S-E01-1d (b) — the tenant scope seam, PROVEN BY EXECUTION.
+      #
+      # ORDERING DEPENDENCY: it drives the COMPILED seam
+      # (apps/api/dist/shared/prisma/{prisma.service,tenant-scope,app-role-prisma.service}.js),
+      # so it must come after `prisma generate` and after `pnpm build` above —
+      # the same guarantee boot-check.js relies on, which is why it sits
+      # immediately after it here and immediately after the boot stage in
+      # scripts/ci-gate.sh.
+      #
+      # It is the only thing in the tree that runs a statement through the REAL
+      # seam and watches PostgreSQL refuse it. The adversarial check above proves
+      # the POLICIES deny for a non-owner role, but it sets the tenant GUC with a
+      # hand-written `SET`; this one lets `runWithTenant` set it, asserts the
+      # POSITIVE CONTROL first (own-tenant read, update and create all succeed)
+      # and only then the cross-tenant denial by primary key, on the Prisma error
+      # object and on returned row counts — never on a log line.
+      #
+      # It builds its own scratch database and applies the ledger with `prisma
+      # migrate deploy`; the live database is never touched. It creates `app_user`
+      # when the cluster has none, which is the case in this service container
+      # (roles are cluster state and the image ships none), and drops it again.
+      # The role must exist BEFORE the ledger is applied: the RLS migration guards
+      # its GRANTs behind `has_app_user` and exits 0 with a NOTICE when false.
+      #
+      # No continue-on-error: a check that cannot run is a failure, never a skip
+      # (DNC-08) — a missing dist/ or generated client exits 1 naming the command
+      # that produces it. Kept in step with scripts/ci-gate.sh stage
+      # "tenant scope (executed proof)" — the two must not drift (S-E02-2 AC-4).
+      # Decision record: docs/adr/ADR-048-tenant-scope-two-connections.md.
+      - run: node scripts/tenant-scope-check.js
       # The boot check cannot cover apps/web — Next.js has no module graph to
       # construct — so the third artefact of a three-artefact deployment had no
       # build-output assertion at all. Measured: with apps/web/.next deleted

@@ -94,11 +94,27 @@ const checker = require(CHECKER_PATH) as {
   TENANT_A: string;
   TENANT_B: string;
   UNCOVERED_EXPECTED: readonly string[];
+  // S-E01-1d (b) — `withTenantCallers` (occurrences of the string `.withTenant(`)
+  // became `scopedCallSites` (call sites ATTRIBUTED to a brace-matched scope
+  // callback), and `enumeratedCallSites` + `enumeratedOutsideScope` were added.
+  // The typed handle moves WITH the checker on purpose: a stale field name here
+  // is a TYPECHECK failure, not a silently passing spec.
   cutoverVerdict: (counts: {
     files: number;
-    withTenantCallers: number;
+    scopedCallSites: number;
+    enumeratedCallSites?: number;
     prismaCallSites: number;
-  }) => { kind: 'vacuous' | 'limit' | 'ok'; label: string; detail: string };
+    enumeratedOutsideScope?: ReadonlyArray<{ glob: string; reason?: unknown }>;
+  }) => { kind: 'vacuous' | 'limit' | 'ok' | 'unreasoned'; label: string; detail: string };
+  ENUMERATED_OUTSIDE_SCOPE: ReadonlyArray<{ glob: string; reason: string }>;
+  SCOPE_RECEIVERS: readonly string[];
+  globToRegExp: (glob: string) => RegExp;
+  matchingParen: (text: string, openIndex: number) => number;
+  scopeCallbackRanges: (text: string) => {
+    ranges: ReadonlyArray<{ start: number; end: number }>;
+    foreignScopeReceivers: Map<string, number>;
+    unbalanced: number;
+  };
   prismaModelName: (table: string) => string;
 };
 const sibling = require(SIBLING_PATH) as {
@@ -847,6 +863,158 @@ describe('AC-12 — le stage est CÂBLÉ dans `ci-gate.sh` ET dans `ci.yml`, qui
   });
 });
 
+/**
+ * TOOL-33 / S-E01-1d (b) — LE STAGE VOISIN, ET SA DÉPENDANCE D'ORDRE.
+ *
+ * `scripts/tenant-scope-check.js` est la PREUVE EXÉCUTÉE d'AC-2 : la seule chose
+ * de l'arbre qui fasse passer une instruction par la couture RÉELLE et regarde
+ * PostgreSQL la refuser. Elle pilote le seam COMPILÉ, donc elle ne peut tourner
+ * qu'APRÈS `prisma generate` et APRÈS `build` — la même garantie dont
+ * `boot-check.js` dépend déjà.
+ *
+ * C'est cette dépendance qui est épinglée ici, pas l'existence du fichier : un
+ * stage placé avant le build serait présent, câblé, et VACUEUSEMENT rouge (ou,
+ * pire, tenté d'être « réparé » par un skip). AC-9 de la story demande que
+ * l'ordre soit ÉNONCÉ là où le stage est créé ; ce `describe` vérifie qu'il l'est
+ * et qu'il est vrai.
+ */
+describe('TOOL-33 — la preuve exécutée est câblée APRÈS le build, dans les deux fichiers', () => {
+  const GATE_SH = lf(readFileSync(join(REPO_ROOT, 'scripts', 'ci-gate.sh'), 'utf8'));
+  const CI_YML = lf(readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'));
+  const SCOPE_CHECK = lf(readFileSync(join(REPO_ROOT, 'scripts', 'tenant-scope-check.js'), 'utf8'));
+  /**
+   * La moitié EXÉCUTABLE de la preuve.
+   *
+   * La distinction est load-bearing ici et pas une précaution : le fichier
+   * DÉCRIT, dans son en-tête, les choses qu'il refuse de faire — « ne pas
+   * “réparer” cela avec `GRANT pg_signal_backend TO pilotage` », « aucune branche
+   * sur `NODE_ENV` ». Une assertion négative sur le texte BRUT serait donc rouge
+   * à cause de l'avertissement lui-même, et la seule façon de la rendre verte
+   * serait de SUPPRIMER l'avertissement. Les négations portent sur le code, les
+   * affirmations sur le texte.
+   */
+  const SCOPE_CODE = executableJs(SCOPE_CHECK);
+  const stripComments = (source: string): string => source.replace(/^\s*#.*$/gm, '');
+
+  it('`ci-gate.sh` le lance, avec une borne NUMÉRIQUE (TOOL-06)', () => {
+    expect(stripComments(GATE_SH)).toMatch(
+      /run_stage\s+\d+\s+"tenant scope \(executed proof\)"\s+node\s+scripts\/tenant-scope-check\.js/,
+    );
+  });
+
+  it('il est APRÈS `build` et APRÈS `boot` — la dépendance d’ordre, mesurée et non racontée', () => {
+    const code = stripComments(GATE_SH);
+    const buildAt = code.indexOf('run_stage 1800 "build" pnpm build');
+    const bootAt = code.indexOf('node scripts/boot-check.js');
+    const scopeAt = code.indexOf('node scripts/tenant-scope-check.js');
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(bootAt).toBeGreaterThan(buildAt);
+    expect(scopeAt).toBeGreaterThan(bootAt);
+  });
+
+  it('la dépendance d’ordre est ÉNONCÉE dans un commentaire, là où le stage est créé', () => {
+    const created = GATE_SH.indexOf('run_stage 180 "tenant scope (executed proof)"');
+    expect(created).toBeGreaterThan(-1);
+    const comment = GATE_SH.slice(Math.max(0, created - 3200), created);
+    expect(comment).toContain('ORDERING DEPENDENCY');
+    expect(comment).toContain('prisma generate');
+    expect(comment).toContain('build');
+    // …et la note anti-dérive que chaque stage frère porte (S-E02-2 AC-4).
+    expect(comment).toContain('the two must not drift');
+    // …et la limite NOMMÉE : le tier 3 est `--full`, donc une PR en tier rapide
+    // rend `GATE: PASS` sans avoir jamais exécuté cette preuve. Une limite non
+    // écrite est une limite qu'on redécouvre en la prenant pour une garantie.
+    expect(comment).toContain('NAMED LIMIT');
+  });
+
+  it('AUCUNE branche `skip_stage` ne lui est offerte — il échoue ou il passe (DNC-08)', () => {
+    expect(stripComments(GATE_SH)).not.toMatch(/skip_stage\s+"tenant scope/);
+  });
+
+  it('`ci.yml` le lance AUSSI, après `boot-check.js`, sans `continue-on-error`', () => {
+    const yml = stripComments(CI_YML);
+    expect(yml).toContain('- run: node scripts/tenant-scope-check.js');
+    expect(yml.indexOf('- run: node scripts/tenant-scope-check.js')).toBeGreaterThan(
+      yml.indexOf('- run: node scripts/boot-check.js'),
+    );
+    expect(yml.indexOf('- run: node scripts/tenant-scope-check.js')).toBeGreaterThan(yml.indexOf('- run: pnpm build'));
+    const step = CI_YML.slice(CI_YML.indexOf('- run: node scripts/tenant-scope-check.js'));
+    expect(step.slice(0, 200)).not.toContain('continue-on-error');
+    const note = CI_YML.slice(Math.max(0, CI_YML.indexOf('- run: node scripts/tenant-scope-check.js') - 1600));
+    expect(note).toContain('the two must not drift');
+  });
+
+  it('le stage voisin `tenant adversarial` se déclenche aussi sur le NOUVEAU fichier', () => {
+    // Sans cette alternative, un diff qui ne touche QUE le nouveau vérificateur
+    // saute le stage que son édition est la plus susceptible de déplacer.
+    expect(stripComments(GATE_SH)).toContain('scripts/tenant-scope-check\\.js');
+  });
+
+  it('le chemin « artefact manquant » ÉCHOUE en nommant la commande qui le produit (DNC-08)', () => {
+    // Copié de `boot-check.js:147-152` : un build absent n'est pas un skip, c'est
+    // l'état dans lequel tout le reste passerait vacueusement.
+    expect(SCOPE_CHECK).toContain('pnpm build');
+    expect(SCOPE_CHECK).toContain('pnpm --filter @pilotage/api exec prisma generate');
+    expect(SCOPE_CHECK).toContain('NOT a skip');
+    // …et il n'y a AUCUN drapeau, AUCUNE branche NODE_ENV, AUCUNE variable
+    // d'échappement capable de transformer un refus en passage (DNC-10).
+    // Assertions sur le CODE : l'en-tête NOMME ces interdits, et une négation sur
+    // le texte brut serait rouge à cause de l'avertissement lui-même.
+    expect(SCOPE_CODE).not.toMatch(/process\.env\.(ALLOW|SKIP)_/);
+    expect(SCOPE_CODE).not.toContain('NODE_ENV');
+    // …et surtout PAS le « correctif » qui achèterait un teardown vert au prix
+    // d'une escalade de privilège permanente sur le rôle même que la bascule vise
+    // (TOOL-27). L'avertissement, lui, DOIT rester dans la prose.
+    expect(SCOPE_CODE).not.toMatch(/GRANT\s+pg_signal_backend/i);
+    expect(SCOPE_CODE).not.toMatch(/GRANT\s+\w+\s+TO\s+/i);
+    expect(SCOPE_CODE).not.toMatch(/\bSUPERUSER\b/);
+    expect(SCOPE_CODE).not.toMatch(/ALTER\s+ROLE/i);
+    expect(SCOPE_CHECK).toContain('KNOWN HAZARD — TOOL-27, DO NOT REINTRODUCE IT');
+    expect(SCOPE_CHECK).toContain('GRANT pg_signal_backend');
+  });
+
+  it('la preuve ne peut détruire qu’un nom qu’elle a elle-même généré (AC-3)', () => {
+    expect(checkerScopePattern().test('tenant_scope_123_1700000000000')).toBe(true);
+    expect(checkerScopePattern().test('pilotage')).toBe(false);
+    expect(SCOPE_CHECK).toContain('refusing to use');
+    // Le client `app_user` est déconnecté AVANT le drop, et l'absence de session
+    // est vérifiée depuis une AUTRE connexion — TOOL-27 fermé par construction et
+    // non par un retry privilégié.
+    expect(SCOPE_CHECK).toContain('$disconnect()');
+    expect(SCOPE_CHECK).toContain('pg_stat_activity');
+    expect(SCOPE_CHECK).toContain('pg_database WHERE datname');
+  });
+
+  it('l’ORDRE d’AC-2 est celui du fichier : identité, puis contrôle POSITIF, puis déni', () => {
+    // L'ordre est la preuve. Un déni mesuré avant le contrôle positif est vert
+    // sur un rôle qui n'aurait de toute façon rien pu lire — `app_user` ne
+    // détenait AUCUN privilège avant S-E01-2b.
+    const whoAmI = SCOPE_CHECK.indexOf('AC-2.1 current_user is readable');
+    const positive = SCOPE_CHECK.indexOf('AC-2.2 POSITIVE CONTROL — tenant A READS');
+    const denial = SCOPE_CHECK.indexOf('AC-2.3 DENIAL — tenant B');
+    const cleanup = SCOPE_CHECK.indexOf('AC-4 the app_user client was disconnected');
+    expect(whoAmI).toBeGreaterThan(-1);
+    expect(positive).toBeGreaterThan(whoAmI);
+    expect(denial).toBeGreaterThan(positive);
+    expect(cleanup).toBeGreaterThan(denial);
+    // Le propriétaire est lu au CATALOGUE, jamais écrit en dur.
+    expect(SCOPE_CHECK).toContain('read from the CATALOG');
+    // L'assertion porte sur le code d'erreur Prisma, jamais sur une ligne de log.
+    expect(SCOPE_CHECK).toContain("'P2025'");
+  });
+
+  function checkerScopePattern(): RegExp {
+    // `require`, jamais `import` : le fichier est du CommonJS hors du tsconfig de
+    // l'application, et son `main()` est derrière `require.main === module` — le
+    // charger ne crée donc AUCUNE base de données. La règle
+    // `no-require-imports` est déjà désactivée pour ce fichier plus haut.
+    const proof = require(join(REPO_ROOT, 'scripts', 'tenant-scope-check.js')) as {
+      SCRATCH_NAME_PATTERN: RegExp;
+    };
+    return proof.SCRATCH_NAME_PATTERN;
+  }
+});
+
 describe('Règle ADR — une citation qui ne résout pas est pire que pas de citation', () => {
   const ADR_DIR = join(REPO_ROOT, 'docs', 'adr');
   const ADR_NUMBERS = new Set(
@@ -919,33 +1087,234 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
    * le cas « partiel » est celui qu'elle déclarait vert.
    */
   describe('AC-9 — la lecture « prêt à basculer » ne peut pas devenir verte sur une couverture partielle', () => {
-    it('zéro appelant reste une LIMITE', () => {
-      const v = checker.cutoverVerdict({ files: 223, withTenantCallers: 0, prismaCallSites: 722 });
+    it('zéro site couvert reste une LIMITE', () => {
+      const v = checker.cutoverVerdict({ files: 223, scopedCallSites: 0, prismaCallSites: 722 });
       expect(v.kind).toBe('limit');
-      expect(v.label).toContain('ZERO production callers');
+      expect(v.label).toContain('ZERO production Prisma call sites');
       expect(v.detail).toContain('NOT READY TO CUT OVER');
     });
 
-    it('UN appelant sur 722 reste une LIMITE — la régression que ce correctif ferme', () => {
-      const v = checker.cutoverVerdict({ files: 223, withTenantCallers: 1, prismaCallSites: 722 });
+    it('UN site couvert sur 722 reste une LIMITE — la régression que ce correctif ferme', () => {
+      // Le cas qui compte le plus, réécrit dans la NOUVELLE unité : la première
+      // rédaction testait `withTenantCallers === 0`, donc un seul appelant sur
+      // 722 faisait passer la ligne « prêt à basculer » au vert affirmatif alors
+      // que 721 sites ne posent aucun GUC. Changer l'unité ne doit pas rouvrir
+      // cette porte : `scopedCallSites: 1` reste une LIMITE.
+      const v = checker.cutoverVerdict({ files: 223, scopedCallSites: 1, prismaCallSites: 722 });
       expect(v.kind).toBe('limit');
       expect(v.kind).not.toBe('ok');
-      expect(v.label).toContain('PARTIAL');
+      expect(v.label).toContain('only PART of the corpus');
       // Le nombre de sites NON couverts est nommé, pas seulement celui des couverts.
       expect(v.detail).toContain('721');
       expect(v.detail).toContain('NOT READY TO CUT OVER');
     });
 
     it('la couverture COMPLÈTE est la seule qui autorise le vert affirmatif', () => {
-      const v = checker.cutoverVerdict({ files: 223, withTenantCallers: 722, prismaCallSites: 722 });
+      const v = checker.cutoverVerdict({ files: 223, scopedCallSites: 722, prismaCallSites: 722 });
       expect(v.kind).toBe('ok');
       expect(v.label).toContain('every production Prisma call site');
     });
 
+    it('l’ÉNUMÉRATION compte dans le mur, mais seulement avec sa raison', () => {
+      // Le mur est `scoped + enumerated === total`. Une énumération LÉGITIME —
+      // chaque entrée porte sa raison — a le droit de le fermer.
+      const v = checker.cutoverVerdict({
+        files: 223,
+        scopedCallSites: 600,
+        enumeratedCallSites: 122,
+        prismaCallSites: 722,
+        enumeratedOutsideScope: [{ glob: 'apps/worker/src/**', reason: 'le worker n’a pas de tenant de requête' }],
+      });
+      expect(v.kind).toBe('ok');
+      expect(v.detail).toContain('600 scoped + 122 enumerated === 722');
+    });
+
+    /**
+     * LE MUTANT « VERT FABRIQUÉ » — le cas que cette story ajoute, et le seul de
+     * ce `describe` qui décrit une ATTAQUE plutôt qu'un état du corpus.
+     *
+     * Il y a deux façons d'atteindre la branche affirmative : convertir des sites
+     * d'appel, ou ÉLARGIR l'énumération. La seconde est gratuite, invisible dans
+     * un résumé de diff, et produit exactement le vert qu'un relecteur cherche.
+     * L'énumération est une liste de RAISONS ; une entrée sans raison ferme
+     * l'écart sans rien couvrir.
+     *
+     * OBSERVÉ ROUGE AVANT D'ÊTRE OBSERVÉ VERT : exécuté contre le `cutoverVerdict`
+     * NON durci (celui qui ne connaît que `files/scoped/prisma` et ignore
+     * `enumeratedOutsideScope`), ce cas rendait `kind === 'ok'` — le vert
+     * fabriqué — et l'assertion échouait. Une assertion qui n'a jamais été rouge
+     * ne prouve rien.
+     */
+    it('MUTANT — une énumération GONFLÉE sans raison ne peut PAS rendre le verdict affirmatif', () => {
+      const v = checker.cutoverVerdict({
+        files: 223,
+        scopedCallSites: 1,
+        // Gonflé pour fermer exactement l'écart, sans qu'un seul site ait été couvert.
+        enumeratedCallSites: 721,
+        prismaCallSites: 722,
+        enumeratedOutsideScope: [{ glob: 'apps/api/src/**' }],
+      });
+      expect(v.kind).not.toBe('ok');
+      expect(v.kind).toBe('unreasoned');
+      expect(v.label).toContain('carries a reason for every entry');
+      expect(v.detail).toContain('"Not converted yet" is not a reason');
+    });
+
+    it('MUTANT — une raison VIDE ne vaut pas mieux qu’une raison absente', () => {
+      const v = checker.cutoverVerdict({
+        files: 223,
+        scopedCallSites: 1,
+        enumeratedCallSites: 721,
+        prismaCallSites: 722,
+        enumeratedOutsideScope: [{ glob: 'apps/api/src/**', reason: '   ' }],
+      });
+      expect(v.kind).toBe('unreasoned');
+    });
+
+    it('une arithmétique IMPOSSIBLE (scoped + enumerated > total) n’est jamais un vert', () => {
+      const v = checker.cutoverVerdict({
+        files: 223,
+        scopedCallSites: 700,
+        enumeratedCallSites: 100,
+        prismaCallSites: 722,
+        enumeratedOutsideScope: [{ glob: 'apps/worker/src/**', reason: 'une raison' }],
+      });
+      expect(v.kind).not.toBe('ok');
+      expect(v.kind).toBe('unreasoned');
+      expect(v.detail).toContain('EXCEEDS');
+    });
+
     it('une lecture de sources vide reste un ÉCHEC, jamais une limite tolérée (DNC-08)', () => {
-      const v = checker.cutoverVerdict({ files: 0, withTenantCallers: 0, prismaCallSites: 0 });
+      const v = checker.cutoverVerdict({ files: 0, scopedCallSites: 0, prismaCallSites: 0 });
       expect(v.kind).toBe('vacuous');
       expect(v.detail).toContain('vacuous');
+    });
+
+    it('la constante d’énumération EN SOURCE porte une raison pour CHAQUE entrée', () => {
+      expect(checker.ENUMERATED_OUTSIDE_SCOPE.length).toBeGreaterThan(0);
+      for (const entry of checker.ENUMERATED_OUTSIDE_SCOPE) {
+        expect(typeof entry.glob).toBe('string');
+        expect(entry.glob.length).toBeGreaterThan(0);
+        expect(typeof entry.reason).toBe('string');
+        // Une raison d'une poignée de caractères est une case cochée, pas une raison.
+        expect(entry.reason.trim().length).toBeGreaterThan(30);
+        // « pas encore converti » N'EST PAS une raison : cela appartient au
+        // compte des sites NON couverts, jamais à l'énumération.
+        expect(entry.reason.toLowerCase()).not.toContain('not converted');
+        expect(entry.reason.toLowerCase()).not.toContain('pas encore');
+        expect(entry.reason.toLowerCase()).not.toContain('todo');
+      }
+    });
+  });
+
+  /**
+   * S-E01-1d (b) — L'ATTRIBUTION, pilotée sur des sources SYNTHÉTIQUES.
+   *
+   * Le compteur est passé de « combien de fois la chaîne `.withTenant(`
+   * apparaît » à « combien de sites d'appel Prisma sont DANS une portée », par
+   * appariement de parenthèses. La technique a deux modes de défaillance et un
+   * seul est bruyant :
+   *
+   *   • une `)` dans une chaîne ferme la plage TROP TÔT → sous-report, visible ;
+   *   • une `(` dans une chaîne, une regex ou un commentaire ne ferme JAMAIS →
+   *     la plage court jusqu'à la fin du fichier et **tous les sites restants du
+   *     fichier comptent COUVERTS**. C'est un vert fabriqué exprimé en nombre,
+   *     que personne ne relit.
+   *
+   * Les cas ci-dessous exercent exactement ces bords, sans base et sans scan du
+   * dépôt — un appariement qui n'est éprouvé que par le corpus réel est un
+   * appariement dont les branches pathologiques ne sont jamais testées.
+   */
+  describe('AC-9 — l’attribution par appariement de parenthèses tient sur les sources pathologiques', () => {
+    const rangesOf = (source: string) => checker.scopeCallbackRanges(source);
+    const coveredCount = (source: string): number => {
+      const { ranges, unbalanced } = rangesOf(source);
+      if (unbalanced > 0) return 0;
+      let covered = 0;
+      const re = /(?<![.\w])(?:prisma|this\.prisma|tx)\.([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z][A-Za-z0-9_]*)/g;
+      for (const match of source.matchAll(re)) {
+        const at = match.index;
+        if (at === undefined) continue;
+        if (ranges.some((r) => at > r.start && at < r.end)) covered += 1;
+      }
+      return covered;
+    };
+
+    it('une `)` DANS UNE CHAÎNE ne ferme pas la plage trop tôt', () => {
+      const source =
+        "this.scope.run(id, async (tx) => { logger.log('a ) b'); await tx.calendarEvent.findMany(); });";
+      expect(coveredCount(source)).toBe(1);
+    });
+
+    it('une `(` DANS UNE REGEX ne fait pas courir la plage jusqu’à la fin du fichier', () => {
+      const source =
+        'this.scope.run(id, async (tx) => { const re = /\\(/; await tx.calendarEvent.findMany(); });\n' +
+        'await this.prisma.grade.findMany();';
+      // Le site HORS portée, après le `});`, ne doit PAS être attribué.
+      expect(coveredCount(source)).toBe(1);
+    });
+
+    it('une `(` DANS UN COMMENTAIRE ne fait pas courir la plage non plus', () => {
+      const source =
+        'this.scope.run(id, async (tx) => { // (\n  await tx.calendarEvent.findMany();\n});\n' +
+        'await this.prisma.grade.findMany();';
+      expect(coveredCount(source)).toBe(1);
+    });
+
+    it('une `(` dans un littéral de gabarit, substitutions comprises, ne désynchronise pas', () => {
+      const source =
+        'this.scope.run(id, async (tx) => { log(`x ( ${fn({ a: 1 })} y`); await tx.calendarEvent.findMany(); });\n' +
+        'await this.prisma.grade.findMany();';
+      expect(coveredCount(source)).toBe(1);
+    });
+
+    it('un rappel qui NE FERME PAS est REMONTÉ, et ses sites comptent NON COUVERTS (fail-closed)', () => {
+      // La direction dangereuse : sous-reporter une couverture est une limite,
+      // sur-reporter est un mensonge. `unbalanced` force la seconde à devenir la
+      // première.
+      const source = 'this.scope.run(id, async (tx) => { await tx.calendarEvent.findMany();';
+      expect(rangesOf(source).unbalanced).toBe(1);
+      expect(coveredCount(source)).toBe(0);
+    });
+
+    it('un `.run(` ÉTRANGER n’ouvre pas de portée — il est REMONTÉ', () => {
+      // MESURÉ sur ce dépôt : `store.run(` dans `tenant-scope.ts:89` est le seul
+      // `.run(` hors du jeu aujourd'hui. Demain, un
+      // `this.queue.run(async () => { await this.prisma.x.findMany() })`
+      // fabriquerait de la couverture sur la connexion du PROPRIÉTAIRE.
+      const source = 'somethingElse.run(async () => { await prisma.calendarEvent.findMany(); });';
+      const result = rangesOf(source);
+      expect(result.ranges.length).toBe(0);
+      expect([...result.foreignScopeReceivers.keys()]).toEqual(['somethingElse.run']);
+      expect(coveredCount(source)).toBe(0);
+    });
+
+    it('le jeu des récepteurs qui OUVRENT une portée est une constante nommée et FERMÉE', () => {
+      expect([...checker.SCOPE_RECEIVERS].sort()).toEqual([
+        'scope',
+        'tenantScope',
+        'this.scope',
+        'this.tenantScope',
+      ]);
+      expect(CHECKER_CODE).toContain('SCOPE_RECEIVERS.includes(receiver)');
+      expect(CHECKER_CODE).toContain('foreignScopeReceivers');
+    });
+
+    it('`withTenant` ouvre une portée quel que soit son récepteur — c’est la méthode de PrismaService', () => {
+      const source = 'this.prisma.withTenant(id, async (tx) => { await tx.calendarEvent.findMany(); });';
+      expect(coveredCount(source)).toBe(1);
+    });
+
+    it('`matchingParen` rend -1 plutôt qu’une supposition quand rien ne ferme', () => {
+      expect(checker.matchingParen('f(a, b)', 1)).toBe(6);
+      expect(checker.matchingParen('f(a, (b)', 1)).toBe(-1);
+      expect(checker.matchingParen("f('(')", 1)).toBe(5);
+    });
+
+    it('`**` traverse les séparateurs, `*` non, et un `.` reste un `.`', () => {
+      expect(checker.globToRegExp('apps/worker/src/**').test('apps/worker/src/a/b/c.ts')).toBe(true);
+      expect(checker.globToRegExp('apps/api/src/*.ts').test('apps/api/src/a/b.ts')).toBe(false);
+      expect(checker.globToRegExp('apps/api/src/main.ts').test('apps/api/src/mainXts')).toBe(false);
     });
   });
 
@@ -1041,8 +1410,27 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
       // « quelle proportion des sites pose le GUC » et « ce verbe a-t-il son
       // privilège » sont deux questions, et fusionner les deux réponses est la
       // façon dont l'une masque l'autre.
-      expect(CHECKER_CODE).toContain('uncovered > 0');
-      expect(CHECKER_CODE).toContain('withTenantCallers === 0');
+      //
+      // S-E01-1d (b) — CES DEUX ÉPINGLES ONT CHANGÉ DE CIBLE, ET C'EST LE POINT.
+      // Elles épinglaient le texte `uncovered > 0` et `withTenantCallers === 0`,
+      // c'est-à-dire l'ANCIENNE unité ; elles cassaient donc mécaniquement le
+      // jour où le compteur devenait juste. Ce qu'il faut épingler n'est pas le
+      // nom du compteur mais **le MUR** : la branche affirmative n'existe que
+      // pour l'ÉGALITÉ `scoped + enumerated === total`. Une épingle sur le mur
+      // échoue encore si quelqu'un réintroduit un SEUIL RÉGLABLE (`>= floor`,
+      // `ratio > 0.9`, un `MIN_*` de couverture) — ce que l'ancienne rédaction ne
+      // faisait plus dès qu'on renommait la variable.
+      expect(CHECKER_CODE).toContain('const uncovered = prismaCallSites - scopedCallSites - enumeratedCallSites');
+      expect(CHECKER_CODE).toContain('if (uncovered !== 0)');
+      // …et la branche affirmative reste la SEULE à mener à `kind: 'ok'`.
+      expect(CHECKER_CODE).toContain("kind: 'ok'");
+      // Le mur est une ÉGALITÉ, jamais un plancher : aucun seuil de couverture
+      // réglable n'a le droit d'exister dans ce fichier (DNC-10).
+      expect(CHECKER_CODE).not.toMatch(/scopedCallSites\s*[><]=?/);
+      expect(CHECKER_CODE).not.toMatch(/MIN_(?:SCOPED|COVERAGE|COVERED_CALL)/);
+      // Le consommateur mappe FAIL-CLOSED : seul `ok` atteint `record`.
+      expect(CHECKER_CODE).toContain("if (verdict.kind === 'ok') record(");
+      expect(CHECKER_CODE).toContain('else fail(verdict.label, verdict.detail)');
     });
 
     it('AC-10 porte son propre fail-before / pass-after sur `role` et `role_permission`', () => {

@@ -459,7 +459,12 @@ describe('cliquets de source de la couture', () => {
     const reads: string[] = [];
     for (const name of SEAM) {
       for (const match of stripComments(sourceOf(name)).matchAll(/process\.env\.([A-Z0-9_]+)/g)) {
-        reads.push(match[1]);
+        // Le groupe capturant est obligatoire dans la regex, donc `undefined`
+        // est inatteignable ici ; sous `noUncheckedIndexedAccess` le type le
+        // dit quand même. On garde le test plutôt qu'une assertion `!` : si la
+        // regex change un jour, le cliquet se tait au lieu de pousser `undefined`.
+        const read = match[1];
+        if (read !== undefined) reads.push(read);
       }
     }
     expect(reads).toEqual(['DATABASE_URL_APP']);
