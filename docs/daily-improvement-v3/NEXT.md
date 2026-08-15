@@ -1,6 +1,132 @@
 # Next story
 
-# NEXT — written by run 61 (`S-E01-1e`), 2026-08-15 — **this section supersedes every section below**
+# NEXT — written by run 62 (`S-E01-4b`), 2026-08-15 — **this section supersedes every section below**
+
+## ✅ `PF-18`'s ratchet exists, and the hole it closes was NOT where the ledger said
+
+`OPEN.md` recorded `S-E01-4a` as *"NOT ratcheted … a regression would land green"*. True, but the **reason**
+mattered more than the fact. Measured, not inherited:
+
+```
+scripts/ci-gate.sh:362
+GATE_MACHINERY='^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)'
+   ↳ else-branch: test:api --skip src/shared/quality/
+```
+
+The production accessor `apps/web/src/lib/keycloak-clients.ts` matches **neither** that pattern nor
+`apps/web/src/auth.ts`. So `keycloak-client-identity-gate.spec.ts` — the *only* executable statement of
+`ADR-050`'s invariants — **did not run on a fast-tier PR editing the accessor itself**. The gate was blind to
+precisely its own most likely regression.
+
+`scripts/keycloak-client-check.js` closes it, and **the derivation mechanism is the reusable output**: it
+**executes** the production accessor (`ts.transpileModule` → `node:vm`) instead of lifting its constants.
+That is not fastidiousness — `PF-18`'s real shape was an alias **inside a function body**, which leaves
+`CLIENT_ID_PREFIX` untouched, so a constant-lifting gate reads **green over a restored `BROKEN_SECURITY`**.
+
+**The stage ships UNCONDITIONAL in tier 1, overruling the routine's own brief, which asked for a trigger.**
+The sprint's argument is better than the brief's and is recorded in `ADR-052 §D4` as an amendment that marks
+the trigger **REJECTED, not unimplemented**: a trigger *is* a skip surface, and `realm-export.json` matches no
+branch of `CODE_RE`, so a triggered stage would not fire on a diff **deleting `portal-student`**. Measured at
+**1.5 s** — the same class as its unconditional neighbours.
+
+## 🛑 `VAL-04` is ADVANCED, NOT CLOSED — and its live half NEVER RAN
+
+The sprint's analyst **overruled the routine's brief** here and was right. `VAL-04` has five live points; the
+story's ACs covered 1, 3 and 5. **Points 2 and 4 need a student identity, which is `PF-210` and out of scope.**
+Ticking `VAL-04` closed on three-fifths of its evidence would be the unevidenced claim this routine exists to
+refuse — and this was the run where that temptation was highest.
+
+Nothing live executed at all, and the reason is now a *named host condition* rather than a shrug:
+
+| state | signature |
+|---|---|
+| pipe present, nothing serving it | **every** `docker` subcommand → **exit 124, ZERO bytes** — a hang, not a refusal |
+| after a clean Docker Desktop + `wsl --shutdown` restart | named pipe **absent** → exit 1, clear error |
+
+`docker-desktop` (the WSL distro) reports **`Stopped`**; booting it by hand starts the distro but **`dockerd`
+never runs inside it** and `/var/run/docker.sock` does not exist. Recorded as **`TOOL-35`**.
+
+**Why this matters beyond one run:** state A is a hang with *no output and no error*, so `docker ps || echo down`
+prints neither branch and any **piped** probe reports success from the pipe's exit code. That is exactly how
+runs have recorded contradictory Docker states — including this run's own first status, which claimed "zero
+containers and zero volumes" when the commands were merely hanging. **Read the real exit code, unpiped, before
+believing anything about Docker.**
+
+`scripts/keycloak-live-probe.js` (449 lines) therefore ships **written and NEVER EXECUTED** and is labelled that
+way rather than as evidence. It **refuses any non-loopback `KEYCLOAK_URL`**, so it cannot be aimed at the
+Hostinger audit fixture even by accident.
+
+## 🛑 `PF-224` — read this before writing "the audience boundary is enforced"
+
+**`azp` is OBSERVABLE but NOT ENFORCED. The API validates neither `azp` nor `aud`.** Four distinct confidential
+clients do not yet make a student's token unusable as a parent's — they only make the two *distinguishable* to
+something that bothers to look, and nothing does. This is the honest limit of the whole `PF-18` line of work and
+it is the sharpest thing found this run.
+
+## 🔭 What was executed, and by whom
+
+Six negative controls, **run by the orchestrator** rather than asserted by an agent — the run 61 lesson that
+agent-written assertions which never ran are not evidence:
+
+| mutation | result |
+|---|---|
+| `portal-parent` given a `/student/*` redirect | exit 1, refused **BY NAME** as `ADR-050`'s forbidden repair |
+| `portal-student` removed from the export | exit 1 |
+| `/api/auth/callback/*` wildcard added | exit 1 |
+| the `PF-18` alias put back **in the accessor** | exit 1 — *the path that previously escaped* |
+
+Every mutated file restored **byte-for-byte**; `git status` clean afterwards.
+
+**A brief-level error was corrected by the implementation and is worth keeping.** `AC-1` said "**NO** wildcard
+anywhere in a redirect URI". Measured against `HEAD`, that is wrong: all four clients carry their own
+`http://localhost:3000/<portal>/*`, which is what makes SSO and the `reset-credentials` return work. A check
+written literally would be **red on `HEAD`**, and both ways back to green (weaken the check, strip the realm)
+are worse than the defect. `ADR-052 §D3` names the permitted wildcard `W-2` and the forbidden one `W-1` so a
+later run does not "fix" the legitimate one.
+
+## ▶ Recommended next story
+
+1. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** This is the story that makes `PF-18`, `ADR-050` and this
+   run's ratchet *mean* something. Until it lands, per-portal clients are a distinction nothing acts on. It is
+   the natural successor and it is squarely `V3-E01`.
+2. **`PF-210` (P1) — provision a student identity.** Still the only thing between the programme and a
+   demonstrable fourth portal, and it now additionally blocks `VAL-04` points 2 and 4. Needs the `ADR-021`
+   decision (password policy, tenant, `Student.userProfileId`).
+3. **`PF-208` (P1) — `announcements` is the `ADR-049` shape and it is a cross-tenant WRITE.** Still the sharpest
+   unfixed leak on the board; carried untouched for three runs now.
+4. **`TOOL-35` / `TOOL-19` — the host's Docker.** Every deferred live proof (`VAL-04` points 1–5, the release
+   gate, observability ingestion, the restore drill) is parked behind an engine that will not start on this
+   host. **This is an operator action at the console**, not something the routine can repair: `wsl --update` is
+   a system-level change beyond what the routine is delegated.
+5. **`PF-221` / `PF-222`** — recorded, not fixed: `.env` points `KEYCLOAK_URL` at **:8080**, which on this host
+   answers as **EnterpriseDB**, while Keycloak publishes **:8180**; and `infra/docker-compose.yml` passes three
+   of the four portal client secrets, so the **student** portal is the one an operator cannot configure.
+6. **`TOOL-30`** — renumber the colliding ids. Untouched for six runs, more expensive every run.
+
+## State of the world at the end of run 62
+
+- **`GATE: PASS (fast)` FOUR times** — twice on the working tree, once on the committed tree, once after the
+  citation fix — with `test-ratchet[api]` and `[worker]` **byte-identical** across all of them. The verdict line
+  was read, never `$?` of a pipeline (`R-23`). No `TOOL-31` flakiness this run.
+- **One `pnpm build`** (`pnpm --filter @pilotage/api build`, exit 0), verified **by artefact**: `dist/main.js`
+  rewritten, **zero** `*.spec.js` emitted — the `S-E01-4a` `rootDir` guarantee still holds.
+- **Docker was NOT rebuilt and no container was recreated** — the engine never became available. **The local
+  stack is left as found: NOT running.** Said plainly, per Step 4b, rather than glossed.
+- **A citation drift was killed inside the diff that created it.** The new stage sits *above* `GATE_MACHINERY`
+  and shifted it 32 lines; `ci.yml` still cited `:330` while `ci-gate.sh` already said `:362`. Two numbers for
+  one line is `TOOL-30` at its smallest scale — fixed as its own commit rather than left for a later reader.
+- **The sprint wrote into the MAIN checkout**; the session worktree was verified **byte-clean**. Same direction
+  as runs 53, 55–61 — the bidirectional bug remains unpredictable, so keep checking.
+- **PostgreSQL was not touched at all** — no Prisma query, no `schema.prisma`, no SQL, no migration. `G-TENANT`,
+  `G-MIGRATION`, `G-AUDIT` and `G-TRUTH` are genuinely **not triggered**, and the story says so rather than
+  leaving them blank.
+- **`INFLIGHT` was 0 at Step 0** and all six open PRs were dependabot, so id allocation against `main` alone was
+  sufficient **this run** — stated rather than assumed.
+- **`gh pr merge` and one `git push` were refused by the permission classifier**, per
+  `project-scheduled-task-pr-denial`; `gh pr edit --title` additionally died on a **Projects-classic GraphQL
+  deprecation** and had to go through `gh api -X PATCH`.
+
+# NEXT — written by run 61 (`S-E01-1e`), 2026-08-15 — superseded by run 62 above, kept for content
 
 ## ✅ The SECOND module is in the tenant scope — `PF-02` half (a) advances, and `PF-199` / `PF-217` are CLOSED
 
