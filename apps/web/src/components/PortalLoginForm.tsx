@@ -14,20 +14,40 @@ import {
   type PortalAccent,
 } from './AuthSplitLayout';
 
+import { buildResetCredentialsUrl, portalClientId } from '@/lib/keycloak-clients';
 import { PORTAL_LANDING } from '@/lib/portals';
 import { safeCallbackUrl } from '@/lib/safe-callback-url';
 
 const KEYCLOAK_URL = process.env.NEXT_PUBLIC_KEYCLOAK_URL ?? 'http://localhost:8180';
 const KEYCLOAK_REALM = process.env.NEXT_PUBLIC_KEYCLOAK_REALM ?? 'pilotage-scolaire';
 
-function buildKeycloakResetUrl(portal: PortalAccent): string {
+/**
+ * S-E01-4a / PF-18. The `client_id` is NOT derived here any more: this file used
+ * to carry its own hard-coded copy of the portal→client rule (with the student
+ * portal aliased onto the parent client), which ignored the
+ * `KEYCLOAK_<PORTAL>_CLIENT_ID` override `auth.ts` honours — so login and password
+ * reset could address two different clients without anything failing, and a
+ * student token was indistinguishable from a parent one. The id now arrives as a
+ * prop, resolved server-side by the login page through the SAME accessor `auth.ts` calls
+ * (`resolvePortalClientId`); `portalClientId(accent)` is only the env-free default
+ * for the (typed-impossible) case where no page passed it.
+ *
+ * A `NEXT_PUBLIC_*` variable was rejected on purpose (ADR-050 §D2): it is inlined
+ * at BUILD time on this deployment, so a runtime-configured login and a
+ * build-time-baked reset link would re-create the exact divergence being closed.
+ * Only the `client_id` crosses to the browser — never the client secret.
+ */
+function buildKeycloakResetUrl(portal: PortalAccent, clientId: string): string {
+  // The origin stays browser-derived: behind Traefik a server-side guess would
+  // ship a `localhost` reset link to production.
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3100';
-  // The student portal reuses the parent OIDC client (ADR-021) — there is no
-  // `portal-student` client to address for a password reset.
-  const clientId = `portal-${portal === 'student' ? 'parent' : portal}`;
-  const redirectUri = `${origin}/${portal}/login`;
-  const qs = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri });
-  return `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/login-actions/reset-credentials?${qs.toString()}`;
+  return buildResetCredentialsUrl({
+    keycloakUrl: KEYCLOAK_URL,
+    realm: KEYCLOAK_REALM,
+    clientId,
+    origin,
+    portal,
+  });
 }
 
 export function PortalLoginForm(props: {
@@ -38,6 +58,9 @@ export function PortalLoginForm(props: {
    *  (e.g. the student portal — accounts are created by the établissement). */
   registerHref?: string;
   registerLabel?: string;
+  /** OIDC `client_id` for this portal's password-reset link, resolved server-side
+   *  by the page (env overrides included) so it can never diverge from login. */
+  resetClientId?: string;
   otherPortals: { label: string; href: string }[];
 }) {
   return (
@@ -53,6 +76,7 @@ function PortalLoginFormInner({
   subtitle,
   registerHref,
   registerLabel,
+  resetClientId,
   otherPortals,
 }: {
   accent: PortalAccent;
@@ -60,6 +84,7 @@ function PortalLoginFormInner({
   subtitle: string;
   registerHref?: string;
   registerLabel?: string;
+  resetClientId?: string;
   otherPortals: { label: string; href: string }[];
 }) {
   const router = useRouter();
@@ -184,13 +209,19 @@ function PortalLoginFormInner({
         </div>
 
         <div>
-          <div className="flex items-center justify-between">
+          {/* `flex-wrap` so a longer localised label wraps under « Mot de passe »
+              instead of squashing it at 320 px. The reset link carries its own
+              min-height/padding (WCAG 2.2 AA §2.5.8 — it is a standalone control,
+              not an inline link inside a sentence) and a solid `currentColor`
+              focus ring (§1.4.11 — the shared 40 %-alpha auth ring is ≈1.6:1 on
+              white, recorded as a systemic finding rather than patched here). */}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <label htmlFor="password" className="text-sm font-semibold text-slate-900">
               Mot de passe
             </label>
             <a
-              href={buildKeycloakResetUrl(accent)}
-              className={`text-xs font-medium hover:underline ${authPrimaryText(accent)}`}
+              href={buildKeycloakResetUrl(accent, resetClientId ?? portalClientId(accent))}
+              className={`-mx-1 inline-flex min-h-[24px] items-center rounded px-1 text-xs font-medium hover:underline focus-visible:outline-none focus-visible:underline focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-offset-2 ${authPrimaryText(accent)}`}
             >
               Mot de passe oublié ?
             </a>

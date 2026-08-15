@@ -22,13 +22,35 @@ if (!BASE) {
   process.exit(1);
 }
 
-// portal client → the URL path segment it owns
+// portal client → the URL path segment it owns.
+//
+// EXACTLY ONE segment per client (ADR-050 §D1, S-E01-4a AC-2c). This map used to
+// read `'portal-parent': ['parent', 'student']`, which made the production realm
+// hand `portal-parent` the student portal's redirect URIs: student SSO "worked",
+// but every student token carried `azp: portal-parent`, so no audience check
+// could ever tell a student from a parent (PF-18, PF-209). Binding two portals
+// to one client is the wrong fix by construction — the loop below refuses it
+// rather than trusting this literal to stay correct.
 const CLIENTS = {
   'portal-admin': ['admin'],
   'portal-teacher': ['teacher'],
-  // the student portal reuses the parent confidential client (ADR-021/023)
-  'portal-parent': ['parent', 'student'],
+  'portal-parent': ['parent'],
+  'portal-student': ['student'],
 };
+
+// The two callback paths NextAuth actually emits for a portal. `keycloak-<portal>`
+// is the live provider id (`portalProviderId` in apps/web/src/lib/keycloak-clients.ts);
+// the bare `<portal>` form is the legacy URI the three pre-existing clients carry
+// (PF-216 — this line cited PF-214 when written, but PF-214 is the hard-coded
+// three-client list in `kc-fix-redirects.mjs`. Corrected at land: one id, one
+// meaning, TOOL-30). Both are written out in full ON PURPOSE: the previous shape wildcarded
+// the whole callback segment, which made every portal client a valid target for
+// every other portal's callback — the same collapse as above, at a second address
+// (ADR-050 §D4). Do not reintroduce a `*` anywhere under `/api/auth/callback/`.
+const callbackPaths = (portal) => [
+  `/api/auth/callback/keycloak-${portal}`,
+  `/api/auth/callback/${portal}`,
+];
 
 async function adminToken() {
   const res = await fetch(`${KC}/realms/master/protocol/openid-connect/token`, {
@@ -55,18 +77,33 @@ async function main() {
   let failures = 0;
 
   for (const [clientId, portals] of Object.entries(CLIENTS)) {
+    // AC-2c, asserted here and not only in the gate: one client owns one portal.
+    if (portals.length !== 1) {
+      console.error(
+        `✗ ${clientId} is bound to ${portals.length} portal segments (${portals.join(', ')}) — ` +
+          `one client owns exactly one portal (ADR-050 §D1). Refusing to provision.`,
+      );
+      process.exit(1);
+    }
+
     const list = await fetch(`${KC}/admin/realms/${REALM}/clients?clientId=${clientId}`, {
       headers: H,
     }).then((r) => r.json());
     const c = Array.isArray(list) ? list[0] : null;
     if (!c) {
-      console.warn(`! client not found: ${clientId} (skipped)`);
+      // Counted as a FAILURE, not a benign skip (DNC-08). This script aligns URLs,
+      // it never creates clients — so a missing `portal-student` means the realm
+      // predates ADR-050 and that portal cannot authenticate at all. The previous
+      // version warned and exited 0, which is how the student portal stayed
+      // unprovisioned while the run looked green. Rollout: ADR-050 §D3.
+      console.error(`✗ client not found: ${clientId} — create it (or re-import the realm) before deploying that portal`);
+      failures++;
       continue;
     }
 
     const redirectUris = [
       ...portals.map((p) => `${BASE}/${p}/*`),
-      `${BASE}/api/auth/callback/*`,
+      ...portals.flatMap((p) => callbackPaths(p).map((path) => `${BASE}${path}`)),
     ];
     const logout = portals.map((p) => `${BASE}/${p}/login`).join('##') + `##${BASE}/`;
 
