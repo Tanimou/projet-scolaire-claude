@@ -111,6 +111,26 @@ jobs:
       # Kept in step with scripts/ci-gate.sh stage 0d-bis (S-E02-2 AC-4) — the two
       # must not drift.
       - run: node scripts/csv-escape-check.js
+      # Per-portal OIDC client identity (S-E01-4b / PF-18, ADR-052). One rule —
+      # "which OIDC client does portal X speak to?" — used to live in more than
+      # one place with a `student -> parent` alias in the copies, which collapsed
+      # `azp` so a student's token was indistinguishable from a parent's. This
+      # stage derives the rule by EXECUTING apps/web/src/lib/keycloak-clients.ts
+      # (not by lifting its constants: PF-18's shape was an alias inside a
+      # function body, invisible to a constant-lifting gate) and asserts a
+      # BIJECTION portal <-> client against infra/keycloak/realm-export.json and
+      # infra/kc-prod-redirects.mjs — injective, total, closed, env-safe, plus a
+      # four-portal vacuity floor.
+      # It is unconditional for the same reason its ci-gate.sh sibling is:
+      # ci-gate.sh:330's GATE_MACHINERY excludes apps/web, so the api spec that
+      # states these invariants does not run on a fast-tier PR editing the
+      # accessor. Source-only (~1.5s): no build, no database, no Docker, no
+      # generated Prisma client, so it belongs in this job (PF-126). Blocking: the
+      # job fails on its exit code and NO failure-tolerating key is attached to
+      # this step — a continue-on-error here would be DNC-10.
+      # Kept in step with scripts/ci-gate.sh stage 0d-ter (S-E02-2 AC-4) — the two
+      # must not drift.
+      - run: node scripts/keycloak-client-check.js
       # `lint` dependsOn `^build` in turbo.json, and the API build needs the
       # generated Prisma client — without this the lint job dies on unresolvable
       # `@prisma/client` types rather than on a lint rule.
