@@ -99,15 +99,34 @@ const checker = require(CHECKER_PATH) as {
   // callback), and `enumeratedCallSites` + `enumeratedOutsideScope` were added.
   // The typed handle moves WITH the checker on purpose: a stale field name here
   // is a TYPECHECK failure, not a silently passing spec.
+  // S-E01-1e / ADR-051 §D2 — `enumerationDrift` joins the verdict's inputs, and
+  // the enumeration entries gain `kind` (+ `statements` on the identity layer).
+  // Same rule: a stale field name here is a TYPECHECK failure.
   cutoverVerdict: (counts: {
     files: number;
     scopedCallSites: number;
     enumeratedCallSites?: number;
     prismaCallSites: number;
     enumeratedOutsideScope?: ReadonlyArray<{ glob: string; reason?: unknown }>;
+    enumerationDrift?: ReadonlyArray<{ glob: string; kind: string; detail: string }>;
   }) => { kind: 'vacuous' | 'limit' | 'ok' | 'unreasoned'; label: string; detail: string };
-  ENUMERATED_OUTSIDE_SCOPE: ReadonlyArray<{ glob: string; reason: string }>;
+  ENUMERATED_OUTSIDE_SCOPE: ReadonlyArray<{
+    kind: 'surface' | 'bootstrap';
+    glob: string;
+    reason: string;
+    statements?: ReadonlyArray<{ model: string; verb: string; reason: string }>;
+  }>;
+  ENUMERATION_KINDS: readonly string[];
+  enumerationDrift: (
+    declared: ReadonlyArray<unknown>,
+    observedByGlob: Map<string, Map<string, number>>,
+  ) => Array<{ glob: string; kind: string; detail: string }>;
   SCOPE_RECEIVERS: readonly string[];
+  SCOPE_SAFE_RECEIVERS: readonly string[];
+  classifyCallSite: (
+    receiver: string,
+    at: { covered: boolean; enumerated: boolean },
+  ) => 'scoped' | 'owner-inside-scope' | 'enumerated' | 'uncovered';
   globToRegExp: (glob: string) => RegExp;
   matchingParen: (text: string, openIndex: number) => number;
   scopeCallbackRanges: (text: string) => {
@@ -1227,6 +1246,259 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
         expect(entry.reason.toLowerCase()).not.toContain('pas encore');
         expect(entry.reason.toLowerCase()).not.toContain('todo');
       }
+    });
+  });
+
+  /**
+   * S-E01-1e / PF-199 / ADR-051 §D2 — LE CLIQUET AU NIVEAU DE L'INSTRUCTION.
+   *
+   * L'énumération portait UNE raison par GLOB, et cette grossièreté échouait
+   * dans la direction SILENCIEUSE : `user-sync.service.ts` excusait 5
+   * instructions le jour où la ligne a été écrite, et excusait ce que ce fichier
+   * contiendrait DEMAIN. Une sixième requête sans rapport ajoutée à ce fichier
+   * était excusée **sans AUCUN diff sur l'énumération**.
+   *
+   * Le contrôle décisif est M1 : sur le VRAI arbre, ajouter une requête à un
+   * fichier déjà excusé fait passer `enumerated` de 120 à 121 et laisse
+   * `uncovered` à 659 — le mur arithmétique ne dit RIEN. Seul le cliquet
+   * ensembliste le voit. C'est pour cela qu'il existe.
+   *
+   * PAS DE PLANCHER DE RATIO. Un plancher est un bouton, et un bouton ici est un
+   * drapeau de contournement déguisé (DNC-10). Le paragraphe du ledger qui en
+   * réclame un est périmé et déjà contredit par le commentaire livré de
+   * `cutoverVerdict`.
+   */
+  describe('AC-7 / PF-199 — l’allow-list de bootstrap MORD, dans les DEUX directions', () => {
+    const GLOB = 'apps/api/src/modules/students/student-access.service.ts';
+    /** Typé explicitement : les mutants ci-dessous SUPPRIMENT `kind` et POUSSENT dans `statements`. */
+    type DeclaredEntry = {
+      kind?: string;
+      glob: string;
+      reason: string;
+      statements?: Array<{ model: string; verb: string; reason: string }>;
+    };
+    const declared = (): DeclaredEntry[] => [
+      {
+        kind: 'surface',
+        glob: 'apps/worker/src/**',
+        reason: 'le worker n’a pas de tenant de requête : un job porte le sien dans sa charge utile',
+      },
+      {
+        kind: 'bootstrap',
+        glob: GLOB,
+        reason: 'PF-199 — `scopeForUser` résout la portée ABAC elle-même, une couche sous `ensureUser`',
+        statements: [
+          { model: 'guardianship', verb: 'findMany', reason: 'résout QUELS élèves un parent peut voir' },
+          { model: 'student', verb: 'findFirst', reason: 'le contrôle élève-unique sur le même chemin pré-portée' },
+        ],
+      },
+    ];
+    const observed = (pairs: ReadonlyArray<[string, number]>) =>
+      new Map([[GLOB, new Map(pairs)]]);
+    const truth = observed([
+      ['guardianship.findMany', 1],
+      ['student.findFirst', 1],
+    ]);
+    /** Le verdict complet, pour prouver que le cliquet REFUSE et ne se contente pas de signaler. */
+    const verdictWith = (drift: ReturnType<typeof checker.enumerationDrift>) =>
+      checker.cutoverVerdict({
+        files: 228,
+        scopedCallSites: 24,
+        enumeratedCallSites: 120,
+        prismaCallSites: 803,
+        enumerationDrift: drift,
+      });
+
+    it('M0 CONTRÔLE POSITIF — déclaré === observé ne dérive pas, et le verdict reste la LIMITE attendue', () => {
+      // Une preuve qui ne montre que l'absence est verte pour la mauvaise raison :
+      // sans ce contrôle, un `enumerationDrift` qui rendrait toujours `[]` passerait.
+      const drift = checker.enumerationDrift(declared(), truth);
+      expect(drift).toEqual([]);
+      expect(verdictWith(drift).kind).toBe('limit');
+    });
+
+    it('M1 une SIXIÈME requête ajoutée à un fichier déjà excusé ÉCHOUE, en la NOMMANT', () => {
+      const drift = checker.enumerationDrift(
+        declared(),
+        observed([
+          ['guardianship.findMany', 1],
+          ['student.findFirst', 1],
+          ['student.findMany', 1],
+        ]),
+      );
+      expect(drift).toHaveLength(1);
+      expect(drift[0].kind).toBe('undeclared-statement');
+      expect(drift[0].detail).toContain('student.findMany');
+      expect(verdictWith(drift).kind).toBe('unreasoned');
+    });
+
+    it('M1b un DOUBLON — la même instruction une deuxième fois — échoue aussi (multi-ensemble, pas ensemble)', () => {
+      // Le collapse des doublons laisserait passer une SECONDE copie d'une
+      // instruction déjà déclarée : exactement la direction silencieuse.
+      const drift = checker.enumerationDrift(
+        declared(),
+        observed([
+          ['guardianship.findMany', 2],
+          ['student.findFirst', 1],
+        ]),
+      );
+      expect(drift).toHaveLength(1);
+      expect(drift[0].kind).toBe('undeclared-statement');
+      expect(drift[0].detail).toContain('2×');
+    });
+
+    it('M2 une entrée MORTE (déclarée, jamais observée) échoue — l’énumération ne s’élargit pas en silence', () => {
+      const entries = declared();
+      entries[1].statements!.push({
+        model: 'school',
+        verb: 'findMany',
+        reason: 'une excuse maintenue en vie après la suppression du code qu’elle excusait',
+      });
+      const drift = checker.enumerationDrift(entries, truth);
+      expect(drift).toHaveLength(1);
+      expect(drift[0].kind).toBe('dead-entry');
+      expect(verdictWith(drift).kind).toBe('unreasoned');
+    });
+
+    it('M3 une instruction qui PERD sa raison échoue', () => {
+      const entries = declared();
+      entries[1].statements![0].reason = '   ';
+      const drift = checker.enumerationDrift(entries, truth);
+      expect(drift.map((d) => d.kind)).toContain('statement-without-reason');
+      expect(verdictWith(drift).kind).toBe('unreasoned');
+    });
+
+    it('M4 une entrée SANS `kind` est inclassable, donc REFUSÉE (DNC-08) — jamais rabattue sur le kind grossier', () => {
+      const entries = declared();
+      delete entries[1].kind;
+      const drift = checker.enumerationDrift(entries, truth);
+      expect(drift).toHaveLength(1);
+      expect(drift[0].kind).toBe('unknown-kind');
+    });
+
+    it('M5 un `surface` qui nomme UN fichier .ts sous modules/** échoue — la porte du module qui se cache', () => {
+      const drift = checker.enumerationDrift(
+        [
+          {
+            kind: 'surface',
+            glob: 'apps/api/src/modules/lessons/lessons.controller.ts',
+            reason: 'un module en cours de conversion qui essaierait de se cacher derrière le kind grossier',
+          },
+        ],
+        new Map(),
+      );
+      expect(drift).toHaveLength(1);
+      expect(drift[0].kind).toBe('surface-hides-a-module-file');
+    });
+
+    it('M6 un `bootstrap` SANS `statements` échoue : ce kind existe pour nommer les instructions', () => {
+      const drift = checker.enumerationDrift(
+        [{ kind: 'bootstrap', glob: GLOB, reason: 'PF-199 — la résolution d’identité ne peut pas précéder sa propre clé' }],
+        new Map(),
+      );
+      expect(drift).toHaveLength(1);
+      expect(drift[0].kind).toBe('bootstrap-without-statements');
+    });
+
+    it('M7 un `surface` qui porte AUSSI des `statements` échoue : deux unités dans une entrée, c’est la dérive', () => {
+      const drift = checker.enumerationDrift(
+        [{ kind: 'surface', glob: 'apps/worker/src/**', reason: 'le worker n’a pas de tenant de requête, par construction de la file', statements: [] }],
+        new Map(),
+      );
+      expect(drift.map((d) => d.kind)).toContain('surface-with-statements');
+    });
+
+    it('la constante LIVRÉE est à DEUX COUCHES, et chaque instruction porte SA raison', () => {
+      const kinds = new Set(checker.ENUMERATED_OUTSIDE_SCOPE.map((e) => e.kind));
+      expect([...kinds].sort()).toEqual(['bootstrap', 'surface']);
+      expect([...checker.ENUMERATION_KINDS].sort()).toEqual(['bootstrap', 'surface']);
+
+      const bootstrap = checker.ENUMERATED_OUTSIDE_SCOPE.filter((e) => e.kind === 'bootstrap');
+      // NON VACUITÉ : une couche B vide rendrait tout ce bloc vert à vide.
+      expect(bootstrap.length).toBeGreaterThanOrEqual(5);
+      for (const entry of bootstrap) {
+        expect(entry.statements?.length ?? 0).toBeGreaterThan(0);
+        for (const statement of entry.statements ?? []) {
+          expect(typeof statement.model).toBe('string');
+          expect(typeof statement.verb).toBe('string');
+          // Une raison de quelques caractères est une case cochée, pas une raison.
+          expect(statement.reason.trim().length).toBeGreaterThan(30);
+          expect(statement.reason.toLowerCase()).not.toContain('not converted');
+          expect(statement.reason.toLowerCase()).not.toContain('pas encore');
+        }
+      }
+      // La couche A ne porte JAMAIS de statements : sa raison est une propriété
+      // de l'arbre entier, et l'énumérer instruction par instruction serait de
+      // la cérémonie, pas de la preuve.
+      for (const entry of checker.ENUMERATED_OUTSIDE_SCOPE.filter((e) => e.kind === 'surface')) {
+        expect(entry.statements).toBeUndefined();
+      }
+      // Les défauts STRUCTURELS de la constante livrée (kind absent, `surface`
+      // portant des statements, `surface` nommant un fichier de module) sont
+      // décidables sans lire le dépôt, donc assérés ici. La comparaison
+      // ensembliste contre le CORPUS, elle, appartient au scan
+      // (`cutoverReadiness`) : ce spec tourne sans système de fichiers.
+      const structural = checker
+        .enumerationDrift(checker.ENUMERATED_OUTSIDE_SCOPE, new Map())
+        .filter((d) => d.kind !== 'dead-entry');
+      expect(structural).toEqual([]);
+    });
+
+    it('AUCUN plancher de ratio n’est introduit : le mur reste `scoped + enumerated === total` (DNC-10)', () => {
+      expect(CHECKER_CODE).not.toMatch(/RATIO_FLOOR|MIN_SCOPED_RATIO|COVERAGE_FLOOR/);
+      expect(CHECKER_CODE).toContain('a knob here is a bypass flag wearing a');
+      // Le mur lui-même, inchangé.
+      const short = checker.cutoverVerdict({
+        files: 228,
+        scopedCallSites: 802,
+        enumeratedCallSites: 0,
+        prismaCallSites: 803,
+      });
+      expect(short.kind).toBe('limit');
+    });
+  });
+
+  /**
+   * S-E01-1e — LE COMPTEUR DEVIENT AVEUGLE-AU-RÉCEPTEUR NON, IL LE CESSE.
+   *
+   * `PRISMA_CALL_SITE_RE` matche `prisma.`, `this.prisma.` et `tx.` à
+   * l'identique, et `covers()` est purement POSITIONNEL. Un
+   * `this.scope.run(id, async (tx) => { await this.prisma.grade.findMany() })`
+   * comptait donc COUVERT : l'instruction part sur la connexion du PROPRIÉTAIRE
+   * — qui échappe à ses propres policies — pendant que le compteur la crédite au
+   * callback. Un handler à moitié converti produisait un compte `scoped` PLUS
+   * ÉLEVÉ qu'un handler correct, c'est-à-dire une métrique qui bouge dans le
+   * mauvais sens exactement quand le code est faux.
+   */
+  describe('AC-11 — un récepteur PROPRIÉTAIRE dans une portée compte NON COUVERT, et il est NOMMÉ', () => {
+    it('`tx.` dans une portée est COUVERT, `this.prisma.` / `prisma.` ne le sont pas', () => {
+      expect(checker.classifyCallSite('tx', { covered: true, enumerated: false })).toBe('scoped');
+      expect(checker.classifyCallSite('this.prisma', { covered: true, enumerated: false })).toBe(
+        'owner-inside-scope',
+      );
+      expect(checker.classifyCallSite('prisma', { covered: true, enumerated: false })).toBe(
+        'owner-inside-scope',
+      );
+    });
+
+    it('l’ORDRE porte la propriété : un site propriétaire DANS une portée ne peut pas être blanchi en `enumerated`', () => {
+      // Sinon un fichier allow-listé qui ouvrirait une portée pourrait faire
+      // passer ses `this.prisma.` de la colonne « défaut » à la colonne « excusé ».
+      expect(checker.classifyCallSite('this.prisma', { covered: true, enumerated: true })).toBe(
+        'owner-inside-scope',
+      );
+      expect(checker.classifyCallSite('this.prisma', { covered: false, enumerated: true })).toBe(
+        'enumerated',
+      );
+      expect(checker.classifyCallSite('tx', { covered: false, enumerated: false })).toBe('uncovered');
+    });
+
+    it('le jeu des récepteurs SÛRS est une constante nommée et FERMÉE', () => {
+      expect([...checker.SCOPE_SAFE_RECEIVERS]).toEqual(['tx']);
+      expect(CHECKER_CODE).toContain('ownerReceiverInsideScope');
+      // …et il est REMONTÉ en `fail`, pas seulement compté (PF-200 : compter sans
+      // remonter est la forme silencieuse du même défaut).
+      expect(CHECKER_CODE).toContain('no OWNER-connection receiver runs inside a tenant-scope callback');
     });
   });
 

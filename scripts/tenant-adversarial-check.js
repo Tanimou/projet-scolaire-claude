@@ -1867,6 +1867,39 @@ const PRISMA_CALL_SITE_RE = new RegExp(
   'g',
 );
 
+/**
+ * S-E01-1e — THE RECEIVERS THAT ARE THE SCOPE'S OWN TRANSACTION CLIENT.
+ *
+ * `PRISMA_CALL_SITE_RE` matches `prisma.`, `this.prisma.` and `tx.` identically,
+ * and `covers()` is purely POSITIONAL. So until this constant existed, a site
+ * written `this.scope.run(id, async (tx) => { await this.prisma.grade.findMany() })`
+ * counted as SCOPED — the hard rule "inside the callback use `tx`, never
+ * `this.prisma`" was unenforced by the only mechanism that reports the number.
+ *
+ * That is not a cosmetic gap: it is the DANGEROUS INVERSE of PF-200. The
+ * statement runs on the OWNER connection, which escapes its own policies, while
+ * the counter credits it to the callback. A half-converted handler produces a
+ * HIGHER scoped count than a correct one, so the metric moves in the wrong
+ * direction exactly when the code is wrong.
+ *
+ * An owner receiver inside a scope is therefore counted UNCOVERED and REPORTED
+ * BY NAME — never scoped, and never quietly enumerated either.
+ */
+const SCOPE_SAFE_RECEIVERS = Object.freeze(['tx']);
+
+/**
+ * The attribution of ONE call site, as a PURE function so the gate spec drives
+ * all four outcomes without a repository scan.
+ *
+ * ORDER IS THE PROPERTY: the owner-receiver check runs BEFORE the enumeration,
+ * so a scope-covered `this.prisma.` site can never be laundered into the
+ * enumerated column by a file that happens to be allow-listed.
+ */
+function classifyCallSite(receiver, { covered, enumerated }) {
+  if (covered) return SCOPE_SAFE_RECEIVERS.includes(receiver) ? 'scoped' : 'owner-inside-scope';
+  return enumerated ? 'enumerated' : 'uncovered';
+}
+
 /** Transaction callbacks whose parameter is NOT in `PRISMA_RECEIVERS`. */
 const TRANSACTION_ALIAS_RE = /\$transaction\s*\(\s*async\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)/g;
 
@@ -2168,63 +2201,427 @@ function globToRegExp(glob) {
  *
  * It is deliberately NOT a directory sweep. `apps/api/src/shared/**` would
  * enumerate the identity seam and forty unrelated files with it.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ S-E01-1e / PF-199 / ADR-051 §D2 — THE UNIT SPLITS IN TWO                 │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * The list above carried ONE reason per GLOB, and that coarseness failed in the
+ * SILENT direction. `user-sync.service.ts` excused 5 statements the day it was
+ * written and excuses whatever that file contains TOMORROW: a sixth, unrelated
+ * query added to it is excused with **no diff to the enumeration at all** — the
+ * manufactured green this very block exists to refuse, reproduced one level
+ * down.
+ *
+ * So `kind` is now MANDATORY, and there are exactly two:
+ *
+ *  - **`'surface'`** — a whole-tree property. The reason is true of every
+ *    statement in the tree BY CONSTRUCTION ("the worker has no request tenant",
+ *    "boot runs before any request exists"), so enumerating statement by
+ *    statement would be ceremony, not evidence. Reserved for boot globs and
+ *    `apps/worker/src/**`. A `surface` entry naming a single `.ts` FILE under
+ *    `apps/api/src/modules/**` FAILS: that is the discretion a converting module
+ *    would otherwise use to hide behind the coarse kind.
+ *  - **`'bootstrap'`** — identity/context resolution. The reason is a property of
+ *    a SPECIFIC statement, so every statement is named with its OWN reason, and
+ *    the declared multiset is compared for EQUALITY against what the scan
+ *    observes (`enumerationDrift`). An unlisted statement FAILS; a dead entry
+ *    FAILS; a statement without a reason FAILS.
+ *
+ * BOTH SIDES ARE DERIVED FROM THE SAME MATCHER, and that is the house rule
+ * ("derive both sides and compare"), not a stylistic preference. It has one
+ * honest consequence worth stating rather than hiding: `PRISMA_CALL_SITE_RE` is
+ * a TEXT matcher, and `user-sync.service.ts` holds a DOCBLOCK reference to
+ * `shared/prisma/prisma.service.ts:52-56` that it counts as a call site
+ * (`service.ts`). It is declared below AS an artifact, with the reason saying so.
+ * Declaring what the matcher actually sees is the only way the two sides can be
+ * compared at all; quietly excluding it would be a second, hidden list.
+ *
+ * NO RATIO FLOOR. `cutoverVerdict`'s `scoped + enumerated === total` wall is
+ * untouched — only the VALIDATION of the enumeration got finer. A floor is a
+ * knob and a knob here is a bypass flag wearing a different hat (DNC-10). The
+ * ledger paragraph asking for one is stale and was already overruled by the
+ * shipped comment on `cutoverVerdict`.
  */
 const ENUMERATED_OUTSIDE_SCOPE = Object.freeze([
+  // ── LAYER A — STRUCTURAL. File globs, because the reason is a property of
+  //    the whole tree and is true of every statement in it by construction.
   Object.freeze({
+    kind: 'surface',
     glob: 'apps/api/src/main.ts',
     reason: 'bootstrap: runs before any request exists, so there is no tenant to scope to',
   }),
   Object.freeze({
+    kind: 'surface',
     glob: 'apps/api/src/shared/config/config-preflight.ts',
     reason: 'bootstrap: preflight decides whether the process may serve at all, before any tenant',
   }),
   Object.freeze({
+    kind: 'surface',
     glob: 'apps/api/src/shared/migrations/**',
     reason:
       'migration-state reader: `assertMigrationsClean` runs at boot and the health probe reads it on ' +
       'every call — it must answer while the tenant scope is degraded or refused',
   }),
   Object.freeze({
+    kind: 'surface',
     glob: 'apps/api/src/shared/release/**',
     reason:
       'release-manifest reader: same obligation as the migration state — it must answer when the ' +
       'second connection is refused, which is precisely when someone is reading it',
   }),
   Object.freeze({
+    kind: 'surface',
     glob: 'apps/api/src/modules/health/**',
     reason: 'health: a liveness answer that needs a working tenant scope is not a liveness answer',
   }),
   Object.freeze({
+    kind: 'surface',
     glob: 'apps/worker/src/**',
     reason:
       'the worker has no request tenant: a job carries its tenant in its payload, and converting ' +
       'that seam is its own slice (touchesWorker false here)',
   }),
+
+  // ── LAYER B — IDENTITY. One entry per STATEMENT, each with its OWN reason,
+  //    ratcheted by set equality against the scan (`enumerationDrift`).
   Object.freeze({
+    kind: 'bootstrap',
     glob: 'apps/api/src/shared/auth/user-sync.service.ts',
     reason:
       'PF-199 — IT RESOLVES THE TENANT. `ensureUser` reads `user_profile` from the Keycloak `sub` ' +
       'to PRODUCE the tenantId a scope would need; a scope cannot be opened before its own key exists',
+    statements: Object.freeze([
+      Object.freeze({
+        model: 'userProfile',
+        verb: 'findUnique',
+        reason:
+          'the `sub` -> profile lookup itself: inside a scope on app_user with no GUC it returns ZERO ' +
+          'rows and every authenticated request of every portal answers 403 ACCOUNT_NOT_PROVISIONED',
+      }),
+      Object.freeze({
+        model: 'userProfile',
+        verb: 'findMany',
+        reason:
+          'the e-mail collision sweep that decides whether this `sub` is a RE-LINK of an existing ' +
+          'profile — it must read across the profiles no tenant has been chosen for yet',
+      }),
+      Object.freeze({
+        model: 'userProfile',
+        verb: 'update',
+        reason:
+          'writes the resolved `keycloakId` back onto the profile it just linked; the tenant it would ' +
+          'scope to is the value this very statement establishes',
+      }),
+      Object.freeze({
+        model: 'userProfile',
+        verb: 'findUnique',
+        reason:
+          'the re-read that confirms the link took, on the same pre-tenant path as the lookup above ' +
+          '(second occurrence: the two are declared separately because the unit here is the STATEMENT)',
+      }),
+      Object.freeze({
+        model: 'service',
+        verb: 'ts',
+        reason:
+          'NOT A STATEMENT — a MATCHER ARTIFACT, declared because both sides of this ratchet are ' +
+          'derived by the same text matcher and hiding it would be a second, invisible list. It is a ' +
+          'docblock cross-reference to `shared/prisma/prisma.service.ts:52-56` that ' +
+          '`PRISMA_CALL_SITE_RE` reads as `prisma.service.ts`. Recorded as PF-219: the corpus total ' +
+          'is inflated by prose, and the matcher cannot currently tell code from a comment',
+      }),
+    ]),
   }),
   Object.freeze({
+    kind: 'bootstrap',
     glob: 'apps/api/src/modules/school-structure/school-context.service.ts',
     reason:
       'PF-199 — `forTenant` resolves the school context a request runs in; same ordering constraint ' +
       'as `ensureUser`, one layer down',
+    statements: Object.freeze([
+      Object.freeze({
+        model: 'school',
+        verb: 'findFirst',
+        reason:
+          '`forTenant` picks the school a request runs in; it is the input to the scope, so it cannot ' +
+          'be issued from within one',
+      }),
+      Object.freeze({
+        model: 'academicYear',
+        verb: 'findFirst',
+        reason:
+          'resolves the ACTIVE academic year for that school in the same pre-scope breath — the ' +
+          'callers of `forTenant` destructure both from one call',
+      }),
+      Object.freeze({
+        model: 'school',
+        verb: 'findFirst',
+        reason:
+          'the explicit-`schoolId` branch: validates a caller-supplied school against the tenant ' +
+          'before any scope exists (second occurrence, declared per statement)',
+      }),
+      Object.freeze({
+        model: 'school',
+        verb: 'findMany',
+        reason:
+          'the school PICKER for a multi-school tenant: it must list the choices before the request ' +
+          'has a school, therefore before it has the context a scope is opened on',
+      }),
+    ]),
   }),
   Object.freeze({
+    kind: 'bootstrap',
     glob: 'apps/api/src/modules/students/student-access.service.ts',
     reason:
       'PF-199 — `scopeForUser` resolves the ABAC scope itself; calling it from inside a scope would ' +
       'hold an owner connection AND an app connection for the transaction’s duration',
+    statements: Object.freeze([
+      Object.freeze({
+        model: 'guardianship',
+        verb: 'findMany',
+        reason:
+          'resolves WHICH students a parent may see — the ABAC scope itself. A scope cannot be the ' +
+          'consumer of the boundary it is being opened to enforce',
+      }),
+      Object.freeze({
+        model: 'student',
+        verb: 'findFirst',
+        reason:
+          'the single-student check on the same pre-scope path; converting it alone would split one ' +
+          'ABAC decision across two connections',
+      }),
+    ]),
   }),
   Object.freeze({
+    kind: 'bootstrap',
+    glob: 'apps/api/src/modules/teaching/teacher-profile.service.ts',
+    reason:
+      'PF-199 / S-E01-1e — THE SECOND IDENTITY RESOLVER, and it was MISSING from this list. It ' +
+      'resolves `teacherProfileId` from a user profile and it WRITES while doing so; inside a scope ' +
+      'it would silently issue on the OWNER connection while the app connection holds an open ' +
+      'interactive transaction — the dangerous inverse of PF-200, invisible to any compile-time guard',
+    statements: Object.freeze([
+      Object.freeze({
+        model: 'teacherProfile',
+        verb: 'findUnique',
+        reason:
+          '`ensureForUser`’s hot path: the profile lookup by `userProfileId`, carrying no tenant ' +
+          'predicate because the caller has not resolved one yet',
+      }),
+      Object.freeze({
+        model: 'userProfile',
+        verb: 'findUnique',
+        reason:
+          'reads the user’s `preferences` to pick a home school — a second identity read on the ' +
+          'same pre-scope path',
+      }),
+      Object.freeze({
+        model: 'school',
+        verb: 'findFirst',
+        reason: 'the PREFERRED-school branch: resolves the school the new teacher profile attaches to',
+      }),
+      Object.freeze({
+        model: 'school',
+        verb: 'findFirst',
+        reason:
+          'the FALLBACK branch (oldest school in the tenant) when no preference is set — declared ' +
+          'separately because the unit here is the statement, not the model',
+      }),
+      Object.freeze({
+        model: 'teacherProfile',
+        verb: 'upsert',
+        reason:
+          'AUTO-PROVISIONS the profile. An INSERT cannot sit inside an interactive tenant transaction ' +
+          'whose key it is still resolving, and under a GUC the pre-existing row it races against is ' +
+          'INVISIBLE — the upsert would raise P2002 on a row the connection cannot see',
+      }),
+      Object.freeze({
+        model: 'teacherProfile',
+        verb: 'findFirst',
+        reason:
+          'S-E01-1e / ADR-051 §D1 — `findForUser`, the READ-ONLY resolver the converted lessons ' +
+          'handlers use for their ownership comparison. Read-only precisely so that hoisting the ' +
+          'resolution ahead of the 404 guard cannot put an unaudited write on a REFUSAL path',
+      }),
+      Object.freeze({
+        model: 'teacherProfile',
+        verb: 'findUnique',
+        reason:
+          '`getById`: the admin-facing lookup by profile id with its own tenant comparison, on the ' +
+          'same owner connection as the rest of this service',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    kind: 'bootstrap',
     glob: 'apps/api/src/modules/calendar/calendar-seed.service.ts',
     reason:
       'PF-198 — it opens its OWN `$transaction` for a bulk import plus its audit row; it cannot nest ' +
       'inside an interactive transaction and would not compile against `Prisma.TransactionClient`',
+    statements: Object.freeze([
+      Object.freeze({
+        model: 'academicYear',
+        verb: 'findMany',
+        reason:
+          'reads the years the holidays are seeded into, BEFORE the seed transaction opens — the plan ' +
+          'is computed outside the write it plans',
+      }),
+      Object.freeze({
+        model: 'calendarEvent',
+        verb: 'createMany',
+        reason:
+          'the bulk import itself, inside this service’s OWN `$transaction`; nesting it in an ' +
+          'interactive tenant scope would take a second pool connection with no GUC on it',
+      }),
+      Object.freeze({
+        model: 'auditLog',
+        verb: 'create',
+        reason:
+          'the ONE audit row that must commit atomically with the import — it belongs to the seed’s ' +
+          'own transaction, and moving it out would make the audit trail lie on a rollback',
+      }),
+    ]),
   }),
 ]);
+
+/** The two enumeration kinds, as a named closed set rather than two string literals. */
+const ENUMERATION_KINDS = Object.freeze(['surface', 'bootstrap']);
+
+/**
+ * ADR-051 §D2 — THE STATEMENT-LEVEL RATCHET, as a PURE function so the gate spec
+ * drives every branch with no repository scan and no database.
+ *
+ * `observedByGlob` maps `glob -> Map<'model.verb', count>` — built by the scan
+ * from the SAME `PRISMA_CALL_SITE_RE` the coverage arithmetic uses. The declared
+ * side is hand-written (a REASON cannot be derived). Comparing the two as
+ * MULTISETS is what makes the ratchet bite in both directions:
+ *
+ *  - a statement the scan sees and the list does not  -> `undeclared-statement`
+ *  - an entry the list holds and the scan never sees  -> `dead-entry`
+ *  - a statement with a blank / missing reason        -> `statement-without-reason`
+ *  - a missing or unknown `kind`                      -> `unknown-kind` (fail-closed)
+ *  - a `surface` entry pointing at ONE module file    -> `surface-hides-a-module-file`
+ *
+ * MULTISET, not set: `teacher_profile.findUnique` legitimately occurs twice in
+ * one file, and collapsing duplicates would let a SECOND copy of an already
+ * declared statement slip in unremarked — which is the exact silent direction
+ * the file-level unit failed in.
+ *
+ * Returns a LIST of findings, never a boolean: the caller must be able to NAME
+ * what drifted, and a ratchet that only says "no" gets deleted the first time it
+ * fires on a Friday.
+ */
+function enumerationDrift(declared, observedByGlob) {
+  const findings = [];
+  const entries = Array.isArray(declared) ? declared : [];
+  for (const entry of entries) {
+    const glob = entry && typeof entry === 'object' ? String(entry.glob) : String(entry);
+    const kind = entry && typeof entry === 'object' ? entry.kind : undefined;
+    if (!ENUMERATION_KINDS.includes(kind)) {
+      findings.push({
+        glob,
+        kind: 'unknown-kind',
+        detail:
+          `kind ${JSON.stringify(kind)} is not one of {${ENUMERATION_KINDS.join(', ')}}. An entry whose ` +
+          'kind is missing is unclassifiable, therefore refused (DNC-08) — never defaulted to the ' +
+          'coarse kind, which is the one that excuses future statements for free',
+      });
+      continue;
+    }
+    if (kind === 'surface') {
+      if (entry.statements !== undefined) {
+        findings.push({
+          glob,
+          kind: 'surface-with-statements',
+          detail:
+            'a `surface` entry declares a WHOLE-TREE property and must not carry `statements`: two ' +
+            'units in one entry is how the two sides start drifting again',
+        });
+      }
+      if (/^apps\/api\/src\/modules\/.*\.ts$/.test(glob)) {
+        findings.push({
+          glob,
+          kind: 'surface-hides-a-module-file',
+          detail:
+            'a single .ts file under apps/api/src/modules/** may not be excused at `surface` ' +
+            'granularity. A converting module would use exactly this to hide its unconverted ' +
+            'statements behind a whole-tree reason',
+        });
+      }
+      continue;
+    }
+    // kind === 'bootstrap'
+    const statements = Array.isArray(entry.statements) ? entry.statements : null;
+    if (statements === null || statements.length === 0) {
+      findings.push({
+        glob,
+        kind: 'bootstrap-without-statements',
+        detail:
+          'a `bootstrap` entry MUST enumerate its statements: the whole point of this kind is that ' +
+          'the reason is a property of a specific statement, not of the file',
+      });
+      continue;
+    }
+    const declaredCounts = new Map();
+    for (const statement of statements) {
+      const ok =
+        statement !== null &&
+        typeof statement === 'object' &&
+        typeof statement.model === 'string' &&
+        statement.model.length > 0 &&
+        typeof statement.verb === 'string' &&
+        statement.verb.length > 0;
+      if (!ok) {
+        findings.push({
+          glob,
+          kind: 'malformed-statement',
+          detail: `${JSON.stringify(statement)} carries no (model, verb) pair to compare against`,
+        });
+        continue;
+      }
+      if (typeof statement.reason !== 'string' || statement.reason.trim().length === 0) {
+        findings.push({
+          glob,
+          kind: 'statement-without-reason',
+          detail:
+            `${statement.model}.${statement.verb} carries no reason. The enumeration is a list of ` +
+            'REASONS, not of paths: an entry without one closes the coverage gap without covering ' +
+            'anything',
+        });
+      }
+      const key = `${statement.model}.${statement.verb}`;
+      declaredCounts.set(key, (declaredCounts.get(key) ?? 0) + 1);
+    }
+    const observed = observedByGlob instanceof Map ? observedByGlob.get(glob) ?? new Map() : new Map();
+    for (const [key, seen] of observed) {
+      const claimed = declaredCounts.get(key) ?? 0;
+      if (claimed < seen) {
+        findings.push({
+          glob,
+          kind: 'undeclared-statement',
+          detail:
+            `${key} runs ${seen}× outside any tenant scope but only ${claimed} occurrence(s) are ` +
+            'declared. A statement added to an already-excused file used to be excused with NO DIFF ' +
+            'to this enumeration — that is the hole ADR-051 §D2 closes',
+        });
+      }
+    }
+    for (const [key, claimed] of declaredCounts) {
+      const seen = observed.get(key) ?? 0;
+      if (claimed > seen) {
+        findings.push({
+          glob,
+          kind: 'dead-entry',
+          detail:
+            `${key} is declared ${claimed}× but the scan observes ${seen}. A dead entry is an excuse ` +
+            'kept alive after the code it excused was deleted or converted, and it is the direction ' +
+            'that quietly widens the list',
+        });
+      }
+    }
+  }
+  return findings;
+}
 
 /**
  * THE CLASSIFIER — a PURE function, so the guard spec drives every branch with
@@ -2309,6 +2706,7 @@ function cutoverVerdict({
   enumeratedCallSites = 0,
   prismaCallSites,
   enumeratedOutsideScope = ENUMERATED_OUTSIDE_SCOPE,
+  enumerationDrift: drift = [],
 }) {
   if (files === 0) {
     return {
@@ -2343,6 +2741,29 @@ function cutoverVerdict({
         'all say WHY. The enumeration is a list of REASONS, not of paths: an entry without one closes ' +
         'the coverage gap without covering anything, which is the manufactured green this branch exists ' +
         'to refuse. "Not converted yet" is not a reason — it belongs in the uncovered count.',
+    };
+  }
+
+  // ADR-051 §D2 — THE STATEMENT-LEVEL RATCHET, evaluated HERE and not merely
+  // printed by the caller. A drift that is reported but not refused is a
+  // ratchet with no teeth: the verdict function is the one place the whole gate
+  // funnels through, so wiring it in is what makes "the ratchet bites"
+  // structural rather than a convention someone has to remember.
+  const drifted = Array.isArray(drift) ? drift : [];
+  if (drifted.length > 0) {
+    return {
+      kind: 'unreasoned',
+      label:
+        'AC-9 the OUT-OF-SCOPE ENUMERATION matches the corpus STATEMENT BY STATEMENT — ' +
+        `${drifted.length} drift(s)`,
+      detail:
+        drifted
+          .map((finding) => `${finding.glob}: [${finding.kind}] ${finding.detail}`)
+          .join(' | ') +
+        '. Set equality is asserted in BOTH directions and derived on both sides from the same ' +
+        'matcher: an unlisted statement fails, a dead entry fails, a statement with no reason fails. ' +
+        'There is deliberately no ratio floor — a floor is a knob and a knob here is a bypass flag ' +
+        'wearing a different hat (DNC-10).',
     };
   }
 
@@ -2411,8 +2832,20 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
   const unbalancedScopes = new Map();
   /** `.run(` receivers that are NOT scope openings, reported rather than assumed absent. */
   const foreignScopeReceivers = new Map();
+  /**
+   * S-E01-1e — `prisma.` / `this.prisma.` sites sitting INSIDE a scope callback:
+   * the OWNER connection running under a range the counter would otherwise
+   * credit. Counted UNCOVERED and named here, never scoped.
+   */
+  const ownerReceiverInsideScope = new Map();
   /** glob -> how many call sites it excused, so a dead enumeration entry is visible. */
   const enumeratedByGlob = new Map();
+  /**
+   * ADR-051 §D2 — glob -> Map<'model.verb', count>. The OBSERVED half of the
+   * statement-level ratchet, derived by the same matcher as the coverage
+   * arithmetic so the two sides can be compared rather than both hand-written.
+   */
+  const enumeratedStatementsByGlob = new Map();
   const enumerationMatchers = ENUMERATED_OUTSIDE_SCOPE.map((entry) => ({
     entry,
     matches: globToRegExp(entry.glob),
@@ -2471,15 +2904,37 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
     for (const match of text.matchAll(PRISMA_CALL_SITE_RE)) {
       const [, model, verb] = match;
       prismaCallSites += 1;
+      // The receiver is the match minus its trailing `.model.verb`, so it is
+      // READ rather than re-searched for and cannot drift from the regex.
+      const receiver = match[0].slice(0, match[0].length - (model.length + verb.length + 2));
       // Attribution is decided BEFORE the model lookup, deliberately: a site
       // whose model the catalog does not know is still a site that either sits
       // in a scope or does not, and dropping it here would let the two counts
       // disagree with `prismaCallSites` — the arithmetic the wall depends on.
-      if (covers(match.index)) {
+      const attribution = classifyCallSite(receiver, {
+        covered: covers(match.index),
+        enumerated: enumeration !== undefined,
+      });
+      if (attribution === 'owner-inside-scope') {
+        // Counted UNCOVERED (it falls through both `if`s) and NAMED.
+        const where = `${relative}:${lineOf(match.index)} ${match[0]}`;
+        ownerReceiverInsideScope.set(where, (ownerReceiverInsideScope.get(where) ?? 0) + 1);
+      }
+      if (attribution === 'scoped') {
         scopedCallSites += 1;
-      } else if (enumeration !== undefined) {
+      } else if (attribution === 'enumerated') {
         enumeratedCallSites += 1;
         enumeratedByGlob.set(enumeration.entry.glob, (enumeratedByGlob.get(enumeration.entry.glob) ?? 0) + 1);
+        // Only `bootstrap` entries are ratcheted per statement; recording the
+        // multiset for `surface` globs too would invite someone to "just add
+        // the statements" to `apps/worker/src/**` and its 99 sites.
+        if (enumeration.entry.kind === 'bootstrap') {
+          const seen =
+            enumeratedStatementsByGlob.get(enumeration.entry.glob) ??
+            enumeratedStatementsByGlob.set(enumeration.entry.glob, new Map()).get(enumeration.entry.glob);
+          const key = `${model}.${verb}`;
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
       }
       const table = modelToTable.get(model);
       if (table === undefined) {
@@ -2534,9 +2989,12 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
     scopedCallSites,
     enumeratedCallSites,
     enumeratedByGlob,
+    enumeratedStatementsByGlob,
+    enumerationDrift: enumerationDrift(ENUMERATED_OUTSIDE_SCOPE, enumeratedStatementsByGlob),
     enumeratedOutsideScope: ENUMERATED_OUTSIDE_SCOPE,
     unbalancedScopes,
     foreignScopeReceivers,
+    ownerReceiverInsideScope,
     prismaCallSites,
     rawSqlSites,
     classified,
@@ -3213,6 +3671,21 @@ $mut$;`;
           'file and mark every remaining site in it covered.',
       );
     }
+    // S-E01-1e — the receiver-blind half of the counter, now visible. A `fail`
+    // and not a `limit`: the rule "inside the callback use `tx`, never
+    // `this.prisma`" is not a state of the corpus to be tolerated, it is the
+    // difference between a converted handler and one that only looks converted.
+    if (readiness.ownerReceiverInsideScope.size > 0) {
+      fail(
+        'AC-9 no OWNER-connection receiver runs inside a tenant-scope callback',
+        `${readiness.ownerReceiverInsideScope.size} site(s) sit inside a scope range but issue on the ` +
+          'owner client: ' +
+          [...readiness.ownerReceiverInsideScope.keys()].join(', ') +
+          `. The safe receiver set is {${SCOPE_SAFE_RECEIVERS.join(', ')}}. They are counted UNCOVERED ` +
+          '— crediting them to the callback would make a half-converted handler report a HIGHER scoped ' +
+          'count than a correct one (the dangerous inverse of PF-200).',
+      );
+    }
     if (readiness.foreignScopeReceivers.size > 0) {
       record(
         'AC-9 `.run(` receivers OUTSIDE the scope set are reported, never assumed to open a scope',
@@ -3220,9 +3693,40 @@ $mut$;`;
           `; the closed set is {${SCOPE_RECEIVERS.join(', ')}}`,
       );
     }
+    // ADR-051 §D2 — the enumeration is printed WITH ITS KIND and, for the
+    // statement-level layer, with the declared/observed pair. A list whose two
+    // sides are never printed side by side is a list nobody can audit.
     for (const entry of readiness.enumeratedOutsideScope) {
       const hits = readiness.enumeratedByGlob.get(entry.glob) ?? 0;
-      record(`AC-9 enumerated outside a scope: ${entry.glob} (${hits} site(s))`, entry.reason);
+      const declared = Array.isArray(entry.statements) ? entry.statements.length : null;
+      record(
+        `AC-9 enumerated outside a scope [${entry.kind}]: ${entry.glob} (${hits} site(s)` +
+          (declared === null ? ')' : `, ${declared} declared)`),
+        entry.reason,
+      );
+    }
+    // THE RATCHET, and it is a `fail` rather than a `limit`: a drift is a defect
+    // in the CHECKER'S OWN constant, not a state of the corpus. `cutoverVerdict`
+    // already refuses on the same input above — this block exists so the drift
+    // is NAMED, statement by statement, instead of only collapsing the verdict.
+    if (readiness.enumerationDrift.length > 0) {
+      for (const finding of readiness.enumerationDrift) {
+        fail(
+          `AC-9 PF-199 the bootstrap allow-list matches the corpus: ${finding.glob} [${finding.kind}]`,
+          finding.detail,
+        );
+      }
+    } else {
+      const ratcheted = readiness.enumeratedOutsideScope.filter((e) => e.kind === 'bootstrap');
+      const statements = ratcheted.reduce((n, e) => n + (e.statements?.length ?? 0), 0);
+      record(
+        'AC-9 PF-199 the bootstrap allow-list is TWO-LAYERED and STATEMENT-RATCHETED (ADR-051 §D2)',
+        `${ratcheted.length} identity file(s) declaring ${statements} statement(s), each with its own ` +
+          'reason, compared for SET EQUALITY in both directions against the same matcher that produces ' +
+          'the coverage arithmetic — an unlisted statement fails, a dead entry fails, a reasonless ' +
+          'statement fails. No ratio floor: a floor is a knob and a knob here is a bypass flag wearing ' +
+          'a different hat (DNC-10).',
+      );
     }
 
     // ---- 14b. S-E01-1c / TOOL-32 — THE VERB-AWARE HALF.
@@ -3536,8 +4040,14 @@ module.exports = {
   // no repository scan and no database. A matcher that is only ever exercised by
   // the real corpus is a matcher whose pathological branches are never tested.
   ENUMERATED_OUTSIDE_SCOPE,
+  ENUMERATION_KINDS,
   SCOPE_RECEIVERS,
+  SCOPE_SAFE_RECEIVERS,
+  classifyCallSite,
   cutoverVerdict,
+  // S-E01-1e / ADR-051 §D2 — the statement-level ratchet, PURE, so the gate spec
+  // can make it FAIL on purpose (AC-7) without touching the repository.
+  enumerationDrift,
   globToRegExp,
   matchingParen,
   scopeCallbackRanges,

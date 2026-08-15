@@ -100,7 +100,15 @@ export function currentTenantScopeFrame(): TenantScopeFrame | undefined {
   return store.getStore();
 }
 
-/** Les tables que le module `calendar` converti touche, verbe par verbe. */
+/**
+ * Une table que LES MODULES CONVERTIS touchent, verbe par verbe.
+ *
+ * S-E01-1e — cette phrase disait littéralement « les tables que le module
+ * `calendar` converti touche ». Elle était vraie d'un module et fausse dès le
+ * deuxième : `lessons` est converti depuis cette tranche, et la clôture est
+ * désormais l'UNION des clôtures relationnelles de TOUS les modules convertis.
+ * Un docblock qui nomme un module est un docblock qui périme au module suivant.
+ */
 export interface AppRolePrivilegeRequirement {
   readonly table: string;
   readonly privilege: string;
@@ -108,7 +116,7 @@ export interface AppRolePrivilegeRequirement {
 }
 
 /**
- * La CLÔTURE RELATIONNELLE du module converti, pas seulement sa table.
+ * La CLÔTURE RELATIONNELLE des modules convertis, pas seulement leurs tables.
  *
  * `calendarEvent.findMany` embarque un `include` sur `cycle`, `gradeLevel` et
  * `classSection`, et la branche parent lit `enrollment`. Sous RLS, ces jointures
@@ -116,31 +124,102 @@ export interface AppRolePrivilegeRequirement {
  * clôture relationnelle, jamais sa seule table. C'est la phrase dont l'auteur du
  * module suivant a besoin.
  *
- * Vérifié contre `20260813120000_tenant_rls_policies` : les six tables sont
- * dans les 44 accordées à `app_user`.
+ * Vérifié contre `20260813120000_tenant_rls_policies` : toutes les tables citées
+ * ici sont dans les 44 accordées à `app_user`.
  *
  * S-E01-5 — CETTE LISTE EST TENUE À LA MAIN, ET ELLE A DÉJÀ DÉCROCHÉ UNE FOIS.
  * Les sondes de propriété de `calendar.controller.ts` ont ajouté quatre tables
  * aux instructions émises DANS la portée ; trois y figuraient déjà par chance
  * (l'`include` de `list`), `academic_year` n'y figurait pas. Le couplage est
- * désormais TESTÉ — `calendar-scope-ownership.spec.ts`, AC-10, dérive les
- * privilèges des sites d'appel `tx.<modèle>.<verbe>(` du contrôleur et exige que
- * cette liste les couvre. Toute sonde ajoutée sans ligne ici vire au ROUGE.
+ * désormais TESTÉ — `calendar-scope-ownership.spec.ts` (AC-10) et
+ * `lessons-scope-ownership.spec.ts` (AC-9) dérivent les privilèges des sites
+ * d'appel `tx.<modèle>.<verbe>(` de leur contrôleur et exigent que cette liste
+ * les couvre. Toute sonde ajoutée sans ligne ici vire au ROUGE.
+ *
+ * S-E01-1e — LE DEUXIÈME MODULE, ET POURQUOI SON ABSENCE ICI SERAIT UN 500 EN
+ * MASSE PLUTÔT QU'UN REFUS. `appRoleVerdict` parcourt cette liste AU DÉMARRAGE :
+ * une entrée manquante ne fait pas échouer la sonde, elle fait certifier
+ * `enforcing: true` sur une clôture jamais vérifiée, et CHAQUE requête leçon des
+ * trois portails rend alors « permission denied » (42501) — soit exactement le
+ * défaut qu'`academic_year` a infligé à S-E01-5, un module plus loin.
  */
 export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[] = Object.freeze([
+  // ── calendar (S-E01-1d, S-E01-5) ────────────────────────────────────────
   { table: 'calendar_event', privilege: 'SELECT', why: 'list + les deux gardes findUnique' },
   { table: 'calendar_event', privilege: 'INSERT', why: 'create' },
   { table: 'calendar_event', privilege: 'UPDATE', why: 'update' },
   { table: 'calendar_event', privilege: 'DELETE', why: 'remove' },
-  { table: 'enrollment', privilege: 'SELECT', why: 'branche parent (G-PORTAL)' },
-  { table: 'class_section', privilege: 'SELECT', why: 'include de list + sonde de propriété' },
-  { table: 'cycle', privilege: 'SELECT', why: 'include de list + sonde de propriété' },
-  { table: 'grade_level', privilege: 'SELECT', why: 'include de list + sonde de propriété' },
+  {
+    table: 'enrollment',
+    privilege: 'SELECT',
+    why: 'branche parent de calendar/list (G-PORTAL) ET branche `studentId` de lessons/list',
+  },
+  {
+    table: 'class_section',
+    privilege: 'SELECT',
+    why: 'include de calendar/list + sonde de propriété + include de lessons/list et /getOne',
+  },
+  {
+    table: 'cycle',
+    privilege: 'SELECT',
+    why: 'include de calendar/list + sonde de propriété + include imbriqué de lessons/getOne',
+  },
+  {
+    table: 'grade_level',
+    privilege: 'SELECT',
+    why: 'include de calendar/list + sonde de propriété + include imbriqué de lessons/getOne',
+  },
   {
     table: 'academic_year',
     privilege: 'SELECT',
     why: 'S-E01-5 — sonde de propriété de `createEvent` : sans ce privilège, la sonde ' +
       'lève permission denied sur CHAQUE création d’événement dès que RLS est enforcé',
+  },
+  // ── lessons (S-E01-1e) ──────────────────────────────────────────────────
+  // Verbe par verbe, et chacun avec SA raison : un `SELECT` accordé sur une
+  // table ÉCRITE passait l'ancien contrôle par table (c'est PF-193).
+  {
+    table: 'lesson_entry',
+    privilege: 'SELECT',
+    why: 'lessons/list (findMany), lessons/getOne + les gardes findUnique d’update et de remove',
+  },
+  { table: 'lesson_entry', privilege: 'INSERT', why: 'lessons/create' },
+  { table: 'lesson_entry', privilege: 'UPDATE', why: 'lessons/update' },
+  { table: 'lesson_entry', privilege: 'DELETE', why: 'lessons/remove' },
+  {
+    table: 'teaching_assignment',
+    privilege: 'SELECT',
+    why: 'garde de propriété de lessons/create (findFirst id+tenantId) ET include de list/getOne — ' +
+      'sans elle, aucune leçon ne peut être créée ni affichée avec sa matière',
+  },
+  {
+    table: 'class_session',
+    privilege: 'SELECT',
+    why: 'S-E01-1e / PF-217 — sonde de propriété du `classSessionId` fourni : sans ce privilège, ' +
+      'la sonde lève permission denied sur CHAQUE création de leçon rattachée à une séance',
+  },
+  {
+    table: 'guardianship',
+    privilege: 'SELECT',
+    why: 'ABAC parent de lessons/list (branche `studentId`) : sans elle, le portail PARENT — le ' +
+      'cœur du produit — refuse chaque consultation du cahier de texte d’un enfant',
+  },
+  {
+    table: 'subject',
+    privilege: 'SELECT',
+    why: 'include de lessons/list et /getOne — la matière est ce que le parent lit en premier',
+  },
+  {
+    table: 'teacher_profile',
+    privilege: 'SELECT',
+    why: 'include de lessons/list et /getOne (le nom du professeur affiché sur chaque entrée)',
+  },
+  {
+    table: 'user_profile',
+    privilege: 'SELECT',
+    why: 'include imbriqué `teacherProfile.userProfile` de lessons/list et /getOne — la jointure ' +
+      'qui porte firstName/lastName ; à ne PAS confondre avec `ensureUser`, qui lit la même table ' +
+      'mais HORS de toute portée, sur la connexion du propriétaire (PF-199)',
   },
 ]);
 
