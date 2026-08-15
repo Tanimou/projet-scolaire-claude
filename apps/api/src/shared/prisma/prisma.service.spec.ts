@@ -323,10 +323,27 @@ describe('Cliquet de source — l’interpolation ne peut pas revenir en silence
     return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
   }
 
-  /** Templates qui interpolent SANS être balisés par `$queryRaw` (donc liés). */
+  /**
+   * Templates qui interpolent SANS être balisés par une forme PARAMÉTRANTE.
+   *
+   * S-E01-5 / PF-207 — `Prisma.sql` rejoint `$queryRaw` dans la liste des
+   * balises reconnues, et ce n'est PAS un assouplissement : les deux produisent
+   * un `Sql` à paramètres liés, la valeur interpolée part en `$1` et ne peut
+   * jamais devenir du texte SQL. Ce qui a rendu l'ajout nécessaire : la sonde de
+   * privilèges dérive désormais sa liste de tables de `APP_ROLE_REQUIRED_PRIVILEGES`
+   * (au lieu d'en tenir une SECONDE copie à la main, qui avait divergé) et la
+   * compose avec `Prisma.sql` / `Prisma.join` — que ce cliquet, ne connaissant que
+   * `$queryRaw`, comptait comme une interpolation nue.
+   *
+   * L'invariant réel — « aucune valeur ne devient du texte SQL » — est INCHANGÉ,
+   * et il est même RENFORCÉ juste en dessous : `Prisma.raw`, le frère qui injecte
+   * littéralement, est désormais interdit nommément. Élargir la reconnaissance à
+   * une balise sûre tout en fermant la balise dangereuse laisse le cliquet plus
+   * strict qu'avant, pas moins.
+   */
   function untaggedInterpolations(source: string): string[] {
     const found: string[] = [];
-    const templates = /(\$queryRaw)?`([^`]*)`/g;
+    const templates = /(\$queryRaw|Prisma\.sql)?`([^`]*)`/g;
     let match: RegExpExecArray | null;
 
     while ((match = templates.exec(source)) !== null) {
@@ -359,6 +376,14 @@ describe('Cliquet de source — l’interpolation ne peut pas revenir en silence
         // l'assertion suivante ne voudrait rien dire.
         expect((CODE.match(/`/g) ?? []).length % 2).toBe(0);
         expect(untaggedInterpolations(CODE)).toEqual([]);
+      });
+
+      // S-E01-5 / PF-207 — la contrepartie de l'élargissement ci-dessus.
+      // `Prisma.sql` lie ses valeurs ; `Prisma.raw` les COLLE dans le texte SQL.
+      // Reconnaître la première sans interdire le second aurait ouvert exactement
+      // le trou que ce cliquet existe pour fermer.
+      it('n’emploie pas `Prisma.raw`, qui réinjecte du texte SQL non lié', () => {
+        expect(CODE).not.toContain('Prisma.' + 'raw');
       });
 
       it.each([
