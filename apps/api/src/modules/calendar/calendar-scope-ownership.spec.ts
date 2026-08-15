@@ -7,6 +7,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
+import { APP_ROLE_REQUIRED_PRIVILEGES, privilegeKey } from '../../shared/prisma/tenant-scope';
 import type { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import type { SchoolContextService } from '../school-structure/school-context.service';
 import type { StudentAccessService } from '../students/student-access.service';
@@ -688,5 +689,87 @@ describe('AC-5 / AC-6 / AC-9 — assertions de SOURCE (G-PORTAL, G-DNC, la prém
     // Cette story ne remédie AUCUNE ligne existante : la moitié rétroactive est
     // PF-205 (le FK composite valide les lignes déjà écrites en les créant).
     expect(listBlock).not.toContain('tenantId: true');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * AC-10 — LA CLÔTURE RELATIONNELLE DÉCLARÉE DOIT SUIVRE LES SITES D'APPEL.
+ *
+ * `APP_ROLE_REQUIRED_PRIVILEGES` (`tenant-scope.ts:122`) est la liste, TENUE À LA
+ * MAIN, de ce dont le module converti a besoin sur la connexion `app_user`. Elle
+ * n'est pas décorative : `appRoleVerdict` la parcourt au DÉMARRAGE, et un
+ * privilège manquant fait retomber le déploiement en `degraded_no_app_url` — RLS
+ * éteint, jauge `pilotage_tenant_scope_enforced` à 0 — au lieu de démarrer
+ * enforcé. Son propre commentaire le dit : « convertir un module, c'est convertir
+ * sa CLÔTURE RELATIONNELLE, jamais sa seule table ».
+ *
+ * Or RIEN ne couplait cette liste au code. Elle a été écrite quand le module
+ * n'émettait que `calendar_event` et `enrollment` depuis l'intérieur d'une
+ * portée ; les sondes de propriété de S-E01-5 en ajoutent QUATRE tables, et la
+ * liste ne l'a pas su. Trois d'entre elles (`cycle`, `grade_level`,
+ * `class_section`) y figuraient DÉJÀ — par chance, pour l'`include` de `list` —
+ * et `academic_year` n'y figurait PAS.
+ *
+ * Ce test est le couplage manquant : il DÉRIVE les privilèges depuis les sites
+ * d'appel réels du contrôleur et exige que la liste les couvre. C'est la seule
+ * assertion du fichier qui parle du DÉPLOIEMENT plutôt que du handler, et c'est
+ * celle qui vire au rouge automatiquement à la prochaine sonde ajoutée.
+ */
+describe('AC-10 — les sites d’appel Prisma du contrôleur ⊆ la clôture déclarée', () => {
+  const SOURCE = readFileSync(join(__dirname, 'calendar.controller.ts'), 'utf8');
+
+  /** `verbe Prisma -> privilège SQL`. Un verbe inconnu ÉCHOUE, il n'est pas ignoré. */
+  const VERB_PRIVILEGE: Record<string, string> = {
+    aggregate: 'SELECT',
+    count: 'SELECT',
+    findFirst: 'SELECT',
+    findMany: 'SELECT',
+    findUnique: 'SELECT',
+    groupBy: 'SELECT',
+    create: 'INSERT',
+    createMany: 'INSERT',
+    update: 'UPDATE',
+    updateMany: 'UPDATE',
+    delete: 'DELETE',
+    deleteMany: 'DELETE',
+  };
+
+  /** `academicYear` -> `academic_year`, la convention `@@map` de tout le schéma. */
+  const toTable = (model: string): string =>
+    model.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
+
+  /** Chaque `tx.<modèle>.<verbe>(` — donc chaque instruction émise DANS une portée. */
+  const sites = [...SOURCE.matchAll(/\btx\s*\.\s*(\w+)\s*\.\s*(\w+)\s*\(/g)].map(([, model, verb]) => ({
+    model: String(model),
+    verb: String(verb),
+    table: toTable(String(model)),
+  }));
+
+  it('le corpus de sites d’appel est NON VIDE et n’utilise que des verbes connus', () => {
+    // Une regex qui ne matche plus rien rendrait le test ci-dessous vert à vide :
+    // c'est le mode de défaillance normal d'une assertion dérivée.
+    expect(sites.length).toBeGreaterThanOrEqual(13);
+    const unknown = sites.filter((s) => VERB_PRIVILEGE[s.verb] === undefined);
+    expect(unknown.map((s) => `${s.model}.${s.verb}`)).toEqual([]);
+  });
+
+  it('chaque (table, privilège) émis par le contrôleur est DÉCLARÉ dans APP_ROLE_REQUIRED_PRIVILEGES', () => {
+    const declared = new Set(
+      APP_ROLE_REQUIRED_PRIVILEGES.map((r) => privilegeKey(r.table, r.privilege)),
+    );
+
+    const missing = [
+      ...new Set(
+        sites
+          .map((s) => privilegeKey(s.table, VERB_PRIVILEGE[s.verb] ?? 'UNKNOWN'))
+          .filter((key) => !declared.has(key)),
+      ),
+    ].sort();
+
+    // Le message NOMME ce qui manque : un rouge ici se corrige en une ligne dans
+    // `tenant-scope.ts`, pas en une enquête.
+    expect(missing).toEqual([]);
   });
 });

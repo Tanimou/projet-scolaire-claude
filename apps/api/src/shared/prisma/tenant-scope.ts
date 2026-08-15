@@ -116,8 +116,16 @@ export interface AppRolePrivilegeRequirement {
  * clôture relationnelle, jamais sa seule table. C'est la phrase dont l'auteur du
  * module suivant a besoin.
  *
- * Vérifié contre `20260813120000_tenant_rls_policies` : les cinq tables sont
+ * Vérifié contre `20260813120000_tenant_rls_policies` : les six tables sont
  * dans les 44 accordées à `app_user`.
+ *
+ * S-E01-5 — CETTE LISTE EST TENUE À LA MAIN, ET ELLE A DÉJÀ DÉCROCHÉ UNE FOIS.
+ * Les sondes de propriété de `calendar.controller.ts` ont ajouté quatre tables
+ * aux instructions émises DANS la portée ; trois y figuraient déjà par chance
+ * (l'`include` de `list`), `academic_year` n'y figurait pas. Le couplage est
+ * désormais TESTÉ — `calendar-scope-ownership.spec.ts`, AC-10, dérive les
+ * privilèges des sites d'appel `tx.<modèle>.<verbe>(` du contrôleur et exige que
+ * cette liste les couvre. Toute sonde ajoutée sans ligne ici vire au ROUGE.
  */
 export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[] = Object.freeze([
   { table: 'calendar_event', privilege: 'SELECT', why: 'list + les deux gardes findUnique' },
@@ -125,9 +133,15 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
   { table: 'calendar_event', privilege: 'UPDATE', why: 'update' },
   { table: 'calendar_event', privilege: 'DELETE', why: 'remove' },
   { table: 'enrollment', privilege: 'SELECT', why: 'branche parent (G-PORTAL)' },
-  { table: 'class_section', privilege: 'SELECT', why: 'include de list' },
-  { table: 'cycle', privilege: 'SELECT', why: 'include de list' },
-  { table: 'grade_level', privilege: 'SELECT', why: 'include de list' },
+  { table: 'class_section', privilege: 'SELECT', why: 'include de list + sonde de propriété' },
+  { table: 'cycle', privilege: 'SELECT', why: 'include de list + sonde de propriété' },
+  { table: 'grade_level', privilege: 'SELECT', why: 'include de list + sonde de propriété' },
+  {
+    table: 'academic_year',
+    privilege: 'SELECT',
+    why: 'S-E01-5 — sonde de propriété de `createEvent` : sans ce privilège, la sonde ' +
+      'lève permission denied sur CHAQUE création d’événement dès que RLS est enforcé',
+  },
 ]);
 
 /** Ce que la sonde ramène de la connexion sous test. */
