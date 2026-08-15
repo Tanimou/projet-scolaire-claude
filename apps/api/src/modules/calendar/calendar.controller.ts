@@ -13,7 +13,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { CalendarEventScope, CalendarEventType, CalendarEventVisibility } from '@prisma/client';
+// `Prisma` est importé en VALEUR pour le seul `instanceof
+// Prisma.PrismaClientKnownRequestError` du chemin porté (mapping P2025 -> 404).
+import { CalendarEventScope, CalendarEventType, CalendarEventVisibility, Prisma } from '@prisma/client';
 import {
   IsBoolean,
   IsDateString,
@@ -39,7 +41,7 @@ import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
-import { PrismaService } from '../../shared/prisma/prisma.service';
+import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 import { StudentAccessService } from '../students/student-access.service';
 
@@ -136,13 +138,41 @@ export class SeedHolidaysDto {
   @IsOptional() @IsBoolean() dryRun?: boolean;
 }
 
+/**
+ * S-E01-1d — le refus RLS d'une écriture doit garder la MÊME forme HTTP que la
+ * garde applicative, sinon la sécurisation crée un ORACLE D'EXISTENCE.
+ *
+ * Aujourd'hui, l'`if` de `update` / `remove` renvoie 404 pour l'événement d'un
+ * autre tenant. Sous un GUC posé sur une connexion non propriétaire,
+ * `calendarEvent.update({ where: { id } })` sur une ligne non visible lève
+ * `P2025`, que Nest transforme en **500**. Un 500 là où la garde donne un 404
+ * distingue « existe chez un autre tenant » de « n'existe pas » — un oracle que
+ * le code d'AVANT cette story n'avait pas, introduit par le durcissement
+ * lui-même.
+ *
+ * On mappe donc `P2025` sur `NotFoundException` : le plancher base et la garde
+ * applicative deviennent EXTÉRIEUREMENT INDISCERNABLES. La garde applicative
+ * n'est PAS supprimée pour autant — défense en profondeur, et la retirer serait
+ * un changement de visibilité déguisé en correctif.
+ *
+ * Conséquence côté UI, et c'est le contrat de copie de cette story : `aucun
+ * changement visible`. `CalendarManager.tsx` affiche `res.error` verbatim ; un
+ * message Postgres brut y atterrirait non traduit devant un administrateur.
+ */
+function mapWriteRefusal(error: unknown): unknown {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+    return new NotFoundException();
+  }
+  return error;
+}
+
 @ApiTags('calendar')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('calendar')
 export class CalendarController {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly scope: TenantScopeService,
     private readonly users: UserSyncService,
     private readonly ctx: SchoolContextService,
     private readonly studentAccess: StudentAccessService,
@@ -159,8 +189,13 @@ export class CalendarController {
     @Query('academicYearId') academicYearId?: string,
   ) {
     const me = await this.users.ensureUser(jwt);
-    const { schoolId } = await this.ctx.forTenant(me.tenantId);
-    const where: Record<string, unknown> = { tenantId: me.tenantId, schoolId };
+    // UNE seule expression du tenant, réutilisée par le filtre ET par la portée.
+    // Deux lectures séparées de `me.tenantId` pourraient diverger, et une portée
+    // dont le GUC ne vaut pas le `where.tenantId` rend `{ data: [] }` avec un
+    // 200 — indiscernable, dans les quatre portails, d'une école sans événement.
+    const tenantId = me.tenantId;
+    const { schoolId } = await this.ctx.forTenant(tenantId);
+    const where: Record<string, unknown> = { tenantId, schoolId };
     if (from || to) {
       where.startsAt = {
         ...(from ? { gte: new Date(from) } : {}),
@@ -180,21 +215,38 @@ export class CalendarController {
     const roles = jwt.realm_access?.roles ?? [];
     const isPrivileged =
       roles.includes('super_admin') || roles.includes('school_admin') || roles.includes('teacher');
-    const classSectionIds = isPrivileged
-      ? []
-      : await this.resolveParentClassSectionIds(me, jwt, schoolId);
-    Object.assign(where, calendarVisibilityWhere(roles, classSectionIds));
 
-    const events = await this.prisma.calendarEvent.findMany({
-      where,
-      orderBy: { startsAt: 'asc' },
-      include: {
-        cycle: { select: { name: true, code: true } },
-        gradeLevel: { select: { name: true, code: true } },
-        classSection: { select: { name: true } },
-      },
+    // HORS PORTÉE, et par nécessité : `scopeForUser` lit `guardianship` /
+    // `student` pour un parent, sur la connexion du PROPRIÉTAIRE. L'appeler
+    // depuis l'intérieur de la portée ferait détenir DEUX connexions au
+    // processus pendant toute la transaction interactive.
+    const parentStudentIds = isPrivileged
+      ? null
+      : (await this.studentAccess.scopeForUser(me, jwt, schoolId)).studentIds;
+
+    // PORTÉE TARDIVE : tout ce qui précède est terminé. À l'intérieur, au plus
+    // DEUX instructions (AC-8) — les inscriptions du parent puis les événements.
+    return this.scope.run(tenantId, async (tx) => {
+      const classSectionIds =
+        parentStudentIds === null || parentStudentIds.length === 0
+          ? []
+          : await this.resolveParentClassSectionIds(tx, tenantId, parentStudentIds);
+      Object.assign(where, calendarVisibilityWhere(roles, classSectionIds));
+
+      // `include` = CLÔTURE RELATIONNELLE : sous RLS, `cycle`, `grade_level` et
+      // `class_section` doivent PASSER pour le rôle applicatif aussi. Les trois
+      // sont dans les 44 tables accordées ; la sonde de démarrage le vérifie.
+      const events = await tx.calendarEvent.findMany({
+        where,
+        orderBy: { startsAt: 'asc' },
+        include: {
+          cycle: { select: { name: true, code: true } },
+          gradeLevel: { select: { name: true, code: true } },
+          classSection: { select: { name: true } },
+        },
+      });
+      return { data: events };
     });
-    return { data: events };
   }
 
   @Post('events')
@@ -213,32 +265,47 @@ export class CalendarController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
   ) {
     const me = await this.users.ensureUser(jwt);
-    const event = await this.prisma.calendarEvent.findUnique({ where: { id } });
-    if (!event || event.tenantId !== me.tenantId) throw new NotFoundException();
+    const tenantId = me.tenantId;
 
-    const startsAt = body.startsAt ? new Date(body.startsAt) : event.startsAt;
-    const endsAt = body.endsAt ? new Date(body.endsAt) : event.endsAt;
-    if (startsAt > endsAt) {
-      throw new BadRequestException('startsAt doit être avant endsAt.');
-    }
+    // La lecture de garde ET l'écriture dans LA MÊME portée : elles doivent voir
+    // le même GUC. Deux portées successives, ce serait deux transactions, donc
+    // potentiellement deux connexions.
+    return this.scope.run(tenantId, async (tx) => {
+      const event = await tx.calendarEvent.findUnique({ where: { id } });
+      // Garde applicative CONSERVÉE — défense en profondeur. Le plancher RLS ne
+      // la remplace pas : il la double.
+      if (!event || event.tenantId !== tenantId) throw new NotFoundException();
 
-    return this.prisma.calendarEvent.update({
-      where: { id },
-      data: {
-        ...(body.title !== undefined ? { title: body.title } : {}),
-        ...(body.description !== undefined ? { description: body.description } : {}),
-        ...(body.type !== undefined ? { type: body.type } : {}),
-        ...(body.scope !== undefined ? { scope: body.scope } : {}),
-        ...(body.visibility !== undefined ? { visibility: body.visibility } : {}),
-        ...(body.startsAt !== undefined ? { startsAt } : {}),
-        ...(body.endsAt !== undefined ? { endsAt } : {}),
-        ...(body.allDay !== undefined ? { allDay: body.allDay } : {}),
-        ...(body.color !== undefined ? { color: body.color } : {}),
-        ...(body.icon !== undefined ? { icon: body.icon } : {}),
-        ...(body.cycleId !== undefined ? { cycleId: body.cycleId || null } : {}),
-        ...(body.gradeLevelId !== undefined ? { gradeLevelId: body.gradeLevelId || null } : {}),
-        ...(body.classSectionId !== undefined ? { classSectionId: body.classSectionId || null } : {}),
-      },
+      const startsAt = body.startsAt ? new Date(body.startsAt) : event.startsAt;
+      const endsAt = body.endsAt ? new Date(body.endsAt) : event.endsAt;
+      if (startsAt > endsAt) {
+        throw new BadRequestException('startsAt doit être avant endsAt.');
+      }
+
+      try {
+        return await tx.calendarEvent.update({
+          where: { id },
+          data: {
+            ...(body.title !== undefined ? { title: body.title } : {}),
+            ...(body.description !== undefined ? { description: body.description } : {}),
+            ...(body.type !== undefined ? { type: body.type } : {}),
+            ...(body.scope !== undefined ? { scope: body.scope } : {}),
+            ...(body.visibility !== undefined ? { visibility: body.visibility } : {}),
+            ...(body.startsAt !== undefined ? { startsAt } : {}),
+            ...(body.endsAt !== undefined ? { endsAt } : {}),
+            ...(body.allDay !== undefined ? { allDay: body.allDay } : {}),
+            ...(body.color !== undefined ? { color: body.color } : {}),
+            ...(body.icon !== undefined ? { icon: body.icon } : {}),
+            ...(body.cycleId !== undefined ? { cycleId: body.cycleId || null } : {}),
+            ...(body.gradeLevelId !== undefined ? { gradeLevelId: body.gradeLevelId || null } : {}),
+            ...(body.classSectionId !== undefined
+              ? { classSectionId: body.classSectionId || null }
+              : {}),
+          },
+        });
+      } catch (error) {
+        throw mapWriteRefusal(error);
+      }
     });
   }
 
@@ -246,10 +313,18 @@ export class CalendarController {
   @RequiresPermission('calendar.write')
   async remove(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
-    const event = await this.prisma.calendarEvent.findUnique({ where: { id } });
-    if (!event || event.tenantId !== me.tenantId) throw new NotFoundException();
-    await this.prisma.calendarEvent.delete({ where: { id } });
-    return { ok: true };
+    const tenantId = me.tenantId;
+
+    return this.scope.run(tenantId, async (tx) => {
+      const event = await tx.calendarEvent.findUnique({ where: { id } });
+      if (!event || event.tenantId !== tenantId) throw new NotFoundException();
+      try {
+        await tx.calendarEvent.delete({ where: { id } });
+      } catch (error) {
+        throw mapWriteRefusal(error);
+      }
+      return { ok: true };
+    });
   }
 
   /**
@@ -277,6 +352,20 @@ export class CalendarController {
    *
    * Aucun intercepteur partagé n'est construit : la décision de S-E04-1 tient,
    * chaque site appelle le seam explicitement, et l'ensemble reste greppable.
+   *
+   * S-E01-1d — CE HANDLER EST DÉLIBÉRÉMENT HORS DE LA PORTÉE TENANT, et c'est
+   * une exclusion NOMMÉE, pas un oubli. `CalendarSeedService` ouvre son propre
+   * `this.prisma.$transaction(...)` sur le service injecté : imbriqué dans une
+   * portée, il n'aurait PAS été attrapé par le typage `Prisma.TransactionClient`
+   * de `withTenant`, parce que le service se referme sur SON PrismaService.
+   * Prisma ouvrirait alors une seconde transaction indépendante sur la connexion
+   * du PROPRIÉTAIRE, où aucun GUC n'est posé — ça marcherait, en silence, hors
+   * de la portée. C'est le danger d'AC-5, vivant, dans le module choisi.
+   *
+   * C'est aussi le chemin audit-dans-la-transaction d'ADR-035 : les 22
+   * événements et LA ligne d'audit tiennent dans une transaction unique, et les
+   * séparer pour faire entrer la portée serait payer la conversion en garantie
+   * d'audit. Le convertir est sa propre story (PF-198).
    */
   @Post('events/seed-french-holidays')
   @RequiresPermission('calendar.write')
@@ -309,26 +398,25 @@ export class CalendarController {
 
   /**
    * Renvoie les `classSectionId` des classes actives des enfants du parent.
-   * Réutilise `StudentAccessService.scopeForUser` pour obtenir les `studentIds`
-   * autorisés, puis lit leurs inscriptions (`Enrollment`) actives. Renvoie un
-   * tableau vide si le parent n'a aucun enfant ou aucune inscription active —
-   * `calendarVisibilityWhere` se rabat alors sur les seuls événements
-   * `school_wide`, ce qui est le comportement de repli sûr.
+   *
+   * S-E01-1d — la méthode reçoit désormais `tx` en PARAMÈTRE LEXICAL et les
+   * `studentIds` DÉJÀ résolus. La moitié `scopeForUser` (qui lit `guardianship`
+   * / `student`) a été remontée dans `list`, AVANT l'ouverture de la portée :
+   * elle résout l'identité, donc elle ne peut pas s'exécuter sous un GUC qu'elle
+   * n'a pas encore produit. Le repli reste identique — tableau vide si le parent
+   * n'a aucun enfant ou aucune inscription active, et `calendarVisibilityWhere`
+   * se rabat alors sur les seuls événements `school_wide` (G-PORTAL).
    */
   private async resolveParentClassSectionIds(
-    me: { id: string; tenantId: string },
-    jwt: KeycloakJwtPayload,
-    schoolId: string,
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    studentIds: string[],
   ): Promise<string[]> {
-    const scope = await this.studentAccess.scopeForUser(me, jwt, schoolId);
-    // `studentIds: null` = aucune restriction (admin/teacher) : non concerné ici.
-    if (scope.studentIds === null || scope.studentIds.length === 0) return [];
-
-    const enrollments = await this.prisma.enrollment.findMany({
+    const enrollments = await tx.enrollment.findMany({
       where: {
-        tenantId: me.tenantId,
+        tenantId,
         status: 'active',
-        studentId: { in: scope.studentIds },
+        studentId: { in: studentIds },
       },
       select: { classSectionId: true },
     });
@@ -368,26 +456,30 @@ export class CalendarController {
             ? CalendarEventScope.cycle_scope
             : CalendarEventScope.school_wide);
 
-    return this.prisma.calendarEvent.create({
-      data: {
-        tenantId: me.tenantId,
-        schoolId,
-        academicYearId: body.academicYearId,
-        type: body.type,
-        scope: finalScope,
-        visibility: body.visibility ?? CalendarEventVisibility.all,
-        title: body.title,
-        description: body.description,
-        startsAt,
-        endsAt,
-        allDay: body.allDay ?? true,
-        color: body.color,
-        icon: body.icon,
-        cycleId: body.cycleId,
-        gradeLevelId: body.gradeLevelId,
-        classSectionId: body.classSectionId,
-        createdBy: me.id,
-      },
-    });
+    // Toute la validation ci-dessus est PURE et se fait DEHORS : la transaction
+    // interactive ne contient qu'UNE instruction (AC-8).
+    return this.scope.run(me.tenantId, (tx) =>
+      tx.calendarEvent.create({
+        data: {
+          tenantId: me.tenantId,
+          schoolId,
+          academicYearId: body.academicYearId,
+          type: body.type,
+          scope: finalScope,
+          visibility: body.visibility ?? CalendarEventVisibility.all,
+          title: body.title,
+          description: body.description,
+          startsAt,
+          endsAt,
+          allDay: body.allDay ?? true,
+          color: body.color,
+          icon: body.icon,
+          cycleId: body.cycleId,
+          gradeLevelId: body.gradeLevelId,
+          classSectionId: body.classSectionId,
+          createdBy: me.id,
+        },
+      }),
+    );
   }
 }
