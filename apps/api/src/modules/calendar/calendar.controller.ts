@@ -88,6 +88,117 @@ export function calendarVisibilityWhere(
   };
 }
 
+/**
+ * S-E01-5 / PF-204 — LES QUATRE CLÉS ÉTRANGÈRES DE PORTÉE, ET POURQUOI RLS NE
+ * LES COUVRE PAS (ADR-049 §D1, ADR-042 §D6).
+ *
+ * `calendar_event` porte quatre FK MONO-COLONNE qui nomment une portée :
+ * `academicYearId`, `cycleId`, `gradeLevelId`, `classSectionId`. PostgreSQL
+ * évalue l'intégrité référentielle EN DEHORS de la row security : le `WITH
+ * CHECK` de `tenant_isolation` ne voit que `calendar_event.tenant_id`, et la
+ * contrainte qui valide `cycle_id` s'exécute en tant que propriétaire de
+ * `cycle`, policy éteinte. Un `cycleId` d'un AUTRE tenant s'insère donc
+ * proprement sous une policy parfaitement correcte — puis `list`'s `include`
+ * rend son `name` dans le portail parent du tenant A.
+ *
+ * Ces trois helpers sont PURS et SANS Prisma : ils décident QUOI vérifier. La
+ * boucle `findFirst`, elle, est IMPURE et écrite EN LIGNE dans chaque callback
+ * de `this.scope.run(...)` — jamais derrière un `this.<méthode>()`, parce que le
+ * compteur de couverture de `tenant-adversarial-check.js` est LEXICAL et ne
+ * traverse pas `this` (PF-200).
+ */
+
+/** Les trois portées mutuellement exclusives, dans l'ordre d'inférence de `finalScope`. */
+export const SCOPE_ID_FIELDS = ['classSectionId', 'gradeLevelId', 'cycleId'] as const;
+export type ScopeIdField = (typeof SCOPE_ID_FIELDS)[number];
+/** Tout ce dont `createEvent` doit prouver la propriété (l'année scolaire incluse). */
+export type OwnedScopeField = ScopeIdField | 'academicYearId';
+
+/**
+ * Ce que `createEvent` ÉCRIT, donc ce qu'il vérifie — année scolaire comprise,
+ * parce que son bloc `data` la persiste (contrairement à celui d'`update`).
+ * RÈGLE : on vérifie EXACTEMENT les ids que l'on persiste.
+ */
+export const CREATE_OWNED_SCOPE_FIELDS = ['academicYearId', ...SCOPE_ID_FIELDS] as const;
+
+/**
+ * Le corps minimal que lisent les helpers purs.
+ *
+ * `string | null` et non `string | undefined` : `null` est une valeur d'exécution
+ * VIVANTE ici. `CalendarManager.tsx:439-441` envoie `gradeLevelId: null` /
+ * `classSectionId: null` sur CHAQUE enregistrement, y compris `school_wide`, et
+ * `@IsOptional()` laisse passer `null` malgré le `?: string` du DTO.
+ */
+type ScopeIdCarrier = Partial<Record<OwnedScopeField, string | null>>;
+
+/**
+ * Un id est FOURNI s'il est une chaîne non vide. `null` et `''` sont la valeur
+ * « efface ce champ » de l'UI : les vérifier ferait échouer chaque
+ * enregistrement `school_wide` ordinaire (et `findFirst({ where: { id: null } })`
+ * est une erreur de validation Prisma, donc un 500).
+ */
+function isSuppliedScopeId(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+/**
+ * ADR-049 §D3 — AU PLUS UNE portée par corps de requête.
+ *
+ * Ferme un trou de cohérence RÉEL, indépendamment du budget d'instructions qu'il
+ * achète : quand `body.scope` est absent, `finalScope` est INFÉRÉ du premier id
+ * non nul (`:449-457`), et les trois gardes de cohérence testent toutes
+ * `body.X && body.scope && …` — donc elles sont INERTES sans `scope`. Un appelant
+ * fournissant `classSectionId` ET `cycleId` obtenait `class_section_scope` et un
+ * `cycleId` persisté que AUCUNE portée déclarée n'explique.
+ *
+ * Défini sur la VÉRACITÉ, jamais sur la présence de la clé : l'UI admin envoie
+ * toujours les deux, l'un explicitement `null`.
+ */
+export function assertSingleScopeId(body: ScopeIdCarrier): void {
+  const supplied = SCOPE_ID_FIELDS.filter((field) => isSuppliedScopeId(body[field]));
+  if (supplied.length > 1) {
+    throw new BadRequestException(
+      `Un seul périmètre peut être défini à la fois (${supplied.join(', ')} ont été fournis ensemble).`,
+    );
+  }
+}
+
+/**
+ * La LISTE des vérifications de propriété à émettre, dans l'ordre. Pure : elle
+ * ne touche pas la base, elle dit seulement quels couples (champ, id) doivent
+ * être prouvés.
+ */
+export function scopeOwnershipPlan<F extends OwnedScopeField>(
+  body: ScopeIdCarrier,
+  fields: readonly F[],
+): { field: F; id: string }[] {
+  const plan: { field: F; id: string }[] = [];
+  for (const field of fields) {
+    const value = body[field];
+    if (isSuppliedScopeId(value)) plan.push({ field, id: value });
+  }
+  return plan;
+}
+
+/**
+ * ADR-049 §D2 — LE REFUS, et son indiscernabilité PAR CONSTRUCTION.
+ *
+ * « id d'un autre tenant » et « id inexistant » empruntent la MÊME branche
+ * (`findFirst → null`) et produisent donc le MÊME message, à l'octet près. La
+ * réponse ne peut pas distinguer les deux cas — cette distinction serait
+ * elle-même un oracle d'existence inter-tenant (ADR-048 §D9).
+ *
+ * 400 et non 404 : les ids arrivent dans le CORPS, où tous les autres refus de
+ * ces deux handlers sont déjà des 400 français ; un 404 sur `POST` se lirait
+ * « route inconnue » et se confondrait avec le 404 que `update` renvoie déjà pour
+ * un ÉVÉNEMENT d'un autre tenant. Le message nomme le CHAMP (donnée de
+ * l'appelant) et jamais un tenant, une école, une table ni une chaîne Postgres —
+ * `CalendarManager.tsx` l'affiche VERBATIM à un administrateur.
+ */
+export function unknownScopeRef(field: OwnedScopeField): BadRequestException {
+  return new BadRequestException(`Le périmètre sélectionné est introuvable (${field}).`);
+}
+
 class CreateCalendarEventDto {
   @IsString() @MinLength(1) @MaxLength(200) title!: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
@@ -267,6 +378,19 @@ export class CalendarController {
     const me = await this.users.ensureUser(jwt);
     const tenantId = me.tenantId;
 
+    // PUR, donc DEHORS (ADR-049 §D3) : une exclusivité mutuelle ne lit pas la
+    // base, elle ne peut donc rien révéler, et un corps qu'elle refuse n'ouvre
+    // aucune transaction.
+    assertSingleScopeId(body);
+    // S-E01-5 — `update` ne prouve la propriété QUE des ids qu'il ÉCRIT.
+    // `academicYearId` en est délibérément absent : le bloc `data` ci-dessous ne
+    // le persiste pas (mesuré, :288-304). Cette asymétrie avec `createEvent` est
+    // le symptôme de PF-206 (le DTO l'accepte, l'UI l'envoie à chaque
+    // enregistrement, le handler le jette en silence), PAS un trou dans la
+    // vérification ; le test G1 épingle la prémisse en LISANT cette source, pour
+    // qu'ajouter le champ plus tard vire au rouge au lieu de rester muet.
+    const ownership = scopeOwnershipPlan(body, SCOPE_ID_FIELDS);
+
     // La lecture de garde ET l'écriture dans LA MÊME portée : elles doivent voir
     // le même GUC. Deux portées successives, ce serait deux transactions, donc
     // potentiellement deux connexions.
@@ -280,6 +404,49 @@ export class CalendarController {
       const endsAt = body.endsAt ? new Date(body.endsAt) : event.endsAt;
       if (startsAt > endsAt) {
         throw new BadRequestException('startsAt doit être avant endsAt.');
+      }
+
+      // ORDRE, et c'est une exigence (ADR-049 §D1) : les sondes de propriété
+      // passent APRÈS la garde `event.tenantId`. L'appelant n'apprend rien sur
+      // son corps tant qu'il n'a pas prouvé qu'il possède la ligne du chemin.
+      //
+      // `tenantId` EXPLICITE dans le `where`, gardé même là où RLS le rend
+      // redondant (ADR-042 §D1) : exécuté en `app_user` c'est la policy qui
+      // travaille, exécuté en PROPRIÉTAIRE — `degraded_no_app_url`, c'est-à-dire
+      // TOUS les déploiements d'aujourd'hui, et le propriétaire échappe à ses
+      // propres policies — cette clause est la SEULE chose qui travaille.
+      //
+      // `await` séquentiel, jamais `Promise.all` : une transaction interactive
+      // est UNE connexion.
+      for (const ref of ownership) {
+        let owned: { id: string } | null;
+        switch (ref.field) {
+          case 'classSectionId':
+            owned = await tx.classSection.findFirst({
+              where: { id: ref.id, tenantId },
+              select: { id: true },
+            });
+            break;
+          case 'gradeLevelId':
+            owned = await tx.gradeLevel.findFirst({
+              where: { id: ref.id, tenantId },
+              select: { id: true },
+            });
+            break;
+          case 'cycleId':
+            owned = await tx.cycle.findFirst({
+              where: { id: ref.id, tenantId },
+              select: { id: true },
+            });
+            break;
+          default: {
+            // Switch CLOS : un cinquième champ ne compile pas, et à l'exécution
+            // il REFUSE au lieu de passer (échec fermé).
+            const exhaustive: never = ref.field;
+            throw unknownScopeRef(exhaustive);
+          }
+        }
+        if (owned === null) throw unknownScopeRef(ref.field);
       }
 
       try {
@@ -435,6 +602,11 @@ export class CalendarController {
     if (startsAt > endsAt) {
       throw new BadRequestException('startsAt doit être avant endsAt.');
     }
+    // ADR-049 §D3 — AU PLUS UN id de portée, avant tout le reste. Les trois
+    // gardes de cohérence ci-dessous sont inertes quand `body.scope` est absent
+    // (elles testent toutes `&& body.scope`), donc sans cette ligne un second id
+    // se glisse dans la ligne sans qu'aucune portée déclarée ne l'explique.
+    assertSingleScopeId(body);
     // Validate scope consistency: if a scoped id is provided, scope must match.
     if (body.classSectionId && body.scope && body.scope !== 'class_section_scope') {
       throw new BadRequestException("scope doit être 'class_section_scope' si classSectionId est fourni.");
@@ -456,12 +628,62 @@ export class CalendarController {
             ? CalendarEventScope.cycle_scope
             : CalendarEventScope.school_wide);
 
-    // Toute la validation ci-dessus est PURE et se fait DEHORS : la transaction
-    // interactive ne contient qu'UNE instruction (AC-8).
-    return this.scope.run(me.tenantId, (tx) =>
-      tx.calendarEvent.create({
+    // Toute la validation PURE ci-dessus se fait DEHORS — « portée tardive,
+    // fermeture précoce » d'ADR-048 §D3 tient intégralement. Ce qui a migré à
+    // l'INTÉRIEUR, c'est uniquement ce qui NE PEUT PAS être calculé dehors : la
+    // propriété d'un id se lit en base, et se la lire sur la connexion du
+    // propriétaire (qui voit TOUS les tenants) ne serait pas une vérification
+    // plus faible — ce serait le bug lui-même réécrit en vérification.
+    //
+    // BUDGET AMENDÉ (ADR-049 §D4, note datée dans ADR-048 §D3) : au plus TROIS
+    // instructions ici — ≤ 1 sonde de portée (l'exclusivité mutuelle a réduit
+    // trois alternatives à une) + ≤ 1 sonde d'année scolaire + le `create`.
+    const tenantId = me.tenantId;
+    const ownership = scopeOwnershipPlan(body, CREATE_OWNED_SCOPE_FIELDS);
+
+    return this.scope.run(tenantId, async (tx) => {
+      // Même forme, même raison qu'en `update` : `tenantId` EXPLICITE dans le
+      // `where` (ADR-042 §D1) pour que la vérification soit correcte MÊME sans
+      // RLS dessous, et `findFirst` plutôt que `findUnique` pour que « d'un
+      // autre tenant » et « inexistant » soient LA MÊME branche.
+      for (const ref of ownership) {
+        let owned: { id: string } | null;
+        switch (ref.field) {
+          case 'academicYearId':
+            owned = await tx.academicYear.findFirst({
+              where: { id: ref.id, tenantId },
+              select: { id: true },
+            });
+            break;
+          case 'classSectionId':
+            owned = await tx.classSection.findFirst({
+              where: { id: ref.id, tenantId },
+              select: { id: true },
+            });
+            break;
+          case 'gradeLevelId':
+            owned = await tx.gradeLevel.findFirst({
+              where: { id: ref.id, tenantId },
+              select: { id: true },
+            });
+            break;
+          case 'cycleId':
+            owned = await tx.cycle.findFirst({
+              where: { id: ref.id, tenantId },
+              select: { id: true },
+            });
+            break;
+          default: {
+            const exhaustive: never = ref.field;
+            throw unknownScopeRef(exhaustive);
+          }
+        }
+        if (owned === null) throw unknownScopeRef(ref.field);
+      }
+
+      return tx.calendarEvent.create({
         data: {
-          tenantId: me.tenantId,
+          tenantId,
           schoolId,
           academicYearId: body.academicYearId,
           type: body.type,
@@ -479,7 +701,7 @@ export class CalendarController {
           classSectionId: body.classSectionId,
           createdBy: me.id,
         },
-      }),
-    );
+      });
+    });
   }
 }

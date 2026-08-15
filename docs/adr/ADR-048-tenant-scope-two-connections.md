@@ -94,6 +94,28 @@ That is a real cost, and this slice pays it on four handlers that previously ran
 
 Maximum **2**. `set_config` is not counted; it is the seam's own statement.
 
+> **AMENDED 2026-08-15 by `ADR-049 §D4` (`S-E01-5`, closing `PF-204`) — the maximum is now 3, and the NUMBER is
+> replaced by a RULE.**
+>
+> The sentence below — *"all validation is pure and happens outside"* — was true of the validation that existed when
+> this table was measured, and **false as a general claim**. `PF-204` is a scope foreign key that must be checked for
+> **ownership**, and ownership validation is **not pure**: it needs the database, and it must run **inside** the
+> scope, because running it outside would validate against the owner connection, which can see every tenant — the bug
+> re-implemented as a check. So the amendment is a real cost, argued in `ADR-049 §D4`, not a number quietly moved.
+>
+> The amended maximum is **3**, on the two **write** handlers only, and only when the body names a scope id:
+> `update` 2 → **3** (guard read, ≤ 1 ownership probe, write), `create` 1 → **3** (≤ 1 scope-id probe, ≤ 1
+> `academicYearId` probe, write). `list` and `remove` are **unchanged**; **no read path gains a statement**. The
+> worst case is held at 3 rather than 4 by `ADR-049 §D3`, which makes the three scope ids mutually exclusive — a
+> hardening that also closes the inference hole at `calendar.controller.ts:449-457`.
+>
+> **What replaces "≤ 2", and it is stricter where it matters:** `≤ 2` was a *measurement* with no principle under it,
+> which is why it could not survive the first non-pure validation. The invariant is now — *the number of statements
+> inside a tenant scope must be bounded by the **schema**, never by the **request***. A handler doing
+> `for (const id of body.ids) await tx.x.findFirst(…)` violates it **even at count 2 today**, because a caller can
+> make it 500 tomorrow; the old numeric bound would have passed it. The table above and the one in `ADR-049 §D4`
+> remain as the audit trail of the constant; the invariant is what the next converting module must satisfy.
+
 The rule this yields, and it is the reusable part: **late scope, early close.** Everything on the owner connection
 finishes before the scope opens. Concretely — **identity resolution, bulk imports and reports never enter a scope**.
 `UserSyncService.ensureUser` reads `user_profile` (a policied table) to resolve a profile from a Keycloak `sub`

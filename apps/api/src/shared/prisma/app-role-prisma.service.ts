@@ -5,7 +5,10 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { PrismaClient, type Prisma } from '@prisma/client';
+// `Prisma` est importé EN VALEUR (et plus seulement en type) parce que la sonde
+// de privilèges construit sa liste de tables avec `Prisma.sql` / `Prisma.join`
+// au lieu de la recopier à la main — voir le commentaire dans `probeAppRole`.
+import { PrismaClient, Prisma } from '@prisma/client';
 
 import { tenantScopeEnforced } from '../../modules/metrics/metrics.registry';
 
@@ -254,13 +257,30 @@ export async function probeAppRole(client: AppRoleProbeClient): Promise<AppRoleP
     };
   }
 
+  // S-E01-5 — LA LISTE DES TABLES SONDÉES EST DÉRIVÉE, PLUS JAMAIS RECOPIÉE.
+  //
+  // Elle était écrite EN DUR ici (cinq noms) tandis que la clôture exigée vit
+  // dans `APP_ROLE_REQUIRED_PRIVILEGES`. Deux listes tenues à la main, et ce
+  // slice les a fait DIVERGER : la sonde de propriété de `createEvent` a ajouté
+  // `academic_year` à la clôture, mais la requête ne le DEMANDAIT pas — la clé
+  // manquait donc du résultat, ce qui se lit exactement comme « non accordé ».
+  // `appRoleVerdict` renvoyait alors `refused_unusable` sur une base pourtant
+  // correctement accordée, et le calendrier répondait 503 sur les quatre
+  // portails. Mesuré : `scripts/tenant-scope-check.js` ROUGE deux fois de suite
+  // sur `academic_year.SELECT` alors que `has_table_privilege` disait `true` en
+  // psql sur la même base — l'écart entre les deux listes, pas entre le code et
+  // la base. Dériver supprime la classe entière : une entrée ajoutée à la
+  // clôture est désormais sondée par construction.
+  const probedTables = [...new Set(APP_ROLE_REQUIRED_PRIVILEGES.map((r) => r.table))];
+  const tableList = Prisma.join(probedTables.map((t) => Prisma.sql`(${t})`));
+
   const privilegeRows = (await client.$queryRaw`
     SELECT
       c.relname::text AS table_name,
       p.priv::text AS privilege,
       has_table_privilege(current_user, c.oid, p.priv) AS held
     FROM (
-      VALUES ('calendar_event'), ('enrollment'), ('class_section'), ('cycle'), ('grade_level')
+      VALUES ${tableList}
     ) AS t(name)
     JOIN pg_class c ON c.relname = t.name
     JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
