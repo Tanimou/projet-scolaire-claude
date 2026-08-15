@@ -3,6 +3,8 @@ import 'next-auth/jwt';
 import Credentials from 'next-auth/providers/credentials';
 import Keycloak from 'next-auth/providers/keycloak';
 
+import { portalProviderId, resolvePortalClientId } from '@/lib/keycloak-clients';
+
 const KEYCLOAK_REALM = process.env.KEYCLOAK_REALM ?? 'pilotage-scolaire';
 // Internal issuer — reachable from the web container (server-side ROPC, refresh,
 // and OIDC discovery/token go here).
@@ -17,26 +19,18 @@ const KEYCLOAK_PUBLIC_ISSUER = `${
 // Server-side direct calls (ROPC login, token refresh) always use the internal URL.
 const KEYCLOAK_ISSUER = KEYCLOAK_INTERNAL_ISSUER;
 
-const PORTAL_FROM_PROVIDER = {
-  'keycloak-admin': 'admin',
-  'keycloak-teacher': 'teacher',
-  'keycloak-parent': 'parent',
-  'keycloak-student': 'student',
-} as const;
-
 type Portal = 'admin' | 'teacher' | 'parent' | 'student';
 const PORTALS: ReadonlyArray<Portal> = ['admin', 'teacher', 'parent', 'student'];
 
 /**
- * OIDC client reuse — E8-S1 / ADR-021. The student portal does NOT get a 4th
- * Keycloak client: it reuses the existing `portal-parent` client (recorded
- * alternative = a dedicated `portal-student` client, not taken in S1). So the
- * student credential lookup resolves to the parent client id/secret. A future
- * dedicated client is opt-in via the `KEYCLOAK_STUDENT_CLIENT_*` env override.
+ * Provider id → portal, DERIVED from the same helper that builds the provider id
+ * (and therefore the OAuth callback path the realm must register). Hand-writing
+ * the four keys here was a second copy of that rule: the realm gate could go
+ * green while this map addressed a callback NextAuth never emits.
  */
-const CLIENT_PORTAL_OVERRIDE: Partial<Record<Portal, Portal>> = {
-  student: 'parent',
-};
+const PORTAL_FROM_PROVIDER: Readonly<Record<string, Portal | undefined>> = Object.freeze(
+  Object.fromEntries(PORTALS.map((portal) => [portalProviderId(portal), portal])),
+);
 
 declare module 'next-auth' {
   interface Session {
@@ -67,22 +61,25 @@ declare module 'next-auth/jwt' {
   }
 }
 
+/**
+ * ADR-050 / S-E01-4a. The client id is resolved by the ONE shared accessor the
+ * login pages also call — there is no alias map and no local literal, so a portal
+ * can no longer resolve to another portal's client (PF-18). The per-portal
+ * `KEYCLOAK_<PORTAL>_CLIENT_ID` override still wins, but it can only ever rename
+ * the client of the portal it names.
+ *
+ * The SECRET stays here, server-side, and is never exported: `keycloak-clients.ts`
+ * is reachable from a client component's server parent. Its dev fallback is
+ * DERIVED from the resolved id (`change-me-<client id>`), which is exactly the
+ * placeholder `infra/keycloak/realm-export.json` ships for each client — one
+ * derivation instead of two hand-maintained lists.
+ */
 function clientCreds(portal: Portal) {
-  // An explicit per-portal env var always wins (lets an operator promote the
-  // student portal to its own client later). Absent that, a portal may reuse
-  // another portal's client (ADR-021: student → parent client reuse).
-  const explicitId = process.env[`KEYCLOAK_${portal.toUpperCase()}_CLIENT_ID`];
-  const explicitSecret = process.env[`KEYCLOAK_${portal.toUpperCase()}_CLIENT_SECRET`];
-  const clientPortal = CLIENT_PORTAL_OVERRIDE[portal] ?? portal;
+  const clientId = resolvePortalClientId(portal, process.env);
   return {
-    clientId:
-      explicitId ??
-      process.env[`KEYCLOAK_${clientPortal.toUpperCase()}_CLIENT_ID`] ??
-      `portal-${clientPortal}`,
+    clientId,
     clientSecret:
-      explicitSecret ??
-      process.env[`KEYCLOAK_${clientPortal.toUpperCase()}_CLIENT_SECRET`] ??
-      `change-me-portal-${clientPortal}`,
+      process.env[`KEYCLOAK_${portal.toUpperCase()}_CLIENT_SECRET`] ?? `change-me-${clientId}`,
   };
 }
 
@@ -94,7 +91,7 @@ const portalClient = (portal: Portal) => {
   // KC_HOSTNAME + backchannel-dynamic make the discovery doc advertise the public
   // issuer/authorization endpoint but internal token/jwks endpoints.
   const provider = Keycloak({
-    id: `keycloak-${portal}`,
+    id: portalProviderId(portal),
     name: `Pilotage scolaire — ${portal}`,
     clientId: clientCreds(portal).clientId,
     clientSecret: clientCreds(portal).clientSecret,
@@ -292,11 +289,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async jwt({ token, account, profile, user }) {
       // OIDC redirect (first call after Keycloak callback)
-      if (account && account.provider in PORTAL_FROM_PROVIDER) {
+      const providerPortal = account ? PORTAL_FROM_PROVIDER[account.provider] : undefined;
+      if (account && providerPortal) {
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;
         token.expiresAt = account.expires_at;
-        token.portal = PORTAL_FROM_PROVIDER[account.provider as keyof typeof PORTAL_FROM_PROVIDER];
+        token.portal = providerPortal;
         token.sub = profile?.sub ?? token.sub;
         const roles = rolesFromAccessToken(account.access_token ?? undefined);
         if (roles.length) token.roles = roles;

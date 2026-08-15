@@ -35,7 +35,8 @@
       { "name": "super_admin", "description": "Plateforme — accès global" },
       { "name": "school_admin", "description": "Administrateur d'établissement" },
       { "name": "teacher", "description": "Enseignant" },
-      { "name": "parent", "description": "Parent / tuteur légal" }
+      { "name": "parent", "description": "Parent / tuteur légal" },
+      { "name": "student", "description": "Élève" }
     ]
   },
   "clients": [
@@ -91,6 +92,24 @@
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:3000/parent/login"
+      }
+    },
+    {
+      "clientId": "portal-student",
+      "name": "Portail élève",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "change-me-portal-student",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:3000",
+      "baseUrl": "/student",
+      "redirectUris": ["http://localhost:3000/student/*", "http://localhost:3000/api/auth/callback/student", "http://localhost:3000/api/auth/callback/keycloak-student"],
+      "webOrigins": ["http://localhost:3000"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/student/login"
       }
     },
     {

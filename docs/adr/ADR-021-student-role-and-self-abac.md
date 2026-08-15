@@ -1,6 +1,10 @@
 # ADR-021 — Student role + deny-by-default self-ABAC (the fourth audience)
 
-- **Status:** Accepted
+- **Status:** Accepted — **partially superseded by
+  [ADR-050](./ADR-050-per-portal-oidc-client-identity.md) (2026-08-15)**, which overturns the
+  *"Reuse the `portal-parent` OIDC client (no fourth client)"* decision **only**. The `student` realm-role, INV-1/INV-2,
+  the self-ABAC scope, the `Student.userProfileId` link, the permission set and the flat DTO posture all stand
+  unchanged. Each affected anchor below carries an inline note.
 - **Date:** 2026-06-10
 - **Epic / Slice:** E8 — Student Portal · S1 (student realm-role + self-ABAC + "Mes notes")
 - **Deciders:** Winston (Architect), Critic (Pre-mortem), Murat (Test-Architect)
@@ -96,6 +100,16 @@ crashed because `AppShellRoot` eagerly calls `fetchBranding()` (`GET /branding/m
 
 ### Reuse the `portal-parent` OIDC client (no fourth client)
 
+> **SUPERSEDED by [ADR-050](./ADR-050-per-portal-oidc-client-identity.md) (2026-08-15, `S-E01-4a`).** The student
+> portal now has its **own** confidential client, `portal-student`, declared in `infra/keycloak/realm-export.json`;
+> the alias in `auth.ts` is deleted, not merely unused. **The authorization argument in the paragraph below still
+> stands** — access is gated by the `student` realm role and the portal+role middleware, never by `client_id`, and
+> ADR-050 does not change that. What was overturned is the corollary that reuse was therefore free: it made the
+> student portal's *redirect registration* unstatable, and every attempt to state it widened a **different** client
+> (production's `/api/auth/callback/*` wildcard on `portal-parent`, `PF-209`). Promotion is still a config-only move
+> in the other direction: `KEYCLOAK_STUDENT_CLIENT_ID=portal-parent` restores this ADR's behaviour deliberately and
+> visibly (ADR-050 §D3).
+
 The student portal **reuses the existing `portal-parent` Keycloak OIDC client** rather than
 provisioning a 4th. ADR-004 establishes that `client_id` identifies the *portal of origin* in
 tokens/logs while the *realm role* gates authorization — and S1 authorization rests entirely on
@@ -121,12 +135,21 @@ unservable, not merely unrendered.
 
 ## Rejected alternatives
 
-- **A fourth Keycloak OIDC client (`portal-student`)** — extra realm-config surface for no
+- **A fourth Keycloak OIDC client (`portal-student`)** — **ACCEPTED by
+  [ADR-050](./ADR-050-per-portal-oidc-client-identity.md) (2026-08-15, `S-E01-4a`); the rejection below no longer
+  holds.** Original reasoning, kept for the record: extra realm-config surface for no
   authorization benefit (the realm-role already gates access). Kept as an opt-in env override
   rather than a default. **Accepted cost:** student logins are not distinguishable from parent
   logins by `client_id` in Keycloak logs until that override is flipped (the per-portal-origin
   telemetry ADR-004 lists as a benefit is lost *for the student audience only*); recorded here so
   a later forensics/audit need can enable it as config, not code.
+  **Correction (ADR-050):** that accepted cost was understated. It was not only lost telemetry. The student portal's
+  redirect URIs (`/api/auth/callback/keycloak-student`, `/student/login`) could not be registered on a client that
+  belongs to another portal, so student SSO and student password reset were refused `invalid_redirect_uri` on the
+  provisioning artefact — and in production they were "fixed" by widening `portal-parent` with a cross-portal
+  `/api/auth/callback/*` wildcard (`PF-209`). And because `azp` collapsed to `portal-parent`, **no audience check
+  could distinguish a student token from a parent token** — which is why the audit graded `PF-18`
+  `BROKEN_SECURITY`, not `BROKEN_LINK`.
 - **A `:studentId` path param with an ownership guard** — one bug in the guard exposes a peer. The
   server-resolved-only scope makes a peer **unaddressable**, not merely *guarded*.
 - **Reusing the `parent` realm-role for students** — would let a student reach `/parent` surfaces
@@ -144,12 +167,19 @@ unservable, not merely unrendered.
 - **+** A genuinely self-only fourth audience: no path param, server-resolved id, `[ownId]`/`[]`
   never a peer; additive non-breaking schema link with safe `SetNull` unlink; read-only permission
   set; peer-comparison wall enforced by the DTO type; no new OIDC client, no new infra.
+  *(The "no new OIDC client, no new infra" clause is **superseded by ADR-050**: `portal-student` and the `student`
+  realm role are now declared in `infra/keycloak/realm-export.json`. Every other benefit in this bullet is unaffected —
+  ADR-050 touches identity of the client, not the ABAC scope, the schema link or the DTO shape.)*
 - **−** `branding.read` is now held by all four audiences — acceptable because it is a read of
   shared, non-peer school chrome, but it means "every authenticated user can read school identity"
   is now a platform-wide invariant to honor (do not later attach student-specific data to the
   branding payload).
 - **−** Student logins share the `portal-parent` `client_id` until the env override is set —
   per-audience login telemetry is deferred, not free. Reversible as config.
+  *(**Superseded by ADR-050.** Student logins now carry `azp: portal-student`. Read this bullet as the record of what
+  sharing a `client_id` cost: not deferred telemetry but an unregistrable redirect and an `azp` that could not
+  distinguish two audiences. The **deploy ordering** is the live hazard now — an already-provisioned realm does not
+  gain `portal-student` on re-deploy, so it must be created first; ADR-050 §D3.)*
 - **Honest limitation:** the `student` self-ABAC trusts `Student.userProfileId` as the sole link.
   An incorrect link (wrong account ↔ wrong student) would expose the *wrong* dossier to *one*
   student — never a broad leak, but the provisioning path that sets `userProfileId` MUST be
@@ -159,7 +189,9 @@ unservable, not merely unrendered.
 ## Evidence
 
 - `auth.ts` — `student` realm-role disjoint from the other portals (INV-1) + the `portal-parent`
-  client reuse with a `KEYCLOAK_STUDENT_CLIENT_*` env override.
+  client reuse with a `KEYCLOAK_STUDENT_CLIENT_*` env override. *(**Stale since ADR-050:** the reuse alias is deleted;
+  `auth.ts` resolves the client id through `apps/web/src/lib/keycloak-clients.ts`, which yields `portal-student`. The
+  `KEYCLOAK_STUDENT_CLIENT_*` override survives and is now the only way back to `portal-parent`. INV-1 is unchanged.)*
 - `middleware.ts` — `/student/*` requires the `student` role; a fresh student login lands on
   `/student/grades` (no `/student/dashboard` in S1).
 - `student-access.service.ts` — the `student` branch resolves own studentId → `[ownId]` / `[]`,
