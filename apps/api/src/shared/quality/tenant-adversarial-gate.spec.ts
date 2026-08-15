@@ -505,12 +505,24 @@ describe('AC-1b / AC-5 / AC-6 — qui, sans contexte, et la limite honnête', ()
 
   it('AC-9 — un vert ne s’imprime pas sans le bloc CUTOVER READINESS', () => {
     // PF-02 un cran plus bas : la preuve est VRAIE et la conclusion « on peut
-    // basculer » est FAUSSE. `withTenant` a ZÉRO appelant de production, donc
-    // AC-5 (« pas de GUC ⇒ zéro ligne ») décrit la PANNE, pas la sûreté.
+    // basculer » est FAUSSE. ~~`withTenant` a ZÉRO appelant de production~~ —
+    // DATÉ S-E01-1d : il en a désormais, mais SIX sites d'appel sur 794 sont
+    // couverts, donc AC-5 (« pas de GUC ⇒ zéro ligne ») décrit toujours la PANNE
+    // des 675 sites restants, pas la sûreté.
     expect(CHECKER_CODE).toContain('function cutoverReadiness');
     expect(CHECKER_CODE).toContain('AC-9 CUTOVER READINESS');
     expect(CHECKER_CODE).toContain('THE APPLICATION IS NOT READY TO CUT OVER');
-    expect(CHECKER_CODE).toContain('.withTenant\\s*\\(');
+    // Le PIN SUIT LE COMPTEUR. Il épinglait `.withTenant\s*\(` — le comptage par
+    // OCCURRENCE DE CHAÎNE que cette story a remplacé, parce que quatre
+    // ouvertures de portée couvrent six sites d'appel et qu'un compteur
+    // d'ouvertures SOUS-ESTIME donc par construction. Épingler l'ancien motif
+    // après l'avoir supprimé du checker, c'est épingler l'absence : le test
+    // devient rouge sur le diff qui le corrige, ce qui est exactement ce qui
+    // vient de se produire. On épingle le NOUVEAU motif, celui qui reconnaît une
+    // ouverture de portée avec son RÉCEPTEUR (un `.run(` nu ne suffit pas — il y
+    // en a cinq dans l'arbre qui n'ouvrent aucune portée, dont `store.run`).
+    expect(CHECKER_CODE).toContain('SCOPE_OPENING_RE');
+    expect(CHECKER_CODE).toContain('(withTenant|run)\\s*\\(');
     // …et la moitié « tables non accordées atteintes par du code de production ».
     expect(CHECKER_CODE).toContain('UNGRANTED');
     expect(CHECKER_CODE).toContain('prismaModelName');
@@ -1006,8 +1018,19 @@ describe('TOOL-33 — la preuve exécutée est câblée APRÈS le build, dans le
   function checkerScopePattern(): RegExp {
     // `require`, jamais `import` : le fichier est du CommonJS hors du tsconfig de
     // l'application, et son `main()` est derrière `require.main === module` — le
-    // charger ne crée donc AUCUNE base de données. La règle
-    // `no-require-imports` est déjà désactivée pour ce fichier plus haut.
+    // charger ne crée donc AUCUNE base de données.
+    //
+    // La directive ci-dessous est NÉCESSAIRE, et le commentaire qu'elle remplace
+    // affirmait exactement le contraire : « la règle est déjà désactivée pour ce
+    // fichier plus haut » est FAUX. Le `eslint-disable` de la ligne 71 est refermé
+    // par un `eslint-enable` ligne 138 — c'est un BLOC, pas une portée de fichier —
+    // donc ce site, mille lignes plus bas, n'a jamais été couvert. MESURÉ, pas
+    // supposé : le gate a rendu `1011:19 error A require() style import is
+    // forbidden`, et c'est la seule erreur de tout le lint. Un commentaire qui
+    // AFFIRME une contrainte au lieu de la vérifier est le défaut que ce dépôt a
+    // déjà payé trois fois (TOOL-22, TOOL-23, TOOL-25) : on désactive donc À LA
+    // LIGNE, où la portée est visible depuis le site lui-même.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const proof = require(join(REPO_ROOT, 'scripts', 'tenant-scope-check.js')) as {
       SCRATCH_NAME_PATTERN: RegExp;
     };
