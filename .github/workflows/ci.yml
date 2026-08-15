@@ -122,7 +122,7 @@ jobs:
       # infra/kc-prod-redirects.mjs — injective, total, closed, env-safe, plus a
       # four-portal vacuity floor.
       # It is unconditional for the same reason its ci-gate.sh sibling is:
-      # ci-gate.sh:330's GATE_MACHINERY excludes apps/web, so the api spec that
+      # ci-gate.sh:362's GATE_MACHINERY excludes apps/web, so the api spec that
       # states these invariants does not run on a fast-tier PR editing the
       # accessor. Source-only (~1.5s): no build, no database, no Docker, no
       # generated Prisma client, so it belongs in this job (PF-126). Blocking: the
