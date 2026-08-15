@@ -201,6 +201,38 @@ run_stage 120 "audit writes" node scripts/audit-write-check.js
 # Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
 run_stage 120 "csv escapers (one neutraliser, two escapers)" node scripts/csv-escape-check.js
 
+# Stage 0d-ter — per-portal OIDC client identity (S-E01-4b, gates G-AUTHZ /
+# G-PORTAL / G-DNC).
+#
+# It derives the rule by EXECUTING the production accessor
+# (apps/web/src/lib/keycloak-clients.ts, via ts.transpileModule → node:vm), never
+# by parsing its constants: PF-18's actual shape was an alias INSIDE a function
+# body, which leaves CLIENT_ID_PREFIX untouched, so a constant-lifting gate would
+# be green over a restored BROKEN_SECURITY. It then asserts a BIJECTION portal ↔
+# client — injective, total, closed, env-safe, with a four-portal vacuity floor —
+# against infra/keycloak/realm-export.json and infra/kc-prod-redirects.mjs.
+# Executed fail-before/pass-after against that exact mutation plus five others.
+#
+# THIS STAGE EXISTS BECAUSE OF `GATE_MACHINERY` AT LINE 362 OF THIS FILE, which is
+# '^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)' with an else-branch
+# that runs `test:api --skip src/shared/quality/`. MEASURED: neither
+# apps/web/src/lib/keycloak-clients.ts nor apps/web/src/auth.ts matches it — so
+# keycloak-client-identity-gate.spec.ts, the only executable statement of
+# ADR-050's invariants, DOES NOT RUN on a fast-tier PR that edits the accessor
+# itself, and a regression re-collapsing `azp` lands GATE: PASS.
+#
+# UNCONDITIONAL — a deliberate STRENGTHENING of ADR-052 §D4, which specified a
+# trigger. A trigger is a skip: infra/keycloak/realm-export.json matches no branch
+# of CODE_RE below, so a tier-2 stage would not run on a diff deleting
+# portal-student from the export. At 1.55s (1542/1563/1563 ms over three runs) it
+# is the same class as its tier-1 neighbours, so no trigger is worth the surface.
+# Source-only: no Docker, no database, no build. No --skip, no --update and no
+# environment variable — a flag that skips the identity gate is a DNC-10 hole with
+# a house-style alibi. Decision record:
+# docs/adr/ADR-052-oidc-client-identity-ratchet.md.
+# Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
+run_stage 120 "keycloak client identity (4 portals, 4 clients)" node scripts/keycloak-client-check.js
+
 # ---------------------------------------------------------------------------
 # TIER 2 — the code stages. Run when code changed.
 # ---------------------------------------------------------------------------

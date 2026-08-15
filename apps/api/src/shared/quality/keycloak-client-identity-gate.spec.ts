@@ -315,3 +315,153 @@ describe('S-E01-4a / PF-18 — per-portal OIDC client identity (G-AUTHZ, G-PORTA
     expect(source).not.toMatch(/clientSecret/);
   });
 });
+
+/* -------------------------------------------------------------------------- *
+ * S-E01-4b — the RATCHET, and its anti-drift closure (ADR-052)
+ * -------------------------------------------------------------------------- *
+ *
+ * WHY THIS BLOCK EXISTS AND WHY IT IS NOT REDUNDANT WITH THE ONE ABOVE
+ * -------------------------------------------------------------------
+ * Everything above runs inside the api jest suite, and `scripts/ci-gate.sh:330`
+ * defines `GATE_MACHINERY='^(scripts/|\.github/|infra/|apps/api/src/shared/quality/)'`
+ * with an else-branch that runs `test:api --skip src/shared/quality/`. MEASURED
+ * against that regex: `apps/web/src/lib/keycloak-clients.ts` → no match,
+ * `apps/web/src/auth.ts` → no match, `apps/web/src/lib/portals.ts` → no match. So
+ * a fast-tier PR that reintroduces the PF-18 alias IN THE ACCESSOR ITSELF does not
+ * run one line of the suite above. That is the hole `scripts/keycloak-client-check.js`
+ * closes, and this block is what keeps the script honest and wired.
+ *
+ * THE CLOSURE: TWO INDEPENDENT DERIVATIONS, NEITHER HAND-TYPED
+ * -----------------------------------------------------------
+ * The script reaches the rule by TRANSPILING AND EVALUATING the accessor
+ * (ADR-052 §D1 — a constant-lifting parse is blind to an alias inside a function
+ * body, which is PF-18's actual shape). This spec reaches the same rule through
+ * the COMPILER, via the real `import` at the top of this file. Deep equality
+ * between them is the closure: if the script's evaluation ever drifts from what
+ * the application actually computes, this goes red, and neither side is a
+ * hand-maintained list.
+ */
+
+/* eslint-disable-next-line @typescript-eslint/no-require-imports */
+const keycloakClientCheck = require(
+  resolve(REPO_ROOT, 'scripts', 'keycloak-client-check.js'),
+) as {
+  deriveRule: () => {
+    portals: string[];
+    clientIds: Record<string, string>;
+    providerIds: Record<string, string>;
+    callbackPaths: Record<string, string>;
+    legacyCallbackPaths: Record<string, string>;
+    resetRedirectPaths: Record<string, string>;
+    declaredClientIds: Record<string, string>;
+  };
+  PORTAL_FLOOR: readonly string[];
+  ADR_REL: string;
+};
+
+const CI_GATE = resolve(REPO_ROOT, 'scripts/ci-gate.sh');
+const CI_YML = resolve(REPO_ROOT, '.github/workflows/ci.yml');
+const CHECK_SCRIPT = resolve(REPO_ROOT, 'scripts/keycloak-client-check.js');
+const CHECK_INVOCATION = 'node scripts/keycloak-client-check.js';
+
+/** The same map, built from the COMPILER-CHECKED import rather than from the script. */
+function compiledMap(project: (portal: PortalId) => string): Record<string, string> {
+  return Object.fromEntries(PORTAL_IDS.map((portal) => [portal, project(portal)]));
+}
+
+describe('S-E01-4b / ADR-052 — the OIDC client identity ratchet (G-AUTHZ, G-DNC, G-PORTAL)', () => {
+  const derived = keycloakClientCheck.deriveRule();
+
+  it('AC-2 — the script DERIVES the rule; its evaluation equals the compiled accessor exactly', () => {
+    expect(derived.portals).toEqual([...PORTAL_IDS]);
+    expect(derived.clientIds).toEqual(compiledMap(portalClientId));
+    expect(derived.clientIds).toEqual({ ...PORTAL_CLIENT_IDS });
+    expect(derived.declaredClientIds).toEqual({ ...PORTAL_CLIENT_IDS });
+    expect(derived.callbackPaths).toEqual(compiledMap(portalCallbackPath));
+    expect(derived.resetRedirectPaths).toEqual(compiledMap(portalResetRedirectPath));
+  });
+
+  it('AC-2 — the vacuity floor covers every portal, so a shrunken PORTAL_IDS cannot pass', () => {
+    // Deleting `'student'` from PORTAL_IDS would otherwise shrink the script's
+    // whole domain to three portals and pass over a deleted portal (ADR-052 §D2).
+    for (const portal of PORTAL_IDS) {
+      expect(keycloakClientCheck.PORTAL_FLOOR).toContain(portal);
+    }
+  });
+
+  it('AC-3 — ci-gate.sh runs the script, in TIER 1, OUTSIDE the CODE_RE block', () => {
+    const gate = readFileSync(CI_GATE, 'utf8');
+    expect(gate).toContain(CHECK_INVOCATION);
+
+    // The stage form every meta-test asserts: `run_stage <numeric timeout> "<name>" …`
+    // (ci-gate.sh exits 64 on a non-numeric bound).
+    expect(gate).toMatch(/run_stage\s+\d+\s+"keycloak client identity[^"]*"\s+node scripts\/keycloak-client-check\.js/);
+
+    // OUTSIDE tier 2. `infra/keycloak/realm-export.json` matches NO branch of
+    // CODE_RE (measured), so a stage inside that block would not run on a diff
+    // that deletes portal-student from the export — the hole in a new costume.
+    const stageAt = gate.indexOf(CHECK_INVOCATION);
+    const codeReAt = gate.indexOf('CODE_RE=');
+    const fullAt = gate.indexOf('if [ "$MODE" = full ]');
+    expect(stageAt).toBeGreaterThan(-1);
+    expect(codeReAt).toBeGreaterThan(-1);
+    expect(stageAt).toBeLessThan(codeReAt);
+    // …and outside --full: this is a fast-tier stage, not a release-only one.
+    expect(fullAt).toBeGreaterThan(-1);
+    expect(stageAt).toBeLessThan(fullAt);
+  });
+
+  it('AC-3 — the stage names its ADR by filename and carries the ci.yml anti-drift note, adjacently', () => {
+    const gate = readFileSync(CI_GATE, 'utf8');
+    const stageAt = gate.indexOf(CHECK_INVOCATION);
+    const block = gate.slice(Math.max(0, stageAt - 1400), stageAt);
+    // Named BY FILENAME, so the decision is one grep away from the stage.
+    expect(block).toContain('ADR-052-oidc-client-identity-ratchet.md');
+    // S-E02-2 AC-4: the note lives WITHIN the same comment block, not at the top
+    // of the file, so it stays adjacent when the stage moves.
+    expect(block).toContain(
+      'Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).',
+    );
+    // The reason the stage exists, quoting the hole it closes.
+    expect(block).toContain('GATE_MACHINERY');
+  });
+
+  it('AC-3 — .github/workflows/ci.yml runs it too, and BLOCKING (ci.yml never calls ci-gate.sh)', () => {
+    const workflow = readFileSync(CI_YML, 'utf8');
+    expect(workflow).toContain(`- run: ${CHECK_INVOCATION}`);
+    expect(workflow).not.toContain('bash scripts/ci-gate.sh');
+    // DNC-10: no failure-tolerating key anywhere near the step.
+    const stepAt = workflow.indexOf(`- run: ${CHECK_INVOCATION}`);
+    const around = workflow.slice(stepAt, stepAt + 400);
+    expect(around).not.toContain('continue-on-error');
+    // The mirrored step names its sibling, so a future edit to one is a visible
+    // omission in the other.
+    const before = workflow.slice(Math.max(0, stepAt - 1400), stepAt);
+    expect(before).toContain('Kept in step with scripts/ci-gate.sh stage 0d-ter');
+  });
+
+  it('AC-1 / DNC-10 — the script has no bypass flag, no skip env var and no fail-open branch', () => {
+    const source = readFileSync(CHECK_SCRIPT, 'utf8');
+    // No environment variable can change the verdict. (`process.env` appears in
+    // this file only inside the message that REFUSES a process.env read in the
+    // accessor, so the assertion targets a property ACCESS, not the substring.)
+    expect(source).not.toMatch(/process\.env\s*[.[]/);
+    // No baseline file, no update switch, no skip switch: the only argument is
+    // --help and anything else exits non-zero.
+    expect(source).toContain('unknown argument(s)');
+    expect(source).not.toMatch(/argv\.includes\('--(skip|force|update)'\)/);
+    // It must be able to exit non-zero, and must not exit 0 on a caught failure.
+    expect(source).toContain('process.exit(1)');
+    expect(source).not.toMatch(/process\.exit\(0\)/);
+    // CLI behind the module guard, so requiring it from this spec runs no CLI.
+    expect(source).toContain('if (require.main === module) main();');
+  });
+
+  it('AC-1 — the script audits BOTH artefacts, and a missing client is a failure, not a skip (DNC-08)', () => {
+    const source = readFileSync(CHECK_SCRIPT, 'utf8');
+    expect(source).toContain('infra/keycloak/realm-export.json');
+    expect(source).toContain('infra/kc-prod-redirects.mjs');
+    // The original defect: `client not found (skipped)` then exit 0.
+    expect(source).toContain('treats a missing client as a benign skip');
+  });
+});
