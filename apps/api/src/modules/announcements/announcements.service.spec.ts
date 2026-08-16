@@ -15,6 +15,17 @@ const SCHOOL = 'school-1';
  * Hand-mocked Prisma. Each query returns the configured rows. `students` is the
  * `student.findMany({ where: { id: { in }, userProfileId: { not: null } } })` set
  * (already filtered to linked students in the mock, matching the real query).
+ *
+ * S-E01-1f — CE QUE CE MOCK NE PROUVE PAS, dit explicitement (PM-1). Il rend les
+ * lignes configurées SANS regarder le `where` qu'il reçoit : il ne peut donc pas
+ * établir une propriété de TENANT, et un test d'isolation écrit ici passerait
+ * avant comme après le correctif. Ce fichier épingle l'UNION (E8-S3), rien
+ * d'autre. La fausse base FALSIFIABLE — celle qui filtre réellement sur
+ * `where.tenantId` et qui porte les contrôles négatifs — vit dans
+ * `announcements-scope-ownership.spec.ts`.
+ *
+ * `userProfile.findMany` est la résolution finale ajoutée par S-E01-1f : ici
+ * elle rend TOUT id demandé (tout appartient au tenant du test).
  */
 function makeService(opts: {
   enrollments?: Array<{ studentId: string }>;
@@ -28,12 +39,20 @@ function makeService(opts: {
   const teachingAssignmentFindMany = jest.fn().mockResolvedValue(opts.assignments ?? []);
   const studentFindMany = jest.fn().mockResolvedValue(opts.linkedStudents ?? []);
   const classSectionFindMany = jest.fn().mockResolvedValue(opts.classSections ?? []);
+  const userProfileFindMany = jest.fn(
+    async ({ where }: { where: { id?: { in?: string[] } } }) =>
+      (where?.id?.in ?? []).map((id) => ({ id })),
+  );
+  const userProfileFindFirst = jest.fn(
+    async ({ where }: { where: { id?: string } }) => (where?.id ? { id: where.id } : null),
+  );
   const prisma = {
     enrollment: { findMany: enrollmentFindMany },
     guardianship: { findMany: guardianshipFindMany },
     teachingAssignment: { findMany: teachingAssignmentFindMany },
     student: { findMany: studentFindMany },
     classSection: { findMany: classSectionFindMany },
+    userProfile: { findMany: userProfileFindMany, findFirst: userProfileFindFirst },
   };
   const service = new AnnouncementRecipientsService(prisma as never);
   return { service, studentFindMany, guardianshipFindMany, teachingAssignmentFindMany };
@@ -67,9 +86,12 @@ describe('AnnouncementRecipientsService — E8-S3 additive student receipts', ()
 
     // Guardians + teachers UNCHANGED, PLUS the linked student's own profile.
     expect(recipients).toEqual(new Set(['guardian-1', 'teacher-1', 'student-profile-1']));
-    // The student query is bounded to the enrolled set + guarded by a non-null link.
+    // The student query is bounded to the enrolled set + guarded by a non-null
+    // link — AND carries the tenant predicate S-E01-1f added (PM-2 predicted
+    // this exact-args assertion would go red for the CORRECT change; the fix is
+    // to update the assertion, never to strip `tenantId` from the query).
     expect(studentFindMany).toHaveBeenCalledWith({
-      where: { id: { in: ['stu-1', 'stu-2'] }, userProfileId: { not: null } },
+      where: { tenantId: TENANT, id: { in: ['stu-1', 'stu-2'] }, userProfileId: { not: null } },
       select: { userProfileId: true },
     });
   });

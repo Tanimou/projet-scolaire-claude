@@ -7,6 +7,16 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
+// S-E01-1f / ADR-053 §D2 — les trois helpers PURS ont déménagé dans
+// `shared/prisma/scope-fk.ts` (annonces en est le second consommateur). Seul le
+// CHEMIN d'import change ici : les assertions ci-dessous sont inchangées, à
+// l'ajout près du tuple de champs — désormais explicite, parce que la liste des
+// champs reste LOCALE à chaque module (elle n'est pas partagée).
+import {
+  assertSingleScopeId,
+  scopeOwnershipPlan,
+  unknownScopeRef,
+} from '../../shared/prisma/scope-fk';
 import { APP_ROLE_REQUIRED_PRIVILEGES, privilegeKey } from '../../shared/prisma/tenant-scope';
 import type { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import type { SchoolContextService } from '../school-structure/school-context.service';
@@ -14,12 +24,9 @@ import type { StudentAccessService } from '../students/student-access.service';
 
 import type { CalendarSeedService } from './calendar-seed.service';
 import {
-  assertSingleScopeId,
   CalendarController,
   CREATE_OWNED_SCOPE_FIELDS,
   SCOPE_ID_FIELDS,
-  scopeOwnershipPlan,
-  unknownScopeRef,
 } from './calendar.controller';
 
 /**
@@ -279,13 +286,15 @@ describe('helpers purs — sans Prisma, testables seuls (ADR-049 §D5)', () => {
   it('AC-7 — l’exclusivité est définie sur la VÉRACITÉ, jamais sur la présence de la clé', () => {
     // Le corps RÉEL de l'UI : les deux clés présentes, une seule vraie.
     expect(() =>
-      assertSingleScopeId({ gradeLevelId: OWN_LEVEL, classSectionId: null }),
+      assertSingleScopeId({ gradeLevelId: OWN_LEVEL, classSectionId: null }, SCOPE_ID_FIELDS),
     ).not.toThrow();
-    expect(() => assertSingleScopeId({ gradeLevelId: '', classSectionId: OWN_CLASS })).not.toThrow();
+    expect(() =>
+      assertSingleScopeId({ gradeLevelId: '', classSectionId: OWN_CLASS }, SCOPE_ID_FIELDS),
+    ).not.toThrow();
     // Deux valeurs vraies : refus.
-    expect(() => assertSingleScopeId({ cycleId: OWN_CYCLE, classSectionId: OWN_CLASS })).toThrow(
-      BadRequestException,
-    );
+    expect(() =>
+      assertSingleScopeId({ cycleId: OWN_CYCLE, classSectionId: OWN_CLASS }, SCOPE_ID_FIELDS),
+    ).toThrow(BadRequestException);
   });
 
   it('le plan ne retient QUE les chaînes non vides (PM-1 : `null` n’est pas « fourni »)', () => {
