@@ -43,7 +43,11 @@ import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
-import { isSuppliedScopeId } from '../../shared/prisma/scope-fk';
+import {
+  assertSingleScopeId,
+  scopeOwnershipPlan,
+  unknownScopeRef,
+} from '../../shared/prisma/scope-fk';
 import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import { mapWriteRefusal } from '../../shared/prisma/write-refusal';
 import { SchoolContextService } from '../school-structure/school-context.service';
@@ -126,81 +130,26 @@ export type OwnedScopeField = ScopeIdField | 'academicYearId';
 export const CREATE_OWNED_SCOPE_FIELDS = ['academicYearId', ...SCOPE_ID_FIELDS] as const;
 
 /**
- * Le corps minimal que lisent les helpers purs.
+ * S-E01-1f / ADR-053 §D2 — `ScopeIdCarrier`, `assertSingleScopeId`,
+ * `scopeOwnershipPlan` et `unknownScopeRef` vivent désormais dans
+ * `shared/prisma/scope-fk.ts`, aux côtés d'`isSuppliedScopeId` (déjà promu par
+ * S-E01-1e / ADR-051 §D3). `announcements` est le DEUXIÈME consommateur d'UNE
+ * implémentation, au lieu d'une troisième copie écrite à la main.
  *
- * `string | null` et non `string | undefined` : `null` est une valeur d'exécution
- * VIVANTE ici. `CalendarManager.tsx:439-441` envoie `gradeLevelId: null` /
- * `classSectionId: null` sur CHAQUE enregistrement, y compris `school_wide`, et
- * `@IsOptional()` laisse passer `null` malgré le `?: string` du DTO.
- */
-type ScopeIdCarrier = Partial<Record<OwnedScopeField, string | null>>;
-
-/**
- * `isSuppliedScopeId` — un id est FOURNI s'il est une chaîne non vide — vit
- * désormais dans `shared/prisma/scope-fk.ts` (S-E01-1e / ADR-051 §D3) : le
- * module converti n°2 en a besoin à l'identique, et un prédicat de sécurité
- * recopié à la main est le défaut que ce dépôt a déjà payé. Le prédicat est PUR
- * et sans Prisma ; la boucle `findFirst`, elle, reste écrite EN LIGNE dans
- * chaque callback (PF-200 — l'attribution est lexicale).
- */
-
-/**
- * ADR-049 §D3 — AU PLUS UNE portée par corps de requête.
+ * Ce qui RESTE ici, et pourquoi : la LISTE des champs. `SCOPE_ID_FIELDS` et
+ * `CREATE_OWNED_SCOPE_FIELDS` décrivent ce que `calendar_event` porte — élargir
+ * une union partagée à chaque module en ferait une liste tenue à la main de
+ * plus. Les helpers sont génériques sur `F extends string` et lisent le tuple
+ * qu'on leur passe.
  *
- * Ferme un trou de cohérence RÉEL, indépendamment du budget d'instructions qu'il
- * achète : quand `body.scope` est absent, `finalScope` est INFÉRÉ du premier id
- * non nul (`:449-457`), et les trois gardes de cohérence testent toutes
- * `body.X && body.scope && …` — donc elles sont INERTES sans `scope`. Un appelant
- * fournissant `classSectionId` ET `cycleId` obtenait `class_section_scope` et un
- * `cycleId` persisté que AUCUNE portée déclarée n'explique.
+ * Aucun ré-export de complaisance ici : deux adresses pour une règle est
+ * précisément ce que l'extraction empêche.
  *
- * Défini sur la VÉRACITÉ, jamais sur la présence de la clé : l'UI admin envoie
- * toujours les deux, l'un explicitement `null`.
+ * La boucle `findFirst`, elle, reste écrite EN LIGNE dans chaque callback
+ * `this.scope.run(...)` — jamais derrière un `this.<méthode>()` — parce que le
+ * compteur de couverture de `tenant-adversarial-check.js` est LEXICAL et ne
+ * traverse pas `this` (PF-200).
  */
-export function assertSingleScopeId(body: ScopeIdCarrier): void {
-  const supplied = SCOPE_ID_FIELDS.filter((field) => isSuppliedScopeId(body[field]));
-  if (supplied.length > 1) {
-    throw new BadRequestException(
-      `Un seul périmètre peut être défini à la fois (${supplied.join(', ')} ont été fournis ensemble).`,
-    );
-  }
-}
-
-/**
- * La LISTE des vérifications de propriété à émettre, dans l'ordre. Pure : elle
- * ne touche pas la base, elle dit seulement quels couples (champ, id) doivent
- * être prouvés.
- */
-export function scopeOwnershipPlan<F extends OwnedScopeField>(
-  body: ScopeIdCarrier,
-  fields: readonly F[],
-): { field: F; id: string }[] {
-  const plan: { field: F; id: string }[] = [];
-  for (const field of fields) {
-    const value = body[field];
-    if (isSuppliedScopeId(value)) plan.push({ field, id: value });
-  }
-  return plan;
-}
-
-/**
- * ADR-049 §D2 — LE REFUS, et son indiscernabilité PAR CONSTRUCTION.
- *
- * « id d'un autre tenant » et « id inexistant » empruntent la MÊME branche
- * (`findFirst → null`) et produisent donc le MÊME message, à l'octet près. La
- * réponse ne peut pas distinguer les deux cas — cette distinction serait
- * elle-même un oracle d'existence inter-tenant (ADR-048 §D9).
- *
- * 400 et non 404 : les ids arrivent dans le CORPS, où tous les autres refus de
- * ces deux handlers sont déjà des 400 français ; un 404 sur `POST` se lirait
- * « route inconnue » et se confondrait avec le 404 que `update` renvoie déjà pour
- * un ÉVÉNEMENT d'un autre tenant. Le message nomme le CHAMP (donnée de
- * l'appelant) et jamais un tenant, une école, une table ni une chaîne Postgres —
- * `CalendarManager.tsx` l'affiche VERBATIM à un administrateur.
- */
-export function unknownScopeRef(field: OwnedScopeField): BadRequestException {
-  return new BadRequestException(`Le périmètre sélectionné est introuvable (${field}).`);
-}
 
 class CreateCalendarEventDto {
   @IsString() @MinLength(1) @MaxLength(200) title!: string;
@@ -369,7 +318,7 @@ export class CalendarController {
     // PUR, donc DEHORS (ADR-049 §D3) : une exclusivité mutuelle ne lit pas la
     // base, elle ne peut donc rien révéler, et un corps qu'elle refuse n'ouvre
     // aucune transaction.
-    assertSingleScopeId(body);
+    assertSingleScopeId(body, SCOPE_ID_FIELDS);
     // S-E01-5 — `update` ne prouve la propriété QUE des ids qu'il ÉCRIT.
     // `academicYearId` en est délibérément absent : le bloc `data` ci-dessous ne
     // le persiste pas (mesuré, :288-304). Cette asymétrie avec `createEvent` est
@@ -594,7 +543,7 @@ export class CalendarController {
     // gardes de cohérence ci-dessous sont inertes quand `body.scope` est absent
     // (elles testent toutes `&& body.scope`), donc sans cette ligne un second id
     // se glisse dans la ligne sans qu'aucune portée déclarée ne l'explique.
-    assertSingleScopeId(body);
+    assertSingleScopeId(body, SCOPE_ID_FIELDS);
     // Validate scope consistency: if a scoped id is provided, scope must match.
     if (body.classSectionId && body.scope && body.scope !== 'class_section_scope') {
       throw new BadRequestException("scope doit être 'class_section_scope' si classSectionId est fourni.");

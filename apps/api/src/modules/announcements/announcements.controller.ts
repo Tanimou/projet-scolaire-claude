@@ -32,10 +32,95 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import {
+  isSuppliedScopeId,
+  scopeOwnershipPlan,
+  unknownScopeRef,
+} from '../../shared/prisma/scope-fk';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
 import { AnnouncementRecipientsService } from './announcements.service';
+
+/**
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ S-E01-1f / PF-208 / ADR-053 — LES CINQ FK DE PORTÉE D'UNE ANNONCE        │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * `announcement` porte cinq FK MONO-COLONNE qui nomment une portée. PostgreSQL
+ * évalue l'intégrité référentielle EN DEHORS de la row security (ADR-049 §D1,
+ * ADR-042 §D6) : le `WITH CHECK` de `tenant_isolation` ne voit que
+ * `announcement.tenant_id`, et la contrainte qui valide `class_section_id`
+ * s'exécute en tant que PROPRIÉTAIRE de `class_section`, policy éteinte. Un id
+ * d'un AUTRE tenant s'insère donc proprement sous une policy parfaitement
+ * correcte.
+ *
+ * Pire ici que dans le calendrier : `announcement.user_profile_id` n'a AUCUNE
+ * clé étrangère du tout (colonne `@db.Uuid` nue) — pas même l'existence n'est
+ * garantie, et le remède « FK composite » de PF-205 est INDISPONIBLE sans
+ * migration. Le prédicat applicatif est le SEUL contrôle qui puisse exister sur
+ * cette colonne. C'est un finding séparé (schéma → G-MIGRATION), pas ce diff.
+ *
+ * La LISTE reste LOCALE au module (ADR-053 §D2) : les helpers purs partagés
+ * (`shared/prisma/scope-fk.ts`) sont génériques sur `F extends string` et lisent
+ * ce tuple. Élargir une union fermée partagée à chaque module en ferait une
+ * liste tenue à la main de plus — la maladie que cet épic combat.
+ */
+const ANNOUNCEMENT_SCOPE_FIELDS = [
+  'cycleId',
+  'gradeLevelId',
+  'classSectionId',
+  'studentId',
+  'userProfileId',
+] as const;
+type AnnouncementScopeField = (typeof ANNOUNCEMENT_SCOPE_FIELDS)[number];
+
+/**
+ * ADR-053 §D3 — LA PORTÉE DÉCLARÉE NOMME EXACTEMENT UN CHAMP, ET AUCUN AUTRE
+ * N'EST PERSISTÉ.
+ *
+ * `create` (`:489-509`) persistait les CINQ ids inconditionnellement : une
+ * annonce `class_section_scope` pouvait donc emporter un `userProfileId` que
+ * AUCUNE portée déclarée n'explique — la forme de PF-206, sur une colonne sans
+ * contrainte. Mesuré contre les deux composeurs livrés
+ * (`AnnouncementComposer.tsx:279-281`, `TeacherMessageComposer.tsx:277-279`) :
+ * chacun envoie EXACTEMENT un id, clé omise sinon (spread conditionnel). Ce
+ * refus ne casse donc AUCUN appelant livré, et il plafonne le plan de propriété
+ * à UNE sonde par requête.
+ *
+ * `validateScope` prouve que le champ REQUIS est présent ; ceci prouve
+ * qu'aucun AUTRE ne l'est. Les deux sont purs et ne lisent pas la base : un
+ * corps qu'ils refusent n'a coûté aucune requête.
+ */
+const SCOPE_REQUIRED_FIELD: Record<AnnouncementScope, AnnouncementScopeField | null> = {
+  school_wide: null,
+  cycle_scope: 'cycleId',
+  grade_level_scope: 'gradeLevelId',
+  class_section_scope: 'classSectionId',
+  individual_student: 'studentId',
+  individual_user: 'userProfileId',
+};
+
+/**
+ * Refuse tout id de portée que la portée déclarée n'explique pas. Défini sur la
+ * VÉRACITÉ (`isSuppliedScopeId`), jamais sur la présence de la clé :
+ * `@IsOptional()` laisse passer `null` malgré le `?: string` du DTO, et traiter
+ * une clé présente-mais-nulle comme « fournie » ferait échouer chaque écriture
+ * ordinaire.
+ */
+export function assertScopeCoherence(
+  body: { scope: AnnouncementScope } & Partial<Record<AnnouncementScopeField, string | null>>,
+): void {
+  const expected = SCOPE_REQUIRED_FIELD[body.scope] ?? null;
+  const extra = ANNOUNCEMENT_SCOPE_FIELDS.filter(
+    (field) => field !== expected && isSuppliedScopeId(body[field]),
+  );
+  if (extra.length > 0) {
+    throw new BadRequestException(
+      `Cette portée n'explique pas les champs fournis (${extra.join(', ')}).`,
+    );
+  }
+}
 
 class CreateAnnouncementDto {
   @IsString() @MinLength(1) @MaxLength(200) title!: string;
@@ -214,9 +299,26 @@ export class AnnouncementsController {
    *
    * Pure-read (no side effects). Same auth surface as `create` — requires
    * `announcements.write` because the breakdown reveals roster size which is
-   * sensitive context. Teachers calling this endpoint for school_wide /
-   * individual_user scopes will get a 400 mirroring the create-time rule, so
-   * the composer can't be used to enumerate the school via the preview.
+   * sensitive context.
+   *
+   * S-E01-1f (AC-3) — CE QUE CE BLOC PROMETTAIT ET NE FAISAIT PAS. Le
+   * commentaire d'origine affirmait que « le composeur ne peut pas servir à
+   * énumérer l'école via le preview ». MESURÉ à `bc4e590` : le handler ne
+   * refusait aux enseignants que `school_wide` / `individual_user` et
+   * n'appliquait AUCUNE des vérifications d'empreinte de `create` — un
+   * enseignant obtenait donc la taille de roster de N'IMPORTE QUELLE classe de
+   * son école. Intra-tenant, donc pas la faille P1, mais de la dette
+   * d'attente à trois lignes du diff (DNC-06). Le contrôle d'empreinte de
+   * `create` est désormais FACTORISÉ (`assertTeacherScope`) et appliqué ici :
+   * le commentaire redevient vrai parce que le code a changé, pas l'inverse.
+   *
+   * MESURÉ AUSSI, et contraire à la prémisse du brief : ce endpoint ne fuitait
+   * PAS de COMPTE inter-tenant. `count` vaut `profiles.length`, issu du
+   * `userProfile.findMany({ …, tenantId })` ci-dessous ; un id étranger rendait
+   * donc `0`, à l'octet près comme un id inexistant. Cette sécurité était
+   * ACCIDENTELLE — un refactor remplaçant `profiles.length` par `ids.length` la
+   * transformerait en l'oracle exact que l'on décrit. Les sondes de propriété
+   * ci-dessous la rendent INTENTIONNELLE, et le test la fige.
    */
   @Get('preview-recipients')
   @RequiresPermission('announcements.write')
@@ -226,14 +328,6 @@ export class AnnouncementsController {
     const roles = jwt.realm_access?.roles ?? [];
     const isAdmin = roles.includes('super_admin') || roles.includes('school_admin');
     const isTeacher = roles.includes('teacher');
-
-    if (!isAdmin && isTeacher) {
-      if (q.scope === 'school_wide' || q.scope === 'individual_user') {
-        throw new BadRequestException(
-          "Cette portée est réservée à l'administration. Choisissez une classe, un niveau ou un cycle où vous enseignez.",
-        );
-      }
-    }
 
     // Validate scope payload requirements early so the preview surfaces the
     // same "Champ requis" hints as a real publish attempt.
@@ -247,6 +341,58 @@ export class AnnouncementsController {
       studentId: q.studentId,
       userProfileId: q.userProfileId,
     } as CreateAnnouncementDto);
+    assertScopeCoherence(q);
+
+    if (!isAdmin && isTeacher) {
+      await this.assertTeacherScope(me, q.scope, q.classSectionId ?? null);
+    }
+
+    // AC-3 — LES MÊMES SONDES QUE `create`, dans le même ordre (après les refus
+    // de rôle, avant toute lecture de roster) et avec le MÊME refus à l'octet
+    // près. Un endpoint de prévisualisation qui exécute quatre requêtes non
+    // tenantées contre des ids étrangers est une surface d'existence et de
+    // charge même quand il ne rend aucun compte. Écrit EN LIGNE (PF-200).
+    const tenantId = me.tenantId;
+    for (const ref of scopeOwnershipPlan(q, ANNOUNCEMENT_SCOPE_FIELDS)) {
+      let owned: { id: string } | null;
+      switch (ref.field) {
+        case 'cycleId':
+          owned = await this.prisma.cycle.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'gradeLevelId':
+          owned = await this.prisma.gradeLevel.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'classSectionId':
+          owned = await this.prisma.classSection.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'studentId':
+          owned = await this.prisma.student.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'userProfileId':
+          owned = await this.prisma.userProfile.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        default: {
+          const exhaustive: never = ref.field;
+          throw unknownScopeRef(exhaustive);
+        }
+      }
+      if (owned === null) throw unknownScopeRef(ref.field);
+    }
 
     const recipientIds = await this.recipients.computeRecipients({
       tenantId: me.tenantId,
@@ -349,13 +495,13 @@ export class AnnouncementsController {
     // /admin/announcements/[id] page can surface the real engagement of the
     // announcement (read rate, time-to-read, per-recipient roster). The list
     // endpoint only exposes a count; everything else here is detail-page only.
-    const receipts = await this.prisma.announcementReceipt.findMany({
+    const allReceipts = await this.prisma.announcementReceipt.findMany({
       where: { announcementId: id },
       orderBy: [{ readAt: 'desc' }, { createdAt: 'asc' }],
       take: 500,
     });
 
-    const userProfileIds = receipts.map((r) => r.userProfileId);
+    const userProfileIds = allReceipts.map((r) => r.userProfileId);
     const authorIds = a.authorId ? [a.authorId] : [];
     const allIds = Array.from(new Set([...userProfileIds, ...authorIds]));
     const profiles = allIds.length
@@ -386,6 +532,31 @@ export class AnnouncementsController {
         },
       ]),
     );
+
+    // ┌────────────────────────────────────────────────────────────────────────┐
+    // │ AC-4 (moitié DIVULGATION) — LA PROJECTION NE REND QUE LES REÇUS RÉSOLUS │
+    // └────────────────────────────────────────────────────────────────────────┘
+    //
+    // `announcement_receipt` n'a PAS de `tenant_id` : la lecture ci-dessus ne
+    // peut donc pas être filtrée par tenant, et pour une annonce publiée AVANT
+    // ce correctif elle rend encore les lignes inter-tenant écrites par PF-208.
+    // La recherche de profils (`:361-363`) est, elle, filtrée par tenant : ces
+    // lignes rendaient `userProfile: null`, mais leur UUID brut, leur nombre et
+    // leur poids dans `stats.total` / `readRate` étaient rendus À L'ATTAQUANT —
+    // un oracle de CARDINALITÉ et d'EXISTENCE (les noms et e-mails, eux,
+    // n'ont jamais fuité).
+    //
+    // On résout donc les reçus CONTRE la recherche déjà filtrée par tenant, et
+    // on ne rend que ceux-là. Deux conséquences, écrites ici plutôt que
+    // découvertes plus tard :
+    //   (a) les lignes inter-tenant préexistantes deviennent INVISIBLES dans
+    //       l'UI — c'est voulu : une UI qui vous dit combien de lignes
+    //       étrangères vous avez réussi à injecter EST l'oracle. Leur détection
+    //       est un recensement OPÉRATEUR (finding séparé), pas un écran ;
+    //   (b) un reçu dont le profil a été supprimé DUR cesse d'être compté :
+    //       petit changement de vérité, défendable (un utilisateur supprimé ne
+    //       peut pas lire).
+    const receipts = allReceipts.filter((r) => profileById.has(r.userProfileId));
 
     const totalReceipts = receipts.length;
     const readReceipts = receipts.filter((r) => r.readAt !== null);
@@ -452,37 +623,83 @@ export class AnnouncementsController {
 
     // Validate scope payload
     this.validateScope(body);
+    // ADR-053 §D3 — PUR, donc AVANT tout accès à la base : un corps refusé ici
+    // n'a coûté aucune requête et n'a rien pu révéler.
+    assertScopeCoherence(body);
 
     // Teachers can only broadcast to scopes that are part of their teaching footprint.
     // School-wide and individual_user are admin-only (those reach across the whole
     // organisation or arbitrary staff/parents and would bypass the teaching boundary).
     if (!isAdmin && isTeacher) {
-      if (body.scope === 'school_wide' || body.scope === 'individual_user') {
-        throw new BadRequestException(
-          "Cette portée est réservée à l'administration. Choisissez une classe, un niveau ou un cycle où vous enseignez.",
-        );
-      }
-      // For scope=class_section_scope, ensure the class is in the teacher's assignments
-      if (body.scope === 'class_section_scope' && body.classSectionId) {
-        const teacher = await this.prisma.teacherProfile.findFirst({
-          where: { userProfileId: me.id },
-          select: { id: true },
-        });
-        if (!teacher) throw new BadRequestException("Profil enseignant introuvable.");
-        const assignment = await this.prisma.teachingAssignment.findFirst({
-          where: {
-            tenantId: me.tenantId,
-            teacherProfileId: teacher.id,
-            classSectionId: body.classSectionId,
-          },
-          select: { id: true },
-        });
-        if (!assignment) {
-          throw new BadRequestException(
-            "Vous ne pouvez diffuser une annonce qu'aux classes que vous enseignez.",
-          );
+      await this.assertTeacherScope(me, body.scope, body.classSectionId ?? null);
+    }
+
+    // ┌────────────────────────────────────────────────────────────────────────┐
+    // │ AC-1 / ADR-053 §D1 — LES SONDES DE PROPRIÉTÉ                           │
+    // └────────────────────────────────────────────────────────────────────────┘
+    //
+    // ORDRE, et c'est une exigence : APRÈS les refus de rôle/portée ci-dessus,
+    // AVANT l'écriture. Un appelant n'apprend rien sur un corps qu'il n'avait
+    // pas le droit d'envoyer.
+    //
+    // `findFirst` et non `findUnique` : « appartient à un autre tenant » et
+    // « n'existe pas » empruntent LA MÊME branche (`→ null`) et produisent le
+    // MÊME message à l'octet près. Distinguer les deux serait un oracle
+    // d'existence inter-tenant.
+    //
+    // `tenantId` EXPLICITE dans chaque `where`. LIMITE NOMMÉE (DNC-06) : ce
+    // module n'est PAS converti à `withTenant` — ces sondes tournent sur la
+    // connexion du PROPRIÉTAIRE des tables, qui échappe à ses propres policies
+    // faute de `FORCE ROW LEVEL SECURITY`. Ce prédicat fait donc TOUT le
+    // travail ; RLS ne le double pas.
+    //
+    // `await` SÉQUENTIEL, jamais `Promise.all` : la forme doit rester valide le
+    // jour où elle entre dans une transaction interactive, qui est UNE connexion.
+    //
+    // La boucle est écrite EN LIGNE, jamais derrière un `this.<méthode>()` :
+    // l'attribution de `tenant-adversarial-check.js` est LEXICALE (PF-200).
+    const tenantId = me.tenantId;
+    for (const ref of scopeOwnershipPlan(body, ANNOUNCEMENT_SCOPE_FIELDS)) {
+      let owned: { id: string } | null;
+      switch (ref.field) {
+        case 'cycleId':
+          owned = await this.prisma.cycle.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'gradeLevelId':
+          owned = await this.prisma.gradeLevel.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'classSectionId':
+          owned = await this.prisma.classSection.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'studentId':
+          owned = await this.prisma.student.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        case 'userProfileId':
+          owned = await this.prisma.userProfile.findFirst({
+            where: { id: ref.id, tenantId },
+            select: { id: true },
+          });
+          break;
+        default: {
+          // Switch CLOS : un sixième champ ne compile pas, et s'il atteignait
+          // l'exécution il REFUSE au lieu de passer (échec fermé).
+          const exhaustive: never = ref.field;
+          throw unknownScopeRef(exhaustive);
         }
       }
+      if (owned === null) throw unknownScopeRef(ref.field);
     }
 
     const now = new Date();
@@ -617,6 +834,56 @@ export class AnnouncementsController {
     }
 
     return { ok: true, publishedAt: new Date(), recipientCount: inserted };
+  }
+
+  /**
+   * S-E01-1f (AC-3 / PM-5) — L'EMPREINTE D'ENSEIGNEMENT, FACTORISÉE.
+   *
+   * Le corps est celui qui vivait EN LIGNE dans `create` (`:466-485` à
+   * `bc4e590`), déplacé mot pour mot — mêmes messages, même ordre, même
+   * `tenantId` sur la recherche d'affectation — et appelé désormais par `create`
+   * ET par `previewRecipients`. Deux copies à la main d'une règle
+   * d'autorisation, c'est la dérive que ce dépôt a déjà payée ; et c'est
+   * précisément l'écart qui laissait un enseignant énumérer par le preview une
+   * classe qu'il ne pouvait pas cibler par la publication.
+   *
+   * PORTÉE de ce contrôle, dite honnêtement : il ne couvre que
+   * `class_section_scope`. Un enseignant peut toujours viser N'IMPORTE QUEL
+   * élève (`individual_student`) ou N'IMPORTE QUEL niveau / cycle de SON tenant.
+   * Les sondes de propriété prouvent le TENANT, jamais l'empreinte — ne pas
+   * décrire AC-1 comme fermant la frontière enseignant. C'est un finding
+   * séparé, pas ce diff.
+   */
+  private async assertTeacherScope(
+    me: { id: string; tenantId: string },
+    scope: AnnouncementScope,
+    classSectionId: string | null,
+  ) {
+    if (scope === 'school_wide' || scope === 'individual_user') {
+      throw new BadRequestException(
+        "Cette portée est réservée à l'administration. Choisissez une classe, un niveau ou un cycle où vous enseignez.",
+      );
+    }
+    if (scope === 'class_section_scope' && classSectionId) {
+      const teacher = await this.prisma.teacherProfile.findFirst({
+        where: { userProfileId: me.id },
+        select: { id: true },
+      });
+      if (!teacher) throw new BadRequestException("Profil enseignant introuvable.");
+      const assignment = await this.prisma.teachingAssignment.findFirst({
+        where: {
+          tenantId: me.tenantId,
+          teacherProfileId: teacher.id,
+          classSectionId,
+        },
+        select: { id: true },
+      });
+      if (!assignment) {
+        throw new BadRequestException(
+          "Vous ne pouvez diffuser une annonce qu'aux classes que vous enseignez.",
+        );
+      }
+    }
   }
 
   private validateScope(b: CreateAnnouncementDto) {

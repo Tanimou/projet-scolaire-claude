@@ -252,6 +252,22 @@ async function main() {
   step('STEP 3 — VAL-04 pt 3 (the security half): the student and parent tokens carry DIFFERENT azp');
   const secretOf = (clientId) => (exported.clients.find((c) => c.clientId === clientId) || {}).secret;
 
+  // PF-228 — DERIVED, never re-typed. This line used to read `'parent123'`, a
+  // literal that matched nothing: `realm-export.json` declares a 12-character
+  // password for `parent@pilotage.local` (the realm's own passwordPolicy demands
+  // length(12), so a 9-character literal could never have been the fixture's).
+  // The mint therefore answered 401 and STEP 3 downgraded the two-sided claim to
+  // "ASSERTED, not observed" — a RED produced by this file, about this file,
+  // while the realm underneath was correct all along.
+  //
+  // The disease is the one this programme keeps paying for: a second hand-kept
+  // copy of a value that already has ONE source. `secretOf` above reads the
+  // export; so does this. A fixture credential that drifts is indistinguishable
+  // from a broken realm at the point where it is read, which is exactly when the
+  // reader is least able to tell the two apart.
+  const passwordOf = (user) =>
+    (((exported.users || []).find((u) => u.username === user) || {}).credentials || [])[0]?.value;
+
   // The password is generated per run and never printed (critic C-13). It has to
   // satisfy the realm passwordPolicy: length(12) notUsername notEmail digits(1)
   // lowerCase(1) upperCase(1) specialChars(1).
@@ -323,12 +339,15 @@ async function main() {
 
         // ONE-SIDED IS NOT EVIDENCE: the parent side must differ, or nothing has
         // been shown to be distinguishable.
-        const parentToken = await mint('portal-parent', 'parent@pilotage.local', 'parent123');
+        const parentPass = passwordOf('parent@pilotage.local');
+        const parentToken = parentPass
+          ? await mint('portal-parent', 'parent@pilotage.local', parentPass)
+          : { status: 0, body: { error_description: 'no password credential in realm-export.json' } };
         if (!parentToken.body || !parentToken.body.access_token) {
           notes.push(
             `parent-side azp NOT observed (HTTP ${parentToken.status}: ` +
-              `${parentToken.body && parentToken.body.error_description}) — the seeded parent's password is ` +
-              'realm-fixture state, so the two-sided claim is PARTIAL, not closed',
+              `${parentToken.body && parentToken.body.error_description}) — the parent password is read ` +
+              'from realm-export.json (PF-228), so this now means the FIXTURE itself cannot authenticate',
           );
           bad('parent token could not be minted — distinguishability is ASSERTED, not observed');
         } else {

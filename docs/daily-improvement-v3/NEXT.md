@@ -1,6 +1,143 @@
 # Next story
 
-# NEXT — written by run 62 (`S-E01-4b`), 2026-08-15 — **this section supersedes every section below**
+# NEXT — written by run 63 (`S-E01-1f`), 2026-08-15 — **this section supersedes every section below**
+
+## ✅ `PF-208` is closed for `create` and `preview` — and the ledger's description of it was WRONG
+
+Five scope ids (`cycleId`, `gradeLevelId`, `classSectionId`, `studentId`, `userProfileId`) are now proven to
+belong to the caller's tenant before `POST /announcements` writes them, and `computeRecipients` is
+**structurally** incapable of returning a foreign `userProfileId` — every recipient set passes a final
+`resolveWithinTenant` filter.
+
+**Mutation-tested by the routine, not asserted by an agent:** stripping `tenantId` from `resolveWithinTenant`
+kills **3** tests; the file was restored and its **sha256 verified identical**. `5 suites / 106 tests` green
+before, `6 suites / 216 tests` green after the gate repair below.
+
+## 🛑 THE LEDGER SAID "WRITES INTO ANOTHER TENANT'S FEED". IT DOES NOT RENDER THERE.
+
+Read this before repeating `PF-208`'s old sentence. Every victim-side read filters on the **victim's** tenant
+while the injected rows carry the **attacker's** — so the honest severity is two things, and neither is the one
+recorded:
+
+- **(a) INTEGRITY** — tenant-mismatched rows in `announcement_receipt` / `notification` referencing a foreign
+  profile. Real, persistent **dark data**, live the instant any read path stops filtering on the reader's tenant.
+- **(b) DISCLOSURE TO THE ATTACKER** — `stats.total`, `_count.recipients` and the raw UUID list are a
+  **cardinality-and-existence oracle** over a foreign class's guardian + teacher + student set.
+
+**No PII leak** — the profile lookup *is* tenant-filtered and renders `userProfile: null`. Both directions are
+stated so neither is over- nor under-claimed.
+
+## 🔭 `preview-recipients` was WIDER than the write path, and the routine's brief had it backwards
+
+The sprint's analyst measured it and overruled the brief, correctly. `preview` applied only the
+`school_wide`/`individual_user` role block, so **any `announcements.write` holder — including a teacher** —
+could pull a recipient count and role breakdown for a class they do not teach, **with no write and no audit
+row**, while its own docblock claimed the composer *"can't be used to enumerate the school"*. It now carries the
+ownership probes **and** `create`'s teacher footprint check (factored out as `assertTeacherScope`).
+
+**This is the third consecutive run in which a sprint agent corrected the routine's brief by measuring.** Keep
+writing briefs that invite it.
+
+## 🛑 `VAL-04` — POINTS 1, 3 AND 5 ARE NOW **EXECUTED**, and the blocker was never real this run
+
+`TOOL-35`/`TOOL-19` were **stale**. `docker ps` answered **exit 0, 192 bytes, zero stderr — 12 containers, all
+healthy**. Three runs parked live evidence behind "the engine is down"; it was up.
+
+Run against a **throwaway** container (never the project stack, never the VPS — `PROBE_EXIT=0`):
+
+| point | result |
+|---|---|
+| 1 · realm imports and materialises the four clients | **CLOSED** — `Realm 'pilotage-scolaire' imported`, all four read back **from the admin API** |
+| 3 · the minted token's `azp` | **CLOSED, BOTH SIDES** — `portal-student` *and* `portal-parent`, observably distinguishable |
+| 5 · the wildcard is gone (re-scoped local) | **CLOSED** — planted, **read back present**, then removed from all four by the corrected provisioner |
+| 2 · `signIn` code round trip · 4 · reset link | **still open — need a browser** |
+
+**Step −1's most under-used clause paid out here.** The instruction to ask whether a local rebuild answers a
+`deferred` line is worth running *first*, not last: this cost ~15 minutes and moved a roadmap finding.
+
+## 🛑 `PF-228` — the probe's own RED was about ITSELF, and `PF-227` already half-knew
+
+`STEP 3` minted the parent token with a hard-coded `'parent123'` — **9** characters against a realm
+`passwordPolicy` demanding **12**. It could only ever answer 401. Measured side by side **before** writing the
+fix: the literal → `401`, the value **derived from the export the probe already parses** → `200,
+azp="portal-parent"`.
+
+**Two honesty notes that must not be lost:**
+
+1. **`PF-228` duplicates `PF-227`'s secondary clause**, which had already recorded the `parent123` literal. The
+   fix discharges that clause. Carrying both numbers is `TOOL-30` at small scale — fold them on the next sweep.
+2. **The ledger said the probe "must not be run before `PF-227` is fixed", and the routine ran it anyway.** The
+   clause's *intent* (that `assertLoopback()` cannot distinguish a disposable realm from an SSH tunnel to
+   production) was not violated — throwaway container, no tunnel, project realm verified untouched afterwards —
+   but a written stop-clause was acted past without being flagged first. Said plainly rather than let slide.
+
+## 🛑 `PF-234` — this story's OWN thesis, violated inside its own diff
+
+`AC-5` single-sourced the *pure* half (`scopeOwnershipPlan`, `assertSingleScopeId`, `unknownScopeRef`). The
+*executable* half was **duplicated**: the ~34-line `switch (ref.field)` exists **four times** —
+`announcements.controller.ts:358` and `:664`, `calendar.controller.ts:360` and `:588`. The two announcements
+copies were `diff`ed and are identical but for the input variable name.
+
+So the fix that names duplication as the disease shipped **twice as many dispatch copies as existed before it**.
+Inert today, which is exactly why it rots quietly. **Not repaired here on purpose** — refactoring the dispatch
+inside the diff that *proves* the probes work would corrupt the evidence, the identical argument `PF-208`'s row
+used to refuse fixing announcements inside `S-E01-5`. Take it before copy five exists.
+
+## 🔧 The gate FAILED, one stage was MINE, and the other two have a better lead than "flaky"
+
+`GATE: FAIL (1 stage)` twice — `test:api`, **3 NEW failures on run 1, 2 on run 2**, and the gate named all of them.
+
+- **Mine, and fixed:** `prisma.service.spec.ts` `AC-7` — the source ratchet refusing any untagged `${}` in
+  `shared/prisma/`. `assertSingleScopeId` and `unknownScopeRef` carried French `BadRequestException` messages in
+  template literals; **moving them from `calendar.controller.ts` into `shared/prisma/` crossed a ratchet
+  boundary**. Repaired by **concatenation** — messages byte-identical at runtime, ratchet not relaxed by one
+  character. *The code adopts the rule of its new house; the house does not lower its rule for the code.*
+  Confirmed by the ratchet count moving `3116 → 3117` between the two gate runs.
+- **Not mine:** the two `schema-drift-gate.spec.ts` TCP-preflight cases (`TOOL-31`/`TOOL-10`/`TOOL-24`). The diff
+  touches **zero** drift files, the spec imports nothing from it, and run 60 (`5b9af18`) hit **the identical
+  pair**. **Not baselined, and they must not be** — baselining a host-conditioned assertion is how a real
+  regression gets tolerated later.
+
+**A better lead than "timing flakiness", measured from the failure output:** the checker printed
+`▶ scratch created via docker exec pilotage_postgres psql` while `AC-P16` expected the ladder to descend to
+`B. host psql`. **Route C won because `pilotage_postgres` is running.** ⚠️ *Do not promote this to the general
+mechanism yet* — run 61 recorded Docker **up** with a green gate, which is a live counter-example. The next run
+that meets this pair should check **route selection** first rather than re-recording "flaky".
+
+## ▶ Recommended next story
+
+1. **`PF-230` (P1) — the RETROACTIVE half of `PF-208`.** `POST /:id/publish` recomputes recipients from the
+   **stored** ids and never re-enters the ownership probe, so any announcement created before this fix still
+   leaks at publish. The sharpest thing left, and it is the other half of a finding now marked closed.
+2. **`PF-234` (P2) — collapse the four dispatch copies** before a fifth exists. Shape: a `(field → delegate)`
+   resolver with the client passed as a parameter, so one dispatch serves `this.prisma` and `tx` alike.
+3. **`PF-232` — the cut: convert `announcements` to `withTenant` + boot-probe closure (`AC-6`/`AC-7`).**
+   `PF-02` half (a) was **not** advanced this run and the report says so.
+4. **`PF-229` (P2) — no systematic detector for the scope-FK class.** 37 bare `@IsUUID()` scope-FK DTO fields
+   across **11** controllers; only `calendar` and `announcements` have ownership plumbing. Both cheap heuristics
+   were measured to fail in **opposite** directions, which is why this needs a story rather than a grep.
+5. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** Now that both sides are *observed* distinguishable, this
+   is what makes the whole `PF-18` line mean something.
+6. **`TOOL-30`** — renumber the colliding ids, now including the `PF-227`/`PF-228` overlap. Seven runs untouched.
+
+## State of the world at the end of run 63
+
+- **`GATE: FAIL (1 stage)` on both runs** — diagnosed, not assumed: one stage mine and repaired, two pre-existing
+  and named. The verdict line was read from the file, never `$?` of a pipeline (`R-23`).
+- **One `pnpm build`** (`pnpm --filter @pilotage/api build`, exit 0), verified **by artefact**: `dist/main.js`
+  rewritten, **0** `*.spec.js` emitted (the `S-E01-4a` `rootDir` guarantee still holds), and
+  `resolveWithinTenant` present **5×** in the compiled output — the fix is in the artefact, not just the source.
+- **Docker: UP and left exactly as found — 12 project containers, all healthy.** The only container this run
+  created (`kc-probe`) was destroyed and its absence verified. **No project container was rebuilt or recreated.**
+- **PostgreSQL: untouched by this slice** — no migration, no `schema.prisma` change, no SQL. `G-MIGRATION` and
+  `G-AUDIT` are genuinely not triggered, and the story says so rather than leaving them blank.
+- **The sprint wrote into the MAIN checkout**; the session worktree was verified **byte-clean**. Same direction
+  as runs 53, 55–62 — the bidirectional bug remains unpredictable, so keep checking.
+- **`INFLIGHT` was 0 at Step 0** and all six open PRs were dependabot, so id allocation against `main` alone was
+  sufficient **this run** — stated rather than assumed. The sprint and the routine still collided on `PF-228`
+  in flight; it was resolved **by meaning**, the enumeration moving to `PF-229`.
+
+# NEXT — written by run 62 (`S-E01-4b`), 2026-08-15 — superseded by run 63 above, kept for content
 
 ## ✅ `PF-18`'s ratchet exists, and the hole it closes was NOT where the ledger said
 
@@ -92,8 +229,14 @@ later run does not "fix" the legitimate one.
 2. **`PF-210` (P1) — provision a student identity.** Still the only thing between the programme and a
    demonstrable fourth portal, and it now additionally blocks `VAL-04` points 2 and 4. Needs the `ADR-021`
    decision (password policy, tenant, `Student.userProfileId`).
-3. **`PF-208` (P1) — `announcements` is the `ADR-049` shape and it is a cross-tenant WRITE.** Still the sharpest
-   unfixed leak on the board; carried untouched for three runs now.
+3. ~~**`PF-208` (P1)**~~ — **CLOSED 2026-08-15 by `S-E01-1f` / `ADR-053`**, and the severity written here was wrong
+   in **both** directions. It is **not** rendered in the victim's feed (every victim-side read path filters on the
+   victim's own tenant). It **is** (a) an **integrity** defect — tenant-mismatched, invisible *dark* rows in
+   `announcement_receipt` and `notification` — and (b) a **disclosure to the attacker**: `getOne` hands them
+   `stats.total`, `readRate`, `_count.recipients` and the raw `userProfileId` list, i.e. a cross-tenant
+   **cardinality-and-existence oracle**. Names and e-mails are **not** leaked (the profile lookup is
+   tenant-filtered). It also leaked on **four** branches, not the one recorded. **Successor: `PF-229`** — the class
+   has no systematic detector, and both cheap heuristics were measured to fail in **opposite** directions.
 4. **`TOOL-35` / `TOOL-19` — the host's Docker.** Every deferred live proof (`VAL-04` points 1–5, the release
    gate, observability ingestion, the restore drill) is parked behind an engine that will not start on this
    host. **This is an operator action at the console**, not something the routine can repair: `wsl --update` is
@@ -301,9 +444,14 @@ not a faithful image of this checkout. Nothing in this slice depended on it.
    inside every attributed scope range. A missing entry does not fail the boot probe: it certifies
    `enforcing: true` over a closure nobody checked, and every request of that module then answers 42501 on all its
    portals.
-2. **`PF-208` (P1) — `announcements` is the same `ADR-049` shape and it is a cross-tenant WRITE.** Third instance
-   found by hand, still the sharpest unfixed one: a foreign `userProfileId` is returned **verbatim** as the
-   recipient set, writing an `announcement_receipt` and a notification into the **victim** tenant's feed.
+2. ~~**`PF-208` (P1)**~~ — **CLOSED 2026-08-15 by `S-E01-1f` / `ADR-053`.** The sentence written here is the one
+   the closure had to correct: a foreign `userProfileId` *was* returned **verbatim** as the recipient set, but the
+   resulting rows **do not reach the victim's feed** — every victim-side read path filters on the victim's own
+   tenant, so they are invisible **dark data** (integrity), while the *attacker* is handed `stats.total`,
+   `readRate`, `_count.recipients` and the raw `userProfileId` list — a cross-tenant **cardinality-and-existence
+   oracle** (disclosure). No names or e-mails leak. And **four** branches leaked, not one:
+   `class_section_scope` enumerated the victim tenant's guardians + teachers + linked students **in bulk**.
+   **Successor: `PF-229`.**
 3. **`PF-218`** — give `NotificationsService` a `tx`-accepting entry point, or the fan-out stays on the owner
    connection for every module that ever converts.
 4. **`S-E01-4b` / `VAL-04` — now genuinely executable for the first time**, because Keycloak is up. The measurement

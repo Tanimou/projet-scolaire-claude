@@ -1,3 +1,5 @@
+import { BadRequestException } from '@nestjs/common';
+
 /**
  * S-E01-1e / ADR-051 §D3 — la moitié PURE de la sonde de propriété de FK de
  * portée, promue au partagé parce qu'un DEUXIÈME module l'a méritée.
@@ -42,4 +44,100 @@
  */
 export function isSuppliedScopeId(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+/**
+ * S-E01-1f / ADR-053 §D2 — LE RESTE DE LA MOITIÉ PURE, promu ici parce qu'un
+ * TROISIÈME module l'aurait recopié à la main.
+ *
+ * `assertSingleScopeId`, `scopeOwnershipPlan` et `unknownScopeRef` vivaient dans
+ * `calendar.controller.ts`. `announcements` en a besoin À L'IDENTIQUE : le
+ * précédent de `mapWriteRefusal` (S-E01-1e) dit qu'une DEUXIÈME copie au module
+ * n°2 EST la dérive, pas son risque. Il n'y a PAS de ré-export dans
+ * `calendar.controller.ts` : deux adresses pour une règle, c'est exactement ce
+ * que l'extraction existe pour empêcher.
+ *
+ * CE QUI N'EST DÉLIBÉRÉMENT PAS PARTAGÉ : la LISTE des champs. Chaque module
+ * garde son propre tuple `as const` local (calendrier : quatre champs ;
+ * annonces : cinq). Élargir une union fermée partagée à chaque nouveau module
+ * en ferait une TROISIÈME liste tenue à la main — la maladie même que cet épic
+ * combat. Ces trois helpers sont donc génériques sur `F extends string` et
+ * lisent le tuple que l'appelant leur passe.
+ *
+ * La moitié IMPURE — la boucle `findFirst({ where: { id, tenantId } })` — reste
+ * écrite EN LIGNE dans chaque handler (PF-200 : l'attribution de
+ * `tenant-adversarial-check.js` est LEXICALE et ne traverse pas `this`).
+ * ADR-049 §D5 refuse toujours un `assertOwnedByTenant(tx, modelName, …)`
+ * générique, et ce fichier ne le contredit pas : toujours aucun import Prisma,
+ * aucun accès à la base, aucune répartition dynamique.
+ */
+export type ScopeIdCarrier<F extends string> = Partial<Record<F, string | null>>;
+
+/**
+ * ADR-049 §D3 — AU PLUS UNE portée par corps de requête, sur les champs que
+ * l'appelant déclare mutuellement exclusifs.
+ *
+ * Défini sur la VÉRACITÉ, jamais sur la présence de la clé : l'UI admin du
+ * calendrier envoie toujours les deux, l'un explicitement `null`.
+ */
+export function assertSingleScopeId<F extends string>(
+  body: ScopeIdCarrier<F>,
+  fields: readonly F[],
+): void {
+  const supplied = fields.filter((field) => isSuppliedScopeId(body[field]));
+  if (supplied.length > 1) {
+    // CONCATÉNATION et non gabarit : ce message et celui d'`unknownScopeRef` ont
+    // franchi une FRONTIÈRE DE CLIQUET en venant de `calendar.controller.ts`.
+    // Tout fichier de `shared/prisma/` est lu par le cliquet de source AC-7
+    // (`prisma.service.spec.ts:374`), qui refuse TOUT gabarit contenant une
+    // interpolation non balisée `$queryRaw` / `Prisma.sql` — sans distinguer un
+    // texte SQL d'un message français, et c'est DÉLIBÉRÉ : la seule règle qu'un
+    // cliquet peut tenir sans jugement est « aucune interpolation nue ici ».
+    //
+    // Le message est INCHANGÉ à l'octet près à l'exécution. Le cliquet n'est pas
+    // relâché d'un caractère pour accueillir du code venu d'ailleurs : c'est le
+    // code qui adopte la règle de sa nouvelle maison (S-E01-1f).
+    throw new BadRequestException(
+      'Un seul périmètre peut être défini à la fois (' +
+        supplied.join(', ') +
+        ' ont été fournis ensemble).',
+    );
+  }
+}
+
+/**
+ * La LISTE des vérifications de propriété à émettre, dans l'ordre. Pure : elle
+ * ne touche pas la base, elle dit seulement quels couples (champ, id) doivent
+ * être prouvés.
+ */
+export function scopeOwnershipPlan<F extends string>(
+  body: ScopeIdCarrier<F>,
+  fields: readonly F[],
+): { field: F; id: string }[] {
+  const plan: { field: F; id: string }[] = [];
+  for (const field of fields) {
+    const value = body[field];
+    if (isSuppliedScopeId(value)) plan.push({ field, id: value });
+  }
+  return plan;
+}
+
+/**
+ * ADR-049 §D2 — LE REFUS, et son indiscernabilité PAR CONSTRUCTION.
+ *
+ * « id d'un autre tenant » et « id inexistant » empruntent la MÊME branche
+ * (`findFirst → null`) et produisent donc le MÊME message, à l'octet près. La
+ * réponse ne peut pas distinguer les deux cas — cette distinction serait
+ * elle-même un oracle d'existence inter-tenant (ADR-048 §D9).
+ *
+ * 400 et non 404 : les ids arrivent dans le CORPS (ou la query string du
+ * preview), où tous les autres refus de ces handlers sont déjà des 400
+ * français ; un 404 sur `POST` se lirait « route inconnue ». Le message nomme le
+ * CHAMP (donnée de l'appelant) et jamais un tenant, une école, une table ni une
+ * chaîne Postgres — `CalendarManager.tsx` comme `AnnouncementComposer.tsx`
+ * l'affichent VERBATIM à un administrateur.
+ */
+export function unknownScopeRef(field: string): BadRequestException {
+  // Concaténation, même raison qu'`assertSingleScopeId` ci-dessus (cliquet AC-7).
+  return new BadRequestException('Le périmètre sélectionné est introuvable (' + field + ').');
 }

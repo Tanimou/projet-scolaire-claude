@@ -21,6 +21,31 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
  * class/grade/cycle/individual_student scopes (guarded by `userProfileId != null`)
  * so the learner receives a receipt. `school_wide` already covers every active
  * profile (linked students included). What guardians/teachers receive is unchanged.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ S-E01-1f / PF-208 — POURQUOI CHAQUE REQUÊTE PORTE `tenantId`             │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * Mesuré à `bc4e590` : CINQ des requêtes de ce fichier n'avaient AUCUN prédicat
+ * de tenant (`guardianship`, `student`, `teachingAssignment`, `enrollment`, et
+ * le passe-plat verbatim d'`individual_user`). Le contrôleur ne prouvait la
+ * propriété d'AUCUN des cinq ids de portée qu'il persiste, donc un
+ * `classSectionId` étranger énumérait en bloc les tuteurs + enseignants +
+ * élèves liés du tenant VICTIME.
+ *
+ * Cette correction est une DÉFENSE EN PROFONDEUR, pas un doublon de la sonde du
+ * contrôleur, et elle n'est pas optionnelle : le service doit être INCAPABLE de
+ * rendre un `userProfileId` hors du tenant de l'annonce même si la sonde du
+ * contrôleur disparaissait un jour — et surtout, `POST /:id/publish` recalcule
+ * les destinataires à partir des ids STOCKÉS sans repasser par la sonde
+ * (PF-230). Ce fichier est donc le POINT D'ÉTRANGLEMENT ; le contrôleur est la
+ * ceinture qui refuse tôt et proprement.
+ *
+ * LIMITE NOMMÉE (DNC-06) : ce module n'est PAS converti à `withTenant`. Toutes
+ * ces requêtes s'exécutent sur la connexion du PROPRIÉTAIRE des tables, qui
+ * échappe à ses propres policies faute de `FORCE ROW LEVEL SECURITY`. Le
+ * prédicat `tenantId` explicite fait donc TOUT le travail ici ; RLS ne le double
+ * pas. Ne pas écrire « isolé » ni « converti ».
  */
 @Injectable()
 export class AnnouncementRecipientsService {
@@ -36,46 +61,100 @@ export class AnnouncementRecipientsService {
     studentId: string | null;
     userProfileId: string | null;
   }): Promise<Set<string>> {
+    const tenantId = announcement.tenantId;
+
     switch (announcement.scope) {
       case 'school_wide':
-        return this.allTenantUsers(announcement.tenantId);
+        // Déjà exactement la requête de résolution finale : filtrée par tenant,
+        // sur `user_profile`. Rien à re-prouver.
+        return this.allTenantUsers(tenantId);
 
-      case 'individual_user':
-        return new Set(announcement.userProfileId ? [announcement.userProfileId] : []);
+      case 'individual_user': {
+        // AVANT : `new Set([announcement.userProfileId])` — passe-plat VERBATIM
+        // d'un id fourni par l'appelant, jamais confronté à la base. C'était la
+        // branche que PF-208 avait nommée, et la seule.
+        if (!announcement.userProfileId) return new Set();
+        const owned = await this.prisma.userProfile.findFirst({
+          where: { id: announcement.userProfileId, tenantId },
+          select: { id: true },
+        });
+        return new Set(owned ? [owned.id] : []);
+      }
 
       case 'individual_student': {
         // Guardians of the student PLUS the student's own linked account (E8-S3,
         // FR-S3-7) — additive, guarded by a non-null link, so a student actually
         // receives a receipt without changing what guardians get.
         const [guardians, students] = await Promise.all([
-          this.guardiansOfStudents([announcement.studentId!]),
-          this.studentsOwnProfiles([announcement.studentId!]),
+          this.guardiansOfStudents(tenantId, [announcement.studentId!]),
+          this.studentsOwnProfiles(tenantId, [announcement.studentId!]),
         ]);
-        return new Set([...guardians, ...students]);
+        return this.resolveWithinTenant(tenantId, new Set([...guardians, ...students]));
       }
 
       case 'class_section_scope':
-        return this.recipientsForClassSections([announcement.classSectionId!]);
+        return this.resolveWithinTenant(
+          tenantId,
+          await this.recipientsForClassSections(tenantId, [announcement.classSectionId!]),
+        );
 
       case 'grade_level_scope': {
         const classes = await this.prisma.classSection.findMany({
-          where: { tenantId: announcement.tenantId, gradeLevelId: announcement.gradeLevelId! },
+          where: { tenantId, gradeLevelId: announcement.gradeLevelId! },
           select: { id: true },
         });
-        return this.recipientsForClassSections(classes.map((c) => c.id));
+        return this.resolveWithinTenant(
+          tenantId,
+          await this.recipientsForClassSections(
+            tenantId,
+            classes.map((c) => c.id),
+          ),
+        );
       }
 
       case 'cycle_scope': {
         const classes = await this.prisma.classSection.findMany({
-          where: { tenantId: announcement.tenantId, gradeLevel: { cycleId: announcement.cycleId! } },
+          where: { tenantId, gradeLevel: { cycleId: announcement.cycleId! } },
           select: { id: true },
         });
-        return this.recipientsForClassSections(classes.map((c) => c.id));
+        return this.resolveWithinTenant(
+          tenantId,
+          await this.recipientsForClassSections(
+            tenantId,
+            classes.map((c) => c.id),
+          ),
+        );
       }
 
       default:
         return new Set();
     }
+  }
+
+  /**
+   * S-E01-1f — LA RÉSOLUTION FINALE, et pourquoi elle existe en plus des
+   * prédicats posés sur chaque requête.
+   *
+   * `guardian.userProfileId` et `student.userProfileId` sont des colonnes UUID
+   * NUES : `guardians.controller.ts:167` écrit `userProfileId: body.userProfileId`
+   * sans AUCUNE vérification de propriété (finding séparé — module distinct, une
+   * seule amélioration cohérente par run). Une `guardianship` parfaitement
+   * intra-tenant peut donc pointer un profil d'un AUTRE tenant.
+   *
+   * Filtrer les jointures ne suffit alors pas : c'est la VALEUR RENDUE qu'il
+   * faut prouver. Une requête bornée (`id IN (…)` sur l'ensemble déjà calculé,
+   * `+ tenantId`) rend la propriété « `computeRecipients` ne peut pas rendre un
+   * id hors tenant » VRAIE PAR CONSTRUCTION, quelle que soit l'hygiène des
+   * colonnes en amont. Elle ne filtre PAS sur `status` : ce serait un changement
+   * de comportement (E8-S3), pas une correction de tenant.
+   */
+  private async resolveWithinTenant(tenantId: string, ids: Set<string>): Promise<Set<string>> {
+    if (ids.size === 0) return new Set();
+    const profiles = await this.prisma.userProfile.findMany({
+      where: { id: { in: [...ids] }, tenantId },
+      select: { id: true },
+    });
+    return new Set(profiles.map((p) => p.id));
   }
 
   private async allTenantUsers(tenantId: string): Promise<Set<string>> {
@@ -86,10 +165,10 @@ export class AnnouncementRecipientsService {
     return new Set(profiles.map((p) => p.id));
   }
 
-  private async guardiansOfStudents(studentIds: string[]): Promise<Set<string>> {
+  private async guardiansOfStudents(tenantId: string, studentIds: string[]): Promise<Set<string>> {
     if (studentIds.length === 0) return new Set();
     const guardianships = await this.prisma.guardianship.findMany({
-      where: { studentId: { in: studentIds }, status: 'active' },
+      where: { tenantId, studentId: { in: studentIds }, status: 'active' },
       include: { guardian: { select: { userProfileId: true } } },
     });
     const set = new Set<string>();
@@ -104,10 +183,10 @@ export class AnnouncementRecipientsService {
    * account materialises NOTHING new (and a non-class student is never added).
    * This NEVER changes what guardians/teachers receive (it is unioned alongside).
    */
-  private async studentsOwnProfiles(studentIds: string[]): Promise<Set<string>> {
+  private async studentsOwnProfiles(tenantId: string, studentIds: string[]): Promise<Set<string>> {
     if (studentIds.length === 0) return new Set();
     const students = await this.prisma.student.findMany({
-      where: { id: { in: studentIds }, userProfileId: { not: null } },
+      where: { tenantId, id: { in: studentIds }, userProfileId: { not: null } },
       select: { userProfileId: true },
     });
     const set = new Set<string>();
@@ -115,29 +194,32 @@ export class AnnouncementRecipientsService {
     return set;
   }
 
-  private async teachersOfClasses(classSectionIds: string[]): Promise<Set<string>> {
+  private async teachersOfClasses(tenantId: string, classSectionIds: string[]): Promise<Set<string>> {
     if (classSectionIds.length === 0) return new Set();
     const assignments = await this.prisma.teachingAssignment.findMany({
-      where: { classSectionId: { in: classSectionIds } },
+      where: { tenantId, classSectionId: { in: classSectionIds } },
       include: { teacherProfile: { select: { userProfileId: true } } },
     });
     return new Set(assignments.map((a) => a.teacherProfile.userProfileId));
   }
 
-  private async recipientsForClassSections(classSectionIds: string[]): Promise<Set<string>> {
+  private async recipientsForClassSections(
+    tenantId: string,
+    classSectionIds: string[],
+  ): Promise<Set<string>> {
     if (classSectionIds.length === 0) return new Set();
     const enrollments = await this.prisma.enrollment.findMany({
-      where: { classSectionId: { in: classSectionIds }, status: 'active' },
+      where: { tenantId, classSectionId: { in: classSectionIds }, status: 'active' },
       select: { studentId: true },
     });
     const studentIds = enrollments.map((e) => e.studentId);
     const [guardians, teachers, students] = await Promise.all([
-      this.guardiansOfStudents(studentIds),
-      this.teachersOfClasses(classSectionIds),
+      this.guardiansOfStudents(tenantId, studentIds),
+      this.teachersOfClasses(tenantId, classSectionIds),
       // E8-S3 (FR-S3-7): additively include each enrolled student's OWN linked
       // account, so a class/grade/cycle announcement reaches the learner too. An
       // enrolled student with no link adds nothing; guardians/teachers unchanged.
-      this.studentsOwnProfiles(studentIds),
+      this.studentsOwnProfiles(tenantId, studentIds),
     ]);
     return new Set([...guardians, ...teachers, ...students]);
   }
