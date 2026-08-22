@@ -53,3 +53,6 @@ Thumbs.db
 
 # Production deploy env (secrets) — never commit
 .env.prod
+
+# Sauvegardes .env (secrets) — jamais committer
+.env.bak*
