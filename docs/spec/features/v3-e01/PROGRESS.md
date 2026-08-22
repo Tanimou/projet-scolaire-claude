@@ -136,6 +136,7 @@ The epic is **not** `shipped`, and **four** sentences must not be misread:
 | **S-E01-5** | `calendar_event`'s scope foreign keys are checked for **OWNERSHIP**, inside the scope, before the write — not only for coherence | 🟢 **shipped — 2026-08-15, ⚠️ NOT auto-merged (P1 · `[security][tenancy][authz][api]`)** — [`stories/S-E01-5.md`](./stories/S-E01-5.md) | 59 | **Closes `PF-204`** (the *creatable* half), ships **`ADR-049`**, amends **`ADR-048 §D3`** in place, records **`PF-205`** and **`PF-206`**. One production file changes: `calendar.controller.ts`. Each supplied scope id (`academicYearId`, `cycleId`, `gradeLevelId`, `classSectionId`) is proven owned by `findFirst({ where: { id, tenantId }, select: { id: true } })` issued **on the scope's own `tx`, inside `this.scope.run(...)`, before the write** — outside it would run on the OWNER connection, which sees every tenant, i.e. it would validate the defect it refuses. `findFirst` and not `findUnique`, because `findUnique` cannot carry the non-unique `tenantId` and the composite predicate would then be applied *after* the foreign row was fetched. One **400** for both failure modes, byte-identical, indistinguishable **by construction** rather than by careful wording (`ADR-048 §D9`). Mutual exclusivity of the three scope ids is defined on **truthiness, never key presence** — which is what keeps the admin UI working, since `CalendarManager.tsx` always sends `gradeLevelId`/`classSectionId` and usually as `null` — and it independently closes the inference hole where an unvalidated `cycleId` rode into the row behind a `class_section_scope`. **The budget is amended honestly, not moved quietly:** `ADR-048 §D3`'s ≤ 2 becomes **≤ 3** for `create` and `update` (`list` 1–2, `remove` 2, both unchanged), asserted executably by B1. **No `schema.prisma`, no migration** (`G-MIGRATION` not triggered, `restore-drill-baseline.json` untouched, the `prisma generate` RED trap disarmed), **no `apps/web` file**. **Two things it does NOT do, both recorded:** it validates NEW writes and remediates nothing already stored (`PF-205` owns the retroactive half and the composite-FK migration that would make the reference *impossible* rather than *checked*), and it does not repair `update` silently dropping `academicYearId` (`PF-206`) — that premise is instead **pinned by a source assertion**, so adding the field later turns a silent hole into a red test. **⚠️ Renumbered at implementation:** written as `S-E01-4`, which was already the Keycloak client split — see the story header. **ADDENDUM AT VERIFY — a SECOND defect was found by the gate pass and fixed at its own layer, and it is the one to read if you read nothing else here.** `APP_ROLE_REQUIRED_PRIVILEGES` (`shared/prisma/tenant-scope.ts:122`) is the hand-maintained relational closure that `appRoleVerdict` walks **at boot**; a missing entry makes the deployment fall back to `degraded_no_app_url` (RLS off, gauge 0). This slice adds 7 Prisma call sites on 4 tables inside the scope — `cycle`, `grade_level` and `class_section` were already listed **by luck** (for `list`’s `include`), and **`academic_year` was not**. On a cluster where `app_user` was granted partially — the exact failure family that constant exists to refuse — the boot probe would have certified `enforcing: true` while **every** calendar-event creation 500s on `permission denied for table academic_year`, and the admin UI sends `academicYearId` on every save (`CalendarManager.tsx:353-354, :439`). Fail-CLOSED, so not a leak — but a security probe green-lighting a state it never checked is the `PF-02` shape inside the probe built to refuse it. The entry is added **and the coupling that never existed is now tested**: **AC-10** derives `(table, privilege)` from the controller’s real `tx.<model>.<verb>(` call sites and requires the declared closure to cover them, with a non-empty-corpus guard so it cannot pass vacuously — proven **red before green** (`+ Array [ "academic_year.SELECT" ]`). **AC-4’s pre-fix RED was never captured** (the spec imports five symbols that exist only post-fix, so it cannot compile against `HEAD~1`); **mutation testing was substituted and is stronger** — three mutants, all killed: `where: { id }` stripped of `tenantId` → 11 red, the refusal dropped with the probe retained → 9 red, `academicYearId` removed from `CREATE_OWNED_SCOPE_FIELDS` → 6 red. **Four things a human owns, none of them fixed here:** (1) the **retroactive census has never been run against PROD** — `calendar_event` measured **0 rows** on the LOCAL database, which is clean and therefore uninformative, so `PF-205`’s blast radius on `pilotage.srv861861.hstgr.cloud` is `unmeasured` at the moment `PF-204` is asked to read `closed`; (2) **`announcements.controller.ts` carries the identical, live, UNRECORDED instance of the same defect** — five mono-column scope FKs written straight from the body, coherence-only validation, **no ownership probe on the admin path**, and `scope: individual_user` with a foreign `userProfileId` writes an `announcement_receipt` **and a `Notification`** into another tenant’s user feed, i.e. a cross-tenant **write** rather than a rendered name; it needs its own `PF-` before anyone reads `PF-204: closed` as « the class is shut »; (3) **a NEW 400 on a path that previously succeeded** — a `PATCH` carrying two truthy scope ids at once is now refused (intended, `ADR-049 §D3`, pinned by M1b), which an integration caller could trip; (4) **the exclusivity invariant is on the BODY, not on the ROW** — `update` merges into the stored row, so `PATCH {classSectionId}` on an event already holding `cycleId` persists **both**, and `update` still carries **no** scope⇄id coherence guard at all (unlike `createEvent:611-619`), which is wider than what `ADR-049 §D3` claims. Both ids are tenant-owned, so it is a claim-width defect and not a leak — but `PF-205` may **not** assume the invariant holds on rows written after this slice. **Two re-runs the orchestrator owns:** `scripts/tenant-scope-check.js` loads `apps/api/dist/shared/prisma/*.js`, so the closure edit is invisible to it until the build — after it, the script must report **9** privileges and stay green; and `node scripts/tenant-adversarial-check.js` was **not** run on this diff although it triples the converted module’s table surface (2 → 6), and its `scoped + enumerated === total` equality is the only mechanical check of that. Non-blocking drift: `scripts/tenant-adversarial-check.js:1884,2290` still say `calendar.controller.ts` has « six call sites » (now 13, comment only — the counter is computed), `ADR-049 §D5`’s heading says « private method » where the code deliberately **inlines** the probe loop in each `this.scope.run(...)` callback because `tenant-adversarial-check.js`’s coverage counter is **lexical** (PF-200), and `tenant-scope.spec.ts:366` still enumerates four table names, so `academic_year` is covered by AC-10 but not pinned there. Ownership is proven for `tenant_id`, **not** `school_id` — a same-tenant / other-school `classSectionId` still passes, latent today because `ctx.forTenant` returns one school |
 | **S-E01-1e** | The **SECOND** module (`lessons`) enters the tenant seam, and the coverage counter stops being **receiver-blind** | 🟡 **shipped in part — 2026-08-15** — ⚠️ **ROW ADDED RETROACTIVELY (run 63)**: the slice landed as `f9eff0a` during run 61 and was never added to this table, exactly as [the correction note above](#v3-e01--tenant-isolation-and-identity-resolution) says. The section below is the authoritative account; this row exists so the table stops disagreeing with it | 61 | Closes **`PF-217`**, settles **`PF-199`**, records **`PF-218`**/**`PF-219`**, ships **`ADR-051`**, advances `PF-02` half (a). Attribution re-derived, never edited: `13 scoped + 111 enumerated / 800` → **`24 scoped + 120 enumerated / 803`**. **The finding is worth more than the movement:** `PRISMA_CALL_SITE_RE` matched `prisma.`, `this.prisma.` and `tx.` identically and `covers()` was purely **positional**, so a statement on the **owner** connection *inside* a `scope.run` callback counted as **scoped** — a half-converted handler scored **higher** than a correct one, i.e. the readiness metric moved the **wrong way** precisely when the code was wrong. `SCOPE_SAFE_RECEIVERS = ['tx']` + a pure `classifyCallSite` with four outcomes close it, receiver test **before** enumeration test so an allow-listed file cannot launder a covered site (`ADR-051 §D1`). **No SQL, no `schema.prisma`** — `G-MIGRATION` untriggered, `PF-80` never armed. See [the section below](#s-e01-1e--the-second-module-and-the-counter-that-moved-the-wrong-way-until-it-was-repaired) |
 | **S-E01-1f** | `announcements`' five scope foreign keys are proven **OWNED** before the write, `computeRecipients` is made structurally incapable of returning a foreign profile, and the ownership helpers become a **shared** rule rather than one controller's habit | 🟡 **shipped in part — 2026-08-15, ⚠️ NOT auto-merged (P1 · `[security][authz][tenancy][api][behavior-change]`)** — [`stories/S-E01-1f.md`](./stories/S-E01-1f.md) | 63 | **Closes `PF-208`** — the twin `S-E01-5`'s escalation panel named and could not fix, and the first instance of this defect class to reach a cross-tenant **WRITE** (`announcement_receipt` **and** `Notification` rows addressed at another tenant's profiles). Ships **`ADR-053`** (§D1 probes · §D2 extraction, **superseding `ADR-049 §D5`** · §D3 the new refusal · §D4 the chokepoint · §D5 preview · §D6 what is not decided); records **`PF-228`**–**`PF-233`**. **What landed:** `create` and `preview-recipients` probe all five **supplied** scope ids with `findFirst({ where: { id, tenantId } })` — `findFirst` not `findUnique`, a `switch` closed by a `const exhaustive: never`, a refusal **byte-identical** for *« other tenant »* and *« does not exist »* (`ADR-048 §D9`), ordered **after** the pure and role refusals so a doomed body costs no query; `computeRecipients` gains five tenant predicates plus a bounded `resolveWithinTenant`, **required and not belt-and-braces** because `publishInternal` recomputes from the **stored** ids and never re-enters the controller probe (`PF-230`); the pure plan helpers move into **`apps/api/src/shared/prisma/scope-fk.ts`** with **no compatibility re-export**, while the field lists, the `findFirst` loop (lexical counter, `PF-200`) and a generic `assertOwnedByTenant` are deliberately **not** extracted; and **`assertScopeCoherence`** (`ADR-053 §D3`) adds a new 400 for bodies whose scope does not explain the ids they carry, measured against both shipped composers first. **The severity correction is part of the deliverable:** `PF-208`'s recorded blast radius was wrong in **both** directions — the rows do **not** render in the victim's feed, so it is (a) integrity / invisible **dark** rows and (b) a **cardinality-and-existence oracle to the attacker**; and **four** branches leaked, not one. **NOT a conversion** — no `withTenant`, no `APP_ROLE_REQUIRED_PRIVILEGES` entry (`AC-6`/`AC-7` cut → **`PF-232`**), `tenant-scope.ts` and `announcements.module.ts` byte-unchanged, so `24 + 120 / 803` and `PF-02` are where `S-E01-1e` left them and the explicit predicate does **all** the work (`DNC-06`). **Evidence, executed:** `pnpm typecheck` **13/13 exit 0** with `@pilotage/api` a genuine cache **miss**; `git diff --check` exit 0; `jest src/modules/announcements src/modules/calendar` → **5 suites / 106 tests PASS** (125 s), including the new 734-line `announcements-scope-ownership.spec.ts` and its **negative control** (the pre-fix query fired against the same fake DB returns the victim's rows; an unknown Prisma operator **throws** rather than silently returning `[]`). **No `schema.prisma`, no migration** (`P-05` disarmed). **Four things a human owns — see [`S-E01-1f` — the write path closed, the read path one third done](#s-e01-1f--the-write-path-closed-the-read-path-one-third-done)** |
+| **S-E01-1g** | The **THIRD** module (`announcements`) enters the tenant scope **PARTIALLY**, and the rule deciding *which handlers can enter at all* becomes an architectural decision instead of a third local comment | 🟡 **shipped in part — 2026-08-16** — [`stories/S-E01-1g.md`](./stories/S-E01-1g.md) | this run | **Closes `PF-232`** (its conversion half), records **`PF-235`** / **`PF-236`**, ships **`ADR-054`**, advances `PF-02` half (a). Attribution **re-derived by the script, never edited**: `24 scoped + 120 enumerated / 816` → **`36 scoped + 120 enumerated / 816`** — `+12` is **exactly** the number of sites converted, so there is **no `owner-inside-scope` residue** and the `PF-217` trap was avoided *by construction*; `enumerated` unmoved at 120, denominator unmoved at 816, verb-aware still `165 satisfied, 2 not`. **Five whole handlers** converted (`unreadCount`, `create`, `update`, `publish`, `markRead`); four handlers, two private methods and all ten sites of `announcements.service.ts` **excluded, each with its mechanism in a docblock at its own definition site**. `APP_ROLE_REQUIRED_PRIVILEGES` gains six rows and four **extended** (never duplicated) `why` strings; `announcements.module.ts` **byte-unchanged by design** (`PrismaModule` is `@Global()`). **`ADR-054` is the deliverable as much as the code:** `§D1` the partition criterion (*a handler converts only if every statement it provokes is **lexically** inside the callback; a collaborator closing over its own `PrismaService` is **excluded**, never threaded a `tx`*) — the third occurrence of a rule `calendar` and `lessons` each recorded locally; `§D2` the **measured** refusal of the `tx` thread (it would *compile*, unlike `CalendarSeedService`, but moves the counter by **zero** while adding five tables to a globally-probed closure); `§D3` the half of the boot-probe rule the first two modules never had to write — an **over**-declared row 503s **calendar and lessons too**, this list being global; `§D4` `remove` excluded because the `announcement`→`announcement_receipt` cascade is **expected, not proven**, so `announcement`/`DELETE` is deliberately undeclared; `§D5` the mandatory `DNC-06` sentence. **Named limits:** the module is **PARTIALLY** converted, `list`/`getOne` are refused on **`G-TRUTH`** (their `_count`/`stats` are rendered projections that legitimately diverge over the dark rows `PF-230` owns), the app still connects as **owner** with no `FORCE ROW LEVEL SECURITY`, and **`PF-02` did not close**. **No `schema.prisma`, no migration, no `apps/web`, no `apps/worker`.** See [the section below](#s-e01-1g--the-third-module-enters-the-scope-partially-and-this-time-the-counter-moved-by-exactly-what-was-converted) |
 
 ## `S-E01-1a` — what landed, and the four residuals
 
@@ -1105,6 +1106,11 @@ BEFORE  13 scoped + 111 enumerated / 800
 AFTER   24 scoped + 120 enumerated / 803     → 659 sites would return ZERO ROWS after the cutover
 ```
 
+> **These two lines are a MEASUREMENT OF THIS RUN and are kept as such — they are not the current state.** The
+> denominator has since moved (`S-E01-1f` added probe call sites; the corpus measured **816** at `a022301`) and the
+> numerator moved with `S-E01-1g` to **`36 scoped + 120 enumerated / 816`**. Read the live figure from
+> `node scripts/tenant-adversarial-check.js`, never from a historical block.
+
 **The application is still NOT ready to cut over, and the suite says so as a named LIMIT rather than a ratio.**
 
 ### The finding that matters more than the movement
@@ -1356,9 +1362,140 @@ gate script: a human should merge it knowingly, not discover it. **`PF-228` was 
 diff** and resolved **by meaning** per the recorded parallel-runs rule — the id cited from the script keeps `228`,
 the story's enumeration renumbered to `PF-229`.
 
+## `S-E01-1g` — the THIRD module enters the scope PARTIALLY, and this time the counter moved by exactly what was converted
+
+### What landed
+
+`announcements` is the third production module inside the tenant seam, and it is the first to enter it **partially by
+design**: **five** whole handlers — `unreadCount`, `create`, `update`, `publish`, `markRead` — run inside
+`this.scope.run(tenantId, async (tx) => …)`, **twelve** call sites rebound from `this.prisma.X` to `tx.X`. Four
+handlers (`list`, `getOne`, `previewRecipients`, `remove`), two private methods (`publishInternal`,
+`assertTeacherScope`) and the whole of `announcements.service.ts` stay on the owner connection, **each carrying a
+docblock that names its mechanism** rather than its inconvenience. `announcements.module.ts` is **byte-unchanged**,
+deliberately: `PrismaModule` is `@Global()` and exports `TenantScopeService`, so wiring anything would be re-adding a
+global.
+
+Attribution **re-derived by the script, never edited as a literal**:
+
+```
+BEFORE  24 scoped + 120 enumerated / 816     (verb-aware: 165 satisfied, 2 not)
+AFTER   36 scoped + 120 enumerated / 816     → 660 sites would return ZERO ROWS after the cutover
+                                             (verb-aware: 165 satisfied, 2 not — unchanged)
+```
+
+**`+12` is exactly the number of sites converted**, and that identity is the result worth reading: it means there is
+**no `owner-inside-scope` residue at all** — the `PF-217` trap that made `S-E01-1e`'s counter move the *wrong* way was
+avoided **by construction** (the unit of work was the handler, never the statement), not caught in review. `enumerated`
+is unmoved at **120** — nothing was laundered into `ENUMERATED_OUTSIDE_SCOPE`, and none of the six excluded paths was
+added to it, because that list carries **structural** reasons and not pending work (`ADR-048 §D6`). The denominator is
+unmoved at **816**: no call site was added or removed. The two unsatisfied verb-aware pairs are still the pre-existing
+`tenant/INSERT` and `tenant/UPDATE` of `identity/register.controller.ts:365`.
+
+**The application is still NOT ready to cut over**, and the suite still says so as a named `[LIMIT]` rather than a
+ratio — `DNC-10` was respected and the readiness counter gained **no floor**, which `PROGRESS.md` itself had asked
+for and `S-E01-1f §5` had already refused (a floor is `DNC-10`'s knob wearing a different hat).
+
+### The decision that had to become an ADR, and why on this diff
+
+`ADR-054` exists because a rule stated **three times in three files** is no longer a local comment. `calendar`
+excluded `CalendarSeedService` (`PF-198`), `lessons` excluded `NotificationsService` (`PF-218`), and this slice
+excludes `AnnouncementRecipientsService` — and the third occurrence is the one that generalises: **a handler converts
+only if every statement it provokes is LEXICALLY inside the callback; a collaborator that closes over its own
+`PrismaService` is EXCLUDED, never threaded a `tx`.** `GUARDRAILS §2` makes a new cross-cutting decision without an
+ADR a blocking finding, and the controller header says so in the source, not only in `docs/`.
+
+The refusal is **measured**, which is what separates it from the two earlier ones: `AnnouncementRecipientsService`
+opens no `$transaction`, so a `Prisma.TransactionClient` parameter **would compile** (unlike `CalendarSeedService`).
+It is refused anyway because it would move the counter by **zero** — the file opens no scope, so all ten of its sites
+stay `uncovered` whatever the receiver is named — while adding **five** tables to a closure that is walked
+**globally** at boot. Cost real, gain nil, blast radius maximal. Recorded as **`PF-235`**.
+
+### The half of the boot-probe rule the first two modules never had to write
+
+`APP_ROLE_REQUIRED_PRIVILEGES` gains six rows (`announcement` SELECT/INSERT/UPDATE, `announcement_receipt`
+SELECT/UPDATE, `student` SELECT), with four existing `why` strings **extended, never duplicated**. What it
+deliberately does **not** gain is the part that needed deciding: `appRoleVerdict` walks this list **globally**, so an
+**over**-declared entry returns `refused_unusable` and 503s **calendar and lessons too**, not only the module that
+declared it. `announcement_receipt`'s granted set is **closed** on `SELECT, INSERT, UPDATE` (`ADR-042 §D5`), so
+declaring `DELETE` there would have taken down three modules at boot for a privilege the schema deliberately
+withholds — the `S-E01-5` hazard **inverted**. `announcement`/`DELETE` is absent for the same fail-closed reason:
+`remove` was **excluded** rather than converted, because the `ON DELETE CASCADE` into `announcement_receipt`
+(`0_baseline/migration.sql:1737`) is **expected** to pass through the RI trigger and is **proven nowhere in this
+repository** (`ADR-054 §D4`). `notification`, `user_role` and `role` are absent because the only handlers that reach
+them are excluded — an entry no `tx` receiver exercises certifies a closure nobody checks, which is `PF-219`'s shape.
+
+### The named limits — read the closure exactly as wide as it is
+
+- **`announcements` is PARTIALLY converted.** Not "converted", not "isolated", not "closed" (`DNC-06`). The module's
+  own child table `announcement_receipt` is still **written** entirely outside any scope, by `materialiseReceipts`.
+- **The application still connects as the table OWNER**, which escapes its own policies for want of
+  `FORCE ROW LEVEL SECURITY`. On `degraded_no_app_url` — every deployment today — **the explicit `tenantId` predicate
+  is doing ALL the work and RLS is not doubling it.**
+- **`PF-02` half (a) ADVANCES from 24/816 to 36/816. It does NOT close.** The global `DATABASE_URL` flip is still
+  `S-E01-1`, on unchanged blockers.
+- **`list` and `getOne` were refused on `G-TRUTH`, not on budget alone** — and this is the residue most likely to be
+  misread as laziness. `list`'s `_count: { select: { recipients: true } }` counts **raw** `announcement_receipt` rows
+  including the dark cross-tenant rows `PF-230` owns, while `getOne` resolves its receipts against an already
+  tenant-filtered profile lookup. The two numbers **legitimately diverge today**; moving the `_count` under the
+  FK-derived policy would silently reconcile a real divergence and change a number rendered on `/admin/announcements`
+  without one line of `apps/web` changing. That is a product decision and it needs its own diff and its own
+  before/after fixture.
+- **`PF-236` is new and its divergence is new with this diff:** the four copies of the `switch (ref.field)` ownership
+  dispatch used to be identical; `create`'s copy now takes `tx` while `previewRecipients`' copy keeps `this.prisma`,
+  so **two copies inside the same file now differ in the one property the counter classifies on**. `AC-7` was cut
+  first, as a `NICE` item.
+
+### Evidence
+
+`pnpm typecheck` **13/13 exit 0** (`@pilotage/api` a genuine cache **miss**, `tsc --noEmit` and
+`tsc --noEmit -p prisma/tsconfig.json` both clean); `git diff --check` exit 0;
+`node scripts/tenant-adversarial-check.js` → **`36 scoped + 120 enumerated / 816`, 228 source files**.
+**No `schema.prisma`, no migration** — `G-MIGRATION` untriggered, `P-05` disarmed, `PF-80` never armed. **No
+`apps/web` and no `apps/worker` file** (`touchesUi: false`, `touchesWorker: false`).
+`announcements-scope-ownership.spec.ts` grows by **483 lines** (existing assertions untouched) carrying the frame
+proof — including its **negative** half, which is the half that proves something: `ensureUser`/`forUser` see
+`undefined` (`PF-199`), `assertTeacherScope` refuses **before** any scope opens, and `previewRecipients` opens **no**
+scope at all — and the closure-coupling ratchet with its inverse guard. **Per `AC-8`, none of those assertions has
+been executed in this role:** `GUARDRAILS §4` reserves jest for the test-architect, and they stay unexecuted until
+`pnpm --filter @pilotage/api exec jest src/modules/announcements` runs — never under a path containing a
+dot-directory, where jest finds zero tests.
+
 ## Next slice
 
-> **⚠️ POINTER MOVED 2026-08-15 by `S-E01-1f` (run 63) — and read the move exactly as wide as it is.**
+> **⚠️ POINTER MOVED 2026-08-16 by `S-E01-1g` (this run) — the THIRD module is in the scope, PARTIALLY.**
+>
+> **What landed.** `announcements` converts **five whole handlers** (`unreadCount`, `create`, `update`, `publish`,
+> `markRead`), **twelve** call sites, and the readiness attribution moves **`24 scoped + 120 enumerated / 816` →
+> `36 scoped + 120 enumerated / 816`** — `+12`, i.e. exactly the sites converted, with **no `owner-inside-scope`
+> residue**, `enumerated` unmoved at 120, denominator unmoved at 816, verb-aware still `165 satisfied, 2 not`.
+> `APP_ROLE_REQUIRED_PRIVILEGES` gains six rows and four extended `why` strings; `announcements.module.ts` is
+> byte-unchanged **by design**. Ships **`ADR-054`** — the criterion that produces the partition (`§D1`), the measured
+> refusal to thread a `tx` into `AnnouncementRecipientsService` (`§D2`), the **global** blast radius of an
+> over-declared boot-probe row (`§D3`), the `remove`/cascade ruling (`§D4`) and the mandatory owner/no-`FORCE`
+> sentence (`§D5`). **Closes `PF-232`** on its conversion half; records **`PF-235`** and **`PF-236`**.
+>
+> **What did NOT land, and it is the half a reader will assume.** `list`, `getOne`, `previewRecipients` and `remove`
+> are **not** converted, nor is any of `announcements.service.ts` — each for a mechanism written at its own
+> definition site (`G-TRUTH` on the rendered projections, the excluded collaborator sitting mid-handler, the
+> **unproven** `announcement_receipt` cascade). **`PF-02` did not close** — half (a) advanced from 24 to 36 of 816.
+> The application still connects as the **owner** and escapes its own policies for want of
+> `FORCE ROW LEVEL SECURITY`, so the explicit `tenantId` predicate is doing **ALL** the work (`DNC-06`).
+>
+> **Two corrections to the block below, both measured rather than inherited.** (1) Its *"`24 scoped + 120 enumerated
+> / 803`"* denominator was **already stale when it was written**: `S-E01-1f` added its own probe call sites, and the
+> corpus measured **816** at `a022301`, not 803. Read the denominator from the script, never from a paragraph.
+> (2) Its *"`shared/prisma/tenant-scope.ts` … **byte-unchanged**"* was true of `S-E01-1f` and is **false of the tree
+> from this slice onward** (`+80` lines) — `OPEN.md`'s `PF-232` row carried the same sentence as its *evidence* and
+> has been corrected there too.
+>
+> **→ The next slice is `PF-235`** — the `AnnouncementRecipientsService` seam, which is what unblocks
+> `previewRecipients` and `publishInternal` — or **`PF-219`**, deriving the boot-probe closure **once, corpus-wide**,
+> now that a third module has been extended by hand and the **over**-declaration half of the rule is written down.
+> `PF-236` (the diverged dispatch) is cheap and should not be left to fork a fifth copy. `S-E01-1` (the global
+> `DATABASE_URL` flip) still comes **after** all of it.
+
+> **⚠️ POINTER MOVED 2026-08-15 by `S-E01-1f` (run 63) — and read the move exactly as wide as it is.** *(Superseded
+> 2026-08-16 by the `S-E01-1g` block above; two of its numbers are corrected there.)*
 >
 > **What landed.** `announcements` scope-FK **ownership** (`ADR-053`), closing **`PF-208`** at both ends: `create`
 > and `preview-recipients` each prove every **supplied** scope id owned before the write (five sequential
@@ -1373,7 +1510,12 @@ the story's enumeration renumbered to `PF-229`.
 > **What did NOT land, and it is the half a reader will assume:** `announcements` is **NOT** converted to
 > `withTenant` and gained **no** `APP_ROLE_REQUIRED_PRIVILEGES` entries (`AC-6`/`AC-7` cut from the bottom, recorded
 > as **`PF-232`**). `shared/prisma/tenant-scope.ts` and `announcements.module.ts` are **byte-unchanged**, so the
-> **`24 scoped + 120 enumerated / 803`** attribution is exactly where `S-E01-1e` left it. **`PF-02` did not move.**
+> ~~**`24 scoped + 120 enumerated / 803`**~~ attribution is exactly where `S-E01-1e` left it. **`PF-02` did not move.**
+> **⚠️ Two corrections, 2026-08-16 (`S-E01-1g`): the denominator was `816`, not `803`, already at the moment this
+> block was written — this slice's own probes added call sites, and the script measured 816 at `a022301`. And
+> `tenant-scope.ts` is byte-unchanged **as of `S-E01-1f` only**: `S-E01-1g` adds `+80` lines to it and moves the
+> attribution to `36 scoped + 120 enumerated / 816`. `announcements.module.ts` is still byte-unchanged, and stays so
+> by design.**
 > Every statement in this module still runs on the connection that **owns** the tables, which escapes its own
 > policies for want of `FORCE ROW LEVEL SECURITY` — the explicit `tenantId` predicate is doing **ALL** the work here,
 > RLS is not doubling it (`DNC-06`).
@@ -1396,7 +1538,9 @@ the story's enumeration renumbered to `PF-229`.
 > `S-E01-4b` is the identity-side gate slice `S-E01-4a` left specified-but-unbuilt. It touches **no** `apps/api`
 > runtime file (its single `apps/api` edit is under `src/shared/quality/`, i.e. gate machinery), no Prisma query, no
 > `schema.prisma`, no migration and no raw SQL, so it converts no module, opens no call site into the tenant scope,
-> and leaves the `24 scoped + 120 enumerated / 803` attribution and `PF-199` exactly where `S-E01-1e` left them.
+> and leaves the ~~`24 scoped + 120 enumerated / 803`~~ attribution and `PF-199` exactly where `S-E01-1e` left them.
+> *(Counter superseded 2026-08-16 by `S-E01-1g`: **`36 scoped + 120 enumerated / 816`**. The statement that this
+> slice moved nothing is unaffected — only the figures it quoted have moved on.)*
 > **→ The next slice is still `S-E01-1f` — convert a THIRD module, and derive the boot-probe closure ONCE
 > (`PF-219`).**
 >

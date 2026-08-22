@@ -41,11 +41,21 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
  * (PF-230). Ce fichier est donc le POINT D'ÉTRANGLEMENT ; le contrôleur est la
  * ceinture qui refuse tôt et proprement.
  *
- * LIMITE NOMMÉE (DNC-06) : ce module n'est PAS converti à `withTenant`. Toutes
- * ces requêtes s'exécutent sur la connexion du PROPRIÉTAIRE des tables, qui
- * échappe à ses propres policies faute de `FORCE ROW LEVEL SECURITY`. Le
- * prédicat `tenantId` explicite fait donc TOUT le travail ici ; RLS ne le double
- * pas. Ne pas écrire « isolé » ni « converti ».
+ * LIMITE NOMMÉE (DNC-06), RÉÉCRITE PAR S-E01-1g POUR RESTER VRAIE DE **CE**
+ * FICHIER : le contrôleur est désormais PARTIELLEMENT converti à la portée
+ * tenant (cinq handlers), mais CE SERVICE ne l'est PAS — pas un seul de ses dix
+ * sites d'appel n'entre dans une portée, et c'est une décision, pas un reste.
+ * Il ferme sur son PROPRE `PrismaService` : appelé depuis un callback de portée
+ * il émettrait sur la connexion du PROPRIÉTAIRE pendant que la connexion
+ * applicative tient une transaction ouverte, invisible au typage
+ * `Prisma.TransactionClient` comme au compteur, qui est LEXICAL. Les deux
+ * handlers qui l'appellent (`previewRecipients`, `publishInternal`) sont donc
+ * EXCLUS par mécanisme nommé (ADR-054 §D1–§D2).
+ *
+ * Conséquence inchangée : toutes ces requêtes s'exécutent sur la connexion du
+ * PROPRIÉTAIRE des tables, qui échappe à ses propres policies faute de `FORCE
+ * ROW LEVEL SECURITY`. Le prédicat `tenantId` explicite fait donc TOUT le
+ * travail ici ; RLS ne le double pas. Ne pas écrire « isolé » ni « converti ».
  */
 @Injectable()
 export class AnnouncementRecipientsService {

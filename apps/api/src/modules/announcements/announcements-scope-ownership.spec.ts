@@ -3,10 +3,17 @@ import 'reflect-metadata';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { scopeOwnershipPlan } from '../../shared/prisma/scope-fk';
+import {
+  APP_ROLE_REQUIRED_PRIVILEGES,
+  currentTenantScopeFrame,
+  privilegeKey,
+  runInTenantScope,
+} from '../../shared/prisma/tenant-scope';
+import type { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 
 import { AnnouncementsController, assertScopeCoherence } from './announcements.controller';
 import { AnnouncementRecipientsService } from './announcements.service';
@@ -63,6 +70,12 @@ const UP_TEACHER_B = 'up-teacher-b';
 const UP_STUDENT_B = 'up-student-b';
 
 const FOREIGN_IDS = [UP_GUARDIAN_B, UP_TEACHER_B, UP_STUDENT_B];
+
+/** Les annonces : celles du tenant appelant, et celles qu'il ne doit jamais voir. */
+const ANN_A = 'ann-a';
+const ANN_OTHER = 'ann-b';
+const ANN_PUBLISHED = 'ann-a-pub';
+const ANN_OTHER_PUBLISHED = 'ann-b-pub';
 
 type Row = Record<string, unknown>;
 
@@ -127,6 +140,54 @@ function seed() {
       { id: UP_TEACHER_B, tenantId: OTHER_TENANT, status: 'active', userRoles: [] },
       { id: UP_STUDENT_B, tenantId: OTHER_TENANT, status: 'active', userRoles: [] },
     ] as Row[],
+    // S-E01-1g — les deux tables que la conversion fait entrer dans la portée.
+    // `ann-b` appartient au tenant B : c'est le CONTRÔLE NÉGATIF des gardes
+    // applicatives, qui doivent survivre à la conversion (ADR-042 §D1).
+    announcement: [
+      {
+        id: ANN_A,
+        tenantId: TENANT,
+        authorId: UP_ADMIN_A,
+        publishedAt: null,
+        title: 'Titre A',
+        body: 'Corps A',
+      },
+      {
+        id: ANN_OTHER,
+        tenantId: OTHER_TENANT,
+        authorId: 'up-admin-b',
+        publishedAt: null,
+        title: 'Titre B',
+        body: 'Corps B',
+      },
+      {
+        id: ANN_PUBLISHED,
+        tenantId: TENANT,
+        authorId: UP_ADMIN_A,
+        publishedAt: new Date('2026-01-01T00:00:00.000Z'),
+        title: 'Publiée',
+        body: 'Corps publié',
+      },
+      // Le PIÈGE du compteur de non-lus : une annonce PUBLIÉE d'un AUTRE tenant
+      // pour laquelle l'appelant porte un reçu (la forme des lignes sombres de
+      // PF-208). Le filtre de jointure `announcement: { tenantId }` doit
+      // l'écarter — sinon le badge du portail parent compte des annonces
+      // étrangères.
+      {
+        id: ANN_OTHER_PUBLISHED,
+        tenantId: OTHER_TENANT,
+        authorId: 'up-admin-b',
+        publishedAt: new Date('2026-01-01T00:00:00.000Z'),
+        title: 'Publiée ailleurs',
+        body: 'Corps',
+      },
+    ] as Row[],
+    announcementReceipt: [
+      { id: 'rec-a', announcementId: ANN_A, userProfileId: UP_ADMIN_A, readAt: null },
+      { id: 'rec-b', announcementId: ANN_OTHER, userProfileId: UP_GUARDIAN_B, readAt: null },
+      { id: 'rec-pub', announcementId: ANN_PUBLISHED, userProfileId: UP_ADMIN_A, readAt: null },
+      { id: 'rec-cross', announcementId: ANN_OTHER_PUBLISHED, userProfileId: UP_ADMIN_A, readAt: null },
+    ] as Row[],
   };
 }
 
@@ -143,6 +204,19 @@ function matches(db: Db, row: Row, where: Record<string, unknown> | undefined): 
       const level = db.gradeLevel.find((l) => l.id === row.gradeLevelId);
       if (!level) return false;
       if (!matches(db, level, cond as Record<string, unknown>)) return false;
+      continue;
+    }
+    // S-E01-1g — le filtre de JOINTURE du compteur de non-lus. Il est ÉVALUÉ,
+    // pas ignoré : c'est lui qui prouve que `announcement.SELECT` est bien dû.
+    if (key === 'announcement') {
+      const parent = db.announcement.find((a) => a.id === row.announcementId);
+      if (!parent) return false;
+      if (!matches(db, parent, cond as Record<string, unknown>)) return false;
+      continue;
+    }
+    if (key === 'OR') {
+      const branches = cond as Record<string, unknown>[];
+      if (!branches.some((branch) => matches(db, row, branch))) return false;
       continue;
     }
     const value = row[key];
@@ -164,6 +238,11 @@ function matches(db: Db, row: Row, where: Record<string, unknown> | undefined): 
         if (value === operators.not) return false;
         continue;
       }
+      if ('gte' in (operators as { gte?: unknown })) {
+        const bound = (operators as { gte: Date }).gte;
+        if (!(value instanceof Date) || value < bound) return false;
+        continue;
+      }
       throw new Error(`fausse base : opérateur non supporté sur \`${key}\` — ${JSON.stringify(cond)}`);
     }
     if (value !== cond) return false;
@@ -171,20 +250,69 @@ function matches(db: Db, row: Row, where: Record<string, unknown> | undefined): 
   return true;
 }
 
+/**
+ * S-E01-1g — CHAQUE instruction enregistre le CADRE `AsyncLocalStorage` RÉEL
+ * observé au moment où elle est émise (`scopeTenant`). C'est ce qui rend AC-6
+ * MESURABLE au lieu de déclaratif : un handler « converti » dont une
+ * instruction voit `undefined` est un demi-handler (PF-217), et le test le dit
+ * par son nom au lieu de le laisser au compteur du script.
+ */
+type Statement = {
+  model: string;
+  verb: string;
+  where: Record<string, unknown>;
+  scopeTenant: string | undefined;
+};
+
 function makeClient() {
   const db = seed();
-  const seen: { model: string; verb: string; where: Record<string, unknown> }[] = [];
+  const seen: Statement[] = [];
+  const record = (model: string, verb: string, where: Record<string, unknown>) => {
+    seen.push({ model, verb, where, scopeTenant: currentTenantScopeFrame()?.tenantId });
+  };
+  /**
+   * `findUnique` par CLÉ : soit l'id, soit la clé composite
+   * `announcementId_userProfileId`. Il ne connaît PAS le tenant — ce qui est
+   * exactement pourquoi les gardes applicatives restent (ADR-042 §D1).
+   */
+  const byUniqueKey = (name: keyof Db, where: Record<string, unknown>): Row | null => {
+    if ('id' in where) return db[name].find((row) => row.id === where.id) ?? null;
+    const entries = Object.entries(where);
+    if (entries.length !== 1) {
+      throw new Error(`fausse base : \`findUnique\` sans clé exploitable — ${JSON.stringify(where)}`);
+    }
+    const compound = entries[0]![1] as Record<string, unknown>;
+    return db[name].find((row) => Object.entries(compound).every(([k, v]) => row[k] === v)) ?? null;
+  };
   const model = (name: keyof Db) => ({
     findMany: jest.fn(async (args?: { where?: Record<string, unknown> }) => {
-      seen.push({ model: name, verb: 'findMany', where: args?.where ?? {} });
+      record(name, 'findMany', args?.where ?? {});
       return db[name].filter((row) => matches(db, row, args?.where));
     }),
     findFirst: jest.fn(async (args?: { where?: Record<string, unknown> }) => {
-      seen.push({ model: name, verb: 'findFirst', where: args?.where ?? {} });
+      record(name, 'findFirst', args?.where ?? {});
       return db[name].find((row) => matches(db, row, args?.where)) ?? null;
     }),
+    findUnique: jest.fn(async (args: { where: Record<string, unknown> }) => {
+      record(name, 'findUnique', args.where);
+      return byUniqueKey(name, args.where);
+    }),
+    count: jest.fn(async (args?: { where?: Record<string, unknown> }) => {
+      record(name, 'count', args?.where ?? {});
+      return db[name].filter((row) => matches(db, row, args?.where)).length;
+    }),
+    update: jest.fn(async (args: { where: Record<string, unknown>; data: Row }) => {
+      record(name, 'update', args.where);
+      const row = byUniqueKey(name, args.where);
+      if (!row) throw new Error('P2025');
+      Object.assign(row, args.data);
+      return row;
+    }),
   });
-  const announcementCreate = jest.fn(async (args: { data: Row }) => ({ id: 'ann-1', ...args.data }));
+  const announcementCreate = jest.fn(async (args: { data: Row }) => {
+    record('announcement', 'create', {});
+    return { id: 'ann-1', ...args.data };
+  });
   const client = {
     cycle: model('cycle'),
     gradeLevel: model('gradeLevel'),
@@ -195,7 +323,8 @@ function makeClient() {
     teachingAssignment: model('teachingAssignment'),
     userProfile: model('userProfile'),
     teacherProfile: { findFirst: jest.fn(async () => null) },
-    announcement: { create: announcementCreate },
+    announcement: { ...model('announcement'), create: announcementCreate },
+    announcementReceipt: model('announcementReceipt'),
   };
   return { client, db, seen, announcementCreate };
 }
@@ -423,17 +552,73 @@ describe('AC-2 — `computeRecipients` ne peut pas rendre un profil hors tenant'
 // AC-1 — LES SONDES DU CONTRÔLEUR, exécutées à travers `create`
 // ═══════════════════════════════════════════════════════════════════════════
 
-function makeController() {
+/**
+ * S-E01-1g / AC-6 — LE DOUBLE DE `TenantScopeService` INSTALLE LE VRAI CADRE.
+ *
+ * `runInTenantScope` est importé DE LA COUTURE elle-même, pas réimplémenté :
+ * c'est le même `AsyncLocalStorage` que la production, donc `scopeTenant`
+ * enregistré par chaque instruction est une MESURE et non une déclaration. Un
+ * booléen posé par le double prouverait seulement que le double a été appelé.
+ */
+function makeController(over: { me?: { id: string; tenantId: string } } = {}) {
   const { client, announcementCreate, seen } = makeClient();
+  const me = over.me ?? { id: UP_ADMIN_A, tenantId: TENANT };
+
+  /** Les tenants passés à la couture, dans l'ordre — une portée par requête. */
+  const runs: string[] = [];
+  /** Le cadre observé À L'ENTRÉE de chaque callback. */
+  const scopeAtCallbackEntry: (string | undefined)[] = [];
+  /** Le cadre observé par CHAQUE résolveur d'identité (PF-199 : doit être `undefined`). */
+  const scopeAtIdentityCall: { who: string; tenant: string | undefined }[] = [];
+
+  const scope = {
+    run: async <T>(tenantId: string, fn: (tx: unknown) => Promise<T>): Promise<T> => {
+      runs.push(tenantId);
+      return runInTenantScope({ tenantId, tx: client }, async () => {
+        scopeAtCallbackEntry.push(currentTenantScopeFrame()?.tenantId);
+        return fn(client);
+      });
+    },
+  } as unknown as TenantScopeService;
+
+  const users = {
+    ensureUser: async () => {
+      scopeAtIdentityCall.push({
+        who: 'users.ensureUser',
+        tenant: currentTenantScopeFrame()?.tenantId,
+      });
+      return me;
+    },
+  };
+  const ctx = {
+    forUser: async () => {
+      scopeAtIdentityCall.push({
+        who: 'ctx.forUser',
+        tenant: currentTenantScopeFrame()?.tenantId,
+      });
+      return { schoolId: SCHOOL };
+    },
+  };
+
   const notifications = { createMany: jest.fn() };
   const controller = new AnnouncementsController(
     client as never,
-    { ensureUser: async () => ({ id: UP_ADMIN_A, tenantId: TENANT }) } as never,
-    { forUser: async () => ({ schoolId: SCHOOL }) } as never,
+    scope,
+    users as never,
+    ctx as never,
     new AnnouncementRecipientsService(client as never),
     notifications as never,
   );
-  return { controller, client, announcementCreate, notifications, seen };
+  return {
+    controller,
+    client,
+    announcementCreate,
+    notifications,
+    seen,
+    runs,
+    scopeAtCallbackEntry,
+    scopeAtIdentityCall,
+  };
 }
 
 const ADMIN_JWT = { realm_access: { roles: ['school_admin'] } } as KeycloakJwtPayload;
@@ -664,6 +849,248 @@ describe('AC-3 — `GET /announcements/preview-recipients`', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// S-E01-1g / AC-6 — LA PREUVE DE CADRE : ce qui tourne DANS la portée, et ce
+// qui n'y tourne PAS. La moitié NÉGATIVE est celle qui prouve quelque chose.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('AC-6 — les cinq handlers convertis émettent CHAQUE instruction sous un cadre de portée', () => {
+  /** Le cadre observé par chaque instruction émise pendant l'appel. */
+  const frames = (h: ReturnType<typeof makeController>) => h.seen.map((s) => s.scopeTenant);
+
+  it('`unread-count` — une instruction, une portée, et le filtre de jointure ÉCARTE l’annonce étrangère', async () => {
+    const h = makeController();
+    const result = await h.controller.unreadCount(ADMIN_JWT);
+    // `rec-pub` (publiée, tenant A) compte ; `rec-cross` (publiée, tenant B)
+    // NON, et `rec-a` non plus (jamais publiée). Le badge ne compte pas les
+    // lignes sombres.
+    expect(result).toEqual({ unread: 1 });
+    expect(h.runs).toEqual([TENANT]);
+    expect(h.scopeAtCallbackEntry).toEqual([TENANT]);
+    expect(frames(h)).toEqual([TENANT]);
+  });
+
+  it('`create` — les DEUX moitiés (sonde de propriété + écriture) voient le cadre', async () => {
+    const h = makeController();
+    await h.controller.create(
+      body({ scope: 'class_section_scope', classSectionId: 'cls-a' }),
+      ADMIN_JWT,
+    );
+    // UNE portée par requête : deux portées successives seraient deux
+    // transactions, donc une fenêtre TOCTOU entre la sonde et l'écriture.
+    expect(h.runs).toEqual([TENANT]);
+    expect(h.seen.map((s) => `${s.model}.${s.verb}`)).toEqual([
+      'classSection.findFirst',
+      'announcement.create',
+    ]);
+    expect(frames(h)).toEqual([TENANT, TENANT]);
+  });
+
+  it('`update` — garde ET écriture dans la MÊME portée (le TOCTOU est fermé, pas déplacé)', async () => {
+    const h = makeController();
+    await h.controller.update(ANN_A, { title: 'Nouveau' } as never, ADMIN_JWT);
+    expect(h.runs).toEqual([TENANT]);
+    expect(h.seen.map((s) => `${s.model}.${s.verb}`)).toEqual([
+      'announcement.findUnique',
+      'announcement.update',
+    ]);
+    expect(frames(h)).toEqual([TENANT, TENANT]);
+  });
+
+  it('`publish` — la lecture de garde est dans la portée, et le fan-out n’y est PAS', async () => {
+    const h = makeController();
+    const result = await h.controller.publish(ANN_PUBLISHED, ADMIN_JWT);
+    // Déjà publiée : on sort AVANT `publishInternal`, donc la seule instruction
+    // du handler est sa garde — et elle a bien vu le cadre.
+    expect(result).toEqual({
+      ok: true,
+      alreadyPublished: true,
+      publishedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    expect(h.runs).toEqual([TENANT]);
+    expect(frames(h)).toEqual([TENANT]);
+    expect(h.notifications.createMany).not.toHaveBeenCalled();
+  });
+
+  it('`markRead` — les deux instructions sous le cadre, puis l’idempotence n’en coûte qu’une', async () => {
+    const h = makeController();
+    expect(await h.controller.markRead(ANN_PUBLISHED, ADMIN_JWT)).toEqual({ ok: true });
+    expect(h.seen.map((s) => `${s.model}.${s.verb}`)).toEqual([
+      'announcementReceipt.findUnique',
+      'announcementReceipt.update',
+    ]);
+    expect(frames(h)).toEqual([TENANT, TENANT]);
+
+    // Deuxième appel : déjà lu → une seule lecture, pas de seconde écriture.
+    expect(await h.controller.markRead(ANN_PUBLISHED, ADMIN_JWT)).toEqual({
+      ok: true,
+      alreadyRead: true,
+    });
+    expect(h.seen.filter((s) => s.verb === 'update')).toHaveLength(1);
+    expect(h.runs).toEqual([TENANT, TENANT]);
+  });
+
+  it('PF-199 (la moitié NÉGATIVE) — `ensureUser` et `forUser` ne voient JAMAIS de cadre', async () => {
+    const h = makeController();
+    await h.controller.create(
+      body({ scope: 'class_section_scope', classSectionId: 'cls-a' }),
+      ADMIN_JWT,
+    );
+    expect(h.scopeAtIdentityCall.map((c) => c.who)).toEqual(['users.ensureUser', 'ctx.forUser']);
+    // LA propriété : la résolution d'identité PRODUIT le tenantId, elle ne peut
+    // pas le consommer. Un cadre observé ici signifierait qu'elle tourne dans
+    // une transaction ouverte sur une clé qu'elle n'a pas encore résolue.
+    expect(h.scopeAtIdentityCall.every((c) => c.tenant === undefined)).toBe(true);
+  });
+
+  it('CONTRÔLE NÉGATIF — `preview-recipients`, NON converti, n’ouvre AUCUNE portée et chaque instruction voit `undefined`', async () => {
+    // Sans ce cas, les assertions ci-dessus pourraient être vertes à vide : un
+    // harnais qui installerait un cadre en permanence les satisferait toutes.
+    const h = makeController();
+    const result = await h.controller.previewRecipients(
+      { scope: 'class_section_scope', classSectionId: 'cls-a' } as never,
+      ADMIN_JWT,
+    );
+    expect(result.count).toBe(3);
+    expect(h.runs).toEqual([]);
+    expect(h.seen.length).toBeGreaterThan(1);
+    expect(frames(h).every((f) => f === undefined)).toBe(true);
+  });
+
+  it('CONTRÔLE NÉGATIF — `assertTeacherScope` refuse AVANT toute portée (G-AUTHZ : l’ordre est la propriété)', async () => {
+    const h = makeController({ me: { id: UP_TEACHER_A, tenantId: TENANT } });
+    await expect(
+      h.controller.create(body({ scope: 'school_wide' }), TEACHER_JWT),
+    ).rejects.toThrow(BadRequestException);
+    // Un corps refusé pour cause de RÔLE n'a coûté AUCUNE transaction.
+    expect(h.runs).toEqual([]);
+    expect(h.announcementCreate).not.toHaveBeenCalled();
+  });
+
+  it('G-AUTHZ — les gardes survivent à la reliaison : annonce d’un AUTRE tenant → 404, et rien n’est écrit', async () => {
+    for (const run of [
+      (h: ReturnType<typeof makeController>) =>
+        h.controller.update(ANN_OTHER, { title: 'x' } as never, ADMIN_JWT),
+      (h: ReturnType<typeof makeController>) => h.controller.publish(ANN_OTHER, ADMIN_JWT),
+      (h: ReturnType<typeof makeController>) => h.controller.markRead(ANN_OTHER, ADMIN_JWT),
+    ]) {
+      const h = makeController();
+      await expect(run(h)).rejects.toThrow(NotFoundException);
+      expect(h.seen.filter((s) => s.verb === 'update')).toHaveLength(0);
+    }
+  });
+
+  it('G-AUTHZ — un non-auteur non-administrateur ne peut pas modifier, et le refus est DANS la portée déjà ouverte', async () => {
+    const h = makeController({ me: { id: UP_TEACHER_A, tenantId: TENANT } });
+    await expect(
+      h.controller.update(ANN_A, { title: 'x' } as never, TEACHER_JWT),
+    ).rejects.toThrow(BadRequestException);
+    expect(h.seen.filter((s) => s.verb === 'update')).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// S-E01-1g / AC-6 (2) — LE CLIQUET DE CLÔTURE : les sites d'appel de portée
+// dérivés de la SOURCE ⊆ `APP_ROLE_REQUIRED_PRIVILEGES`, et rien de plus.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('AC-6 — les sites d’appel de portée d’announcements ⊆ la clôture déclarée', () => {
+  const SOURCE = readFileSync(join(__dirname, 'announcements.controller.ts'), 'utf8');
+
+  /** `verbe Prisma -> privilège SQL`. Un verbe inconnu ÉCHOUE, il n'est pas ignoré. */
+  const VERB_PRIVILEGE: Record<string, string> = {
+    aggregate: 'SELECT',
+    count: 'SELECT',
+    findFirst: 'SELECT',
+    findMany: 'SELECT',
+    findUnique: 'SELECT',
+    groupBy: 'SELECT',
+    create: 'INSERT',
+    createMany: 'INSERT',
+    update: 'UPDATE',
+    updateMany: 'UPDATE',
+    delete: 'DELETE',
+    deleteMany: 'DELETE',
+  };
+
+  /** `announcementReceipt` -> `announcement_receipt`, la convention `@@map`. */
+  const toTable = (model: string): string => model.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
+
+  const sites = [...SOURCE.matchAll(/\btx\s*\.\s*(\w+)\s*\.\s*(\w+)\s*\(/g)].map(([, model, verb]) => ({
+    model: String(model),
+    verb: String(verb),
+    table: toTable(String(model)),
+  }));
+
+  it('le corpus de sites est NON VIDE et n’utilise que des verbes connus', () => {
+    // Une regex qui ne matche plus rien rendrait les tests suivants verts à vide.
+    // DOUZE à cette tranche (unreadCount 1, create 6, update 2, publish 1,
+    // markRead 2) ; une tranche ultérieure qui en convertit d'autres fait
+    // MONTER ce nombre, jamais descendre.
+    expect(sites.length).toBeGreaterThanOrEqual(12);
+    expect(sites.filter((s) => VERB_PRIVILEGE[s.verb] === undefined)).toEqual([]);
+  });
+
+  it('chaque (table, privilège) émis DANS une portée est DÉCLARÉ', () => {
+    const declared = new Set(
+      APP_ROLE_REQUIRED_PRIVILEGES.map((r) => privilegeKey(r.table, r.privilege)),
+    );
+    const missing = [
+      ...new Set(
+        sites
+          .map((s) => privilegeKey(s.table, VERB_PRIVILEGE[s.verb] ?? 'UNKNOWN'))
+          .filter((key) => !declared.has(key)),
+      ),
+    ].sort();
+    expect(missing).toEqual([]);
+  });
+
+  it('les tables NOUVELLES de cette tranche sont présentes, verbe par verbe (garde anti-vacuité)', () => {
+    const declared = new Set(
+      APP_ROLE_REQUIRED_PRIVILEGES.map((r) => privilegeKey(r.table, r.privilege)),
+    );
+    for (const key of [
+      'announcement.SELECT',
+      'announcement.INSERT',
+      'announcement.UPDATE',
+      'announcement_receipt.SELECT',
+      'announcement_receipt.UPDATE',
+      'student.SELECT',
+      'cycle.SELECT',
+      'grade_level.SELECT',
+      'class_section.SELECT',
+      'user_profile.SELECT',
+    ]) {
+      expect(declared.has(key)).toBe(true);
+    }
+    for (const requirement of APP_ROLE_REQUIRED_PRIVILEGES) {
+      expect(requirement.why.trim().length).toBeGreaterThan(10);
+    }
+  });
+
+  it('GARDE INVERSE — la clôture ne DÉCLARE PAS un privilège que `app_user` ne détient pas, ni une table qu’aucune portée n’atteint', () => {
+    // `announcement_receipt` n'a QUE `SELECT, INSERT, UPDATE` (migration dérivée
+    // :371, ensemble CLOS). Déclarer `DELETE` rendrait `refused_unusable` au
+    // démarrage — donc un 503 sur calendar ET lessons aussi, cette liste étant
+    // GLOBALE. C'est la faute la plus coûteuse que cette tranche pouvait commettre.
+    const declared = new Set(
+      APP_ROLE_REQUIRED_PRIVILEGES.map((r) => privilegeKey(r.table, r.privilege)),
+    );
+    expect(declared.has('announcement_receipt.DELETE')).toBe(false);
+    // Et le DÉRIVÉ ne les réclame pas non plus : `remove` et `publishInternal`
+    // sont exclus, donc aucun `tx.` ne porte DELETE ni ne touche `notification`.
+    const derived = new Set(
+      sites.map((s) => privilegeKey(s.table, VERB_PRIVILEGE[s.verb] ?? 'UNKNOWN')),
+    );
+    expect([...derived].filter((k) => k.endsWith('.DELETE'))).toEqual([]);
+    expect([...derived].filter((k) => k.startsWith('notification'))).toEqual([]);
+    expect([...derived].filter((k) => k.startsWith('user_role'))).toEqual([]);
+    // `notification` n'est atteint que par `publishInternal`, exclu : aucune
+    // entrée de clôture ne doit le certifier (la vacuité de PF-219).
+    expect(declared.has('notification.INSERT')).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // G-DNC — assertions de SOURCE
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -730,5 +1157,41 @@ describe('G-DNC / AC-11 — assertions de source', () => {
   it('DNC-06 — la source dit que la connexion est celle du PROPRIÉTAIRE et que RLS ne double rien', () => {
     expect(SERVICE).toContain('FORCE ROW LEVEL SECURITY');
     expect(CONTROLLER).toContain('FORCE ROW LEVEL SECURITY');
+  });
+
+  it('S-E01-1g / DNC-06 — le module est dit PARTIELLEMENT converti, jamais « isolé »', () => {
+    expect(CONTROLLER).toContain('PARTIELLEMENT');
+    // Le service, lui, n'est converti sur AUCUN site : sa limite doit rester
+    // vraie de CE fichier-là après que le contrôleur a changé (FM-9).
+    expect(SERVICE).toContain('CE SERVICE ne l');
+  });
+
+  it('S-E01-1g / AC-3 — chaque handler NON converti porte un docblock d’exclusion', () => {
+    // Non pas « il existe un commentaire », mais « le MÉCANISME est nommé » :
+    // chacune de ces chaînes désigne la cause structurelle, pas l'inconvénient.
+    for (const mechanism of [
+      'NON CONVERTI',
+      'PROPRE `PrismaService`',
+      'HORS PORTÉE',
+      'onDelete: Cascade',
+      'transaction interactive',
+    ]) {
+      expect(CONTROLLER).toContain(mechanism);
+    }
+  });
+
+  it('S-E01-1g / C-1 — `announcements.module.ts` ne câble RIEN pour la couture (PrismaModule est @Global)', () => {
+    const MODULE = readFileSync(join(__dirname, 'announcements.module.ts'), 'utf8');
+    expect(MODULE).not.toContain('TenantScopeService');
+    expect(MODULE).not.toContain('PrismaModule');
+  });
+
+  it('S-E01-1g / AC-9 (G-DNC) — aucun plancher de ratio sur le compteur de bascule', () => {
+    // DNC-10 : un plancher est un bouton, et un bouton ici est un drapeau de
+    // contournement déguisé. Le compteur se lit, il ne se garantit pas.
+    for (const source of [CONTROLLER, SERVICE]) {
+      expect(source).not.toMatch(/MIN_(SCOPED|COVERAGE|RATIO)/);
+      expect(source).not.toMatch(/coverageFloor|ratioFloor/);
+    }
   });
 });

@@ -142,6 +142,16 @@ export interface AppRolePrivilegeRequirement {
  * `enforcing: true` sur une clôture jamais vérifiée, et CHAQUE requête leçon des
  * trois portails rend alors « permission denied » (42501) — soit exactement le
  * défaut qu'`academic_year` a infligé à S-E01-5, un module plus loin.
+ *
+ * S-E01-1g — LE TROISIÈME MODULE, ET LA MOITIÉ DE LA RÈGLE QUE LES DEUX
+ * PREMIERS N'AVAIENT PAS EU À ÉCRIRE : une entrée EN TROP est aussi
+ * destructrice qu'une entrée manquante, et son rayon de souffle est le MÊME.
+ * `appRoleVerdict` parcourt cette liste GLOBALEMENT au démarrage ; déclarer un
+ * privilège que `app_user` ne détient PAS rend `refused_unusable`, et
+ * `transactionRunnerOrNull()` lève alors un 503 pour calendar et lessons AUSSI,
+ * pas seulement pour le module fautif. Les tables FK-dérivées (`announcement_
+ * receipt`, `user_role`) ont un ensemble de privilèges CLOS sans `DELETE`
+ * (ADR-042 §D5) : c'est là que la faute est la plus facile à commettre.
  */
 export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[] = Object.freeze([
   // ── calendar (S-E01-1d, S-E01-5) ────────────────────────────────────────
@@ -175,17 +185,21 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
   {
     table: 'class_section',
     privilege: 'SELECT',
-    why: 'include de calendar/list + sonde de propriété + include de lessons/list et /getOne',
+    why: 'include de calendar/list + sonde de propriété + include de lessons/list et /getOne ; ' +
+      'S-E01-1g — ET la sonde `classSectionId` d’announcements/create : sans elle, aucune ' +
+      'annonce de classe ne peut plus être rédigée par un enseignant',
   },
   {
     table: 'cycle',
     privilege: 'SELECT',
-    why: 'include de calendar/list + sonde de propriété + include imbriqué de lessons/getOne',
+    why: 'include de calendar/list + sonde de propriété + include imbriqué de lessons/getOne ; ' +
+      'S-E01-1g — ET la sonde `cycleId` d’announcements/create, qui refuse avant d’écrire',
   },
   {
     table: 'grade_level',
     privilege: 'SELECT',
-    why: 'include de calendar/list + sonde de propriété + include imbriqué de lessons/getOne',
+    why: 'include de calendar/list + sonde de propriété + include imbriqué de lessons/getOne ; ' +
+      'S-E01-1g — ET la sonde `gradeLevelId` d’announcements/create',
   },
   {
     table: 'academic_year',
@@ -237,7 +251,65 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
     privilege: 'SELECT',
     why: 'include imbriqué `teacherProfile.userProfile` de lessons/list et /getOne — la jointure ' +
       'qui porte firstName/lastName ; à ne PAS confondre avec `ensureUser`, qui lit la même table ' +
-      'mais HORS de toute portée, sur la connexion du propriétaire (PF-199)',
+      'mais HORS de toute portée, sur la connexion du propriétaire (PF-199) ; S-E01-1g — ET la ' +
+      'sonde `userProfileId` d’announcements/create, la SEULE vérification possible sur une ' +
+      'colonne qui n’a AUCUNE clé étrangère au schéma',
+  },
+  // ── announcements (S-E01-1g) ────────────────────────────────────────────
+  // CINQ handlers convertis : `unreadCount`, `create`, `update`, `publish`,
+  // `markRead`. Chaque entrée ci-dessous est EXERCÉE par un site d'appel converti
+  // du MÊME diff — l'inverse de la forme PF-219, et vrai seulement parce que la
+  // partition est étroite. Ce qui est délibérément ABSENT est aussi une décision :
+  //   • `announcement.DELETE`          — `remove` n'est PAS converti (la cascade
+  //     vers `announcement_receipt`, sur lequel `app_user` ne détient PAS DELETE,
+  //     est ATTENDUE passante par le trigger RI mais n'est PROUVÉE nulle part) ;
+  //   • `announcement_receipt.DELETE`  — l'ensemble accordé est CLOS sur
+  //     `SELECT, INSERT, UPDATE` (migration dérivée :371). Déclarer ce privilège
+  //     ferait rendre `refused_unusable` à la sonde de démarrage, donc un 503 sur
+  //     calendar ET lessons AUSSI : cette liste est GLOBALE, pas par module ;
+  //   • `announcement_receipt.INSERT`  — accordé, mais écrit uniquement par
+  //     `materialiseReceipts`, hors portée. Une entrée qu'aucune instruction de
+  //     portée n'exerce certifie une clôture que personne ne vérifie ;
+  //   • `user_role`, `role`, `notification` — atteints seulement par `getOne`,
+  //     `previewRecipients` et `publishInternal`, tous les trois exclus par
+  //     mécanisme nommé.
+  {
+    table: 'announcement',
+    privilege: 'SELECT',
+    why: 'gardes findUnique d’update et de publish, ET le filtre de JOINTURE `announcement: {…}` ' +
+      'du compteur de non-lus — que le cliquet dérivé de `tx.<modèle>.<verbe>(` ne peut PAS ' +
+      'voir : sans ce privilège le badge des portails parent et élève rend permission denied',
+  },
+  {
+    table: 'announcement',
+    privilege: 'INSERT',
+    why: 'la rédaction écrit la ligne DANS la portée, après sa sonde de propriété — c’est le seul ' +
+      'moment où un id de portée étranger peut encore être refusé sans oracle d’existence',
+  },
+  {
+    table: 'announcement',
+    privilege: 'UPDATE',
+    why: 'la modification réécrit la ligne dans la MÊME portée que sa lecture de garde : sans ce ' +
+      'privilège la garde passerait et l’écriture qu’elle autorise échouerait, fenêtre TOCTOU ' +
+      'rouverte au passage',
+  },
+  {
+    table: 'announcement_receipt',
+    privilege: 'SELECT',
+    why: 'garde d’unicité du marquage « lu » (clé announcementId_userProfileId) et comptage des ' +
+      'non-lus : sans elle un parent ne peut plus ouvrir une communication qui lui est adressée',
+  },
+  {
+    table: 'announcement_receipt',
+    privilege: 'UPDATE',
+    why: 'le marquage « lu » est un SOFT WRITE sur `read_at` — le seul retour que le portail ' +
+      'parent renvoie à l’école, et la table ne porte AUCUN `tenant_id` (policy FK-dérivée)',
+  },
+  {
+    table: 'student',
+    privilege: 'SELECT',
+    why: 'sonde de propriété du `studentId` d’une annonce individuelle : sans ce privilège, ' +
+      'écrire à la famille d’UN élève devient impossible sur les quatre portails',
   },
 ]);
 
