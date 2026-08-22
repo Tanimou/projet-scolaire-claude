@@ -1,6 +1,119 @@
 # Next story
 
-# NEXT — written by run 65 (`S-E05-3`), 2026-08-22 — **this section supersedes every section below**
+# NEXT — written by run 66 (`S-E01-1h`), 2026-08-22 — **this section supersedes every section below**
+
+> **Run-number collision, resolved by merge order.** This slice and `S-E05-3` (#258) ran in PARALLEL and both
+> called themselves *run 65*. #258 merged first, so it keeps 65 and this one becomes **66**. The FINDING ids did
+> not collide — this run deliberately allocated from `PF-242` / `ADR-056` after reading #258+s open branch, which is
+> the precaution `project_parallel_runs_collide_on_ids` exists for. Only the run number had to be repaired.
+
+## 🛑 THE SEAM WAS BUILT, PROVEN THREE TIMES, AND HAD NEVER BEEN TURNED ON
+
+This run set out to convert a fourth module. Step 2 — *verify the precondition before writing
+anything* — asked what grants the new module would need, which meant reading the grants `app_user`
+actually holds on the stack's own database:
+
+```
+select count(*) from information_schema.role_table_grants where grantee='app_user';   →  0
+```
+
+Following that upward produced the finding of the run:
+
+| measured on the runtime target | value |
+|---|---|
+| migrations applied vs shipped | **2 / 7** |
+| RLS-enabled tables · policies · `app_user` privileges | **0 · 0 · 0** |
+| `DATABASE_URL_APP` in the api container | **empty** |
+| occurrences of `DATABASE_URL_APP` in `infra/docker-compose.yml` | **0** |
+
+`AppRolePrismaService` opens its RLS-bearing connection **only when that variable is declared**. It
+lived in `.env.example` and in no compose service. So the api ran in `degraded_no_app_url` and **all
+36 converted call sites executed on the OWNER connection** — `pilotage`, measured
+`rolbypassrls = true`.
+
+**`S-E01-1d`, `1e` and `1g` were never wrong.** Their proofs run against a *scratch* database built
+from the ledger, and they prove the **mechanism**. Nothing proved the **deployment** — and the
+deployment is exactly what `PF-02`'s remaining closure condition is about (`ADR-032` §D5–§D8). A
+counter can move for three runs while the target runs none of it.
+
+## ✅ The stack now ENFORCES, and it is the first deployment that ever has
+
+`migrator` and `api` rebuilt (their images predated the RLS migrations — `R-05`) and recreated:
+
+```
+7/7 migrations · 199 grants · 53 RLS tables · 59 policies · closure 25/25 HELD
+[AppRolePrismaService] Portée tenant ENFORCÉE (enforced)
+pilotage_tenant_scope_enforced{app="api"} 1     229 routes     0 errors
+```
+
+The denial itself, on the stack's own database, **positive control first** — mandatory, because
+`app_user` held zero privileges before this slice, so a proof showing only an *absence* of rows would
+have been green for the wrong reason: it would have measured a missing `GRANT`, not a working policy.
+
+| connection | `app.current_tenant_id` | `count(*) from calendar_event` |
+|---|---|---|
+| owner `pilotage` | tenant **B** (foreign) | **17** ← the hole, and what the api used to be |
+| `app_user` | tenant **A** (own) | **17** |
+| `app_user` | tenant **B** (foreign) | **0** |
+| `app_user` | none | **0** |
+
+## 🔒 The gate is TIER 1, and that placement is the decision
+
+`scripts/tenant-scope-deployment-check.js` refuses **four** shapes, not one: absent, host-only address
+(`.env.example` ships exactly that literal), database/host disagreeing with `DATABASE_URL`, and **the
+owner role** — the only shape that reads as `enforced` while isolating nothing, because the owner
+carries `BYPASSRLS` and would make the probe pass with the gauge at **1**.
+
+Its neighbour `compose-invocation-check.js` sits in `--full` because it shells out to
+`docker compose config`. The diff that reintroduces *this* regression is a **compose edit**, and a
+compose edit never schedules a `--full` run. A `--full`-only gate would not have caught the thing it
+exists to catch.
+
+Mutation-tested rather than trusted: two mutants, both killed (2 and 3 specs); checker restored,
+**sha256 identical**. Fail-before replayed from git history: **1** problem on `main`, **0** here.
+
+## ⚖️ A hypothesis this run FALSIFIED — recorded, not deleted
+
+The api printed *"Preflight migrations OK — 2 appliquée(s)"* while the repo shipped seven, which reads
+like a preflight comparing applied-and-clean rather than applied-vs-shipped. A finding was drafted
+saying so. **It is wrong:** `migration-state.ts:120` computes
+`pending = shipped.filter(m => !applied.includes(m))`, has a `pending` status, and reads
+`prisma/migrations` from disk. The preflight was right; the *image* shipped two migrations. The real
+gap is one layer up and is `PF-243`.
+
+## ⚠️ What did NOT move, said plainly
+
+The source-side counter is **unchanged**: `36 scoped + 120 enumerated / 816`, re-derived on this tree
+and identical to `main`. **660 call sites would still return zero rows after a `DATABASE_URL`
+cutover.** `PF-02` stays `in-progress`. What changed is that the 36 already-converted sites now
+actually run under RLS on the target instead of on a `BYPASSRLS` owner.
+
+Nothing here is claimed for `pilotage.srv861861.hstgr.cloud`, which was not contacted (Step −1).
+
+## ▶ Recommended next story
+
+1. **`S-E01-1i` — the FOURTH module, now that conversion finally changes runtime behaviour.**
+   `student-portal` is the sized candidate: **11 own call sites**, 7 handlers that already resolve
+   `me`/`schoolId` *outside* the future scope, and only three new grants
+   (`grade.SELECT`, `attendance_record.SELECT`, `student_subject_snapshot.SELECT`) — all three verified
+   **held** by `app_user` on the stack. The trap is named in advance: `analytics.parentUpcoming`,
+   `remediation.remediationProgress` and `studentAccess.canAccessStudent` must stay **outside** the
+   scope, or the process holds an owner connection and an app connection simultaneously (the dangerous
+   inverse of `PF-200`, and why `teacher-profile.service.ts` is in the bootstrap allow-list).
+2. **`PF-243` (P2) — arm the `R-05` machinery locally.** `GET /version` says `buildSha: "unknown"`,
+   `verdict: "unverified"`. That is why a five-migrations-behind image served for nine days while
+   truthfully reporting `migrations: clean`. Needs a decision on where the sha comes from locally.
+3. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** Re-verified open this run: `jwt.strategy.ts`
+   `validate()` checks `sub` and nothing else; no audience check exists under `shared/auth/`. Still
+   the finding that makes the whole `PF-18` line mean something.
+4. **`PF-235` (P2) — the `AnnouncementRecipientsService` seam**, which unblocks the rest of
+   `announcements` (`ADR-054 §D2` is the recorded refusal, not the fix).
+5. **`PF-219` (P2) — derive the boot-probe closure once, corpus-wide.** Four modules will have been
+   extended by hand after story 1 above.
+
+
+
+# NEXT — written by run 65 (`S-E05-3`), 2026-08-22 — superseded by run 66 above, kept for content
 
 ## ✅ `PF-10` is CLOSED on its reachable path — a ROADMAP finding, and the first `V3-E05` slice since 2026-08-12
 

@@ -352,6 +352,35 @@ services:
     environment:
       <<: *app-env
       PORT: "4000"
+      # ---- Seconde connexion : le rôle applicatif sous RLS (S-E01-1h / PF-02) --
+      #
+      # LA COUTURE TENANT N'ÉTAIT PAS ENFORCÉE SUR CETTE PILE, et rien ne le
+      # disait. `AppRolePrismaService` n'ouvre sa seconde connexion QUE si cette
+      # variable est déclarée ; elle ne l'était nulle part dans ce fichier. Les
+      # sites d'appel convertis (calendar, lessons, announcements) tournaient
+      # donc sur la connexion du PROPRIÉTAIRE — qui porte `BYPASSRLS` — dans
+      # l'état nommé `degraded_no_app_url`, jauge `pilotage_tenant_scope_enforced`
+      # à 0. Les policies pouvaient exister, le GUC était posé, et PostgreSQL
+      # n'avait aucune raison de refuser quoi que ce soit : le rôle sous test
+      # n'était jamais celui qui exécutait. C'est PF-242.
+      #
+      # Déclarée ICI et pas sur l'ancre `x-app-env`, pour la même raison
+      # qu'`OTEL_EXPORTER_OTLP_ENDPOINT` : seul un service qui CONSOMME cette
+      # connexion doit se la voir déclarer. `migrator` doit garder le
+      # propriétaire (il crée les objets, et un GRANT ne se donne pas à soi-même),
+      # et `worker` n'a pas de tenant de requête — ses 99 sites d'appel sont
+      # énumérés HORS portée par `tenant-adversarial-check.js`. Leur déclarer
+      # cette URL annoncerait une capacité qu'aucune instruction n'exerce.
+      #
+      # Hôte `postgres:5432` (réseau Compose), JAMAIS `localhost:5433` comme
+      # dans `.env.example` : une adresse hôte ne résout pas depuis ce
+      # conteneur, et l'échec serait SILENCIEUX — `AppRolePrismaService` dégrade
+      # au lieu de crasher, donc une URL fausse rend exactement la même jauge à 0
+      # qu'une URL absente. Le mot de passe reprend celui qu'
+      # `infra/postgres/init/01-extensions.sql` crée pour ce rôle, comme
+      # `DATABASE_URL` reprend celui de `pilotage` : pile de développement, la
+      # rotation est une action opérateur.
+      DATABASE_URL_APP: postgresql://app_user:app_user@postgres:5432/pilotage?schema=public
       # Ce que l'opérateur CROIT déployer, injecté au démarrage et comparé au
       # GIT_SHA gravé au build. Non renseigné ⇒ verdict `unverified` : rien n'est
       # bloqué, mais `GET /version` le dit au lieu de laisser croire à une

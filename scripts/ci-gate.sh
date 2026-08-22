@@ -233,6 +233,30 @@ run_stage 120 "csv escapers (one neutraliser, two escapers)" node scripts/csv-es
 # Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
 run_stage 120 "keycloak client identity (4 portals, 4 clients)" node scripts/keycloak-client-check.js
 
+# S-E01-1h / PF-242 — THE SECOND CONNECTION MUST BE DECLARED, NOT ASSUMED.
+#
+# `AppRolePrismaService` opens the RLS-bearing connection only when
+# `DATABASE_URL_APP` is present. It was declared in `.env.example` and NOWHERE in
+# `infra/docker-compose.yml`, so on the local stack the api ran in
+# `degraded_no_app_url` and all three converted modules executed on the OWNER
+# connection — which carries BYPASSRLS. The scratch-database proofs stayed true;
+# the deployment was never covered by them.
+#
+# TIER 1 and not tier 3, unlike its neighbour `compose-invocation-check.js`: this
+# one reads the compose file as TEXT and never invokes `docker compose config`,
+# so it costs milliseconds and — the point — actually runs on every PR. A gate
+# that only ran in --full would not have caught this, because the diff that
+# introduces the regression is a compose edit, and a compose edit does not
+# schedule a full run.
+#
+# It refuses four shapes, not one: absent, host-only address, mismatched
+# database/host, and the OWNER role — that last being the only configuration
+# that reads as ENFORCED while isolating nothing. No --skip, no environment
+# variable: a flag here is a DNC-10 hole. Decision record:
+# docs/adr/ADR-056-tenant-scope-deployment-declaration.md.
+# Kept in step with .github/workflows/ci.yml — the two must not drift (S-E02-2 AC-4).
+run_stage 120 "tenant scope deployment (the second connection)" node scripts/tenant-scope-deployment-check.js
+
 # ---------------------------------------------------------------------------
 # TIER 2 — the code stages. Run when code changed.
 # ---------------------------------------------------------------------------
