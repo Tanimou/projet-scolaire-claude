@@ -1817,3 +1817,56 @@ after the flip; the owner bypass is asserted as a **present leak** whose asserti
 the cutover cannot quietly leave the app connecting as `pilotage`; and `AC-9 CUTOVER READINESS` must be converted
 from a zero-threshold to a **ratio with a floor before step (2) is written**, because the first `withTenant` call
 site would otherwise flip that block from a named limit into an affirmative claim of readiness.
+
+---
+
+## `S-E01-1i` — the FOURTH module, and the first whose numerator moves without its denominator (2026-08-22, run 67)
+
+`student-portal` is converted on **all eleven** of its Prisma call sites. Attribution, re-derived by
+`scripts/tenant-adversarial-check.js` rather than edited as a literal:
+
+| | scoped | enumerated | corpus | would return zero rows after the cutover |
+|---|---|---|---|---|
+| before (`main`) | 36 | 120 | 818 | 662 |
+| after | **47** | 120 | **818** | **651** |
+
+**The unchanged denominator is the result, not a detail.** `resolveSelf` — the `student.findFirst` that precedes all
+seven reads — is shared. Inlining it at its seven call sites would have produced `51 scoped / 824 total`: a *higher*
+numerator bought by growing the corpus, which is coverage improving because the tree got bigger. The counter
+classifies **textual call sites, not invocations**, so the scope is opened inside the helper — one site, called seven
+times. `ADR-057 §D2` carries the three-row table.
+
+**First converted module holding no owner client at all.** `PrismaService` is no longer injected into
+`StudentPortalService`. The three modules before it each kept one for a path that stayed outside; here every statement
+converts, so the injection goes and the constructor becomes the proof (`ADR-057 §D4`). The three excluded
+collaborators — `StudentAccessService` (bootstrap allow-list, `PF-199`), `AnalyticsService.parentUpcoming`,
+`RemediationService.remediationProgress` — are called through their own services and stay on the owner connection.
+They are deliberately **not** added to `ENUMERATED_OUTSIDE_SCOPE`: their only available reason would be *"not
+converted yet"*, and that list holds structural reasons (`ADR-048 §D6`).
+
+**The brief under-counted the privilege closure, and that is the second result.** `NEXT.md` sized the slice at three
+new grants — the root delegates. Under RLS a relation a nested `select` **traverses** is a table **read**, so
+`/student/grades` (`grade -> assessment -> term`) makes `assessment` and `term` due as well: **five**, not three.
+`APP_ROLE_REQUIRED_PRIVILEGES` goes `25 → 30`. All five were verified **held** on the stack's database *before* being
+declared — a declared-but-absent pair makes `appRoleVerdict` refuse the whole application's second connection.
+Recorded as `PF-246`; it makes `PF-219` (mechanise the closure) worth paying for rather than closing it.
+
+**Evidence executed against the runtime target**, positive control first, as `app_user` (`rolbypassrls = f`, measured):
+
+| GUC | student | enrollment | grade | snapshot | assessment | term |
+|---|---|---|---|---|---|---|
+| `voltaire-demo` (own) | 2463 | 2463 | 420 | 840 | 16 | 3 |
+| `demo` (foreign) | 0 | 0 | 0 | 0 | 0 | **3** |
+| none | 0 | — | 0 | 0 | — | — |
+
+`term`'s **3** was first read as a leak and then measured as the opposite: `demo` owns its own three terms, and under
+each GUC `string_agg(distinct tenant_id)` returns only the tenant asked for. It is therefore the **strongest** control
+in the set — the one table where both tenants hold rows, so the only one that shows the policy *selects* rather than
+merely returning nothing. The owner-side hole is restated in numbers: `pilotage` (`rolbypassrls = true`) under the
+`demo` GUC still sees **420 grades and 2463 students** belonging to `voltaire-demo`.
+
+**Named limit, not omitted:** `attendance_record` and `announcement_receipt` hold **zero rows** on this stack, so this
+probe carries no denial evidence for them; theirs comes from the adversarial suite, which seeds its own fixtures.
+
+**Pointer.** Unchanged in kind: `S-E01-1` (the global `DATABASE_URL` cutover) still needs 651 more call sites. The
+next sized module is the one whose collaborators are already inside the scope set — see `NEXT.md`.

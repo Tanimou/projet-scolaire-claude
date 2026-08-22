@@ -1,5 +1,97 @@
 # Next story
 
+# NEXT — written by run 67 (`S-E01-1i`), 2026-08-22 — **this section supersedes every section below**
+
+## ✅ The fourth module, and the first time the numerator moved without the denominator
+
+`student-portal` is converted on **all eleven** of its Prisma call sites. Re-derived by
+`scripts/tenant-adversarial-check.js`, never edited as a literal:
+
+| | scoped | enumerated | corpus | zero rows after the cutover |
+|---|---|---|---|---|
+| `main` | 36 | 120 | 818 | 662 |
+| **here** | **47** | 120 | **818** | **651** |
+
+**The unchanged 818 is the result.** `resolveSelf` is shared by seven handlers. Inlining it at the
+seven call sites would have read **51 / 824** — a higher numerator bought by growing the corpus,
+which is coverage improving because the tree got bigger. The counter classifies **textual call sites,
+not invocations**, so the scope is opened *inside* the helper: one site, called seven times
+(`ADR-057 §D2`).
+
+**First converted module that holds no owner client.** `PrismaService` is no longer injected into
+`StudentPortalService`. The three modules before it each kept one; here every statement converts, so
+the injection goes and the constructor is the proof (`ADR-057 §D4`).
+
+## ⚠️ THE BRIEF THIS RUN INHERITED WAS WRONG BY TWO GRANTS, AND THE SHAPE OF THE ERROR REPEATS
+
+Run 66 sized this slice at *"only three new grants — `grade.SELECT`, `attendance_record.SELECT`,
+`student_subject_snapshot.SELECT`"*. Those are the **root delegates** of the `findMany`s. Under RLS a
+relation a nested `select` **traverses** is a table **READ**: Prisma issues its own query against it
+and raises `42501` without the privilege. `/student/grades` descends `grade -> assessment -> term`,
+so `assessment` and `term` are due as well.
+
+**Five, not three.** `APP_ROLE_REQUIRED_PRIVILEGES`: **25 → 30**. All five verified **held** on the
+stack's database *before* being declared — a declared-but-absent pair makes `appRoleVerdict` refuse
+the whole application's second connection, not just this module's.
+
+The failure mode is why this is `PF-246` and not a typo: it is neither a compile error nor a test
+failure, but a `42501` **at request time on exactly the deployments where the scope works** — a
+degraded deployment runs on the owner and never reaches the check. Every future module owes a
+relation-deep closure. `PF-219` (mechanise it from the matcher that already classifies every call
+site by table and verb) is now worth paying for.
+
+## 🔬 Executed on the runtime target, positive control first
+
+As `app_user` (`rolbypassrls = f`, **measured**, not deduced), on the stack's own database:
+
+| GUC | student | enrollment | grade | snapshot | assessment | term |
+|---|---|---|---|---|---|---|
+| `voltaire-demo` (own) | 2463 | 2463 | 420 | 840 | 16 | 3 |
+| `demo` (foreign) | 0 | 0 | 0 | 0 | 0 | **3** |
+| none | 0 | — | 0 | 0 | — | — |
+
+`term`'s **3** was instructed as a leak and then **measured as the opposite**: `demo` owns its own
+three terms, and under each GUC `string_agg(distinct tenant_id)` returns only the tenant asked for.
+That makes `term` the **strongest** control in the set — the only table where both tenants hold rows,
+therefore the only one showing the policy *selects* instead of merely returning nothing. Every other
+row proves denial the ordinary way.
+
+The owner-side hole, restated in numbers: `pilotage` (`rolbypassrls = true`) under the `demo` GUC
+still sees **420 grades and 2463 students** belonging to `voltaire-demo`.
+
+**Named limit:** `attendance_record` and `announcement_receipt` hold **zero rows** on this stack, so
+this probe carries no denial evidence for them. Theirs comes from the adversarial suite, which seeds
+its own fixtures.
+
+Nothing here is claimed for `pilotage.srv861861.hstgr.cloud`, which was not contacted (Step −1).
+
+## ▶ Recommended next story
+
+1. **`S-E01-1j` — `RemediationService`, and it is the best-shaped candidate left.** **23 call sites**
+   in one file, and its constructor is `(private readonly prisma: PrismaService)` — **no
+   collaborator at all**, so there is no exclusion analysis to do and no trap of the
+   `ADR-054` kind. It is also one of the two producers `/student/dashboard` currently has to call
+   from outside its scope, so converting it narrows the residual this run just wrote down. Measured
+   ranking of what remains (Prisma call sites per file, controllers and services, specs excluded):
+   `analytics.service.ts` 93 · `alerts.service.ts` 33 · `messaging.service.ts` 32 ·
+   **`remediation.service.ts` 23** · `guardians.controller.ts` 20 · `exports.service.ts` 19 ·
+   `attendance.controller.ts` 18. `analytics.service.ts` is the biggest single lever and is
+   **deliberately not** the recommendation: at 93 sites it is three slices, not one, and it is the
+   shared producer four portals read.
+2. **`PF-246` (P2) — derive the privilege closure instead of writing it.** Four modules of
+   hand-written pairs now exist and one has been under-counted. `tenant-adversarial-check.js`
+   already classifies every call site by `(table, privilege)`; compare that set against the declared
+   list for **set equality in both directions**, the shape `ADR-051 §D2` uses for the bootstrap
+   allow-list. An unlisted pair fails, a dead entry fails.
+3. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** Unchanged and still open: `jwt.strategy.ts`
+   `validate()` checks `sub` and nothing else. Still the finding that makes the `PF-18` line mean
+   something.
+4. **`PF-243` (P2) — arm the `R-05` machinery locally.** `GET /version` still says
+   `buildSha: "unknown"`, `verdict: "unverified"`.
+5. **`PF-235` (P2) — the `AnnouncementRecipientsService` seam**, which unblocks the rest of
+   `announcements`.
+
+
 # NEXT — written by run 66 (`S-E01-1h`), 2026-08-22 — **this section supersedes every section below**
 
 > **Run-number collision, resolved by merge order.** This slice and `S-E05-3` (#258) ran in PARALLEL and both

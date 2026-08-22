@@ -309,7 +309,56 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
     table: 'student',
     privilege: 'SELECT',
     why: 'sonde de propriété du `studentId` d’une annonce individuelle : sans ce privilège, ' +
-      'écrire à la famille d’UN élève devient impossible sur les quatre portails',
+      'écrire à la famille d’UN élève devient impossible sur les quatre portails ; ' +
+      'S-E01-1i — ET `resolveSelf`, la résolution de l’élève lié au compte appelant, qui ' +
+      'précède CHAQUE lecture du portail élève',
+  },
+  // ── student-portal (S-E01-1i) ───────────────────────────────────────────
+  // LE BRIEF EN ANNONÇAIT TROIS. IL EN FAUT CINQ, ET L’ÉCART EST MESURÉ.
+  //
+  // `NEXT.md` (run 66) dimensionnait cette tranche à « trois nouveaux droits :
+  // grade.SELECT, attendance_record.SELECT, student_subject_snapshot.SELECT ».
+  // Cette liste ne compte que les tables RACINES des `findMany`. Elle oublie les
+  // relations que les `select` IMBRIQUÉS traversent, et sous RLS une relation
+  // traversée est une table LUE : Prisma émet sa propre requête dessus, et sans
+  // le privilège elle lève 42501. `/student/grades` descend
+  // `grade -> assessment -> term` et `assessment -> teaching_assignment ->
+  // subject` ; `subjectTrends` retraverse `grade -> assessment`. `assessment` et
+  // `term` sont donc DUES, et elles manquaient au dimensionnement (PF-246).
+  //
+  // Les cinq sont VÉRIFIÉES DÉTENUES par `app_user` sur la base de la pile AVANT
+  // d’être déclarées ici (`information_schema.role_table_grants`), pas après :
+  // une entrée déclarée puis constatée manquante refuserait le démarrage.
+  {
+    table: 'grade',
+    privilege: 'SELECT',
+    why: '`/student/grades` — les notes PUBLIÉES de l’élève lui-même, et la retombée ' +
+      'live de `subjectTrends` quand aucun snapshot n’est matérialisé',
+  },
+  {
+    table: 'attendance_record',
+    privilege: 'SELECT',
+    why: '`/student/attendance` — « Mon assiduité » : sans ce privilège le portail élève ' +
+      'rendrait un résumé à zéro absence, ce qui se lit comme une donnée et non comme une panne',
+  },
+  {
+    table: 'student_subject_snapshot',
+    privilege: 'SELECT',
+    why: 'bloc A de `/student/dashboard` — la tendance par matière lit le snapshot ' +
+      'année (termId=null) AVANT toute retombée sur les notes vives',
+  },
+  {
+    table: 'assessment',
+    privilege: 'SELECT',
+    why: 'S-E01-1i — relation TRAVERSÉE, pas racine : chaque note de `/student/grades` ' +
+      'et de la retombée de `subjectTrends` descend son `assessment` (titre, barème, ' +
+      'coefficient). Absente du dimensionnement de la tranche ; elle est due',
+  },
+  {
+    table: 'term',
+    privilege: 'SELECT',
+    why: 'S-E01-1i — relation traversée depuis `assessment` : le trimestre étiquette ' +
+      'chaque ligne de notes rendue à l’élève. Absente du dimensionnement ; elle est due',
   },
 ]);
 

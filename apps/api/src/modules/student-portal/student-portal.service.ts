@@ -13,7 +13,7 @@ import type {
 } from '@pilotage/contracts';
 
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
-import { PrismaService } from '../../shared/prisma/prisma.service';
+import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { RemediationService } from '../remediation/remediation.service';
 import { StudentAccessService } from '../students/student-access.service';
@@ -28,13 +28,68 @@ import { StudentAccessService } from '../students/student-access.service';
  * every query (server-derived from the JWT). Read-only: no student write verb
  * exists. The payloads structurally lack every peer-relative field (the narrowed
  * DTOs in `@pilotage/contracts`). See docs/adr/ADR-021-student-role-and-self-abac.md.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ S-E01-1i — LE QUATRIÈME MODULE CONVERTI, ET LE PREMIER SANS AUCUNE       │
+ * │ CONNEXION PROPRIÉTAIRE                                                   │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * `PrismaService` n'est plus injecté ICI. Les onze sites d'appel de ce fichier
+ * passent tous par `TenantScopeService.run`, donc ce producteur ne DÉTIENT plus
+ * de référence au client propriétaire — ce n'est pas une convention de revue,
+ * c'est une propriété du constructeur. Les trois modules précédents (calendar,
+ * lessons, announcements) gardent tous un `prisma` pour un chemin resté dehors ;
+ * celui-ci est le premier à n'en avoir aucun.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ CE QUI RESTE DEHORS, ET POURQUOI CHAQUE CAS EST STRUCTUREL              │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * Trois collaborateurs sont appelés depuis ce fichier et AUCUN ne doit l'être
+ * depuis l'intérieur d'une portée. Chacun ferme sur son PROPRE `PrismaService` :
+ * appelé sous `run(...)`, il émettrait ses requêtes sur la connexion du
+ * PROPRIÉTAIRE pendant que le processus tient déjà une transaction interactive
+ * ouverte sur la connexion applicative — deux connexions simultanées pour une
+ * seule requête HTTP, l'inverse dangereux de PF-200.
+ *
+ *  1. **`studentAccess.canAccessStudent`** — `student-access.service.ts` est dans
+ *     la liste d'amorçage (`PF-199`) : il RÉSOUT la portée ABAC. Une portée ne
+ *     peut pas être la condition de la résolution de sa propre portée.
+ *  2. **`analytics.parentUpcoming`** — producteur partagé avec le portail parent,
+ *     non converti. `/student/upcoming` n'a donc AUCUN site d'appel Prisma propre
+ *     en dehors de `resolveSelf` : c'est une conversion à un seul site, et le
+ *     dire évite de lire son compte comme un oubli.
+ *  3. **`remediation.remediationProgress`** — même forme, bloc C du tableau de
+ *     bord.
+ *
+ * CONSÉQUENCE ÉCRITE PLUTÔT QUE SOUS-ENTENDUE : les lectures que ces trois-là
+ * font restent sur la connexion du propriétaire et comptent NON COUVERTES dans
+ * l'attribution. Elles ne sont PAS ajoutées à `ENUMERATED_OUTSIDE_SCOPE` : leur
+ * seule raison disponible serait « pas encore converti », et l'énumération est
+ * une liste de RAISONS, pas de chemins (la règle posée par S-E01-1e).
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ POURQUOI DEUX PORTÉES PAR HANDLER PLUTÔT QU'UNE                         │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * L'ordre de ce producteur est `resolveSelf` -> mur ABAC -> lecture. Le mur
+ * s'intercale entre les deux accès à la base et doit rester dehors (point 1
+ * ci-dessus), donc une portée unique enjamberait un appel propriétaire. Deux
+ * portées courtes et SÉQUENTIELLES (jamais imbriquées) sont la seule forme qui
+ * préserve à la fois l'ordre de sécurité et la règle « rien du propriétaire dans
+ * une portée ». Chacune tient UNE ou DEUX instructions, très en dessous du
+ * budget de trois d'ADR-049 §D4.
+ *
+ * RETOUR ARRIÈRE : remplacer les `this.scope.run(...)` par le client propriétaire
+ * ramène le module comme il était. Aucun changement de schéma, aucune migration,
+ * aucun intercepteur — il n'y en a jamais eu.
  */
 @Injectable()
 export class StudentPortalService {
   private readonly logger = new Logger(StudentPortalService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly scope: TenantScopeService,
     private readonly studentAccess: StudentAccessService,
     private readonly analytics: AnalyticsService,
     private readonly remediation: RemediationService,
@@ -45,15 +100,32 @@ export class StudentPortalService {
    * `null` when unlinked (the kind activation gate, scenario 7) — never throws,
    * never another student's data. The lookup mirrors the ABAC branch exactly so
    * the wall and the reads can never diverge.
+   *
+   * S-E01-1i — LA PORTÉE EST OUVERTE ICI, PAS CHEZ L'APPELANT, et c'est ce qui
+   * garde l'arithmétique honnête : le compteur d'attribution
+   * (`tenant-adversarial-check.js`) classe des SITES D'APPEL textuels, pas des
+   * invocations. Inliner ce `findFirst` dans les sept handlers l'aurait fait
+   * compter sept fois — sept au numérateur ET six de plus au dénominateur, une
+   * couverture qui monte parce que le corpus a grossi. Un seul site, ouvrant sa
+   * propre portée, appelé sept fois : le numérateur monte, le dénominateur ne
+   * bouge pas.
+   *
+   * L'imbrication est SÛRE si elle arrive : `run` sur le MÊME tenant réutilise le
+   * cadre actif et n'ouvre pas de seconde transaction. Aucun appelant de ce
+   * fichier ne l'imbrique aujourd'hui — ils l'appellent tous avant leur propre
+   * portée — mais la propriété est ce qui rend l'ajout d'un huitième handler sans
+   * danger.
    */
   private async resolveSelf(me: {
     id: string;
     tenantId: string;
   }): Promise<{ id: string; firstName: string; lastName: string } | null> {
-    return this.prisma.student.findFirst({
-      where: { tenantId: me.tenantId, userProfileId: me.id },
-      select: { id: true, firstName: true, lastName: true },
-    });
+    return this.scope.run(me.tenantId, async (tx) =>
+      tx.student.findFirst({
+        where: { tenantId: me.tenantId, userProfileId: me.id },
+        select: { id: true, firstName: true, lastName: true },
+      }),
+    );
   }
 
   /**
@@ -67,11 +139,13 @@ export class StudentPortalService {
 
     // Own current class section label, from the student's own active enrollment.
     // Newest first so a re-enrolled pupil shows the current class.
-    const enrollment = await this.prisma.enrollment.findFirst({
-      where: { tenantId: me.tenantId, studentId: self.id, status: 'active' },
-      orderBy: { enrolledAt: 'desc' },
-      select: { classSection: { select: { name: true } } },
-    });
+    const enrollment = await this.scope.run(me.tenantId, async (tx) =>
+      tx.enrollment.findFirst({
+        where: { tenantId: me.tenantId, studentId: self.id, status: 'active' },
+        orderBy: { enrolledAt: 'desc' },
+        select: { classSection: { select: { name: true } } },
+      }),
+    );
 
     return {
       student: {
@@ -105,40 +179,48 @@ export class StudentPortalService {
     const allowed = await this.studentAccess.canAccessStudent(me, jwt, self.id, schoolId);
     if (!allowed) throw new ForbiddenException('Forbidden');
 
-    const grades = await this.prisma.grade.findMany({
-      where: {
-        studentId: self.id,
-        tenantId: me.tenantId,
-        // Published-only for the learner: never a draft (the non-staff posture).
-        status: { in: ['published', 'revised'] },
-      },
-      select: {
-        id: true,
-        value: true,
-        isAbsent: true,
-        comment: true,
-        status: true,
-        assessment: {
-          select: {
-            id: true,
-            title: true,
-            kind: true,
-            maxScore: true,
-            coefficientOverride: true,
-            scheduledAt: true,
-            term: { select: { id: true, name: true } },
-            teachingAssignment: {
-              select: {
-                subject: {
-                  select: { id: true, name: true, color: true, defaultCoefficient: true },
+    // PORTÉE TARDIVE : le mur ABAC ci-dessus tourne sur la connexion du
+    // PROPRIÉTAIRE et est TERMINÉ avant que la transaction s'ouvre. Le `select`
+    // imbriqué descend `assessment -> term` et `assessment ->
+    // teachingAssignment -> subject` : sous RLS ce sont QUATRE tables lues, et
+    // c'est pourquoi `assessment` et `term` ont dû rejoindre
+    // `APP_ROLE_REQUIRED_PRIVILEGES` (PF-246).
+    const grades = await this.scope.run(me.tenantId, async (tx) =>
+      tx.grade.findMany({
+        where: {
+          studentId: self.id,
+          tenantId: me.tenantId,
+          // Published-only for the learner: never a draft (the non-staff posture).
+          status: { in: ['published', 'revised'] },
+        },
+        select: {
+          id: true,
+          value: true,
+          isAbsent: true,
+          comment: true,
+          status: true,
+          assessment: {
+            select: {
+              id: true,
+              title: true,
+              kind: true,
+              maxScore: true,
+              coefficientOverride: true,
+              scheduledAt: true,
+              term: { select: { id: true, name: true } },
+              teachingAssignment: {
+                select: {
+                  subject: {
+                    select: { id: true, name: true, color: true, defaultCoefficient: true },
+                  },
                 },
               },
             },
           },
         },
-      },
-      orderBy: { assessment: { scheduledAt: 'desc' } },
-    });
+        orderBy: { assessment: { scheduledAt: 'desc' } },
+      }),
+    );
 
     const data: StudentGradeRow[] = grades.map((g) => {
       const a = g.assessment;
@@ -249,27 +331,31 @@ export class StudentPortalService {
     const allowed = await this.studentAccess.canAccessStudent(me, jwt, self.id, schoolId);
     if (!allowed) throw new ForbiddenException('Forbidden');
 
-    const records = await this.prisma.attendanceRecord.findMany({
-      where: { studentId: self.id, tenantId: me.tenantId },
-      select: {
-        id: true,
-        status: true,
-        justification: true,
-        classSession: {
-          select: {
-            date: true,
-            teachingAssignment: {
-              select: {
-                subject: { select: { name: true, color: true } },
-                classSection: { select: { name: true } },
+    // PURE, donc DEHORS : rien à borner ici ne lit la base. La portée n'entoure
+    // que l'instruction elle-même.
+    const records = await this.scope.run(me.tenantId, async (tx) =>
+      tx.attendanceRecord.findMany({
+        where: { studentId: self.id, tenantId: me.tenantId },
+        select: {
+          id: true,
+          status: true,
+          justification: true,
+          classSession: {
+            select: {
+              date: true,
+              teachingAssignment: {
+                select: {
+                  subject: { select: { name: true, color: true } },
+                  classSection: { select: { name: true } },
+                },
               },
             },
           },
         },
-      },
-      orderBy: { classSession: { date: 'desc' } },
-      take: 100,
-    });
+        orderBy: { classSession: { date: 'desc' } },
+        take: 100,
+      }),
+    );
 
     const mapped: StudentAttendanceRecord[] = records.map((r) => {
       const ta = r.classSession.teachingAssignment;
@@ -319,38 +405,45 @@ export class StudentPortalService {
     // Receipt-scoped on the caller's OWN userProfileId + tenant-scoped on the
     // announcement; published + non-expired only. Mirrors the parent receipt read
     // (NEVER the admin/author branch that leaks roster/stats/email).
-    const receipts = await this.prisma.announcementReceipt.findMany({
-      where: {
-        userProfileId: me.id,
-        announcement: {
-          tenantId: me.tenantId,
-          publishedAt: { not: null },
-          OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }],
-        },
-      },
-      select: {
-        readAt: true,
-        announcement: {
-          select: {
-            id: true,
-            title: true,
-            body: true,
-            scope: true,
-            priority: true,
-            pinned: true,
-            publishedAt: true,
-            authorRoleHint: true,
-            cycle: { select: { name: true } },
-            gradeLevel: { select: { name: true } },
-            classSection: { select: { name: true } },
+    // `announcement_receipt` ne porte AUCUN `tenant_id` : sa policy est
+    // FK-DÉRIVÉE (`EXISTS (SELECT 1 FROM announcement p WHERE p.id =
+    // announcement_id AND p.tenant_id = current_setting(...))`). Le `where`
+    // applicatif ci-dessous exprime exactement la même clôture — la portée ne le
+    // remplace pas, elle le DOUBLE côté base.
+    const receipts = await this.scope.run(me.tenantId, async (tx) =>
+      tx.announcementReceipt.findMany({
+        where: {
+          userProfileId: me.id,
+          announcement: {
+            tenantId: me.tenantId,
+            publishedAt: { not: null },
+            OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }],
           },
         },
-      },
-      orderBy: [
-        { announcement: { pinned: 'desc' } },
-        { announcement: { publishedAt: 'desc' } },
-      ],
-    });
+        select: {
+          readAt: true,
+          announcement: {
+            select: {
+              id: true,
+              title: true,
+              body: true,
+              scope: true,
+              priority: true,
+              pinned: true,
+              publishedAt: true,
+              authorRoleHint: true,
+              cycle: { select: { name: true } },
+              gradeLevel: { select: { name: true } },
+              classSection: { select: { name: true } },
+            },
+          },
+        },
+        orderBy: [
+          { announcement: { pinned: 'desc' } },
+          { announcement: { publishedAt: 'desc' } },
+        ],
+      }),
+    );
 
     const data: StudentAnnouncementRow[] = receipts.map((r) => {
       const a = r.announcement;
@@ -397,19 +490,30 @@ export class StudentPortalService {
     const allowed = await this.studentAccess.canAccessStudent(me, jwt, self.id, schoolId);
     if (!allowed) throw new ForbiddenException('Forbidden');
 
-    const receipt = await this.prisma.announcementReceipt.findUnique({
-      where: {
-        announcementId_userProfileId: { announcementId, userProfileId: me.id },
-      },
-    });
-    if (!receipt) throw new NotFoundException();
-    if (receipt.readAt) return { ok: true, alreadyRead: true };
+    // GARDE ET ÉCRITURE DANS LA MÊME PORTÉE — donc dans la MÊME transaction, et
+    // c'est la seule forme sans TOCTOU : entre un `findUnique` et un `update`
+    // séparés, le reçu lu peut avoir disparu. Deux instructions, sous le budget
+    // de trois d'ADR-049 §D4.
+    //
+    // Le `NotFoundException` levé ICI abandonne la transaction. C'est sans
+    // conséquence et il faut le dire plutôt que le supposer : rien n'a encore été
+    // écrit sur ce chemin, l'abandon ne défait donc aucun effet, et Nest recevra
+    // l'exception d'origine que Prisma re-lève telle quelle -> 404, inchangé.
+    return this.scope.run(me.tenantId, async (tx) => {
+      const receipt = await tx.announcementReceipt.findUnique({
+        where: {
+          announcementId_userProfileId: { announcementId, userProfileId: me.id },
+        },
+      });
+      if (!receipt) throw new NotFoundException();
+      if (receipt.readAt) return { ok: true as const, alreadyRead: true };
 
-    await this.prisma.announcementReceipt.update({
-      where: { id: receipt.id },
-      data: { readAt: new Date() },
+      await tx.announcementReceipt.update({
+        where: { id: receipt.id },
+        data: { readAt: new Date() },
+      });
+      return { ok: true as const };
     });
-    return { ok: true };
   }
 
   /**
@@ -444,11 +548,13 @@ export class StudentPortalService {
     // Identity header (best-effort): own current class label.
     let classSectionName: string | null = null;
     try {
-      const enrollment = await this.prisma.enrollment.findFirst({
-        where: { tenantId: me.tenantId, studentId: self.id, status: 'active' },
-        orderBy: { enrolledAt: 'desc' },
-        select: { classSection: { select: { name: true } } },
-      });
+      const enrollment = await this.scope.run(me.tenantId, async (tx) =>
+        tx.enrollment.findFirst({
+          where: { tenantId: me.tenantId, studentId: self.id, status: 'active' },
+          orderBy: { enrolledAt: 'desc' },
+          select: { classSection: { select: { name: true } } },
+        }),
+      );
       classSectionName = enrollment?.classSection?.name ?? null;
     } catch (err) {
       this.logger.debug(`dashboard header degraded to null: ${String(err)}`);
@@ -528,18 +634,26 @@ export class StudentPortalService {
   ): Promise<StudentDashboardSubject[]> {
     const IMPROVEMENT = 1.5; // the shared E3/E7 IMPROVEMENT delta threshold.
 
+    // TROIS PORTÉES SÉQUENTIELLES, UNE INSTRUCTION CHACUNE, et jamais imbriquées :
+    // le `map`/`Map` qui les relie est du calcul PUR et n'a rien à faire dans une
+    // transaction interactive à 5 s.
+    //
     // Snapshot-first: one findMany over the year-level per-subject snapshot rows.
-    const snaps = await this.prisma.studentSubjectSnapshot.findMany({
-      where: { tenantId, studentId, termId: null },
-      select: { subjectId: true, average: true, trendDelta: true },
-    });
+    const snaps = await this.scope.run(tenantId, async (tx) =>
+      tx.studentSubjectSnapshot.findMany({
+        where: { tenantId, studentId, termId: null },
+        select: { subjectId: true, average: true, trendDelta: true },
+      }),
+    );
 
     if (snaps.length > 0) {
       const subjectIds = snaps.map((s) => s.subjectId);
-      const subjects = await this.prisma.subject.findMany({
-        where: { tenantId, id: { in: subjectIds } },
-        select: { id: true, name: true, color: true },
-      });
+      const subjects = await this.scope.run(tenantId, async (tx) =>
+        tx.subject.findMany({
+          where: { tenantId, id: { in: subjectIds } },
+          select: { id: true, name: true, color: true },
+        }),
+      );
       const byId = new Map(subjects.map((s) => [s.id, s]));
       return snaps.map((s) => {
         const subj = byId.get(s.subjectId);
@@ -558,26 +672,28 @@ export class StudentPortalService {
     // Live fall-through (snapshots not yet materialised): the learner's own
     // published, non-absent grades grouped by subject → a single subject average.
     // No class scan, no peer figure. Trend is `unknown` (live has no delta here).
-    const grades = await this.prisma.grade.findMany({
-      where: {
-        tenantId,
-        studentId,
-        status: { in: ['published', 'revised'] },
-        isAbsent: false,
-        value: { not: null },
-      },
-      select: {
-        value: true,
-        assessment: {
-          select: {
-            maxScore: true,
-            teachingAssignment: {
-              select: { subject: { select: { id: true, name: true, color: true } } },
+    const grades = await this.scope.run(tenantId, async (tx) =>
+      tx.grade.findMany({
+        where: {
+          tenantId,
+          studentId,
+          status: { in: ['published', 'revised'] },
+          isAbsent: false,
+          value: { not: null },
+        },
+        select: {
+          value: true,
+          assessment: {
+            select: {
+              maxScore: true,
+              teachingAssignment: {
+                select: { subject: { select: { id: true, name: true, color: true } } },
+              },
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     const acc = new Map<
       string,

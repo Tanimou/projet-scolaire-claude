@@ -68,14 +68,40 @@ function makeService(opts: {
     : jest.fn().mockResolvedValue(opts.remediationRows ?? []);
   const remediation = { remediationProgress };
 
+  /**
+   * S-E01-1i — LE FAUX `TenantScopeService`, ET CE QU'IL PROUVE RÉELLEMENT.
+   *
+   * Il n'ouvre AUCUNE transaction et ne pose AUCUN GUC : ce spec n'a pas de base
+   * et ne prétend pas en avoir une. Ce qu'il rend observable est la moitié que la
+   * preuve exécutée (`scripts/tenant-scope-check.js`, base réelle) ne peut PAS
+   * voir — l'ORDRE des appels et le TENANT passé à chaque ouverture :
+   *
+   *  - chaque instruction Prisma du producteur est atteinte à travers `run(...)`,
+   *    parce que le client mock n'est accessible QUE par le callback ;
+   *  - le tenant de chaque ouverture est enregistré, donc une portée ouverte sur
+   *    autre chose que `me.tenantId` est visible plutôt que déduite ;
+   *  - un `run` qui n'est jamais appelé laisse `scopeTenants` vide, ce qui fait
+   *    échouer les assertions ci-dessous plutôt que de les rendre vacantes.
+   */
+  const scopeTenants: string[] = [];
+  const scopeRun = jest.fn(
+    async (tenantId: string, fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => {
+      scopeTenants.push(tenantId);
+      return fn(prisma);
+    },
+  );
+  const scope = { run: scopeRun };
+
   const service = new StudentPortalService(
-    prisma as never,
+    scope as never,
     studentAccess as never,
     analytics as never,
     remediation as never,
   );
   return {
     service,
+    scopeRun,
+    scopeTenants,
     studentFindFirst,
     attendanceFindMany,
     receiptFindMany,
@@ -505,5 +531,145 @@ describe('StudentPortalService.dashboard — composed, best-effort, peer-free', 
 
     await expect(service.dashboard(ME, JWT, SCHOOL)).rejects.toBeInstanceOf(ForbiddenException);
     expect(snapshotFindMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * S-E01-1i — G-TENANT : LA PORTÉE TENANT DU PORTAIL ÉLÈVE.
+ *
+ * Ce bloc est le pendant STATIQUE de la preuve exécutée. La preuve exécutée
+ * (`scripts/tenant-scope-check.js` / `tenant-adversarial-check.js`, PostgreSQL
+ * réel) montre que la base REFUSE le tenant étranger ; elle ne peut rien dire de
+ * l'ORDRE dans lequel ce producteur appelle ses collaborateurs, parce que cet
+ * ordre n'existe pas au niveau SQL.
+ *
+ * Or l'ordre est exactement ce que cette tranche pouvait casser :
+ *
+ *  - `canAccessStudent` / `parentUpcoming` / `remediationProgress` ferment sur
+ *    LEUR PROPRE `PrismaService`. Appelés DEPUIS l'intérieur d'une portée, ils
+ *    émettraient sur la connexion du propriétaire pendant qu'une transaction
+ *    interactive est ouverte sur la connexion applicative — deux connexions pour
+ *    une requête, et le compteur d'attribution ne le verrait pas.
+ *  - une portée ouverte sur un tenant qui n'est pas `me.tenantId` rendrait
+ *    `{data: []}` avec un 200, indiscernable d'un élève sans note.
+ *
+ * Les deux sont ici des assertions, pas des commentaires.
+ */
+describe('S-E01-1i — G-TENANT: every read of the student portal runs inside a tenant scope', () => {
+  const READS: ReadonlyArray<{
+    readonly name: string;
+    readonly call: (s: StudentPortalService) => Promise<unknown>;
+    /** Ouvertures de portée attendues : `resolveSelf` + celles du handler. */
+    readonly scopes: number;
+  }> = [
+    { name: 'me', call: (s) => s.me(ME), scopes: 2 },
+    { name: 'grades', call: (s) => s.grades(ME, JWT, SCHOOL), scopes: 2 },
+    // `upcoming` délègue tout à `parentUpcoming`, qui n'est PAS converti : sa
+    // seule portée est `resolveSelf`. Un 1 attendu ici, écrit exprès, pour que
+    // personne ne lise ce compte comme un oubli de conversion.
+    { name: 'upcoming', call: (s) => s.upcoming(ME, JWT, SCHOOL), scopes: 1 },
+    { name: 'attendance', call: (s) => s.attendance(ME, JWT, SCHOOL), scopes: 2 },
+    { name: 'announcements', call: (s) => s.announcements(ME, JWT, SCHOOL), scopes: 2 },
+    // dashboard : resolveSelf + en-tête + `subjectTrends` (snapshot, puis la
+    // retombée live sur les notes quand aucun snapshot n'existe) = 4.
+    { name: 'dashboard', call: (s) => s.dashboard(ME, JWT, SCHOOL), scopes: 4 },
+  ];
+
+  it.each(READS)(
+    '$name opens every scope on me.tenantId, and on nothing else',
+    async ({ call, scopes }) => {
+      const { service, scopeRun, scopeTenants } = makeService({ linked: true });
+
+      await call(service);
+
+      expect(scopeRun).toHaveBeenCalledTimes(scopes);
+      // SET-shaped, pas « le premier argument du premier appel » : une seule
+      // ouverture divergente parmi quatre resterait invisible autrement.
+      expect([...new Set(scopeTenants)]).toEqual([TENANT]);
+    },
+  );
+
+  it('the ABAC wall runs OUTSIDE any scope — no owner connection is held open inside one', async () => {
+    const { service, scopeRun, canAccessStudent } = makeService({ linked: true });
+
+    // `resolveSelf` ouvre la portée 1 et la REFERME ; le mur est appelé ensuite,
+    // hors de toute portée ; la lecture ouvre la portée 2. On mesure donc que le
+    // mur tombe ENTRE la première et la seconde ouverture.
+    //
+    // L'implémentation d'origine est CONSERVÉE et enveloppée : la remplacer
+    // priverait le callback de son client et ferait échouer `resolveSelf`, ce qui
+    // rendrait cette assertion verte pour la mauvaise raison (une seule portée,
+    // parce que la première a levé).
+    const order: string[] = [];
+    const inner = scopeRun.getMockImplementation();
+    scopeRun.mockImplementation(async (tenantId: string, fn: (tx: unknown) => Promise<unknown>) => {
+      order.push('scope');
+      return inner!(tenantId, fn);
+    });
+    canAccessStudent.mockImplementation(async () => {
+      order.push('wall');
+      return true;
+    });
+
+    await service.grades(ME, JWT, SCHOOL);
+
+    // Le mur n'est ni premier ni dernier : il est ENCADRÉ par deux portées
+    // distinctes, ce qui est la forme « portée tardive, fermeture précoce ».
+    expect(order).toEqual(['scope', 'wall', 'scope']);
+  });
+
+  it('parentUpcoming and remediationProgress are never called from inside a scope', async () => {
+    const { service, parentUpcoming, remediationProgress, scopeRun } = makeService({
+      linked: true,
+    });
+
+    // Une portée « ouverte » est comptée à l'entrée et décomptée à la sortie ; si
+    // un producteur non converti était appelé pendant qu'elle est ouverte, la
+    // profondeur relevée à cet instant serait > 0.
+    let depth = 0;
+    const depthAtCall: number[] = [];
+    const inner = scopeRun.getMockImplementation();
+    scopeRun.mockImplementation(async (tenantId: string, fn: (tx: unknown) => Promise<unknown>) => {
+      depth += 1;
+      try {
+        return await inner!(tenantId, fn);
+      } finally {
+        depth -= 1;
+      }
+    });
+    parentUpcoming.mockImplementation(async () => {
+      depthAtCall.push(depth);
+      return { classSectionName: null, gradeLevelName: null, data: [] };
+    });
+    remediationProgress.mockImplementation(async () => {
+      depthAtCall.push(depth);
+      return [];
+    });
+
+    await service.upcoming(ME, JWT, SCHOOL);
+    await service.dashboard(ME, JWT, SCHOOL);
+
+    // Trois appels au total (upcoming ×1, dashboard ×2), tous à profondeur 0.
+    expect(depthAtCall.length).toBeGreaterThan(0);
+    expect(depthAtCall.every((d) => d === 0)).toBe(true);
+  });
+
+  it('there is NO un-scoped fallback: when the scope refuses, every read fails rather than degrading', async () => {
+    // La preuve qu'aucun chemin ne contourne la portée : si `run` refuse, aucune
+    // lecture ne peut plus aboutir. Un producteur qui garderait un client
+    // propriétaire pour un seul chemin rendrait ici une réponse au lieu de lever
+    // — et c'est précisément ce qui rendait `36 sites convertis` compatible avec
+    // `tout tourne sur le propriétaire` avant S-E01-1h.
+    const { service, scopeRun } = makeService({ linked: true });
+    scopeRun.mockRejectedValue(new Error('scope refused'));
+
+    await expect(service.me(ME)).rejects.toThrow('scope refused');
+    await expect(service.grades(ME, JWT, SCHOOL)).rejects.toThrow('scope refused');
+    await expect(service.attendance(ME, JWT, SCHOOL)).rejects.toThrow('scope refused');
+    await expect(service.announcements(ME, JWT, SCHOOL)).rejects.toThrow('scope refused');
+    await expect(service.upcoming(ME, JWT, SCHOOL)).rejects.toThrow('scope refused');
+    await expect(service.markAnnouncementRead(ME, JWT, SCHOOL, 'ann-1')).rejects.toThrow(
+      'scope refused',
+    );
   });
 });
