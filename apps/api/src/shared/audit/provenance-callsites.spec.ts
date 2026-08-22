@@ -297,6 +297,13 @@ describe('SubjectsController.upsertCoefficients — the derived value reaches tx
   it('T-6 — a teacher caller lands teacher/teacher in the transactional audit payload', async () => {
     const txAudit = jest.fn().mockResolvedValue({ id: 'audit-1' });
     const tx = {
+      // S-E05-3 — le double est ÉTENDU, jamais affaibli : depuis PF-10, le
+      // handler prouve la propriété des deux FK de portée sur `tx` AVANT
+      // d'ouvrir la boucle d'écriture. Les deux sondes rendent exactement les ids
+      // que ce cas envoie déjà, donc le corps reste propriétaire et la provenance
+      // asserée plus bas est mesurée sur le MÊME chemin heureux qu'avant.
+      gradeLevel: { findMany: jest.fn().mockResolvedValue([{ id: 'gl-1' }]) },
+      subject: { findMany: jest.fn().mockResolvedValue([{ id: 's-1' }]) },
       subjectCoefficient: { upsert: jest.fn().mockResolvedValue({}) },
       auditLog: { create: txAudit },
     };
@@ -341,6 +348,13 @@ describe('SubjectsController.upsertCoefficients — the derived value reaches tx
 
     const txAudit = jest.fn().mockResolvedValue({ id: 'audit-1' });
     const tx = {
+      // S-E05-3 — le double est ÉTENDU, jamais affaibli : depuis PF-10, le
+      // handler prouve la propriété des deux FK de portée sur `tx` AVANT
+      // d'ouvrir la boucle d'écriture. Les deux sondes rendent exactement les ids
+      // que ce cas envoie déjà, donc le corps reste propriétaire et la provenance
+      // asserée plus bas est mesurée sur le MÊME chemin heureux qu'avant.
+      gradeLevel: { findMany: jest.fn().mockResolvedValue([{ id: 'gl-1' }]) },
+      subject: { findMany: jest.fn().mockResolvedValue([{ id: 's-1' }]) },
       subjectCoefficient: { upsert: jest.fn().mockResolvedValue({}) },
       auditLog: { create: txAudit },
     };
@@ -373,6 +387,13 @@ describe('SubjectsController.upsertCoefficients — the derived value reaches tx
 
     const txAudit = jest.fn().mockResolvedValue({ id: 'audit-1' });
     const tx = {
+      // S-E05-3 — le double est ÉTENDU, jamais affaibli : depuis PF-10, le
+      // handler prouve la propriété des deux FK de portée sur `tx` AVANT
+      // d'ouvrir la boucle d'écriture. Les deux sondes rendent exactement les ids
+      // que ce cas envoie déjà, donc le corps reste propriétaire et la provenance
+      // asserée plus bas est mesurée sur le MÊME chemin heureux qu'avant.
+      gradeLevel: { findMany: jest.fn().mockResolvedValue([{ id: 'gl-1' }]) },
+      subject: { findMany: jest.fn().mockResolvedValue([{ id: 's-1' }]) },
       subjectCoefficient: { upsert: jest.fn().mockResolvedValue({}) },
       auditLog: { create: txAudit },
     };

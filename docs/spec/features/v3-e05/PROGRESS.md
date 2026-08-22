@@ -2,10 +2,10 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-13)** `in-progress` — **five slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12) and **`S-E05-2c` (2026-08-12, #229)**. Each was authored and implemented in the same
+**Status (2026-08-22)** `in-progress` — **six slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)** and **`S-E05-3` (2026-08-22, this PR)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
-remaining eight (`S-E05-1`, `S-E05-3` … `S-E05-6`, `S-E05-8` … `S-E05-10`) still exist as **rows in
+remaining seven (`S-E05-1`, `S-E05-4` … `S-E05-6`, `S-E05-8` … `S-E05-10`) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
 `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
 without an authoring pass of its own.
@@ -24,6 +24,13 @@ marked `⬜ unenumerated` in the table below — a row already falsified by `HEA
 `db2473b` (#222) shipped `S-E05-11` on 2026-08-12. `S-E05-7.md` §0.1 named both stale rows in advance and this pass
 discharges that instruction. The count is now **four**, and the `Next slice` pointer is annotated rather than deleted:
 it was a recommendation from the `S-E05-2` land pass, never an instruction, and it survives this run untouched.)*
+
+*(Corrected a third time 2026-08-22, `S-E05-3` land pass. Two lines above were falsified by the diff that carries this
+edit: the count read **five**, and the sentence at line 8 listed `S-E05-3` among the rows that "still exist as rows in
+`traceability-matrix.md` only". `S-E05-3.md` §0.1 named both in advance and this pass discharges that instruction. The
+slice-status row below moves from `⬜ unenumerated` to `⚠️ done`. The `Next slice` pointer is annotated, not deleted —
+`S-E05-3` ran on an operator override, which schedules over a recommendation without refuting it — and the queue behind
+it gains **`PF-240`**, the remediation sweep for the rows `PF-10` already wrote.)*
 
 > **Why there is no `spec.md` here.** Same posture as
 > [`docs/spec/features/v3-e02/PROGRESS.md`](../v3-e02/PROGRESS.md) and
@@ -49,7 +56,7 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | S-E05-1 | Global custom roles are cross-tenant (`PF-08`) + `VAL-07` | ⬜ unenumerated | — | matrix row only — no story in `sprint-01` |
 | **S-E05-2** | **The privilege ceiling: no grantor may mint, rewrite or assign a permission they do not themselves hold** (`PF-09`, `PF-156`) | ⚠️ done — **needs human review** | 2026-08-11 | spec: [`stories/S-E05-2.md`](./stories/S-E05-2.md) · **`PF-09` narrowed to 4 of 5 grant channels, NOT closed** (the `realmRole` invite channel stays open — see evidence below) · `PF-156` closed with its `isSystem` remedy **declined and argued** · `ADR-015` gains its first `D<n>` amendment; `ADR-035`'s "we do not change who may grant what" posture marked SUPERSEDED · raises the `S-E05-2b` residual set · evidence below |
 | **S-E05-2c** | **The detection sweep for pre-ceiling escalated grants** (`PF-175`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as **#229** · spec: [`stories/S-E05-2c.md`](./stories/S-E05-2c.md) · **`PF-175` NARROWED, not closed** — the detector exists and is proven, but has **never been executed against a database** · evidence below |
-| S-E05-3 | Coefficient-matrix foreign-tenant write (`PF-10`) | ⬜ unenumerated | — | matrix row only |
+| **S-E05-3** | **The coefficient matrix stops accepting foreign-tenant identifiers** (`PF-10`) | ⚠️ done — **needs human review** | 2026-08-22 | spec: [`stories/S-E05-3.md`](./stories/S-E05-3.md) · **`PF-10` closed on its REACHABLE write path** — the composite key stays tenant-blind (`PF-239`) and the rows the defect already wrote are neither detected nor repaired (`PF-240`) · new **`ADR-055`** (scope-FK ownership over a COLLECTION) · also records **`PF-238`** (no cap on `entries[]`) · evidence below |
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-5 | Attendance reads without ABAC (`PF-07`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-6 | Unvalidated PATCH / query params / enum (`PF-51`) | ⬜ unenumerated | — | matrix row only; `S-E06-6` fixed **one DTO** of this family |
@@ -58,6 +65,98 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
 | S-E05-10 | Unused `hasPermission`, `users.suspend` unimplemented (`PF-52`) | ⬜ unenumerated | — | matrix row only |
 | **S-E05-11** | **The public registration path becomes atomic, compensated and audited** (`PF-166`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as commit `db2473b` (#222). **`PF-166` closed.** *(Row corrected by the `S-E05-7` land pass: it read `⬜ unenumerated · matrix row only` while the code was already on `main`. Note the **subject changed**: the matrix row this line inherited names "non-atomic invite/permission rewrite, catalogue drift (`PF-53`)", which is a **different finding** — `PF-53` is still open and still unenumerated.)* |
+
+---
+
+## S-E05-3 — evidence (this PR, 2026-08-22)
+
+### What was actually wrong
+
+`SubjectCoefficient` is `@@unique([gradeLevelId, subjectId])` — a key with **no tenant column and no school column** —
+and `PUT /api/v1/subjects/coefficients/matrix` upserted directly onto it from `body.entries[]`, whose only gate was
+`@IsUUID()`. A caller in tenant A naming tenant B’s couple took one of two branches, both live:
+
+- `update` — **B’s own coefficient row was rewritten**, silently changing the weighted average, and therefore the
+  alert rules, of every pupil of tenant B;
+- `create` — a row stamped `tenantId: A` whose two FKs point into B’s school: a row whose tenant column **lies about
+  its own content**, the `PF-208` shape.
+
+This is the product’s core promise (an explainable alert on a child) being re-weighted from another tenant. It is the
+reason the slice is tiered **P1 `[security][tenancy]`** and is not auto-merged.
+
+### What the fix is, and why it has the shape it has
+
+Ownership of **both** scope FKs is proven on `tx`, in the same transaction, before the first write. Three decisions
+carry the slice, all recorded in **`ADR-055`**:
+
+1. **Two probes, not two per entry.** `ADR-053 §D1`’s per-reference `findFirst` switch, transcribed here, would emit
+   **60 statements for a 30-entry matrix** — a statement count bounded by the REQUEST, which `ADR-049 §D4` names as a
+   violation. The new pure planner `distinctScopeIdPlan` (`shared/prisma/scope-fk.ts`) returns one `{ field, ids }` per
+   **declared field**, so the cost is **2 probes for any body size**. It imports no Prisma and dispatches on no model
+   name (`ADR-049 §D5` intact); the two `findMany` stay **lexically inline** on `tx`, because
+   `tenant-adversarial-check.js`’s attribution does not traverse `this` (`PF-200`).
+2. **The predicate is a conjunction**, `{ id: { in }, tenantId: me.tenantId, schoolId }`. `tenantId` stays explicit
+   because the application connects as table OWNER and escapes its own RLS policies (`ADR-032 §D5`); `schoolId` is added
+   because a tenant may own several schools while the sibling GET renders exactly one. The two columns are denormalised
+   side by side with no constraint linking them — the conjunction is what fails **closed** when they disagree.
+3. **Deduplication is case-insensitive, and that is measured.** `@IsUUID()` accepts an uppercase uuid that Postgres
+   compares case-insensitively and returns lowercased. A case-sensitive key would make `owned.length !== ids.length`
+   count two ids where the database returns one row, and **refuse a legitimate save**. The emitted value keeps the
+   spelling received first; only the dedup key is lowercased.
+
+The refusal reuses `unknownScopeRef(field)` **verbatim**: foreign and merely-unknown ids take the same branch and
+produce a byte-identical 400 (`ADR-049 §D2` — distinguishing them would be a cross-tenant existence oracle). Because
+the probes precede every write, a refusal rolls back to **zero coefficients, zero audit rows, zero recompute
+triggers**, and the post-commit recompute enqueue closes **by construction** — it is a sibling of the transaction,
+never reached on refusal — rather than by a second filter that would read as a security control while being dead code.
+
+### Evidence, executed
+
+- `pnpm typecheck` — **13 successful / 13 total** (`@pilotage/api` the one cache miss, compiled clean).
+- `npx jest subjects-coefficient-scope-ownership.spec.ts provenance-callsites.spec.ts` — **2 suites, 72/72 passed** (69/69 as the sprint shipped it, +3 for `AC-14`, the round-trip block the escalation panel required at the land pass — see `stories/S-E05-3.md` §12).
+- `git diff --check` — **exit 0**.
+- The new suite carries a **negative control** (the pre-fix query reaching the victim), a **vacuous-path control**
+  (an empty id refuses instead of shortening the set) and a **false-positive control** (an uppercase uuid that really
+  belongs to the caller is accepted). Its fake database **throws on an unrecognised Prisma operator** instead of
+  returning `[]`, which is what stops a misread `where` from passing vacuously.
+- The three `provenance-callsites.spec.ts` doubles were **extended, never weakened**: the added `findMany` doubles
+  return exactly the ids those cases already send, so provenance is still measured on the same happy path.
+
+### `PF-10` is closed on its REACHABLE path — read what that excludes
+
+| Residual | Id | Why it is not this slice |
+|---|---|---|
+| The rows the defect already wrote are neither detected nor repaired, and the `update` branch never rewrites their lying `tenant_id` | **`PF-240`** | Same shape as `PF-175`/`S-E05-2c`: a read-only detector is its own slice, and a repair is its own risk tier. The detection query is in `OPEN.md`. |
+| `@@unique([gradeLevelId, subjectId])` is still tenant-blind, so ownership is *checked*, not *impossible* | **`PF-239`** | A migration — `G-MIGRATION`, plus a `scripts/restore-drill-baseline.json` entry per `PF-80`. |
+| `BulkCoefficientDto.entries` has no `@ArrayMaxSize`, and the `in` arrays inherit that | **`PF-238`** | Pre-existing; the write loop, not the two probes, is the budget risk inside a 5 s interactive transaction. |
+
+**Named and accepted (`ADR-055 §D3`):** the scope is the **school**, not the tenant. A grade level belonging to another
+school of the **same** tenant is now refused, and `forTenant` resolves the default school by live student count — if
+that default flips between the GET and the PUT, a legitimate save is refused. Refusal, never corruption; the inverse
+choice would leave an inter-school leak open inside a tenant. **Second accepted change:** a tenant with **no school**
+now receives a `NotFoundException` (404) from `forTenant` on a PUT that previously proceeded.
+
+**DNC-06 limit, stated:** nothing proven for this slice touches PostgreSQL. The suite proves the **shape** of the
+queries and the behaviour of the handler, not the behaviour of RLS.
+
+### Merge conditions a human owns (none fixed here)
+
+1. **The round-trip case is missing.** Every accepted id in the suite is a hand-declared constant, so nothing proves
+   that the matrix the sibling GET *renders* is accepted verbatim by the PUT. The GET filters `schoolId` +
+   `active: true`; the PUT probes `tenantId` + `schoolId`. A row whose two denormalised columns disagree is **rendered
+   and then refused**, and `SubjectsManager.tsx` sends the whole dirty set in one PUT — so one bad axis id means the
+   matrix becomes unsavable, all-or-nothing, for an admin who did nothing wrong.
+2. **`PF-240` must be counted in production before merge.** The local database holds **zero** coefficient rows, so the
+   local clean result proves nothing.
+3. **The 404 for a school-less tenant surfaces an English developer string** (`No school for tenant`) verbatim in the
+   French admin banner, while every other refusal on this handler is French UI copy.
+
+### Next run
+
+`S-E05-2b` (the `realmRole` invite channel) still ranks first in this epic — it is the only **live escalation path**
+left, and `S-E05-3` was scheduled over that pointer by override, not instead of it. **`PF-240` ranks immediately
+behind it**, and it should be sequenced exactly like `S-E05-2c`: a read-only detector with three exit codes first, a
+repair only once a human has seen the count.
 
 ---
 

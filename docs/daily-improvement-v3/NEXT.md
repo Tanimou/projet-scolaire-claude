@@ -1,5 +1,124 @@
 # Next story
 
+# NEXT — written by run 65 (`S-E05-3`), 2026-08-22 — **this section supersedes every section below**
+
+## ✅ `PF-10` is CLOSED on its reachable path — a ROADMAP finding, and the first `V3-E05` slice since 2026-08-12
+
+`PUT /api/v1/subjects/coefficients/matrix` upserted onto `@@unique([gradeLevelId, subjectId])` — a key with **no**
+tenant column and **no** school column — from a body whose only gate was `@IsUUID()`. A tenant-A caller naming tenant
+B's couple either **rewrote B's row** (`update`) or created a row stamped `tenantId: A` whose two FKs point into B
+(`create`, the `PF-208` shape). Both re-weight the average, and therefore the **alerts**, of every pupil of the victim
+tenant. Ownership of both FKs is now proven on `tx`, in the same transaction, before the first write.
+
+## 🔭 The load-bearing decision was the SHAPE of the probe, not the probe
+
+`ADR-053 §D1`'s per-reference `findFirst` switch, transcribed here, emits **60 statements for a 30-entry matrix** — a
+statement count bounded by the REQUEST, which `ADR-049 §D4` names as a violation. The new pure planner
+`distinctScopeIdPlan` returns one `{ field, ids }` per **declared field**, so the cost is **2 probes for any body**.
+This is the first module of the pattern with a **set-shaped** probe (`ADR-055`), and the first where the dedup key had
+to be lowercased for correctness: `@IsUUID()` accepts an uppercase uuid, Postgres returns it lowercased, and
+`owned.length !== ids.length` would otherwise **refuse a legitimate save**.
+
+## 🛑 `PF-240` — this slice does NOT clean what the bug already wrote, and that is the one thing to read
+
+A dark row survives the fix **and survives every subsequent legitimate save by the victim**: the unique key is
+unchanged, so B's next PUT takes `update: { coefficient }` and the row stays labelled tenant A **forever**. The column
+is read asymmetrically — the worker filters `tenantId`, the live API paths filter only the FKs — so the parent-facing
+snapshot and the live average diverge permanently on the same child. After the `DATABASE_URL_APP` cutover the row
+becomes invisible to its true owner **while still occupying the unique key**, and B's upsert falls to `create` and
+takes a `P2002` — a hard 500 on an ordinary matrix save, three slices after the cause. **The detection query is in
+`OPEN.md` and is read-only; run it against prod before merging.** The local database holds **zero** coefficient rows,
+so the local `0|0|0|0|0` proves nothing. This is the `S-E05-2c`/`PF-175` shape and it deserves the same treatment.
+
+## 🛑 The fifth copy of the ownership dispatch exists now — run 64 predicted it by name
+
+Run 64's recommendation #3 was *"collapse the ownership dispatch before a fifth copy exists"* (`PF-236`/`PF-234`).
+This slice shipped copy five, and it **diverges in shape**: an `if (…) { … continue; }` chain whose fallthrough is a
+runtime `throw`, where the four existing copies close with `default: { const exhaustive: never = … }`. The consequence
+is exact: a third field added to `COEFFICIENT_SCOPE_FIELDS` **fails at runtime instead of failing to compile**. That
+is a real cost of shipping this slice before the collapse, and it raises the priority of `PF-236`/`PF-234`.
+
+## ⚠️ Merge conditions a human owns (none fixed in the PR)
+
+1. **No round-trip case.** Every accepted id in the suite is a hand-declared constant — a second hand-kept list, the
+   defect class this repo keeps re-hitting. The sibling GET filters `schoolId` + `active: true`; the PUT probes
+   `tenantId` + `schoolId`. A row whose denormalised columns disagree is **rendered and then refused**, and the admin
+   sends the whole dirty set in one PUT, so the matrix becomes unsavable all-or-nothing.
+2. **`PF-240` must be counted in production before merge.**
+3. **The school-less tenant now gets a 404** carrying the English string `No school for tenant`, rendered verbatim in
+   the French admin banner while every other refusal on this handler is French UI copy.
+
+## 🛑 THE PANEL BLOCKED THE MERGE, AND THE OBJECTION WAS RIGHT — read this before trusting the suite
+
+*Written by the routine at the land pass, after the sections above.*
+
+The escalation panel returned **CONCERNS — conditional GO, do not auto-merge** on a slice that was green. Its
+objection was not about a leak; it was about the suite: **every id the suite accepted came from a constant the suite
+itself declared**, so it proved the PUT accepts ids *the test invented*, never ids the **sibling GET emits**. A second
+hand-kept list — the defect class this repo re-hits most.
+
+It mattered because it sat on the failure mode this diff **introduces**, not the one it closes:
+
+| Surface | Predicate on its axes |
+|---|---|
+| `GET .../coefficients/matrix` | `{ schoolId }`, and `{ schoolId, active: true }` for subjects |
+| `PUT .../coefficients/matrix` | `{ id: { in }, tenantId, schoolId }` |
+
+`subject.tenant_id` and `grade_level.tenant_id` are denormalised beside `school_id` with **nothing linking them**, so
+a drifted row is **rendered by the GET and refused by the PUT** — all-or-nothing, on the administrator's real Save
+button. `ADR-055 §D3` named this in prose; nothing measured it, and `forTenant` is mocked to a fixed school
+everywhere else, so the suite **structurally could not** see it.
+
+**Discharged at the land pass, not carried.** `AC-14` plus three cases derive the PUT's entries from the GET's own
+response, assert both surfaces resolve the school through the **same** `forTenant(tenantId)` call, and pin the
+divergence as **`PF-241`**. **Mutation-proven:** drifting ONE `subject.tenantId` away from its school turns the
+round-trip case RED with the exact production symptom « Le périmètre sélectionné est introuvable (subjectId) » and
+fails **9 of 20**; restored, sha256 identical, **20/20** green. Suite total **69 → 72**.
+
+**The lesson worth carrying:** a green suite whose fixtures it wrote itself proves the code agrees with the test
+author. Deriving the input from the **sibling surface** is what makes it prove the two surfaces agree with each other.
+
+## 🔧 THE GATE'S FIRST FAIL WAS `TOOL-36`, AND IT WAS PROVED, NOT PRESUMED
+
+`GATE: FAIL (1 stage)` on run 1 — `test:api`, 2 NEW failures, both `schema-drift-gate.spec.ts` (`AC-4`, `AC-P16`).
+This diff touches **zero** drift files, so the pair was isolated **in both directions on this tree**:
+
+```
+pilotage_postgres UP    →  jest -t "AC-P16"                1 failed
+pilotage_postgres DOWN  →  jest -t "AC-P16"                1 passed
+pilotage_postgres DOWN  →  whole schema-drift-gate suite   135 passed / 135
+run 2, committed tree, postgres DOWN  →  GATE: PASS (fast), test:api ✓ (229s)
+```
+
+This **reproduces run 64's ruling independently**: the variable is the **container**, never the clock, so `TOOL-31`'s
+premise stays falsified and the cause stays `TOOL-36`. **Do not re-diagnose this pair a third time** — measure the
+container first, in one command, and move on. Stack left healthy (12 containers, postgres restarted).
+
+
+## ▶ Recommended next story
+
+1. **`S-E05-2b` (P1) — the `realmRole` invite channel.** Unchanged as the epic first pick: it is the only **live**
+   escalation path left in `V3-E05`, and `S-E05-3` was scheduled over that pointer by operator override, not instead
+   of it. A grantor-relative ladder, not a subset ceiling; needs its own `ADR-015` entry.
+2. **`PF-240` (P1) — the remediation sweep for the rows `PF-10` already wrote.** Same shape as `S-E05-2c`: a read-only
+   detector with three exit codes (`0` clean / `1` findings / `2` inconclusive) first, a repair only once a human has
+   seen the count. It is the only residual of this slice that is a *live data* problem rather than a hardening one.
+3. **`PF-236` / `PF-234` (P2) — collapse the ownership dispatch, now at FIVE copies.** Promoted from run 64: the fifth
+   copy exists, it diverges in shape, and the `never` exhaustiveness guard that makes a new scope field fail to
+   compile is missing from it. Cheapest slice on the board that stops the bleeding.
+4. **`PF-239` (P2) — the tenant-aware composite key on `subject_coefficient`.** `G-MIGRATION` plus a
+   `scripts/restore-drill-baseline.json` entry per `PF-80`. It is what turns *checked* into *impossible*.
+5. **`PF-238` (P2) — `@ArrayMaxSize` on `BulkCoefficientDto`,** with N **derived** from a realistic matrix, refused by
+   the DTO before `forTenant` and before any transaction opens.
+
+## State of the world at the end of run 65
+
+- `V3-E05`: **5 of 12 slices shipped** (`S-E05-12`, `S-E05-2`, `S-E05-11`, `S-E05-7`, `S-E05-3`), plus `S-E05-2c`.
+- `ADR-055` is the fifth module of the scope-FK ownership pattern and the first with a **set-shaped** probe.
+- No schema change, no migration, no `apps/web`, no `apps/worker`, no `packages/` change in this run.
+- **DNC-06 stands:** nothing proven this run touches PostgreSQL. The suite proves query **shape**, not RLS behaviour.
+
+---
 # NEXT — written by run 64 (`S-E01-1g`, **salvaged and executed**), 2026-08-22 — **this section supersedes every section below**
 
 ## 🛑 THE SLICE ALREADY EXISTED. IT HAD NEVER BEEN PUSHED, GATED OR RUN.
