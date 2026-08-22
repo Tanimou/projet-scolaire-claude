@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-08-22
 - **Story:** `S-E01-1h`
-- **Findings:** closes `PF-242`; advances `PF-02` (half (a), the deployment half); records `PF-243`, `PF-244`
+- **Findings:** closes `PF-242`; advances `PF-02` (half (a), the deployment half); records `PF-243`, `PF-244`, `PF-245`
 - **Supersedes nothing.** Extends `ADR-032` §D5–§D8 (the connection cutover) and `ADR-046` §D1.
 
 ## Context
@@ -159,3 +159,17 @@ identical**. Fail-before was replayed against the real pre-slice compose file fr
   - **`PF-244` (P3)** — `.env.example:37` ships `DATABASE_URL_APP` on `localhost:5433` while the root
     `.env` and the stack both use `5432`. Host-side tooling that copies the example connects nowhere,
     and — being the degrade-silently path — says nothing when it does.
+  - **`PF-245` (P2)** — found while checking **this slice's own blast radius**, and recorded because
+    the slice widened it. The `api` service carries `profiles: ["app", "prod"]`, so I checked what a
+    production overlay does with the new line: `infra/docker-compose.prod.yml` declares **no**
+    `DATABASE_URL` and no `DATABASE_URL_APP` at all. It overrides Keycloak, CORS and
+    `TRUST_PROXY_HOPS` — each using the refusing `${VAR:?…}` form that `S-E06-1` / `PF-54` introduced
+    precisely so compose fails in the operator's terminal — and leaves the database literals to be
+    inherited from the base file. **The database is the one credential that kept a literal.**
+    `DATABASE_URL_APP` is added here in the same shape as its sibling, deliberately, rather than
+    inventing a second convention inside a slice about something else; the honest consequence is that
+    a pre-existing gap is now one credential wider. Per **Step −1** the severity is *"the deployment
+    description is wrong"*, never *"production is compromised"*: the VPS is an audit fixture and was
+    not contacted. The fix is not two lines — the refusing form needs the variables present for the
+    **local** stack too, `.env` is gitignored, and `.env.example` has to lead — so it belongs with
+    `PF-244` in one deliberate pass over the `.env` contract.
