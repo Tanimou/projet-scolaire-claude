@@ -77,6 +77,14 @@ jobs:
       # probes are reported as not-executed here rather than silently skipped.
       # Kept in step with scripts/ci-gate.sh stage 0c (S-E02-2 AC-4).
       - run: node scripts/compose-invocation-check.js
+      # Tenant scope deployment (S-E01-1h / PF-242). `DATABASE_URL_APP` is what
+      # switches the tenant scope from `degraded_no_app_url` to `enforced`; it was
+      # absent from infra/docker-compose.yml, so every converted call site ran on
+      # the OWNER connection (BYPASSRLS) while the scratch-database proofs stayed
+      # green. Source-only — reads the compose file as text, never runs
+      # `docker compose config` — so it sits in the fast tier and runs on every PR.
+      # Kept in step with scripts/ci-gate.sh tier 1 (S-E02-2 AC-4).
+      - run: node scripts/tenant-scope-deployment-check.js
       # Audit writes (S-E04-7 / PF-31). Every `auditLog.create` under the walk
       # root apps/api/src + apps/worker/src + packages/imports-core/src is either
       # behind `writeAudit(tx, {…})` inside a transaction, or carries a reviewed
