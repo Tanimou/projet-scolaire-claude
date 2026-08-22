@@ -58,6 +58,41 @@ annotated *"archive on the next sweep"*. `PF-18`, `PF-208`, `PF-228` and `PF-232
 `PF-199` was **deleted as a duplicate** — it was already in `CLOSED-L0.md`, so it lived in two files, which the
 partition's own header forbids. `OPEN.md` now contains zero closed rows.
 
+## 🔧 THE GATE'S "FLAKY PAIR" IS SETTLED — the variable is the CONTAINER, not the clock
+
+Run 63 wrote: *"the next run that meets this pair should check **route selection** first rather than
+re-recording flaky."* This is that run, and route selection is the answer. **`GATE: FAIL (1 stage)`** —
+`test:api`, one NEW failure, `schema-drift-gate.spec.ts` `AC-P16`. This diff touches **zero** drift files.
+
+**Measured in BOTH directions, on ONE commit, with no gate and no contention:**
+
+```
+docker start pilotage_postgres  →  jest -t "AC-P16"  →  1 failed
+docker stop  pilotage_postgres  →  jest -t "AC-P16"  →  1 passed
+```
+
+So **`TOOL-31`'s premise — *"they pass 135/135 in isolation"* — is FALSE**, and every fix it proposed (retry
+with backoff, contention-tolerant bound, wider stage cap) addressed the wrong cause. The row is corrected in
+place rather than deleted.
+
+**The mechanism, read from the child run's own narration and not from the source.** `AC-P16` points
+`DATABASE_URL` at `schema-drift-gate.invalid:5433`; the probe returns `indeterminate`; `query()` therefore
+tries route B; B fails; and its `B. host psql — …` line is pushed into `attempts[]` — **which is printed only
+when NO route answers.** Route **C** then answers (`▶ scratch created via docker exec pilotage_postgres psql`),
+so `attempts[]` is never surfaced and the assertion hunts a line that was produced but never shown. The verdict
+slides with it: `migrate_deploy_failed` instead of the expected `tooling_unavailable`.
+
+**The real defect is upstream of the test, and it is now `TOOL-36` (P1).** `containerAddressesTheUrl()` ties
+route C to the URL by **port** only — never by **host**. A URL naming a host that does not resolve is answered
+by the local container because it happens to publish that port, and the run prints
+`▶ server reachable at schema-drift-gate.invalid:5433` for a server that does not exist. Under `DNC-08` that
+narration is the worse half: point a real drift check at a staging URL on 5433 and whatever container is up on
+the laptop answers it, silently.
+
+**Not fixed here on purpose** — it is a different seam, it changes a verdict, and it deserves a before/after of
+its own. The local stack was left as found (12 containers, all healthy).
+
+
 ## ▶ Recommended next story
 
 1. **`PF-230` (P2) — the RETROACTIVE half of `PF-208`.** `publishInternal` still recomputes from the **stored**
