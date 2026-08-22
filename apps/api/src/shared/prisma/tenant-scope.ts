@@ -360,6 +360,98 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
     why: 'S-E01-1i — relation traversée depuis `assessment` : le trimestre étiquette ' +
       'chaque ligne de notes rendue à l’élève. Absente du dimensionnement ; elle est due',
   },
+  // ── remediation (S-E01-1j) ──────────────────────────────────────────────
+  // SEPT entrées, 30 -> 37, et pas une de plus. `RemediationService` convertit
+  // ses VINGT-TROIS instructions ; les NEUF tables que sa clôture touche déjà
+  // (`student`, `subject`, `grade`, `assessment`, `teaching_assignment`,
+  // `teacher_profile`, `academic_year`, `enrollment`,
+  // `student_subject_snapshot`) sont DÉCLARÉES PLUS HAUT et ne sont pas
+  // dupliquées — elles sont dues ICI aussi, pour des raisons relationnelles
+  // vérifiées par LECTURE et non par confiance :
+  //   • `student` + `subject`        — `PLAN_INCLUDE`, sur CHAQUE DTO de plan ;
+  //   • `grade` + `assessment` + `teaching_assignment` — le `where` de
+  //     `computeLiveSubjectBaseline` traverse le FILTRE relationnel
+  //     `assessment: { teachingAssignment: { subjectId } }`, et son `select`
+  //     descend `assessment.maxScore`. Un filtre relationnel est une LECTURE
+  //     sous RLS, exactement comme un `include` (PF-246) ;
+  //   • `teacher_profile` + `academic_year` + `enrollment` — les deux `where`
+  //     d'`isTeacherOfStudent` traversent `academicYear: { status:'active' }` et
+  //     `teacherProfile: { userProfileId }` depuis `enrollment` ;
+  //   • `student_subject_snapshot` — le point-read de `readSubjectAverage`.
+  //
+  // CE QUI EST DÉLIBÉRÉMENT ABSENT, et c'est une décision, pas un oubli :
+  //   • AUCUN `DELETE` — ce service n'a aucun chemin de suppression. `app_user`
+  //     détient pourtant les QUATRE verbes sur les cinq tables (mesuré) : une
+  //     entrée `DELETE` démarrerait donc au VERT et serait MORTE, et une entrée
+  //     morte ne peut plus faire échouer le contrôle d'égalité d'ensembles que
+  //     PF-246 / PF-219 existent pour acheter ;
+  //   • `booking.INSERT` / `booking.UPDATE` — le chemin d'écriture de
+  //     réservation vit dans `booking.service.ts`, que cette tranche ne convertit
+  //     PAS. Le déclarer certifierait une clôture qu'aucune instruction de portée
+  //     n'exerce ;
+  //   • `alert_instance.UPDATE` — l'alerte est LUE pour dériver le diagnostic ;
+  //     sa mutation (acquittement) appartient au module alerts, non converti.
+  //
+  // Les sept paires sont VÉRIFIÉES DÉTENUES sur la base de la pile AVANT d'être
+  // déclarées (`information_schema.role_table_grants` : 20/20 sur les cinq
+  // tables), pas après — une entrée déclarée puis constatée manquante rendrait
+  // `refused_unusable`, donc un 503 sur calendar, lessons, announcements ET
+  // student-portal aussi. Cette liste est GLOBALE, jamais par module.
+  {
+    table: 'alert_instance',
+    privilege: 'SELECT',
+    why: '`promotePlan` RÉSOUT le diagnostic depuis l’alerte (student, subject et school ' +
+      'dérivés du serveur, jamais du client) : sans ce privilège plus AUCUNE alerte n’est ' +
+      'promouvable en plan, et le bouton « agir » du tableau de bord parent — la promesse ' +
+      'du produit — rend permission denied au lieu d’un plan',
+  },
+  {
+    table: 'remediation_plan',
+    privilege: 'SELECT',
+    why: 'la garde d’idempotence de la promotion, la relecture du GAGNANT après P2002, ' +
+      '`getPlan` / `listPlansForStudent` / `loadPlanForLifecycle` / `loadPlanForBooking`, et ' +
+      'les plans ouverts de la bande de progression — ET les deux `updateMany`, dont le ' +
+      '`WHERE` exige `SELECT` sur les colonnes qu’il lit (ADR-058 §D5) : rogner ce ' +
+      '« SELECT redondant » ferait basculer toute l’application en refused_unusable',
+  },
+  {
+    table: 'remediation_plan',
+    privilege: 'INSERT',
+    why: 'la promotion écrit la ligne DANS la portée : c’est le `WITH CHECK` de la policy qui ' +
+      'refuse un GUC étranger, et l’`include` de la création fait un `INSERT … RETURNING`, ' +
+      'qui exige en plus le SELECT déclaré ci-dessus',
+  },
+  {
+    table: 'remediation_plan',
+    privilege: 'UPDATE',
+    why: 'les `updateMany` gardés par le statut de DÉPART de `closePlan` / `reopenPlan` ' +
+      '(idiome ADR-020) — la garde EST l’écriture, donc sans ce privilège clôturer ou ' +
+      'rouvrir un plan devient un 42501 sur les portails parent ET admin, là où le produit ' +
+      'promet une boucle réversible',
+  },
+  {
+    table: 'booking',
+    privilege: 'SELECT',
+    why: 'la lecture GROUPÉE des séances de la bande de progression (séances prévues / faites / ' +
+      'prochaine date, une seule requête pour tous les plans ouverts) et les deux lectures ' +
+      'groupées du catalogue (sièges restants par créneau, réservation propre du parent) : ' +
+      'sans elle le catalogue afficherait « Indisponible » sur chaque créneau libre',
+  },
+  {
+    table: 'tutor',
+    privilege: 'SELECT',
+    why: 'le `findMany` des tuteurs publiés du catalogue ET la relation `tutor` TRAVERSÉE par ' +
+      'le `select` imbriqué de `loadBookableAvailability` — une relation traversée est une ' +
+      'table lue (ADR-057 §D1) : sans elle le mur enseignant du chemin de réservation ne ' +
+      'peut plus lire la liaison du tuteur',
+  },
+  {
+    table: 'tutor_availability',
+    privilege: 'SELECT',
+    why: 'l’`include: { availabilities }` du catalogue et le `findFirst` de ' +
+      '`loadBookableAvailability` : sans ce privilège aucun créneau n’est affichable ni ' +
+      'réservable, et la boucle alerte → plan → séance s’arrête à la moitié',
+  },
 ]);
 
 /** Ce que la sonde ramène de la connexion sous test. */

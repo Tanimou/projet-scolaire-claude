@@ -138,6 +138,8 @@ The epic is **not** `shipped`, and **four** sentences must not be misread:
 | **S-E01-1f** | `announcements`' five scope foreign keys are proven **OWNED** before the write, `computeRecipients` is made structurally incapable of returning a foreign profile, and the ownership helpers become a **shared** rule rather than one controller's habit | 🟡 **shipped in part — 2026-08-15, ⚠️ NOT auto-merged (P1 · `[security][authz][tenancy][api][behavior-change]`)** — [`stories/S-E01-1f.md`](./stories/S-E01-1f.md) | 63 | **Closes `PF-208`** — the twin `S-E01-5`'s escalation panel named and could not fix, and the first instance of this defect class to reach a cross-tenant **WRITE** (`announcement_receipt` **and** `Notification` rows addressed at another tenant's profiles). Ships **`ADR-053`** (§D1 probes · §D2 extraction, **superseding `ADR-049 §D5`** · §D3 the new refusal · §D4 the chokepoint · §D5 preview · §D6 what is not decided); records **`PF-228`**–**`PF-233`**. **What landed:** `create` and `preview-recipients` probe all five **supplied** scope ids with `findFirst({ where: { id, tenantId } })` — `findFirst` not `findUnique`, a `switch` closed by a `const exhaustive: never`, a refusal **byte-identical** for *« other tenant »* and *« does not exist »* (`ADR-048 §D9`), ordered **after** the pure and role refusals so a doomed body costs no query; `computeRecipients` gains five tenant predicates plus a bounded `resolveWithinTenant`, **required and not belt-and-braces** because `publishInternal` recomputes from the **stored** ids and never re-enters the controller probe (`PF-230`); the pure plan helpers move into **`apps/api/src/shared/prisma/scope-fk.ts`** with **no compatibility re-export**, while the field lists, the `findFirst` loop (lexical counter, `PF-200`) and a generic `assertOwnedByTenant` are deliberately **not** extracted; and **`assertScopeCoherence`** (`ADR-053 §D3`) adds a new 400 for bodies whose scope does not explain the ids they carry, measured against both shipped composers first. **The severity correction is part of the deliverable:** `PF-208`'s recorded blast radius was wrong in **both** directions — the rows do **not** render in the victim's feed, so it is (a) integrity / invisible **dark** rows and (b) a **cardinality-and-existence oracle to the attacker**; and **four** branches leaked, not one. **NOT a conversion** — no `withTenant`, no `APP_ROLE_REQUIRED_PRIVILEGES` entry (`AC-6`/`AC-7` cut → **`PF-232`**), `tenant-scope.ts` and `announcements.module.ts` byte-unchanged, so `24 + 120 / 803` and `PF-02` are where `S-E01-1e` left them and the explicit predicate does **all** the work (`DNC-06`). **Evidence, executed:** `pnpm typecheck` **13/13 exit 0** with `@pilotage/api` a genuine cache **miss**; `git diff --check` exit 0; `jest src/modules/announcements src/modules/calendar` → **5 suites / 106 tests PASS** (125 s), including the new 734-line `announcements-scope-ownership.spec.ts` and its **negative control** (the pre-fix query fired against the same fake DB returns the victim's rows; an unknown Prisma operator **throws** rather than silently returning `[]`). **No `schema.prisma`, no migration** (`P-05` disarmed). **Four things a human owns — see [`S-E01-1f` — the write path closed, the read path one third done](#s-e01-1f--the-write-path-closed-the-read-path-one-third-done)** |
 | **S-E01-1g** | The **THIRD** module (`announcements`) enters the tenant scope **PARTIALLY**, and the rule deciding *which handlers can enter at all* becomes an architectural decision instead of a third local comment | 🟡 **shipped in part — 2026-08-16** — [`stories/S-E01-1g.md`](./stories/S-E01-1g.md) | this run | **Closes `PF-232`** (its conversion half), records **`PF-235`** / **`PF-236`**, ships **`ADR-054`**, advances `PF-02` half (a). Attribution **re-derived by the script, never edited**: `24 scoped + 120 enumerated / 816` → **`36 scoped + 120 enumerated / 816`** — `+12` is **exactly** the number of sites converted, so there is **no `owner-inside-scope` residue** and the `PF-217` trap was avoided *by construction*; `enumerated` unmoved at 120, denominator unmoved at 816, verb-aware still `165 satisfied, 2 not`. **Five whole handlers** converted (`unreadCount`, `create`, `update`, `publish`, `markRead`); four handlers, two private methods and all ten sites of `announcements.service.ts` **excluded, each with its mechanism in a docblock at its own definition site**. `APP_ROLE_REQUIRED_PRIVILEGES` gains six rows and four **extended** (never duplicated) `why` strings; `announcements.module.ts` **byte-unchanged by design** (`PrismaModule` is `@Global()`). **`ADR-054` is the deliverable as much as the code:** `§D1` the partition criterion (*a handler converts only if every statement it provokes is **lexically** inside the callback; a collaborator closing over its own `PrismaService` is **excluded**, never threaded a `tx`*) — the third occurrence of a rule `calendar` and `lessons` each recorded locally; `§D2` the **measured** refusal of the `tx` thread (it would *compile*, unlike `CalendarSeedService`, but moves the counter by **zero** while adding five tables to a globally-probed closure); `§D3` the half of the boot-probe rule the first two modules never had to write — an **over**-declared row 503s **calendar and lessons too**, this list being global; `§D4` `remove` excluded because the `announcement`→`announcement_receipt` cascade is **expected, not proven**, so `announcement`/`DELETE` is deliberately undeclared; `§D5` the mandatory `DNC-06` sentence. **Named limits:** the module is **PARTIALLY** converted, `list`/`getOne` are refused on **`G-TRUTH`** (their `_count`/`stats` are rendered projections that legitimately diverge over the dark rows `PF-230` owns), the app still connects as **owner** with no `FORCE ROW LEVEL SECURITY`, and **`PF-02` did not close**. **No `schema.prisma`, no migration, no `apps/web`, no `apps/worker`.** See [the section below](#s-e01-1g--the-third-module-enters-the-scope-partially-and-this-time-the-counter-moved-by-exactly-what-was-converted) |
 | **S-E01-1h** | The tenant scope stops being a property of the **source tree** and becomes a property of the **running stack** | ✅ **shipped — 2026-08-22** — [`stories/S-E01-1h.md`](./stories/S-E01-1h.md) | 66 | **Closes `PF-242`**, advances **`PF-02`** (the *deployment* half), ships **`ADR-056`**, records **`PF-243`**/**`PF-244`**. **The finding was found by Step 2, not by the roadmap:** sizing the grant closure a fourth module conversion would need meant reading the grants `app_user` actually holds, and the answer on the stack's own database was **0**. Following it upward: `DATABASE_URL_APP` was declared in `.env.example` and in **no** compose service, so `AppRolePrismaService` never opened its second connection and **all 36 already-converted call sites ran on the OWNER connection** (`pilotage`, `rolbypassrls = true` measured), in state `degraded_no_app_url`. The stack database was also **2 of 7** migrations behind — **0** policies, **0** grants. **Three runs of conversion work (`S-E01-1d`/`1e`/`1g`) had never once been exercised on the runtime target.** Their scratch-database proofs were true and remain true; they prove the **mechanism**, and the deployment was the half `PF-02`'s closure condition (`ADR-032` §D5–§D8) is actually about. **What landed:** one line on the `api` service only (`ADR-056` §D1 — `migrator` cannot grant itself privileges, `worker` has no request tenant), plus `scripts/tenant-scope-deployment-check.js` and a 22-assertion gate spec wired **TIER 1** in `ci-gate.sh` and `ci.yml`. **Tier 1 is the decision, not a detail:** the neighbouring `compose-invocation-check.js` sits in `--full` because it shells out to `docker compose config`; the diff that reintroduces *this* regression is a compose edit, and a compose edit never schedules a `--full` run. The checker refuses **four** shapes — absent, host-only address, database/host disagreeing with `DATABASE_URL`, and **the owner role**, which is the only shape that reads as `enforced` while isolating nothing (the owner carries `BYPASSRLS`, so the probe would pass and the gauge would read **1** over zero isolation). **Executed on the local stack — never the VPS (Step −1):** `migrator`+`api` rebuilt (the images predated the RLS migrations, `R-05`) and recreated → **7/7** migrations, **199** grants, **53** RLS tables, **59** policies, the declared closure **25/25 HELD** (set-compared against `information_schema`, *both sides derived*), `[AppRolePrismaService] Portée tenant ENFORCÉE (enforced)`, `pilotage_tenant_scope_enforced{app="api"} 1`, **229** routes, **0** errors, 12 containers healthy. **The denial, on the stack's own database, positive control FIRST** — mandatory here, because `app_user` held zero privileges before, so a proof showing only an absence of rows would have been green for the wrong reason (measuring a missing `GRANT`, not a working policy): owner + foreign GUC → **17 rows**, `app_user` + own → **17**, `app_user` + foreign → **0**, `app_user` + no GUC → **0**. The first figure *is* the defect stated as a number. **Mutation-tested rather than trusted:** gutting the owner-role refusal killed 2 specs, gutting the absent-variable refusal killed 3; checker restored and **sha256 verified identical**; fail-before replayed against the real pre-slice compose from git history (**1** problem on `main`, **0** here). **One hypothesis was FALSIFIED and is recorded rather than deleted** (`S-E01-1h` §2): the migration preflight is *not* defective — `migration-state.ts:120` computes `pending` against the on-disk ledger and has a `pending` status. The image was stale, not the check. **What this does NOT claim:** the source counter is **unchanged** at `36 scoped + 120 enumerated / 816`, 660 sites would still return zero rows after a `DATABASE_URL` cutover, and `PF-02` stays `in-progress` |
+| **S-E01-1i** | The **FOURTH** module (`student-portal`) enters the tenant scope **WHOLE**, and the privilege closure turns out to be **relation-deep** | 🟢 **shipped — 2026-08-22** — ⚠️ **ROW ADDED RETROACTIVELY (run 68)**: the slice landed on `main` as `1f79ee2` (#260) and that run wrote its § below but never this table — the same drift repaired once before for `S-E01-1e`. The § stays authoritative. | 67 | **Closes nothing on its own; advances `PF-02`** (the *source* half), ships **`ADR-057`**, records **`PF-246`**. All **eleven** Prisma call sites converted; attribution re-derived by `scripts/tenant-adversarial-check.js`, never edited as a literal: **`36 scoped + 120 enumerated / 818` → `47 + 120 / 818`**, so **651** sites would still return zero rows after a `DATABASE_URL` cutover. **The unchanged denominator is the result:** `resolveSelf` is shared by seven handlers and the scope is opened *inside* the helper — inlining it would have bought `51 / 824`, a coverage ratio improving because the corpus grew (`ADR-057 §D2`). **First converted module holding no owner client at all** — `PrismaService` is no longer injected into `StudentPortalService`, so the constructor is the proof (`ADR-057 §D4`). **The brief under-counted the closure and that is the second result:** `NEXT.md` sized it at three new grants (the root delegates); the truth is **five**, because under RLS a relation a nested `select` *traverses* is a table **read** — `/student/grades` descends `grade -> assessment -> term`. `APP_ROLE_REQUIRED_PRIVILEGES` **25 → 30**, all five verified **held** on the stack database *before* being declared. **Executed on the runtime target, positive control first**, as `app_user` (`rolbypassrls = f`, measured): own GUC → `student 2463 / enrollment 2463 / grade 420 / snapshot 840 / assessment 16 / term 3`; foreign GUC → **0** everywhere **except `term`, which returns 3** — first read as a leak, then **measured as the opposite** (`demo` owns its own three terms; `string_agg(distinct tenant_id)` returns only the tenant asked for), making `term` the **strongest** control in the set: the one table where both tenants hold rows, so the only one showing the policy *selects* rather than merely returning nothing. Owner hole restated in numbers: `pilotage` under the `demo` GUC still sees **420 grades and 2463 students** belonging to `voltaire-demo`. **Named limit:** `attendance_record` and `announcement_receipt` hold **0** rows on this stack, so this probe carries no denial evidence for them |
+| **S-E01-1j** | The **FIFTH** module (`remediation`) enters the tenant scope **WHOLE**, and it is the first that **catches a Prisma error and keeps going** — so scope-abort recovery becomes an architectural rule instead of a habit | 🟢 **shipped — 2026-08-22, ⚠️ NOT auto-merged (P1 · `[tenancy][security][authz][rls][api][backend]`)** | 68 | **Advances `PF-02`** (the *source* half), ships **`ADR-058`**, records **`PF-247`**/**`PF-248`**/**`TOOL-38`**/**`TOOL-39`**. All **twenty-three** Prisma call sites converted; attribution re-derived, never edited: **`47 scoped + 120 enumerated / 818` → `70 + 120 / 818`**, so **628** sites would still return zero rows after the cutover. Denominator held because the shared subject-average reader opens its scope **inside the helper** (`ADR-057 §D2`). **Second module whose constructor is the proof** — `(private readonly scope: TenantScopeService)`, zero `this.prisma` (`ADR-057 §D4`); the **controller** deliberately keeps its owner client, because its guard read and its append-only `auditLog` rows must run *before* the service, outside any scope. **The headline is `ADR-058 §D1`:** `withTenant` opens an **interactive** transaction, so any error **aborts** it and every later statement on that `tx` raises `25P02` — a `catch` may therefore not issue a statement inside the scope whose statement threw; the `try {` opens **before** the scope and the recovery opens a **fresh** one. Three instances (`promotePlan` P2002 → winner re-read, `reopenPlan` P2002 → `'conflict_open_exists'`, `readSubjectAverage` snapshot failure → live fall-through), the third a **correctness** requirement rather than style: one scope spanning both statements would turn a deliberate graceful degrade into a hard `{avg:null}`. `ADR-058` also **qualifies** `ADR-057 §D2` — "nesting is safe if it ever happens" is true on success paths, false when the inner callee swallows errors and continues. **Closure 30 → 37**, relation-deep again: the `where` of `computeLiveSubjectBaseline` traverses the relation *filter* `assessment: { teachingAssignment: { subjectId } }` and `isTeacherOfStudent` traverses `academicYear` and `teacherProfile` — a relation filter is a READ under RLS, exactly like an `include` (second application of `PF-246`). **No `DELETE` anywhere, by decision**: `app_user` holds all four verbs on the five new tables, so a `DELETE` entry would boot green and be **dead**, and a dead entry can never fail the future set-equality check `PF-246`/`PF-219` exist to buy. **Executed on the RUNNING STACK, positive control first**, as `app_user` (`rolbypassrls = f`, measured): each of `alert_instance` / `remediation_plan` / `booking` / `tutor` / `tutor_availability` returns **1** under its own GUC, **1** under the foreign GUC (its *own* row — `string_agg(distinct tenant_id)` returns only the tenant asked for) and **0** with no GUC. Every table in the closure is non-empty, so no probe needs a caveat; preconditions measured *before* declaring anything (20/20 grants, RLS on with exactly 1 policy each, 37/37 pairs held, `DATABASE_URL_APP` present in the running `pilotage_api`). **Named limits:** nothing here proves the running API **image** executes the new code (it predates the diff, and `tenant-scope-check.js` reads a `dist/` built before it — agents do not build), so the live evidence proves the **database** side only; the three fail-soft catches keep swallowing everything, byte-identically (`PF-248`); nothing is claimed for Hostinger, not contacted |
 
 ## `S-E01-1a` — what landed, and the four residuals
 
@@ -1503,6 +1505,39 @@ scope at all — and the closure-coupling ratchet with its inverse guard.
 
 ## Next slice
 
+> **⚠️ POINTER MOVED 2026-08-22 by `S-E01-1j` (run 68). It had ALREADY been stale for three slices** — `S-E01-1g`
+> wrote the block below and `1h`, `1i`, `1j` each pointed through `NEXT.md` instead, so this section named a module
+> that entered the scope four runs ago. The blocks below are kept as dated history, not deleted.
+>
+> **What landed here.** The **fifth** module, `remediation`, converted on **all twenty-three** of its Prisma call
+> sites: `47 scoped + 120 enumerated / 818` → **`70 + 120 / 818`**, `PrismaService` no longer injected, the closure
+> widened **30 → 37**, and **`ADR-058`** shipped — the first converted module that **catches a Prisma error and keeps
+> going**, so the abort-recovery rule (`§D1`) had to be decided rather than improvised.
+>
+> **→ The next slice is `PF-246` / `PF-219` — DERIVE the privilege closure instead of writing it, and take it NOW.**
+> This is a change of order, argued from measurement rather than taste. `APP_ROLE_REQUIRED_PRIVILEGES` is now **37**
+> hand-written pairs across **five** modules; it has been under-counted **once already** (`S-E01-1i`, `PF-246`) and it
+> has just grown by **seven more relation-deep entries** whose reason is a relation *filter* in a `where` — the half a
+> naive matcher is least likely to see. The failure mode is neither a compile error nor a red test: it is a `42501` at
+> request time, on exactly the deployments where the scope **works**, and the list is **global**, so one missing pair
+> refuses the second connection for calendar, lessons, announcements, student-portal **and** remediation at once.
+> `scripts/tenant-adversarial-check.js` already classifies every call site by `(table, privilege)`; compare that set
+> against the declared list for **set equality in both directions** (`ADR-051 §D2`'s shape, and note that the current
+> boot probe is only `declared ⊆ held`). The derivation **must** walk relation filters and nested `select`/`include`
+> targets, or the mechanised check will be *less* complete than the hand list it replaces.
+>
+> **Behind it, in the order to take them.** (1) **`S-E01-1k`** — the next module, and the ranking has changed shape:
+> measured Prisma call sites per file are `analytics.service.ts` 93 · `alerts.service.ts` 33 · `messaging.service.ts`
+> 32 · `guardians.controller.ts` 20 · `exports.service.ts` 19 · `attendance.controller.ts` 18. **`alerts.service.ts`**
+> is the best-shaped candidate: it is the **producer** of the alert rows `remediation` now reads inside a scope, so
+> converting it closes the alert → plan loop on one connection. `analytics.service.ts` stays **deliberately not** the
+> recommendation — 93 sites is three slices, not one, and it is the shared producer four portals read. (2) **`PF-248`**
+> (P1) — narrow the three fail-soft catches, which now also swallow a `refused_unusable` 503 and a `42501`; behaviour
+> was left byte-identical here on purpose. (3) **`PF-247`** — the integration test that makes `ADR-058 §D1` observable
+> instead of lexical. (4) **`PF-224`** (P1, `azp`/`aud` at the API) and **`PF-243`** (P2, arm `R-05` locally),
+> unchanged. `S-E01-1` — the global `DATABASE_URL` flip — still comes after all of it, on **628** unconverted sites.
+
+---
 > **⚠️ POINTER MOVED 2026-08-16 by `S-E01-1g` (this run) — the THIRD module is in the scope, PARTIALLY.**
 >
 > **What landed.** `announcements` converts **five whole handlers** (`unreadCount`, `create`, `update`, `publish`,
@@ -1870,3 +1905,105 @@ probe carries no denial evidence for them; theirs comes from the adversarial sui
 
 **Pointer.** Unchanged in kind: `S-E01-1` (the global `DATABASE_URL` cutover) still needs 651 more call sites. The
 next sized module is the one whose collaborators are already inside the scope set — see `NEXT.md`.
+
+---
+
+## `S-E01-1j` — the FIFTH module, and the first that CATCHES a Prisma error and continues (2026-08-22, run 68)
+
+`RemediationService` is converted on **all twenty-three** of its Prisma call sites. Attribution, re-derived by
+`node scripts/tenant-adversarial-check.js` rather than edited as a literal:
+
+| | scoped | enumerated | corpus | would return zero rows after the cutover |
+|---|---|---|---|---|
+| before (`main`) | 47 | 120 | 818 | 651 |
+| after | **70** | 120 | **818** | **628** |
+
+**The denominator did not move, and that was checked rather than hoped.** 23 `this.prisma.*` sites became 23
+`tx.*` sites; both receivers are already in the classifier's closed set, so the corpus stays at 818. The shared
+subject-average reader opens its scope **inside the helper** (`ADR-057 §D2`): one textual call site, called once
+per open plan. Inlining it at its two call sites would have bought a higher numerator by growing the tree.
+
+**Second module holding no owner client.** `PrismaService` is no longer injected into `RemediationService` — the
+constructor is `(private readonly scope: TenantScopeService)`, so the class cannot reach the owner connection
+whatever a reviewer misses (`ADR-057 §D4`). The **controller** deliberately keeps its own: its guard read of the
+alert and its append-only `auditLog` rows run on the owner connection, **before** the service, outside any scope
+(`portée tardive, fermeture précoce`). "The constructor is the proof" is a statement about the class, not the
+module.
+
+**The new architectural decision, and it is the headline — `ADR-058 §D1`.** This is the first converted module
+that **catches a Prisma error and continues**. `withTenant` opens an *interactive* transaction: any error aborts
+it, and every later statement on that `tx` raises `25P02`. So a `catch` may not issue a statement inside the scope
+whose statement threw. Three instances here, each verifiable by reading the diff — `promotePlan`'s P2002 → winner
+re-read (a fresh scope inside the `catch`), `reopenPlan`'s P2002 → `'conflict_open_exists'` sentinel, and
+`readSubjectAverage`'s snapshot failure → live fall-through. The third is a **correctness** requirement: one scope
+spanning both statements would have turned a deliberate graceful degrade into a hard `{avg:null}`. `ADR-058` also
+**qualifies** `ADR-057 §D2`'s "nesting is safe if it ever happens" — true on success paths, false when the inner
+callee swallows errors and continues.
+
+**No fake-client test can catch it,** and that limit is written rather than glossed: a fake `run` that calls
+`fn(client)` opens no transaction, so nothing can be aborted. The property is ratcheted **lexically** in
+`remediation-scope-ownership.spec.ts` (the `try {` byte index precedes the scope-opening index in all three; no
+scope callback contains a `catch`). The residue is `PF-247`, a review obligation the derived matcher cannot see.
+
+**The closure is relation-deep again — 30 → 37.** Seven new pairs: `alert_instance.SELECT`,
+`remediation_plan.SELECT/INSERT/UPDATE`, `booking.SELECT`, `tutor.SELECT`, `tutor_availability.SELECT`. Nine
+tables were already declared and are **not** duplicated, and eight of the nine are due here for a **relational**
+reason: the `where` of `computeLiveSubjectBaseline` traverses the relation *filter* `assessment: {
+teachingAssignment: { subjectId } }`, and `isTeacherOfStudent` traverses `academicYear` and `teacherProfile`. A
+relation filter is a READ under RLS, exactly like an `include` — the second application of `PF-246`, on `where`
+clauses this time. **No `DELETE` anywhere**: `app_user` holds all four verbs on the five new tables (measured), so
+a `DELETE` entry would boot green and be dead, and a dead entry can never fail the future set-equality check
+`PF-246`/`PF-219` buy. `remediation_plan.SELECT` is **mandatory rather than incidental**: `INSERT … RETURNING`
+needs `SELECT` on the returned columns and `UPDATE … WHERE` needs it on the predicate's columns (`ADR-058 §D5`).
+
+**Evidence executed on the RUNNING STACK, positive control first**, as `app_user`
+(`rolbypassrls = f`, **measured**; `pilotage` is `t`, the owner hole restated):
+
+| GUC | `alert_instance` | `remediation_plan` | `booking` | `tutor` | `tutor_availability` |
+|---|---|---|---|---|---|
+| `voltaire-demo` (own) | 1 | 1 | 1 | 1 | 1 |
+| `demo` (foreign) | 1 | 1 | 1 | 1 | 1 |
+| none | **0** | **0** | **0** | **0** | **0** |
+
+Every table holds **exactly one row per tenant**, and under each GUC `string_agg(distinct tenant_id)` returns
+**only the tenant asked for**. This is the *strongest* control shape available (the `term` case of `S-E01-1i`): it
+shows the policy **selects**, rather than merely returning nothing. **No table in this closure is empty** —
+`tenant` 2, the five above 2 each, `student` 2464, `subject` 16, `grade` 420, `assessment` 16,
+`teaching_assignment` 286, `teacher_profile` 186, `academic_year` 4, `enrollment` 2463,
+`student_subject_snapshot` 840 — so no probe here needs a caveat. Preconditions measured before declaring
+anything: **20/20** grants on the five new tables, RLS on with exactly **1** policy each (`polcmd='*'`, USING +
+WITH CHECK, so INSERT/UPDATE inside the scope are permitted), **37/37** pairs of the widened closure held, and
+`DATABASE_URL_APP` present in the running `pilotage_api` container (so `ADR-056` holds and the scope is genuinely
+enforced here).
+
+**The host's `localhost:5432` is a DECOY, and it would have cost the next run an hour — `TOOL-38`.**
+`pilotage_postgres` publishes **no** host port (`docker port` returns nothing), so the stack database is reachable
+only via `docker exec pilotage_postgres psql -U … -d pilotage`. The host's 5432 is the native Windows service
+`postgresql-x64-15`: 55 tables, but only two migrations applied, no RLS migration, **0 rows in every table**.
+Probing there and concluding "unverifiable" would be wrong, and running `migrate deploy` there to "fix" it is
+forbidden.
+
+**`TOOL-39` — an unclosed scope-opening token inside a DOCBLOCK zeroes the whole file's coverage.** The first
+attribution run after the conversion printed an unchanged `47 / 818`. The cause was a prose line naming the
+scope-opening call with an open parenthesis and no closing one: `scopeCallbackRanges` matches comments too, its
+brace matcher never closed, and the file was counted **fail-closed** at zero. The check *named the file*, so it
+was diagnostic rather than mysterious; closing the parenthesis in the prose restored the true 70.
+
+**G-PORTAL, all four surfaces, named separately.** PARENT: `/remediation/plans` (promote / list / get),
+`/remediation/catalogue`, `/remediation/bookings` (via `loadPlanForBooking` + `loadBookableAvailability` +
+`isTeacherOfStudent`), `plans/:id/close|reopen`, and the progress strip on the dashboard aggregate.
+STUDENT: dashboard block C via `student-portal.service.ts:603` — `/student/*` was already fully scoped, so this
+slice removes the last owner-connection producer that surface calls. TEACHER: `isTeacherOfStudent`, the E2
+teaching wall inlined in this file, is converted, so the teacher-linked-tutor booking branch runs inside a scope.
+ADMIN: `admin/plans/:id/close|reopen` go through the converted `loadPlanForLifecycle` + `closePlan`/`reopenPlan`.
+
+**Named limits.** (1) Nothing here proves the RUNNING API image executes the new code — `pilotage_api`'s image
+predates this diff, and `scripts/tenant-scope-check.js` reads a `dist/` built before it (agents do not build), so
+the live evidence proves the **database** side of the closure, never the new service code. (2) Both dashboard
+consumers wrap `remediationProgress` in `try/catch → []` at `logger.debug`, so a `42501` renders as "no plans" —
+indistinguishable from the correct empty state (`PF-248`, together with the promote-time null-baseline hazard).
+(3) The three fail-soft catches keep swallowing every error, byte-identically to before; narrowing them is a
+separate slice, recorded rather than absorbed. (4) Nothing is claimed for `pilotage.srv861861.hstgr.cloud`, which
+was not contacted.
+
+**Pointer.** `S-E01-1` (the global `DATABASE_URL` cutover) still needs **628** more call sites. See `NEXT.md`.
