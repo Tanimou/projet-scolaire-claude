@@ -31,6 +31,46 @@ function planRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * S-E01-1j — LES TENANTS PASSÉS À `TenantScopeService.run`, dans l'ordre.
+ *
+ * Un faux `run` qui IGNORE son premier paramètre ne prouve rien d'AC-1 : il
+ * rendrait ces vingt-et-un tests verts même si le service ouvrait ses portées
+ * sur `undefined`. On enregistre donc l'identifiant, et deux cas ci-dessous
+ * l'assertent — c'est la moitié « la portée porte le BON tenant » que le double
+ * doit rendre mesurable.
+ */
+const scopeTenants: string[] = [];
+
+beforeEach(() => {
+  scopeTenants.length = 0;
+});
+
+/**
+ * S-E01-1j — L'ADAPTATION DE CONSTRUCTEUR, et rien d'autre.
+ *
+ * `RemediationService` n'injecte plus `PrismaService` : ses vingt-trois
+ * instructions passent par `TenantScopeService.run(tenantId, tx => …)`. Le
+ * double ci-dessous rend le client de test EN TANT QUE `tx`, donc chaque
+ * assertion existante — `remediationPlan.create` appelé ou non, les `where`
+ * observés, les formes de DTO — reste vraie MOT POUR MOT. Aucune assertion
+ * n'est retirée ni affaiblie : ce serait un re-cadrage, pas une adaptation.
+ *
+ * CE QUE CE DOUBLE NE PEUT PAS PROUVER, et il faut le dire ici : il n'ouvre
+ * AUCUNE transaction, donc il ne peut pas être AVORTÉ. La règle ADR-058 §D1
+ * (« une erreur rattrapée sort de sa portée, et la récupération en ouvre une
+ * FRAÎCHE ») est invisible d'ici — elle est prouvée LEXICALEMENT dans
+ * `remediation-scope-ownership.spec.ts` (PF-247).
+ */
+function svc(prisma: unknown): RemediationService {
+  return new RemediationService({
+    run: (tenantId: string, fn: (tx: unknown) => unknown) => {
+      scopeTenants.push(tenantId);
+      return fn(prisma);
+    },
+  } as never);
+}
+
 function makePrisma(overrides: Record<string, unknown> = {}) {
   return {
     alertInstance: {
@@ -68,7 +108,7 @@ describe('RemediationService.promotePlan — idempotency + baseline', () => {
         create: jest.fn(),
       },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const res = await service.promotePlan({
       tenantId: TENANT,
@@ -88,7 +128,7 @@ describe('RemediationService.promotePlan — idempotency + baseline', () => {
 
   it('creates a fresh plan capturing the snapshot baseline when none is open', async () => {
     const prisma = makePrisma();
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const res = await service.promotePlan({
       tenantId: TENANT,
@@ -125,7 +165,7 @@ describe('RemediationService.promotePlan — idempotency + baseline', () => {
         ),
       },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const res = await service.promotePlan({
       tenantId: TENANT,
@@ -156,7 +196,7 @@ describe('RemediationService.promotePlan — idempotency + baseline', () => {
           ),
       },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const res = await service.promotePlan({
       tenantId: TENANT,
@@ -175,7 +215,7 @@ describe('RemediationService.promotePlan — idempotency + baseline', () => {
     const prisma = makePrisma({
       alertInstance: { findFirst: jest.fn().mockResolvedValue(null) },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     await expect(
       service.promotePlan({
         tenantId: TENANT,
@@ -194,7 +234,7 @@ describe('RemediationService.promotePlan — idempotency + baseline', () => {
           .mockResolvedValue({ id: ALERT, studentId: STUDENT, subjectId: null, schoolId: SCHOOL }),
       },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     await expect(
       service.promotePlan({
         tenantId: TENANT,
@@ -228,7 +268,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
 
   it('scopes open plans to (tenant, student, status:open)', async () => {
     const prisma = progressPrisma();
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     const where = (prisma.remediationPlan as { findMany: jest.Mock }).findMany.mock.calls[0][0]
       .where;
@@ -238,7 +278,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
   it('snapshot hit: trendDelta = current − baseline, improved at/above the threshold', async () => {
     // baseline 8.5 (planRow), current snapshot 11 → delta +2.5 ≥ 1.5 → improved.
     const prisma = progressPrisma();
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     expect(p?.baselineAvg).toBe(8.5);
     expect(p?.currentAvg).toBe(11);
@@ -253,7 +293,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
         findFirst: jest.fn().mockResolvedValue({ average: new Prisma.Decimal(9), trendDelta: null }),
       },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     expect(p?.trendDelta).toBe(0.5);
     expect(p?.improved).toBe(false);
@@ -269,7 +309,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
         ]),
       },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     // live avg (10+12)/2 = 11; delta vs 8.5 baseline = +2.5.
     expect(p?.currentAvg).toBe(11);
@@ -283,7 +323,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
         findMany: jest.fn().mockResolvedValue([planRow({ baselineAvg: null })]),
       },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     expect(p?.baselineAvg).toBeNull();
     expect(p?.currentAvg).toBe(11); // current still read
@@ -296,7 +336,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
       studentSubjectSnapshot: { findFirst: jest.fn().mockResolvedValue(null) },
       grade: { findMany: jest.fn().mockResolvedValue([]) },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     expect(p?.currentAvg).toBeNull();
     expect(p?.trendDelta).toBeNull();
@@ -312,7 +352,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
       { planId: 'plan-1', status: 'completed', sessionAt: past },
     ]);
     const prisma = progressPrisma({ booking: { findMany: bookingFindMany } });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     expect(bookingFindMany).toHaveBeenCalledTimes(1);
     expect(p?.sessionsPlanned).toBe(2); // confirmed + requested
@@ -322,7 +362,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
 
   it('empty booking tables → 0/0/null, trend still renders', async () => {
     const prisma = progressPrisma();
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const [p] = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     expect(p?.sessionsPlanned).toBe(0);
     expect(p?.sessionsDone).toBe(0);
@@ -334,7 +374,7 @@ describe('RemediationService.remediationProgress — S3 progress strip payload',
     const prisma = progressPrisma({
       remediationPlan: { findMany: jest.fn().mockResolvedValue([]) },
     });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const res = await service.remediationProgress({ tenantId: TENANT, studentId: STUDENT });
     expect(res).toEqual([]);
     expect((prisma.booking as { findMany: jest.Mock }).findMany).not.toHaveBeenCalled();
@@ -366,7 +406,7 @@ describe('RemediationService.catalogue — tenant + published + subject filter',
       },
     ]);
     const prisma = makePrisma({ tutor: { findMany } });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const res = await service.catalogue({ tenantId: TENANT, schoolId: SCHOOL, subjectId: SUBJECT });
 
@@ -387,7 +427,7 @@ describe('RemediationService.closePlan — S6 from-status-guarded completion', (
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const findFirst = jest.fn().mockResolvedValue(planRow({ status: 'met', closedAt: new Date() }));
     const prisma = makePrisma({ remediationPlan: { updateMany, findFirst } });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const res = await service.closePlan({
       tenantId: TENANT,
@@ -416,7 +456,7 @@ describe('RemediationService.closePlan — S6 from-status-guarded completion', (
       .mockResolvedValueOnce({ count: 0 });
     const findFirst = jest.fn().mockResolvedValue(planRow({ status: 'met' }));
     const prisma = makePrisma({ remediationPlan: { updateMany, findFirst } });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const first = await service.closePlan({ tenantId: TENANT, planId: 'plan-1', resolution: 'met', userProfileId: PARENT });
     const second = await service.closePlan({ tenantId: TENANT, planId: 'plan-1', resolution: 'closed', userProfileId: 'other' });
@@ -431,7 +471,7 @@ describe('RemediationService.reopenPlan — S6 reversible + unique-safe', () => 
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const findFirst = jest.fn().mockResolvedValue(planRow({ status: 'open' }));
     const prisma = makePrisma({ remediationPlan: { updateMany, findFirst } });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
 
     const res = await service.reopenPlan({ tenantId: TENANT, planId: 'plan-1', userProfileId: PARENT });
 
@@ -444,7 +484,7 @@ describe('RemediationService.reopenPlan — S6 reversible + unique-safe', () => 
   it('reopening an already-open plan matches 0 rows → null (controller → kind 409)', async () => {
     const updateMany = jest.fn().mockResolvedValue({ count: 0 });
     const prisma = makePrisma({ remediationPlan: { updateMany, findFirst: jest.fn() } });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const res = await service.reopenPlan({ tenantId: TENANT, planId: 'plan-1', userProfileId: PARENT });
     expect(res).toBeNull();
   });
@@ -454,8 +494,46 @@ describe('RemediationService.reopenPlan — S6 reversible + unique-safe', () => 
       new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'x' }),
     );
     const prisma = makePrisma({ remediationPlan: { updateMany, findFirst: jest.fn() } });
-    const service = new RemediationService(prisma as never);
+    const service = svc(prisma);
     const res = await service.reopenPlan({ tenantId: TENANT, planId: 'plan-1', userProfileId: PARENT });
     expect(res).toBe('conflict_open_exists');
+  });
+});
+
+/**
+ * S-E01-1j — LA PORTÉE PORTE LE TENANT DÉRIVÉ DU SERVEUR, sur chaque méthode.
+ *
+ * Le double `svc()` enregistre l'identifiant passé à `run`. Sans ces deux cas,
+ * un service qui ouvrirait ses portées sur `undefined`, sur `alert.tenantId`
+ * (la donnée que la portée est censée filtrer) ou sur une constante rendrait
+ * les vingt-et-un autres tests verts sans rien prouver d'AC-1.
+ */
+describe('S-E01-1j — chaque portée est ouverte sur args.tenantId', () => {
+  it('promotePlan ouvre ses portées (alerte, idempotence, snapshot, création) sur le MÊME tenant', async () => {
+    const prisma = makePrisma();
+    const service = svc(prisma);
+
+    await service.promotePlan({
+      tenantId: TENANT,
+      schoolId: SCHOOL,
+      alertId: ALERT,
+      userProfileId: PARENT,
+    });
+
+    // NON VACUITÉ d'abord : une liste vide passerait `every` sans rien dire.
+    expect(scopeTenants.length).toBeGreaterThanOrEqual(4);
+    expect([...new Set(scopeTenants)]).toEqual([TENANT]);
+  });
+
+  it('les lectures de plan ouvrent aussi leur portée sur args.tenantId', async () => {
+    const prisma = makePrisma();
+    const service = svc(prisma);
+
+    await service.getPlan({ tenantId: TENANT, planId: 'plan-1' });
+    await service.listPlansForStudent({ tenantId: TENANT, studentId: STUDENT });
+    await service.loadPlanForLifecycle({ tenantId: TENANT, planId: 'plan-1' });
+    await service.loadPlanForBooking({ tenantId: TENANT, planId: 'plan-1' });
+
+    expect(scopeTenants).toEqual([TENANT, TENANT, TENANT, TENANT]);
   });
 });

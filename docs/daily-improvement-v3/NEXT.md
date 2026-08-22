@@ -1,5 +1,106 @@
 # Next story
 
+# NEXT — written by run 68 (`S-E01-1j`), 2026-08-22 — **this section supersedes every section below**
+
+## ✅ The fifth module, and the first that catches a Prisma error and keeps going
+
+`RemediationService` is converted on **all twenty-three** of its Prisma call sites. Re-derived by
+`node scripts/tenant-adversarial-check.js`, never edited as a literal:
+
+| | scoped | enumerated | corpus | zero rows after the cutover |
+|---|---|---|---|---|
+| `main` | 47 | 120 | 818 | 651 |
+| **here** | **70** | 120 | **818** | **628** |
+
+The denominator held at 818 because the shared subject-average reader opens its scope **inside the
+helper** (`ADR-057 §D2`) — one textual call site, called once per open plan. `PrismaService` is no
+longer injected: **second** module whose constructor is the proof (`ADR-057 §D4`). The **controller**
+keeps its owner client on purpose — its guard read and its `auditLog` rows must run *before* the
+service, outside any scope.
+
+## ⚠️ THE NEW RULE, AND IT IS NOT DISCOVERABLE BY ANY TEST — `ADR-058 §D1`
+
+`withTenant` opens an **interactive** transaction. Any error **aborts** it; every later statement on
+that `tx` raises `25P02`. So:
+
+> a `catch` may not issue a Prisma statement inside the scope whose statement threw — the `try {`
+> opens **before** the scope, the `catch` closes **after** it, and the recovery opens a **fresh** one.
+
+Three instances in this one file: `promotePlan`'s P2002 → winner re-read, `reopenPlan`'s P2002 →
+`'conflict_open_exists'`, and `readSubjectAverage`'s snapshot failure → live fall-through. The third
+is a **correctness** requirement, not style: one scope spanning both would turn a deliberate graceful
+degrade into a hard `{avg:null}`.
+
+**`ADR-058` also qualifies `ADR-057 §D2`.** "Nesting is safe if it ever happens" is true on *success*
+paths; it is false when the inner callee **swallows** errors and continues, because its own `run` is a
+no-op inside the caller's frame and its `try/catch` then isolates nothing.
+
+**A fake client cannot prove it** — a fake `run` that calls `fn(client)` has no transaction to abort.
+The ratchet is therefore **lexical** (`remediation-scope-ownership.spec.ts`), and the residue is
+`PF-247`: a review obligation the derived matcher cannot see.
+
+## 🔬 Executed on the runtime target, positive control first
+
+As `app_user` (`rolbypassrls = f`, **measured**), inside `pilotage_postgres`:
+
+| GUC | `alert_instance` | `remediation_plan` | `booking` | `tutor` | `tutor_availability` |
+|---|---|---|---|---|---|
+| `voltaire-demo` (own) | 1 | 1 | 1 | 1 | 1 |
+| `demo` (foreign) | 1 | 1 | 1 | 1 | 1 |
+| none | **0** | **0** | **0** | **0** | **0** |
+
+Every one of the five holds **exactly one row per tenant**, and `string_agg(distinct tenant_id)`
+returns only the tenant asked for under each GUC — the **strongest** control shape available (the
+`term` case of `S-E01-1i`): the policy *selects*, it does not merely return nothing. **No table in
+this closure is empty**, so no probe needs a caveat. Closure widened **30 → 37**, all 37 pairs
+verified **held** before being declared.
+
+**Two traps recorded so the next run does not pay for them:**
+
+- **`TOOL-38` — the host's `localhost:5432` is a DECOY.** `pilotage_postgres` publishes no host port;
+  the stack DB is reachable **only** through `docker exec`. The host's 5432 is the native Windows
+  service: 55 tables, two migrations, no RLS, **0 rows everywhere**. Measuring there reads exactly
+  like "unverifiable", and it is not.
+- **`TOOL-39` — an unclosed scope-opening token in a DOCBLOCK zeroes a whole file's coverage.** The
+  first attribution run after the conversion printed an unchanged `47 / 818`; the cause was one line
+  of *prose* naming `this.scope.run` with an open parenthesis and no closing one. The range matcher
+  reads comments too, never closed, and the file counted **fail-closed** at zero. The check named the
+  file, so it is diagnostic — but "the counter did not move" reads as "the conversion did not land".
+
+## ▶ Recommended next story
+
+1. **`PF-246` / `PF-219` (P2) — derive the privilege closure instead of writing it, and do it NOW.**
+   Retired from this list is the old item 1 (`S-E01-1j`), landed here. This becomes item 1 because
+   **five** modules of hand-written pairs now exist, the list has been under-counted once
+   (`S-E01-1i`) and has now grown by seven more relation-deep entries. `tenant-adversarial-check.js`
+   already classifies every call site by `(table, privilege)`; compare that set against the declared
+   list for **set equality in both directions** (`ADR-051 §D2`'s shape). An unlisted pair fails; a
+   dead entry fails. Note the half a derived matcher **cannot** see: relation filters in `where` and
+   nested `select`/`include` targets — the derivation must walk those or the mechanised check will be
+   *less* complete than the hand list it replaces.
+2. **`S-E01-1k` — the next module, and the ranking has changed shape.** Measured Prisma call sites
+   per file (services and controllers, specs excluded): `analytics.service.ts` 93 ·
+   `alerts.service.ts` 33 · `messaging.service.ts` 32 · `guardians.controller.ts` 20 ·
+   `exports.service.ts` 19 · `attendance.controller.ts` 18. `alerts.service.ts` is the best-shaped
+   candidate left — it is the **producer of the alert rows** `remediation` now reads inside a scope,
+   so converting it closes the alert → plan loop on one connection. `analytics.service.ts` remains
+   **deliberately not** the recommendation: 93 sites is three slices, not one, and it is the shared
+   producer four portals read.
+3. **`PF-248` (P1, NEW) — the fail-soft catches now swallow scope refusals too.**
+   `readSubjectAverage`, `computeLiveSubjectBaseline` and `isTeacherOfStudent` catch *everything*.
+   After the conversion the likeliest new error is a 503 `refused_unusable` or a `42501`, and the
+   consequences are asymmetric: `promotePlan` **persists** a null `baseline_avg` **forever** (the
+   strip reads "en attente" and no later run repairs it), and the E2 teaching wall answers "does not
+   teach this student" — an infrastructure fault rendered as an authorization verdict. Behaviour was
+   left **byte-identical** this run on purpose (the non-regression AC); narrowing the three catches
+   is its own slice.
+4. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** Unchanged and still open: `jwt.strategy.ts`
+   `validate()` checks `sub` and nothing else.
+5. **`PF-243` (P2) — arm the `R-05` machinery locally.** `GET /version` still says
+   `buildSha: "unknown"`, `verdict: "unverified"`.
+
+
+
 # NEXT — written by run 67 (`S-E01-1i`), 2026-08-22 — **this section supersedes every section below**
 
 ## ✅ The fourth module, and the first time the numerator moved without the denominator

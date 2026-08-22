@@ -59,14 +59,20 @@ import { StudentAccessService } from '../students/student-access.service';
  *     non converti. `/student/upcoming` n'a donc AUCUN site d'appel Prisma propre
  *     en dehors de `resolveSelf` : c'est une conversion à un seul site, et le
  *     dire évite de lire son compte comme un oubli.
- *  3. **`remediation.remediationProgress`** — même forme, bloc C du tableau de
- *     bord.
+ *  3. **`remediation.remediationProgress`** — bloc C du tableau de bord.
+ *     S-E01-1j : ce producteur est désormais CONVERTI (ses 23 sites ouvrent
+ *     leurs propres portées), donc il ne compte plus NON COUVERT. Il reste
+ *     appelé d'ici DEPUIS L'EXTÉRIEUR de toute portée, et c'est la forme
+ *     correcte : une portée extérieure ferait tenir ses N lectures par plan
+ *     dans UNE transaction interactive et rendrait no-op la portée interne de
+ *     son lecteur partagé (ADR-058 §D2). Ne pas l'envelopper.
  *
- * CONSÉQUENCE ÉCRITE PLUTÔT QUE SOUS-ENTENDUE : les lectures que ces trois-là
- * font restent sur la connexion du propriétaire et comptent NON COUVERTES dans
- * l'attribution. Elles ne sont PAS ajoutées à `ENUMERATED_OUTSIDE_SCOPE` : leur
- * seule raison disponible serait « pas encore converti », et l'énumération est
- * une liste de RAISONS, pas de chemins (la règle posée par S-E01-1e).
+ * CONSÉQUENCE ÉCRITE PLUTÔT QUE SOUS-ENTENDUE : les lectures que les DEUX
+ * PREMIERS font restent sur la connexion du propriétaire et comptent NON
+ * COUVERTES dans l'attribution. Elles ne sont PAS ajoutées à
+ * `ENUMERATED_OUTSIDE_SCOPE` : leur seule raison disponible serait « pas encore
+ * converti », et l'énumération est une liste de RAISONS, pas de chemins (la
+ * règle posée par S-E01-1e).
  *
  * ┌──────────────────────────────────────────────────────────────────────────┐
  * │ POURQUOI DEUX PORTÉES PAR HANDLER PLUTÔT QU'UNE                         │
