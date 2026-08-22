@@ -1455,10 +1455,50 @@ them are excluded — an entry no `tx` receiver exercises certifies a closure no
 `announcements-scope-ownership.spec.ts` grows by **483 lines** (existing assertions untouched) carrying the frame
 proof — including its **negative** half, which is the half that proves something: `ensureUser`/`forUser` see
 `undefined` (`PF-199`), `assertTeacherScope` refuses **before** any scope opens, and `previewRecipients` opens **no**
-scope at all — and the closure-coupling ratchet with its inverse guard. **Per `AC-8`, none of those assertions has
-been executed in this role:** `GUARDRAILS §4` reserves jest for the test-architect, and they stay unexecuted until
-`pnpm --filter @pilotage/api exec jest src/modules/announcements` runs — never under a path containing a
-dot-directory, where jest finds zero tests.
+scope at all — and the closure-coupling ratchet with its inverse guard.
+
+> **⚠️ THE PARAGRAPH THAT USED TO SIT HERE SAID THOSE ASSERTIONS HAD NEVER BEEN RUN. THEY HAVE NOW BEEN RUN,
+> 2026-08-22 — and the first execution found a RED that the writing role could not have seen.**
+>
+> The 2026-08-16 commit was left as `wip` on a local branch, **never pushed, never gated, never executed**.
+> This run salvaged it from `89b77a2` — no rebase was needed, its merge-base *is* `a022301`, still the tip —
+> and ran what the writing role is forbidden to run (`GUARDRAILS §4` reserves jest for the test-architect):
+>
+> ```
+> pnpm --filter @pilotage/api exec jest src/modules/announcements
+> → 1 failed, 57 passed / 58        (before the repair)
+> → 2 suites, 58 passed / 58        (after)
+> ```
+>
+> **The single failure was `DNC-06 — la source dit que la connexion est celle du PROPRIÉTAIRE`, and it was a
+> TRUE red, not a flake.** The slice rewrote `announcements.service.ts`’s `DNC-06` docblock to stay true of the
+> partially-converted module, and in reflowing it the phrase `FORCE ROW LEVEL SECURITY` ended up **wrapped
+> across two comment lines** (`faute de `FORCE` / `ROW LEVEL SECURITY``). The assertion is `toContain`, so a
+> line break inside the phrase deletes it as far as the ratchet is concerned. **Repaired by reflowing the
+> docblock so the phrase is contiguous again — the assertion was NOT relaxed by one character**, which is the
+> whole point of a ratchet that pins a sentence rather than a symbol. `announcements.controller.ts` was
+> byte-unaffected and already carried the phrase intact at `:190` and `:801`.
+>
+> **Recorded as `PF-237` (P3):** a prose ratchet asserting a multi-word phrase with `toContain` is silently
+> broken by ordinary comment reflow and nothing warns the author. Making the matcher whitespace-insensitive on
+> the **assertion** side is cheap — but that is a change to a ratchet, and it belongs in its own diff, not in
+> the diff whose red it just caught.
+>
+> **Mutation-tested rather than trusted** — a frame proof can pass vacuously. Reverting ONE converted site,
+> `tx.announcementReceipt.count` → `this.prisma.announcementReceipt.count` inside `unreadCount`’s callback,
+> turns the suite **RED (1 failed / 58)**. The file was restored and its **sha256 verified identical**
+> (`7f119074fb2906b6…9418eb`) before anything was staged.
+>
+> **The counter was re-derived, not inherited.** `node scripts/tenant-adversarial-check.js` ran on `main` at
+> the start of this run — **`24 scoped + 120 enumerated / 816`** — and again on this tree —
+> **`36 scoped + 120 enumerated / 816`**. `+12`, matching the slice’s claim exactly, measured six days later by
+> a different role. Verb-aware residual unchanged at `165 satisfied, 2 not`; denominator unmoved at 816.
+>
+> **The boot-probe closure was checked against the real grant matrix, not against the story.** All six new rows
+> land inside the closed sets the script printed for `app_user`: `announcement=DELETE|INSERT|SELECT|UPDATE`,
+> `announcement_receipt=INSERT|SELECT|UPDATE` (**no DELETE — and none was declared**), `student` carrying
+> `SELECT`. No over-declaration, so `appRoleVerdict` cannot 503 `calendar` and `lessons` on this diff
+> (`ADR-054 §D3`).
 
 ## Next slice
 

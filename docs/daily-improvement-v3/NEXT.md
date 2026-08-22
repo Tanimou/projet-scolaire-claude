@@ -1,5 +1,82 @@
 # Next story
 
+# NEXT — written by run 64 (`S-E01-1g`, **salvaged and executed**), 2026-08-22 — **this section supersedes every section below**
+
+## 🛑 THE SLICE ALREADY EXISTED. IT HAD NEVER BEEN PUSHED, GATED OR RUN.
+
+The first thing this run found was not a story — it was **1 869 lines of finished work sitting on a local
+branch that `origin` had never heard of** (`89b77a2`, committed 2026-08-16 as `wip`, merge-base `a022301`,
+i.e. still the tip six days later). `git log origin/main..main` was **empty**, which is exactly why the usual
+check does not catch this shape: the work was not on `main`, it was on an unpushed `ci/` branch.
+
+**Read the branch list, not only `origin/main..main`.** `git branch --list 'ci/*'` showed five stale branches;
+one of them was a complete, typechecked, ADR-bearing slice.
+
+## ✅ `PF-232` is CLOSED on its conversion half — and this run is the one that *proved* it
+
+`announcements` is the **third** module in the tenant scope, partially and by design: five whole handlers
+(`unreadCount`, `create`, `update`, `publish`, `markRead`), twelve call sites rebound to `tx`.
+
+**Independently re-derived, not inherited** — the script was run on `main` at Step 1 and on the tree at Step 5:
+
+```
+main (a022301)   24 scoped + 120 enumerated / 816
+this tree        36 scoped + 120 enumerated / 816     +12 = exactly the sites converted
+```
+
+No `owner-inside-scope` residue (the `PF-217` trap), `enumerated` unmoved at 120, denominator unmoved at 816,
+verb-aware residual unchanged at `165 satisfied, 2 not`. **`PF-02` half (a) ADVANCES. It does NOT close.**
+
+## 🛑 THE 483-LINE FRAME PROOF HAD NEVER BEEN EXECUTED, AND ITS FIRST RUN WAS RED
+
+`GUARDRAILS §4` reserves jest for the test-architect, so the writing role *could not* have run it — and then
+the run ended without one. First execution: **`1 failed / 58`**.
+
+**The red was TRUE, and it was about the diff's own prose.** `S-E01-1g` rewrote `announcements.service.ts`'s
+`DNC-06` docblock to stay honest about a *partially* converted module — a strictly better docblock — and the
+reflow put a line break inside `` `FORCE ROW LEVEL SECURITY` ``. `toContain` stopped seeing a phrase the file
+still says. **Repaired by reflowing the comment; the assertion was not relaxed by one character** — the same
+ruling `S-E01-1f` made at the `${}` ratchet boundary. Recorded as **`PF-237` (P3)**, because the *other* branch
+is the dangerous one: the next author meets this red on a docblock they just improved, reads it as pedantry,
+and widens the matcher.
+
+Then **`58 / 58` green**, and **mutation-tested rather than trusted**: reverting ONE converted site
+(`tx.announcementReceipt.count` → `this.prisma.…` inside `unreadCount`) turns the suite RED; the file was
+restored and its **sha256 verified identical**.
+
+## 🔭 The boot-probe closure was checked against the GRANT MATRIX, not against the story
+
+`ADR-054 §D3` says an **over**-declared row 503s `calendar` and `lessons` too, because `appRoleVerdict` walks
+the list globally. So the six new rows were checked against what `tenant-adversarial-check.js` prints for
+`app_user`: `announcement=DELETE|INSERT|SELECT|UPDATE`, `announcement_receipt=INSERT|SELECT|UPDATE`
+(**no DELETE — and none was declared**), `student` carrying `SELECT`. All six inside the closed sets.
+
+## 🧹 The archive sweep the ledger kept deferring was done
+
+`OPEN.md` said *"move its row out of this file"* and carried **five** rows marked `closed`, four of them
+annotated *"archive on the next sweep"*. `PF-18`, `PF-208`, `PF-228` and `PF-232` moved to `CLOSED-L0.md`;
+`PF-199` was **deleted as a duplicate** — it was already in `CLOSED-L0.md`, so it lived in two files, which the
+partition's own header forbids. `OPEN.md` now contains zero closed rows.
+
+## ▶ Recommended next story
+
+1. **`PF-230` (P2) — the RETROACTIVE half of `PF-208`.** `publishInternal` still recomputes from the **stored**
+   scope ids and never re-enters the probe. After `ADR-053 §D4` that yields an **empty** recipient set rather
+   than a leak, but **nothing cleans the dark rows already written**. Needs a census first — a blind
+   `UPDATE … SET user_profile_id = NULL` is data loss dressed as a fix. Triggers `G-MIGRATION`.
+2. **`PF-235` (P2) — the `AnnouncementRecipientsService` seam.** It is what unblocks `previewRecipients` and
+   `publishInternal`, i.e. the rest of this module. `ADR-054 §D2` is the recorded **refusal**, not the fix:
+   threading a `tx` would compile, move the counter by **zero**, and add five tables to a globally probed
+   closure. The fix is a seam, not a parameter.
+3. **`PF-236` / `PF-234` (P2) — collapse the ownership dispatch before a fifth copy exists.** The four copies
+   used to be identical; `create`'s now takes `tx` while `previewRecipients`' keeps `this.prisma`, so **two
+   copies in the same file differ in the one property the counter classifies on**.
+4. **`PF-219` (P2) — derive the boot-probe closure once, corpus-wide.** Three modules have now been extended by
+   hand, and the **over**-declaration half of the rule is finally written down (`ADR-054 §D3`).
+5. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** Still the finding that makes the whole `PF-18` line mean
+   something: both sides are *observably* distinguishable and neither is *refused* anywhere.
+
+
 # NEXT — written by run 63 (`S-E01-1f`), 2026-08-15 — **this section supersedes every section below**
 
 ## ✅ `PF-208` is closed for `create` and `preview` — and the ledger's description of it was WRONG

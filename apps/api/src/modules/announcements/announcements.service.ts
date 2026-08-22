@@ -53,9 +53,10 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
  * EXCLUS par mécanisme nommé (ADR-054 §D1–§D2).
  *
  * Conséquence inchangée : toutes ces requêtes s'exécutent sur la connexion du
- * PROPRIÉTAIRE des tables, qui échappe à ses propres policies faute de `FORCE
- * ROW LEVEL SECURITY`. Le prédicat `tenantId` explicite fait donc TOUT le
- * travail ici ; RLS ne le double pas. Ne pas écrire « isolé » ni « converti ».
+ * PROPRIÉTAIRE des tables, qui échappe à ses propres policies faute de
+ * `FORCE ROW LEVEL SECURITY`. Le prédicat `tenantId` explicite fait donc TOUT
+ * le travail ici ; RLS ne le double pas. Ne pas écrire « isolé » ni
+ * « converti ».
  */
 @Injectable()
 export class AnnouncementRecipientsService {
