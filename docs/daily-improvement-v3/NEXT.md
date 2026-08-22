@@ -48,6 +48,53 @@ is a real cost of shipping this slice before the collapse, and it raises the pri
 3. **The school-less tenant now gets a 404** carrying the English string `No school for tenant`, rendered verbatim in
    the French admin banner while every other refusal on this handler is French UI copy.
 
+## 🛑 THE PANEL BLOCKED THE MERGE, AND THE OBJECTION WAS RIGHT — read this before trusting the suite
+
+*Written by the routine at the land pass, after the sections above.*
+
+The escalation panel returned **CONCERNS — conditional GO, do not auto-merge** on a slice that was green. Its
+objection was not about a leak; it was about the suite: **every id the suite accepted came from a constant the suite
+itself declared**, so it proved the PUT accepts ids *the test invented*, never ids the **sibling GET emits**. A second
+hand-kept list — the defect class this repo re-hits most.
+
+It mattered because it sat on the failure mode this diff **introduces**, not the one it closes:
+
+| Surface | Predicate on its axes |
+|---|---|
+| `GET .../coefficients/matrix` | `{ schoolId }`, and `{ schoolId, active: true }` for subjects |
+| `PUT .../coefficients/matrix` | `{ id: { in }, tenantId, schoolId }` |
+
+`subject.tenant_id` and `grade_level.tenant_id` are denormalised beside `school_id` with **nothing linking them**, so
+a drifted row is **rendered by the GET and refused by the PUT** — all-or-nothing, on the administrator's real Save
+button. `ADR-055 §D3` named this in prose; nothing measured it, and `forTenant` is mocked to a fixed school
+everywhere else, so the suite **structurally could not** see it.
+
+**Discharged at the land pass, not carried.** `AC-14` plus three cases derive the PUT's entries from the GET's own
+response, assert both surfaces resolve the school through the **same** `forTenant(tenantId)` call, and pin the
+divergence as **`PF-241`**. **Mutation-proven:** drifting ONE `subject.tenantId` away from its school turns the
+round-trip case RED with the exact production symptom « Le périmètre sélectionné est introuvable (subjectId) » and
+fails **9 of 20**; restored, sha256 identical, **20/20** green. Suite total **69 → 72**.
+
+**The lesson worth carrying:** a green suite whose fixtures it wrote itself proves the code agrees with the test
+author. Deriving the input from the **sibling surface** is what makes it prove the two surfaces agree with each other.
+
+## 🔧 THE GATE'S FIRST FAIL WAS `TOOL-36`, AND IT WAS PROVED, NOT PRESUMED
+
+`GATE: FAIL (1 stage)` on run 1 — `test:api`, 2 NEW failures, both `schema-drift-gate.spec.ts` (`AC-4`, `AC-P16`).
+This diff touches **zero** drift files, so the pair was isolated **in both directions on this tree**:
+
+```
+pilotage_postgres UP    →  jest -t "AC-P16"                1 failed
+pilotage_postgres DOWN  →  jest -t "AC-P16"                1 passed
+pilotage_postgres DOWN  →  whole schema-drift-gate suite   135 passed / 135
+run 2, committed tree, postgres DOWN  →  GATE: PASS (fast), test:api ✓ (229s)
+```
+
+This **reproduces run 64's ruling independently**: the variable is the **container**, never the clock, so `TOOL-31`'s
+premise stays falsified and the cause stays `TOOL-36`. **Do not re-diagnose this pair a third time** — measure the
+container first, in one command, and move on. Stack left healthy (12 containers, postgres restarted).
+
+
 ## ▶ Recommended next story
 
 1. **`S-E05-2b` (P1) — the `realmRole` invite channel.** Unchanged as the epic first pick: it is the only **live**
