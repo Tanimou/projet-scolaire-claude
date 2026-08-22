@@ -43,6 +43,7 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { distinctScopeIdPlan, unknownScopeRef } from '../../shared/prisma/scope-fk';
 
 import { SchoolContextService } from './school-context.service';
 
@@ -74,6 +75,18 @@ class BulkCoefficientDto {
   @Type(() => CoefficientEntry)
   entries!: CoefficientEntry[];
 }
+
+/**
+ * S-E05-3 / ADR-055 §D4 — les champs de portée de la matrice, DÉCLARÉS UNE FOIS
+ * et dans l'ordre où les sondes les prouvent.
+ *
+ * L'ordre est significatif : sur un corps qui viole les deux, c'est le PREMIER
+ * champ de ce tuple qui est nommé dans le refus. Le nom vient toujours du plan
+ * rendu par `distinctScopeIdPlan`, jamais d'un littéral réécrit au point de
+ * refus — deux listes tenues à la main qui divergent en silence est le défaut
+ * répété de ce dépôt.
+ */
+const COEFFICIENT_SCOPE_FIELDS = ['gradeLevelId', 'subjectId'] as const;
 
 @ApiTags('school-structure')
 @ApiBearerAuth()
@@ -215,6 +228,60 @@ export class SubjectsController {
    * Les deux valeurs sont extraites AVANT `$transaction` — assainies hors de la
    * transaction, comme au site calendrier, pour la raison de S-E06-6 : un cast
    * `inet` raté ne doit pas annuler l'enregistrement qu'il trace.
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * S-E05-3 / PF-10 / ADR-055 — LA MATRICE N'ACCEPTE PLUS D'IDENTIFIANT ÉTRANGER
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * `SubjectCoefficient` est unique sur `(gradeLevelId, subjectId)` — une clé
+   * qui ne porte AUCUNE colonne de tenant. Un appelant du tenant A dont le corps
+   * nommait le couple du tenant B RÉÉCRIVAIT donc la ligne de B (branche
+   * `update`), ou en créait une estampillée `tenantId: A` dont les deux FK
+   * pointent chez B (branche `create` : une ligne dont la colonne de tenant
+   * MENT sur son contenu, la forme de PF-208). Dans les deux cas cela re-pondère
+   * la moyenne de chaque élève du tenant victime.
+   *
+   * Le correctif prouve la PROPRIÉTÉ des deux FK avant toute écriture, DANS la
+   * même transaction et sur `tx` :
+   *
+   *  - deux sondes seulement, une par modèle, sur l'ensemble DISTINCT des ids
+   *    (ADR-055 §D1). Une boucle par entrée émettrait soixante `findFirst` pour
+   *    trente lignes — un nombre d'instructions borné par la REQUÊTE, ce que
+   *    l'ADR-049 §D4 nomme comme violation ;
+   *  - le prédicat est la CONJONCTION `{ id: { in }, tenantId, schoolId }`
+   *    (ADR-055 §D2). `tenantId` reste porté explicitement parce que
+   *    l'application se connecte en PROPRIÉTAIRE des tables et échappe donc à
+   *    ses propres policies RLS (ADR-032 §D5) ; `schoolId` s'y ajoute parce
+   *    qu'un tenant peut posséder PLUSIEURS écoles et que le GET frère ne montre
+   *    que celle-là. Les deux colonnes sont dénormalisées côte à côte sans
+   *    contrainte qui les lie : c'est la conjonction qui échoue fermé ;
+   *  - la propriété se décide par `owned.length !== ids.length`, valide parce
+   *    que `id` est la clé primaire et que les ids sont dédoublonnés. Pas de
+   *    seconde liste tenue à la main ;
+   *  - le refus réutilise `unknownScopeRef(field)` VERBATIM : un id étranger et
+   *    un id simplement inconnu empruntent la même branche et produisent le même
+   *    400 à l'octet près (ADR-049 §D2 — les distinguer serait un oracle
+   *    d'existence inter-tenant).
+   *
+   * LIMITE NOMMÉE, assumée (ADR-055 §D3) : la portée est l'ÉCOLE, pas le tenant.
+   * Un `gradeLevelId` d'une AUTRE école du MÊME tenant est désormais refusé, et
+   * `forTenant` sans école explicite résout l'école par défaut (le plus d'élèves,
+   * départage par `createdAt`) — si ce défaut bascule entre le GET et le PUT, un
+   * enregistrement légitime peut être refusé. Refus, jamais corruption : le
+   * choix inverse (sonder sur le seul `tenantId`) laisserait ouverte une fuite
+   * inter-écoles à l'intérieur d'un tenant.
+   *
+   * DEUXIÈME LIMITE : `forTenant` lève `NotFoundException` pour un tenant sans
+   * école. Ce handler ne l'appelait pas jusqu'ici ; un PUT sur un tenant vierge
+   * répondra donc 404 au lieu d'écrire — un tenant sans école n'a de toute façon
+   * ni niveau ni matière à pondérer.
+   *
+   * HORS PÉRIMÈTRE, explicitement : aucune conversion vers `TenantScopeService`
+   * (ADR-054 §D2), aucune migration (la clé composite tenant-consciente est
+   * consignée en PF-239), aucun plafond sur `entries[]` (PF-238), aucune reprise
+   * des lignes sombres déjà écrites, et AUCUN second filtre sur la mise en file
+   * de recalcul : celle-ci est un FRÈRE d'après-commit, jamais atteinte par un
+   * refus — le préjudice (c) se ferme par construction.
    */
   @Put('coefficients/matrix')
   @RequiresPermission('subjects.write')
@@ -231,7 +298,42 @@ export class SubjectsController {
     if (!Array.isArray(body.entries) || body.entries.length === 0) {
       throw new BadRequestException('Aucune entrée à enregistrer.');
     }
+    // S-E05-3 / AC-1 — l'école de l'appelant, que ce handler était le SEUL de ce
+    // contrôleur à ne pas résoudre. Même appel, même forme que le GET frère
+    // (`forTenant(me.tenantId)`, sans école explicite) : une divergence ici
+    // refuserait une matrice que le GET vient d'afficher.
+    const { schoolId } = await this.ctx.forTenant(me.tenantId);
+    // Moitié PURE, hors transaction : elle ne touche pas la base et refuse déjà
+    // un id vide ou nul, donc un corps malformé n'ouvre même pas de transaction.
+    const scopePlan = distinctScopeIdPlan(body.entries, COEFFICIENT_SCOPE_FIELDS);
+
     await this.prisma.$transaction(async (tx) => {
+      // Moitié IMPURE, écrite EN LIGNE et sur `tx` (PF-200 : l'attribution de
+      // `tenant-adversarial-check.js` est LEXICALE et ne traverse pas `this`).
+      // Deux sondes, avant que la boucle d'écriture ne s'ouvre ; le champ nommé
+      // dans le refus est LU dans le plan, jamais réécrit en littéral.
+      for (const scope of scopePlan) {
+        if (scope.field === 'gradeLevelId') {
+          const owned = await tx.gradeLevel.findMany({
+            where: { id: { in: scope.ids }, tenantId: me.tenantId, schoolId },
+            select: { id: true },
+          });
+          if (owned.length !== scope.ids.length) throw unknownScopeRef(scope.field);
+          continue;
+        }
+        if (scope.field === 'subjectId') {
+          const owned = await tx.subject.findMany({
+            where: { id: { in: scope.ids }, tenantId: me.tenantId, schoolId },
+            select: { id: true },
+          });
+          if (owned.length !== scope.ids.length) throw unknownScopeRef(scope.field);
+          continue;
+        }
+        // Échoue FERMÉ : un champ ajouté au tuple sans sa sonde refuse le corps
+        // au lieu de le laisser passer non prouvé.
+        throw unknownScopeRef(scope.field);
+      }
+
       for (const e of body.entries) {
         await tx.subjectCoefficient.upsert({
           where: { gradeLevelId_subjectId: { gradeLevelId: e.gradeLevelId, subjectId: e.subjectId } },

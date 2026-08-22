@@ -141,3 +141,63 @@ export function unknownScopeRef(field: string): BadRequestException {
   // Concaténation, même raison qu'`assertSingleScopeId` ci-dessus (cliquet AC-7).
   return new BadRequestException('Le périmètre sélectionné est introuvable (' + field + ').');
 }
+
+/**
+ * S-E05-3 / ADR-055 §D1 — LA MÊME MOITIÉ PURE, mais sur une COLLECTION.
+ *
+ * `scopeOwnershipPlan` répond « quels couples (champ, id) prouver » pour UN
+ * corps portant AU PLUS un id par champ. La matrice de coefficients pose la
+ * question au pluriel : `entries[]` porte un `gradeLevelId` et un `subjectId`
+ * PAR LIGNE, et une sauvegarde ordinaire en compte trente.
+ *
+ * Pourquoi un planificateur d'ENSEMBLE plutôt que la boucle par référence de
+ * l'ADR-053 §D1 : appliquée telle quelle, elle émettrait SOIXANTE `findFirst`
+ * pour trente lignes — un nombre d'instructions borné par la REQUÊTE et non par
+ * le SCHÉMA, exactement la forme que l'ADR-049 §D4 nomme comme violation. Le
+ * plan rendu ici est borné par le nombre de CHAMPS déclarés : deux entrées,
+ * donc deux sondes, quelle que soit la taille du corps.
+ *
+ * DÉDOUBLONNAGE INSENSIBLE À LA CASSE, et c'est mesuré, pas décoratif :
+ * `@IsUUID()` (validator.js, drapeau `/i`) accepte un uuid en MAJUSCULES, que
+ * Postgres accepte aussi mais renvoie en minuscules. La propriété se décide
+ * ensuite par `owned.length !== ids.length` (ADR-055 §D1) : si le même uuid
+ * arrivait deux fois dans deux casses, l'ensemble « distinct » en compterait
+ * deux là où la base ne rend qu'UNE ligne, et une sauvegarde parfaitement
+ * légitime serait refusée. La clé de dédoublonnage est donc la forme minuscule ;
+ * la valeur ÉMISE reste l'orthographe reçue en premier, que Postgres normalise
+ * lui-même à la comparaison.
+ *
+ * LÈVE plutôt que d'ignorer une ligne dont le champ n'est pas FOURNI. Sauter la
+ * ligne produirait un ensemble d'ids plus court — au pire vide — et la sonde
+ * émettrait alors un `where` que Prisma satisfait à VIDE : `0 === 0` passerait
+ * et ne prouverait rien. C'est le chemin vacuous que le contrôle négatif de
+ * chaque module existe pour tuer, et il est fermé ICI, une fois, pour tous.
+ *
+ * Toujours aucun import Prisma, aucun accès à la base, aucune répartition
+ * dynamique par nom de modèle (ADR-049 §D5 tient). La moitié IMPURE — les deux
+ * `findMany({ where: { id: { in }, tenantId, schoolId } })` — reste écrite EN
+ * LIGNE dans le handler (PF-200).
+ */
+export function distinctScopeIdPlan<F extends string>(
+  rows: readonly ScopeIdCarrier<F>[],
+  fields: readonly F[],
+): { field: F; ids: string[] }[] {
+  const plan: { field: F; ids: string[] }[] = [];
+  for (const field of fields) {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const value = row[field];
+      // Pas de « la clé est présente » : `isSuppliedScopeId` est le SEUL
+      // prédicat correct, et un id absent, vide ou nul prend ici la MÊME
+      // branche de refus qu'un id étranger (ADR-049 §D2, indiscernabilité).
+      if (!isSuppliedScopeId(value)) throw unknownScopeRef(field);
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ids.push(value);
+    }
+    plan.push({ field, ids });
+  }
+  return plan;
+}
