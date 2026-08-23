@@ -121,7 +121,7 @@ export function AttendanceManager({ teachingAssignmentId }: { teachingAssignment
 
   return (
     <div className="space-y-4">
-      {error && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>}
+      {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>}
       {feedback && (
         <div className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
           <CheckCircle2 className="h-4 w-4" /> {feedback}
