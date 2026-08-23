@@ -4,9 +4,11 @@ import {
   ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -31,6 +33,200 @@ import { RequiresPermission } from '../../shared/auth/requires-permission.decora
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TeacherProfileService } from '../teaching/teacher-profile.service';
+
+/**
+ * S-E05-14 / PF-278 / `ADR-063 §D3` — la projection de la liste d'appel.
+ *
+ * Ce sont les QUATRE colonnes que ce fichier PROJETTE DÉJÀ, dix-huit lignes plus
+ * haut : `list` (:142) rend exactement `{ id, firstName, lastName, externalRef }`
+ * pour chaque élève. La tranche n'invente donc aucune forme — elle ALIGNE
+ * `roster` sur la forme que son propre contrôleur applique déjà, là où il
+ * renvoyait la ligne `Student` ENTIÈRE (`medicalNotes`, `address`, `phone`,
+ * `email`, `birthDate`, `gender`, `nationality`, `notes`, `customFields`).
+ *
+ * `externalRef` reste : c'est l'identifiant de scolarité qui désambiguïserait
+ * des homonymes, et `list` le rend déjà à ses appelants.
+ *
+ * `photoUrl` est EXCLU délibérément (`ADR-062 §D1`, sur MESURE) : la seule
+ * surface enseignant qui affiche une liste d'élèves aujourd'hui compose un
+ * avatar d'INITIALES (`apps/web/src/app/teacher/classes/[id]/attendance/
+ * AttendanceManager.tsx`), donc réintroduire une URL qui résout vers la
+ * photographie de chaque enfant, à l'intérieur d'une tranche de MINIMISATION de
+ * charge utile, contredirait la tranche.
+ *
+ * Module-locale et NON exportée : aucune projection PARTAGÉE entre modules n'est
+ * introduite (`ADR-062 §D3`). La constante jumelle d'`attendance` n'est PAS
+ * importée — deux modules, deux décisions, chacune révocable seule.
+ */
+const ENROLLMENT_ROSTER_STUDENT_SELECT = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  externalRef: true,
+} as const;
+
+/**
+ * S-E05-14 / PF-280 / `ADR-063 §D4` — la LECTURE DE GARDE, et la seule source
+ * du `classSection` rendu.
+ *
+ * `roster` faisait un `classSection.findUnique` SANS `select`, puis renvoyait la
+ * ligne telle quelle sous `classSection`. Cette ligne porte `internalNotes` —
+ * du texte libre rédigé par l'administration À PROPOS de la classe — et
+ * `options` (`Json`). Mesuré : `internalNotes` n'est écrit et lu que sous
+ * `apps/web/src/app/admin/classes/*` et `school-structure/classes.controller.ts`.
+ * C'est un champ ADMIN, et le livrer à tout enseignant dans la tranche même qui
+ * minimise la charge utile serait la contradiction exacte que `photoUrl` évite.
+ *
+ * Ce n'est PAS une seconde décision : la forme en deux temps imposée par
+ * `AC-1` (garde étroite → verdict → charge utile) DÉTRUIT structurellement
+ * l'ancien `cls`, donc la tranche ne peut pas être livrée sans décider ce
+ * qu'est le `classSection` de la réponse.
+ *
+ * `tenantId` est SÉLECTIONNÉ (la comparaison de tenant en dépend) mais n'est
+ * PAS rendu : la réponse est recomposée champ par champ.
+ */
+const ENROLLMENT_ROSTER_CLASS_SECTION_SELECT = {
+  id: true,
+  tenantId: true,
+  name: true,
+  maxStudents: true,
+} as const;
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * S-E05-14 / PF-278 / ADR-063 — LA COUCHE DE DÉCISION, EXPORTÉE ET PURE.
+ *
+ * `roster` (:531) ne portait qu'une comparaison de tenant. Avec
+ * `enrollments.read` détenu par `school_admin`, `teacher` ET `parent`
+ * (`permissions.constants.ts:168`, `:225`, `:259`), tout parent authentifié de
+ * l'établissement pouvait énumérer N'IMPORTE QUELLE classe par son id et lire
+ * la ligne `Student` entière de CHAQUE enfant qui s'y trouve. Une liste
+ * d'appel est de la donnée de PAIRS — les autres enfants de la classe — jamais
+ * le dossier d'un parent.
+ *
+ * FORME IMPOSÉE (maison, `attendance.controller.ts:154`, `lessons.controller.ts:114`) :
+ * le contrôleur RÉSOUT l'identité, puis passe des VALEURS SIMPLES à une
+ * fonction EXPORTÉE et PURE qui compare et lève. La fonction pure est ce que la
+ * spec teste directement — pas de module de test Nest, pas de conteneur
+ * d'injection. Aucun paramètre `bypass` / `allow` / `skip`, aucune variable
+ * d'environnement : un contrôle qu'on peut éteindre n'est pas un contrôle
+ * (`DNC-10`).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Le SEUL endroit de ce fichier qui nomme les deux rôles privilégiés.
+ *
+ * LIMITE CONNUE, HÉRITÉE ET ÉCRITE PLUTÔT QUE DÉCOUVERTE (`PF-268`) : c'est un
+ * test sur le NOM d'un rôle de realm, alors que `PermissionsGuard` résout aussi
+ * les rôles PERSONNALISÉS via `UserSyncService.effectivePermissions`
+ * (`ADR-013`, `ADR-047` — les rôles custom sont globaux). Un rôle « vie
+ * scolaire » qui détiendrait `enrollments.read` passerait le garde et serait
+ * refusé ici. Le remède honnête est un code de permission dédié, hors de la
+ * portée de cette tranche (`AC-9`).
+ *
+ * SUR LE NOMBRE D'APPELANTS VIVANTS : `attendance.controller.ts:133` enregistre
+ * `select count(*) from role` → **0**, mesuré sur la pile locale le 2026-08-23.
+ * C'est une CITATION de cette mesure, pas une seconde mesure : cet agent n'a
+ * pas rouvert la base. Copier la phrase comme si elle était une observation
+ * fraîche fabriquerait la preuve (`DNC-06`).
+ */
+export function isPrivilegedEnrollmentsCaller(roles: readonly string[]): boolean {
+  return roles.includes('super_admin') || roles.includes('school_admin');
+}
+
+/** Un SEUL littéral pour le refus : deux copies dérivent, une copie ne dérive pas. */
+const CLASS_ROSTER_REFUSAL = 'Vous ne pouvez consulter que la liste des élèves de vos classes.';
+
+/**
+ * `AC-3` + `AC-4` + `AC-7` — la liste d'appel de cette classe est-elle lisible
+ * par cet appelant ? La règle ENTIÈRE, en un seul endroit, sur trois booléens.
+ *
+ * Les trois entrées sont prises en PARAMÈTRE même quand l'appelant sait déjà
+ * que l'une d'elles est fausse : la fonction énonce la règle complète et se
+ * teste sur les HUIT combinaisons — y compris `{ false, null, true }`,
+ * impossible en production (le mur d'enseignement n'est pas interrogé sans
+ * profil) et qui doit néanmoins LEVER.
+ *
+ * `teacherProfileId === null` est vérifié EN PREMIER et INDÉPENDAMMENT de
+ * `teachesSection`, et rend le MÊME 403 : un appelant sans profil professeur
+ * n'enseigne aucune classe par construction de la clé étrangère. La forme
+ * inversée « `if (!isPrivileged && teacherProfileId && !teachesSection) throw` »
+ * FAIL-OPEN sur un profil nul — c'est exactement le fail-open que `G-AUTHZ`
+ * refuse, et il est écrit ici pour que personne ne le « simplifie » vers elle.
+ *
+ * Le message est de forme LECTURE (« consulter »), ne nomme ni tenant, ni
+ * table, ni id, ni code Prisma (discipline `ADR-048 §D9`). Il ne réutilise pas
+ * la copie d'`attendance` : ce n'est pas la même ressource.
+ */
+export function assertClassRosterReadable(decision: {
+  readonly isPrivileged: boolean;
+  readonly teacherProfileId: string | null;
+  readonly teachesSection: boolean;
+}): void {
+  if (decision.isPrivileged) return;
+  if (decision.teacherProfileId === null) {
+    throw new ForbiddenException(CLASS_ROSTER_REFUSAL);
+  }
+  if (!decision.teachesSection) {
+    throw new ForbiddenException(CLASS_ROSTER_REFUSAL);
+  }
+}
+
+/**
+ * `AC-3` + `AC-12` — le mur d'enseignement, en UNE instruction entièrement
+ * SCALAIRE, et le type qui rend le fail-open INEXPRIMABLE.
+ *
+ * `teacherProfileId` est NON OPTIONNEL, délibérément. Prisma RETIRE les clés
+ * `undefined` d'un `where` : écrit naïvement
+ * `{ tenantId, classSectionId, teacherProfileId: tp?.id }` avec `tp === null`,
+ * la requête devient « la première affectation de cette classe, à QUI QUE CE
+ * SOIT » et l'appelant sans profil est ACCORDÉ. Le contrôleur doit donc rendre
+ * son 403 AVANT que ce `where` existe — et la signature ci-dessous fait qu'il
+ * ne peut pas faire autrement.
+ *
+ * `ADR-063 §D1` — POURQUOI AUCUNE CLAUSE D'ANNÉE SCOLAIRE ICI, ALORS QUE
+ * `ADR-061 §D1` EN EXIGEAIT UNE. Le mur d'`attendance` est ÉLÈVE-clé : il
+ * marche `professeur → affectations → classes → inscriptions → élève`, où
+ * l'année est LIBRE, et comme `@@unique([teacherProfileId, classSectionId,
+ * subjectId])` ne contient PAS `academicYearId`, une affectation SURVIT au
+ * changement d'année et rejoindrait une inscription COURANTE. Ici les deux
+ * côtés sont ancrés sur le MÊME `classSectionId`, et `ClassSection` est
+ * elle-même épinglée à une année (`academicYearId` non nul, `@@unique(
+ * [academicYearId, gradeLevelId, name])`, `schema.prisma:457`, `:478`) : l'id
+ * de section fournit DÉJÀ l'année. Une affectation périmée pointe vers
+ * l'ANCIENNE section — un autre id, dont la liste d'appel est l'ancienne.
+ *
+ * Pire, une clause d'année NUIRAIT :
+ *  • `TeachingAssignment.academicYearId` est une colonne simple, sans clé
+ *    étrangère composite vers `ClassSection.academicYearId` — les deux peuvent
+ *    DIVERGER en données, et filtrer refuserait un professeur qui enseigne
+ *    RÉELLEMENT la classe aujourd'hui ;
+ *  • elle refuserait aussi un professeur consultant une section d'une année
+ *    RÉVOLUE qu'il a authentiquement enseignée.
+ * Précédent maison pour un contrôle section-clé : `announcements.controller.ts:1155`
+ * — `{ tenantId, teacherProfileId, classSectionId }`, sans année.
+ *
+ * `findFirst` et non `findUnique` : un professeur peut détenir une affectation
+ * PAR MATIÈRE sur la même section (la clé d'unicité inclut `subjectId`), donc
+ * plusieurs lignes satisfont ce `where`. Seule leur EXISTENCE nous intéresse.
+ *
+ * `tenantId` est EXPLICITE et n'est pas redondant : les déploiements
+ * d'aujourd'hui empruntent le chemin `degraded_no_app_url`, où la connexion du
+ * PROPRIÉTAIRE échappe à ses propres policies RLS (`ADR-032 §D5` /
+ * `ADR-042 §D1`). Cette clause est la SEULE chose qui filtre, et sans elle une
+ * ligne d'affectation dérivée d'un autre tenant AUTORISERAIT.
+ */
+export function teacherOfSectionWhere(input: {
+  readonly tenantId: string;
+  readonly classSectionId: string;
+  readonly teacherProfileId: string;
+}): Prisma.TeachingAssignmentWhereInput {
+  return {
+    tenantId: input.tenantId,
+    classSectionId: input.classSectionId,
+    teacherProfileId: input.teacherProfileId,
+  };
+}
 
 class CreateEnrollmentDto {
   @IsUUID() studentId!: string;
@@ -57,6 +253,12 @@ export class EnrollmentsController {
     private readonly prisma: PrismaService,
     private readonly users: UserSyncService,
     private readonly notifications: NotificationsService,
+    /**
+     * S-E05-14 — la RÉSOLUTION d'identité du mur d'enseignement de `roster`.
+     * `TeachingModule` l'exporte déjà ; `EnrollmentsModule` l'importe, comme
+     * `AttendanceModule` (`attendance.module.ts`). Aucun provider n'est ajouté.
+     */
+    private readonly teachers: TeacherProfileService,
   ) {}
 
   /** Fan-out: notify every active guardian of the student about the enrollment event. */
@@ -527,23 +729,122 @@ export class EnrollmentsController {
     });
   }
 
-  /** Roster — list active enrollments per class section, useful for the teacher portal. */
+  /**
+   * S-E05-14 / PF-278 / ADR-063 — la liste d'appel d'une classe : QUI la lit,
+   * DANS QUEL ORDRE on refuse, et CE QUI part sur le fil.
+   *
+   * CE QUI S'EXÉCUTE (`DNC-06` — le commentaire précédent disait « useful for
+   * the teacher portal », ce qui était FAUX : recensement des consommateurs
+   * relancé le 2026-08-23, `grep -rn "enrollments/roster" apps/ packages/` →
+   * code de sortie 1, **ZÉRO appelant de première partie** sur les quatre
+   * portails. Décrire un souhait au lieu du runtime est la violation ; la
+   * phrase est corrigée, pas conservée) :
+   *
+   *  1. `ParseUUIDPipe` refuse un id malformé en phase PIPE — donc AVANT toute
+   *     lecture de base. Aujourd'hui il atteignait une colonne `@db.Uuid` et
+   *     rendait `P2023` → 500 (`PF-51`, avancé ICI sur UN SEUL site — partiel,
+   *     jamais clos).
+   *  2. Lecture de GARDE, `select` seulement : classe absente OU d'un autre
+   *     tenant → 404 NU. Le 404 vient EN PREMIER et le court-circuit privilégié
+   *     ne le saute PAS — inverser l'ordre ferait du 403 un oracle d'existence
+   *     sur les ids de classe d'un AUTRE tenant (`ADR-048 §D9`, `ADR-061`), y
+   *     compris pour un `super_admin` du tenant A visant le tenant B.
+   *  3. Verdict de PROPRIÉTÉ : privilégié (`super_admin` / `school_admin`), ou
+   *     professeur portant une `TeachingAssignment` sur CETTE section. Tout le
+   *     reste — `parent` inclus, et un appelant sans profil professeur — → 403.
+   *  4. Seulement ENSUITE la charge utile. AUCUNE donnée d'enfant n'est
+   *     matérialisée pour un appelant refusé.
+   *
+   * CE QUI PART SUR LE FIL : quatre colonnes par élève
+   * (`ENROLLMENT_ROSTER_STUDENT_SELECT`) au lieu de la ligne `Student`
+   * ENTIÈRE, et un `classSection` recomposé `{ id, name, maxStudents }` au lieu
+   * de la ligne `ClassSection` entière (`internalNotes`, `options`).
+   * `enrollments`, `capacity` et le tri `student.lastName` ascendant sont
+   * INCHANGÉS.
+   *
+   * `enrollments.read` n'est PAS retiré du catalogue `parent` : le portail
+   * parent lit légitimement l'inscription de SON enfant via `list` (:122). La
+   * dérive de catalogue est l'histoire de `PF-264` / `PF-53`, pas celle-ci.
+   *
+   * CE QUE CETTE TRANCHE NE FERME PAS (`ADR-063 §D6`) : `GET /enrollments?
+   * classSectionId=<id>` (:122) porte la MÊME permission, dans le MÊME
+   * contrôleur, SANS ABAC. `PF-278` est clos sur ce HANDLER, pas sur la CLASSE
+   * d'exposition — l'énumération de pairs par la route de liste survit et est
+   * enregistrée en `PF-283` (arbitrage d'id : `ADR-063`, §« Id arbitration »).
+   */
   @Get('roster/:classSectionId')
   @RequiresPermission('enrollments.read')
-  async roster(@Param('classSectionId') classSectionId: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
+  async roster(
+    @Param('classSectionId', ParseUUIDPipe) classSectionId: string,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ) {
     const me = await this.users.ensureUser(jwt);
-    const cls = await this.prisma.classSection.findUnique({ where: { id: classSectionId } });
+    const cls = await this.prisma.classSection.findUnique({
+      where: { id: classSectionId },
+      select: ENROLLMENT_ROSTER_CLASS_SECTION_SELECT,
+    });
     if (!cls || cls.tenantId !== me.tenantId) throw new NotFoundException();
+    await this.assertSectionOwnership(classSectionId, me, jwt);
 
     const enrollments = await this.prisma.enrollment.findMany({
       where: { classSectionId, status: 'active', tenantId: me.tenantId },
-      include: { student: true },
+      include: { student: { select: ENROLLMENT_ROSTER_STUDENT_SELECT } },
       orderBy: { student: { lastName: 'asc' } satisfies Prisma.StudentOrderByWithRelationInput },
     });
     return {
-      classSection: cls,
+      classSection: { id: cls.id, name: cls.name, maxStudents: cls.maxStudents },
       enrollments,
       capacity: { current: enrollments.length, max: cls.maxStudents },
     };
+  }
+
+  /**
+   * S-E05-14 — la RÉSOLUTION d'identité du chemin de LECTURE de `roster`.
+   *
+   * Lecture seule (`findForUser`, `teacher-profile.service.ts:94`), JAMAIS
+   * `ensureForUser` : un refus ne doit PROVISIONNER rien — `ensureForUser` est
+   * un UPSERT, et le placer sur un chemin de refus créerait une ligne
+   * `TeacherProfile` pour chaque parent qui tente une énumération
+   * (`PF-265` / `ADR-051 §D1`).
+   *
+   * Le court-circuit privilégié saute les DEUX requêtes : un administrateur n'a
+   * ni profil professeur ni affectation, et ne pas les demander est deux
+   * instructions de moins sur le chemin admin. Il ne saute PAS la lecture de
+   * garde — celle-ci a déjà rendu son 404 avant qu'on arrive ici.
+   *
+   * L'ORDRE DES TROIS LIGNES EST LE CONTRÔLE : le profil nul rend son 403 dans
+   * `assertClassRosterReadable` AVANT que `teacherOfSectionWhere` soit
+   * construit, parce que le type de ce dernier n'accepte pas `undefined` (voir
+   * son docblock : Prisma retire les clés `undefined` d'un `where`, ce qui
+   * transformerait le mur en fail-open).
+   */
+  private async assertSectionOwnership(
+    classSectionId: string,
+    me: { id: string; tenantId: string },
+    jwt: KeycloakJwtPayload,
+  ): Promise<void> {
+    const isPrivileged = isPrivilegedEnrollmentsCaller(jwt.realm_access?.roles ?? []);
+    if (isPrivileged) {
+      assertClassRosterReadable({ isPrivileged: true, teacherProfileId: null, teachesSection: false });
+      return;
+    }
+    const tp = await this.teachers.findForUser(me);
+    if (tp === null) {
+      assertClassRosterReadable({ isPrivileged: false, teacherProfileId: null, teachesSection: false });
+      return;
+    }
+    const assignment = await this.prisma.teachingAssignment.findFirst({
+      where: teacherOfSectionWhere({
+        tenantId: me.tenantId,
+        classSectionId,
+        teacherProfileId: tp.id,
+      }),
+      select: { id: true },
+    });
+    assertClassRosterReadable({
+      isPrivileged: false,
+      teacherProfileId: tp.id,
+      teachesSection: assignment !== null,
+    });
   }
 }
