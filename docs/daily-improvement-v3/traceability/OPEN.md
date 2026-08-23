@@ -272,6 +272,7 @@ These are evidence programmes, not code. They attach to the epic that first need
 
 | Obligation | Epic | Status | Gate | Blocked by |
 |---|---|---|---|---|
+| VAL-01 clean dependency install + full CI run (lint, typecheck, unit, integration, Playwright, a11y) — **row added 2026-08-23 (run 79); it was named in `V3-E02`s `Closes` column with no ledger row anywhere** | V3-E02 | `blocked` | G-DNC | **`PF-59` — no GitHub Actions runner starts.** The account has been locked for Actions billing since 2026-07-28, so every job reports failure in ~2s with zero steps executed. Not a defect in the diff and not fixable by this routine: a red check on any PR must be read against the check-run annotation before debugging. The LOCAL equivalent (`scripts/ci-gate.sh`, no flags) is executed on every run and is currently `GATE: PASS`, which is evidence about the tree but **not** about `VAL-01` — the obligation is specifically a clean-install run on neutral infrastructure |
 | VAL-05 provider sandbox: delivery, retry, callback, outage, reconciliation | V3-E16 (payments), V3-E17 (messaging) | `blocked` | G-AUDIT | D-03 + sandbox credentials |
 | VAL-06 import batch validate → apply → **rollback** with a synthetic batch | V3-E12 | `open` | G-AUDIT, G-TENANT | E12 promotion (needs a batch to exist) |
 | VAL-08 full WCAG keyboard / screen-reader / contrast audit | V3-E02 (CI harness), V3-E06 (fixes) | `open` | — | axe/Playwright assets exist but are not run — see VAL-01 |
