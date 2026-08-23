@@ -8,6 +8,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   UseGuards,
@@ -48,6 +49,44 @@ class TermDto {
   @IsInt() orderIndex!: number;
   @IsDateString() startDate!: string;
   @IsDateString() endDate!: string;
+}
+
+/**
+ * S-E05-13 / PF-51 / ADR-064 — the PATCH body of a term, as a CLASS.
+ *
+ * Same mechanism as `UpdateGradeLevelDto` in `cycles.controller.ts`:
+ * `Partial<TermDto>` is a TYPE, so `emitDecoratorMetadata` wrote `Object` into
+ * `design:paramtypes`, `ValidationPipe.toValidate()` refused to validate it,
+ * and the global pipe at `main.ts:141-145` was bypassed rather than applied.
+ *
+ * WHAT THIS SITE IS, AND WHAT IT IS NOT — the two `Partial<>` bodies had very
+ * different blast radii and conflating them would misreport both.
+ * `updateTerm` already FIELD-PICKS below (`name`/`orderIndex`/`startDate`/
+ * `endDate`, each `?? undefined`) instead of spreading the body, so there was
+ * never a mass-assignment hole here and no tenancy escape: `Term.tenantId` was
+ * never reachable from the wire. What WAS real is that no type or length check
+ * ran at all, and `new Date('pas-une-date')` yields `Invalid Date`, which
+ * Prisma rejects as a 500 where the caller deserved a 400. `@IsDateString()`
+ * moves that refusal into the pipe.
+ *
+ * `orderIndex` deliberately carries `@IsInt()` and NO `@Min()`: `TermDto` above
+ * has none, and a PATCH stricter than its own POST is a new inconsistency
+ * introduced under cover of a hardening slice.
+ *
+ * NOT fixed here, recorded instead:
+ *   • `PF-284` — `assertDateOrder` below runs only when BOTH dates are present,
+ *     so a ONE-SIDED PATCH can still invert a term's stored date order. This
+ *     DTO does not close it and cannot: `@IsDateString()` validates each field
+ *     in isolation and cannot see the stored counterpart. It needs a
+ *     handler-side read-then-compare against the row already loaded.
+ *   • `PF-285` — `updateTerm`/`deleteTerm` write no audit row while their
+ *     `academicYear` siblings in this same file relay through `writeAudit`.
+ */
+class UpdateTermDto {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(40) name?: string;
+  @IsOptional() @IsInt() orderIndex?: number;
+  @IsOptional() @IsDateString() startDate?: string;
+  @IsOptional() @IsDateString() endDate?: string;
 }
 
 @ApiTags('school-structure')
@@ -210,7 +249,7 @@ export class AcademicYearsController {
   @Post(':id/terms')
   @RequiresPermission('terms.write')
   async createTerm(
-    @Param('id') yearId: string,
+    @Param('id', ParseUUIDPipe) yearId: string,
     @Body() body: TermDto,
     @CurrentJwt() jwt: KeycloakJwtPayload,
   ) {
@@ -243,8 +282,8 @@ export class AcademicYearsController {
   @Patch('terms/:termId')
   @RequiresPermission('terms.write')
   async updateTerm(
-    @Param('termId') termId: string,
-    @Body() body: Partial<TermDto>,
+    @Param('termId', ParseUUIDPipe) termId: string,
+    @Body() body: UpdateTermDto,
     @CurrentJwt() jwt: KeycloakJwtPayload,
   ) {
     const me = await this.users.ensureUser(jwt);
@@ -264,7 +303,10 @@ export class AcademicYearsController {
 
   @Delete('terms/:termId')
   @RequiresPermission('terms.write')
-  async deleteTerm(@Param('termId') termId: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
+  async deleteTerm(
+    @Param('termId', ParseUUIDPipe) termId: string,
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+  ) {
     const me = await this.users.ensureUser(jwt);
     const term = await this.prisma.term.findUnique({ where: { id: termId } });
     if (!term || term.tenantId !== me.tenantId) throw new NotFoundException();

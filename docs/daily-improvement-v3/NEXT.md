@@ -1,5 +1,16 @@
 # Next story
 
+> **Allocation note (run 74, at land — supersedes the run-73 note below).** This run took **`ADR-064`** and
+> **`PF-284`** … **`PF-287`**. **The next run allocates from `PF-288` and `ADR-065`**, after re-checking open PRs.
+>
+> *Arbitration:* the escalation panel and two reviewers referred to the surviving-`data: body` finding as
+> **“PF-289”**. That label is cited from **no** source file and **no** ledger row, and `PF-287`/`PF-288` were
+> unallocated, so it lands as **`PF-287`** — contiguous allocation, the `PF-185`/`PF-186` rule (arbitrate by
+> meaning, and renumber the allocation that production code does not quote).
+>
+> *Correction:* the run-73 note below says this run allocates from `PF-284` and `ADR-064` — it did, and that
+> line is now discharged rather than pending.
+
 > **Allocation note (run 73, at land).** This run took **`ADR-063`** and allocated **`PF-280`** … **`PF-283`**.
 > Three planning agents each allocated `PF-280` to a **different** subject in the same pass; it was arbitrated **by
 > meaning**, not by date (the `PF-185`/`PF-186` rule from runs 53/54), and the arbitration table lives in `ADR-063`
