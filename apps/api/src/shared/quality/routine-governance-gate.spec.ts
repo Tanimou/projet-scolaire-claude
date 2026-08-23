@@ -34,7 +34,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// `scripts/` is plain CommonJS JavaScript outside the api `rootDir`, so it is reached by `require` rather than
+// `import`. The disabled rule is `no-require-imports`, NOT `no-var-requires`: the first draft disabled the latter,
+// which left the real rule erroring AND added an "unused eslint-disable directive" warning — the lint config
+// reports unused directives, so a wrong rule name costs twice.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const checker = require('../../../../../scripts/roadmap-selection-check.js');
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..');
@@ -61,7 +65,6 @@ describe('§1 routine doc ↔ installed SKILL.md', () => {
 
   it('does not drift from the installed SKILL.md (INACTIVE where the installed copy is absent)', () => {
     if (!existsSync(INSTALLED_SKILL)) {
-      // eslint-disable-next-line no-console
       console.log(
         `✓ routine-doc-sync: INACTIVE — no installed SKILL.md at ${INSTALLED_SKILL}. ` +
           'Drift cannot be measured from this machine; the tracked-copy assertions above still ran.',
@@ -111,7 +114,9 @@ describe('§3 roadmap coverage — no finding without a row', () => {
     const out = new Set<string>();
     for (const line of readFileSync(join(D, 'roadmap.md'), 'utf8').split(/\r?\n/)) {
       const m = line.match(/^\|\s*\*\*(V3-E\d+)\*\*\s*\|([^|]*)\|([^|]*)\|/);
-      if (m) (m[3].match(ID) || []).forEach((i) => out.add(i));
+      // `?? ''` because the api tsconfig runs `noUncheckedIndexedAccess`: a capture group is `string | undefined`
+      // to the compiler even when the regex guarantees it. Coercing to '' keeps the empty case a no-op.
+      if (m) ((m[3] ?? '').match(ID) || []).forEach((i) => out.add(i));
     }
     return out;
   };
