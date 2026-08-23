@@ -2,14 +2,15 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-23)** `in-progress` — **nine slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, this PR — `PF-278` + `PF-280`, `ADR-063`)**. Each was authored and implemented in the same
+**Status (2026-08-23)** `in-progress` — **ten slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, this PR — `PF-51` **advanced**, not closed, `ADR-064`)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
-remaining four (`S-E05-1`, `S-E05-4`, `S-E05-8` … `S-E05-10`) — plus **`S-E05-13`**, the renumbered
-`PF-51` placeholder, see the note below — still exist as **rows in
+remaining four (`S-E05-1`, `S-E05-4`, `S-E05-8` … `S-E05-10`) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
 `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
-without an authoring pass of its own.
+without an authoring pass of its own. *(**`S-E05-13` left this list on 2026-08-23**: the renumbered `PF-51`
+placeholder was authored and implemented in the same run, the `S-E05-2` posture, under operator override. It is
+the first of the six matrix-row-only allocations to be discharged.)*
 **Next slice → `S-E05-2b` — the `realmRole` invite channel, the fifth grant path `S-E05-2` deliberately left open.**
 *(Annotated 2026-08-23, `S-E05-5` land pass — **not** deleted. `S-E05-5` was scheduled over this pointer by operator
 override, exactly as `S-E05-7` and `S-E05-3` were before it. An override **schedules over** a recommendation without
@@ -37,6 +38,19 @@ as **`PF-283`** (`ADR-063 §D6`). Ranking after this run: **`PF-283` → `PF-267
 `S-E05-2b`** — `PF-283` leads because it is the only P1 in the queue and it is the residue this slice knowingly
 left. `PF-281` (`findForUser` ignores `TeacherProfile.active`) and `PF-282` (`ADR-060` is missing from
 `docs/adr/`) also join, at P2 and P3.)*
+*(Annotated a FOURTH time 2026-08-23, `S-E05-13` land pass — **not** deleted, for the seventh time and the same
+reason. `S-E05-2b` is still open, still unclaimed, still the epic’s only live escalation path. **This run is the
+first of the seven that does NOT discharge the item the previous annotation ranked first**: `PF-283` was ranked
+first by the annotation directly above and is **still open, still unclaimed, still the only P1 in the queue** —
+`S-E05-13` was scheduled over it and its own story says so in §0.1. Nothing in this run may be read as progress on
+`PF-283`. What joins the queue is **`PF-287`**, and it ranks *second*: `ADR-064` establishes two rules and the
+ratchet enforces only one of them, so the two surviving `data: body` mass-assignments —
+`cycles.controller.ts:132` (twelve lines above the handler this slice repaired, **same file**) and
+`subjects.controller.ts:168` — run on **defence 1 alone**, the posture this slice’s own docblock argues at length
+is insufficient. Ranking after this run: **`PF-283` → `PF-287` → `PF-284` → `PF-267` → `PF-277` → `PF-279` →
+`S-E05-2b`**. Also joining: `PF-284` (P2, a one-sided date PATCH still inverts a term’s stored order),
+`PF-285` (P2, **six** privileged structural mutations write no audit row) and `PF-286` (P3, the four Zod
+handlers never traverse the global pipe, so unknown keys are silently stripped rather than refused).)*
 Still open, still unclaimed: `S-E05-7` was scheduled over it by operator override, not instead of it. See "Next run"
 below, and § `S-E05-7` → "Next run" for the ranking as it stands after this slice.
 
@@ -57,6 +71,12 @@ below, and § `S-E05-7` → "Next run" for the ranking as it stands after this s
 > `:92` `PATCH /:id`. **No first-party caller issues the `GET`.** So `S-E05-15` may take the *same* treatment
 > `roster` just took — wall **and** projection — with no compatibility census owed. The correction runs in the
 > slice's favour, which is exactly why it would have been easy to carry the wrong version forward.
+>
+> **Still operative after the `S-E05-13` land pass (2026-08-23).** `S-E05-13` was scheduled over this block by
+> operator override and **did not touch `PF-283`**: no query parameter of `GET /enrollments` was validated, no
+> ABAC was added there, and the `classSection` payload is unchanged. `S-E05-15` remains **unauthored and
+> unclaimed**, and it remains the ranking. What `S-E05-13` adds *behind* it is **`PF-287`** — see the fourth
+> annotation on the standing pointer above.
 
 *(Corrected 2026-08-11, `S-E05-2` land pass. Lines 5-12 used to read "`S-E05-12` … is the only one with a written
 story" and "**Next slice → not in this epic** … nothing in this epic is enumerated". Both were falsified by the diff
@@ -131,7 +151,7 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
 | **S-E05-5** | **The attendance READ paths gain the ABAC their WRITE paths already have** (`PF-07`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-5.md`](./stories/S-E05-5.md) · **`PF-07` closed on the WHO axis ONLY** — four handlers (not the audit’s two) gain teacher/privileged ABAC via exported pure decision functions; the **WHAT** axis (`include: { student: true }` still returning `medicalNotes`/`address`/`notes`/`customFields`) is carried forward as **`PF-269`**, and the row may not read `closed` without that sentence · new **`ADR-061`** (§D0 supersedes the audit sentence — the exposed audience included **`parent`**, not only `teacher`; §D1 the teaching wall constrains the **active academic year** on both halves; §D3 ownership reads the denormalised `classSession.teacherProfileId`, the same bit the WRITE trusts; §D4 404 before 403; §D7 the parent branch stays byte-identical and `parent` deliberately precedes `privileged`) · also records **`PF-264`…`PF-274`** · test: `apps/api/src/modules/attendance/attendance-read-abac.spec.ts` — **written, not executed by its author** |
 | **S-E05-6** | **The attendance roster payload stops being MAXIMAL** (`PF-269`, `PF-274`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-6.md`](./stories/S-E05-6.md) · **`PF-269` closed** — the three `include: { student: true }` sites in `attendance.controller.ts` (`sessionDetail` ×2, `roster`) become one module-local `ATTENDANCE_ROSTER_STUDENT_SELECT = { id, firstName, lastName, externalRef }` · **`PF-274` closed** (`role="alert"` on the teacher error banner — a `V3-E06` row deliberately folded into this `V3-E05` slice, because the banner is the surface `S-E05-5`'s new 403 lands on) · **`PF-07` loses its `AC-21` qualifier and reads closed on BOTH axes** for the first time · new **`ADR-062`** (§D1 `photoUrl` REFUSED against two standing written recommendations, on measurement — the list composes an initials avatar; §D1.1 the design-system durability clause — a future `AvatarNameCell` adoption must pass no `src`; §D2 `externalRef` RETAINED, asymmetry deliberate; §D3 the first-of-kind `*_SELECT` constant is sanctioned as module-local **only**, the cross-module `StudentSummary` extraction refused) · also records **`PF-275`**…**`PF-278`** · test: `apps/api/src/modules/attendance/attendance-read-abac.spec.ts` — **74/74 executed green, and the ratchet proven by TWO mutations** (revert the three sites → 5 red; add `photoUrl` → closure assertion red) |
-| S-E05-13 | Unvalidated PATCH / query params / enum (`PF-51`) | ⬜ unenumerated | — | matrix row only; `S-E06-6` fixed **one DTO** of this family. **Renumbered from `S-E05-6` on 2026-08-23** — see the ID-collision note above |
+| **S-E05-13** | **The two `Partial<T>` request bodies stop erasing to `Object`, and the grade-level PATCH stops mass-assigning into Prisma** (`PF-51`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-13.md`](./stories/S-E05-13.md) · **`PF-51` `in-progress`, explicitly NOT closed** — the row covers three clauses (PATCH bodies / query params / enum) and this slice closes the **first** only; the three unvalidated query params of `GET /enrollments` (`enrollments.controller.ts:122`) and the notification-kind clause both stay open, and `OPEN.md:73`’s standing instruction *“Do NOT flip this row on the strength of one parameter”* still holds · new **`ADR-064`** (§D1 a `@Body()` is a **class** — the metatype rule, ratchet-enforced across all 41 controllers; §D1a the derived Zod exemption as the single sanctioned second style, `MANUAL_ALLOWLIST` empty; §D1b the accepted negative — a controller may **not** annotate `@Body()` with a DTO imported from `@pilotage/contracts` or any non-relative module, because the classifier cannot prove it is a class; §D2 a privileged write **picks its fields**, never `data: body`, with the per-field blast-radius table; §D2a why both defences ship and why no test asserts a status code) · also records **`PF-284`**…**`PF-287`** · tests: `apps/api/src/modules/school-structure/grade-level-mass-assignment.spec.ts` (574 l) + `apps/api/src/shared/quality/body-metatype-gate.spec.ts` (849 l) — **written un-executed by their author, then EXECUTED at the land pass** — `npx jest --runInBand` gives **38/38** and **33/33** (71 green). A green run only proves half, so both defences were also proven **RED BY MUTATION** and the mutations reverted: deleting `forbidNonWhitelisted` from `main.ts` fails exactly the 6 hostile-key refusals, and restoring `data: body` fails exactly the 2 AC-4 assertions that read `Object.keys()` of the Prisma argument. The land pass also **fixed a twin-list defect the sprint raised against itself**: `GLOBAL_PIPE_OPTIONS` was a hand-transcribed copy of `main.ts:141-145`, so the first mutation above would have stayed green — it now DERIVES the options by reading `main.ts` and throws rather than defaulting if it cannot. The ratchet’s census (41 controllers / 77 `@Body()` / 4 sanctioned / 0 offenders) is now carried by an executed jest run, not only by a standalone classifier · evidence below |
 | **S-E05-7** | **The public registration funnel gains an admission bound: two tiers, one fixed window, in process** (`PF-46`, throttling third) | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E05-7.md`](./stories/S-E05-7.md) · **`PF-46` NARROWED, not closed** — the `emailVerified` third (R-3) stays open · new **`ADR-038`** (in-process admission bounds on pre-auth endpoints) — shipped *against* the story's own §5 "no new ADR", on Winston's ruling · raises **R-1** (the global ceiling is itself a DoS lever, real fix `infra/nginx/`) and **R-2** (per-process counters, `ADR-038` D2) · **the shipped constants diverge from the story's §1.4 and a human must ratify the numbers** · evidence below |
 | S-E05-8 | Wrong password reported as "MFA required" (`PF-25`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
@@ -809,3 +829,139 @@ citation namespace. `#263` merged mid-run (`825a009`) and the rebase brought the
 update `main`, so the next run measures a hole that is already fixed in flight and spends a finding id on it. The
 cheap defence is the one this run used by accident — **re-measure every raised finding after the rebase**, not only
 the one being closed.
+
+---
+
+## S-E05-13 — evidence (this PR, 2026-08-23)
+
+### What was actually wrong
+
+`PATCH /api/v1/cycles/grade-levels/:levelId` accepted an **entirely unvalidated** request body and handed it
+straight to `prisma.gradeLevel.update({ where: { id }, data: body })`.
+
+The mechanism was **read off the shipped build artefact**, not inferred.
+`apps/api/dist/modules/school-structure/cycles.controller.js` carried, verbatim:
+
+```js
+// createGradeLevel — the CONTROL: a real class survives erasure
+__metadata("design:paramtypes", [String, GradeLevelDto, Object]),
+// updateGradeLevel — the defect
+__metadata("design:paramtypes", [String, Object,        Object]),
+```
+
+Four measured links: `packages/tsconfig/node.json` sets `emitDecoratorMetadata: true` → `Partial<T>` is a mapped
+**type** with no runtime value, so the compiler emits `Object` → `Object` is in `ValidationPipe.toValidate()`’s own
+skip list, so the pipe returns the body **raw** → the global
+`new ValidationPipe({ transform, whitelist, forbidNonWhitelisted })` at `apps/api/src/main.ts:141-145` was
+**SKIPPED, not lenient**. That distinction is the whole finding: a reader auditing `main.ts` would have concluded the
+route was protected.
+
+`model GradeLevel` (`schema.prisma:385-406`, read, never edited) declares `tenantId`, `schoolId` and `cycleId` as
+writable `@db.Uuid` scalars, `GradeLevelUncheckedUpdateInput` accepts raw scalar FKs, and `grade_level` carries **no
+RLS policy** (checked across `apps/api/prisma/migrations/**/*.sql`). So `PATCH {"tenantId":"<foreign-uuid>"}` from a
+`school_admin` **pushed the row out of their own tenant**. `ADR-002` forbids that unconditionally. The `findUnique`
+guard three lines above reads the row’s **current** tenant and is structurally blind to the incoming body — it never
+stood between a caller and the write.
+
+The blast radius is wider than `tenantId`, and each escape differs in kind:
+
+- **`tenantId`** — no relation, no FK, no RLS. An arbitrary uuid orphans the row into a tenant that need not exist.
+- **`schoolId`** — an FK to `School`, so a school owned by tenant B is **FK-valid**. The row keeps tenant A’s
+  `tenantId` yet re-lists inside tenant B, because `list()` filters `where: { schoolId }` with no `tenantId`. **A
+  cross-tenant READ leak reached through a WRITE** — invisible to any assertion that only watches `tenantId`.
+- **`cycleId`** — re-parents the level under a foreign cycle, stranding the `SubjectCoefficient` rows
+  `createGradeLevel` auto-created, which still carry the old `tenantId`.
+
+`updateTerm` is reported as the **lesser** site and deliberately not conflated with it: it was **already**
+field-picking, so no tenancy escape was ever reachable there. What was real is that nothing type-checked the body at
+all and `new Date('pas-une-date')` reached Prisma as a 500 where the caller deserved a 400.
+
+### What the fix is, and why it has the shape it has
+
+**Two independent defences, and the asymmetry between them is the design.** Recorded in **`ADR-064`**:
+
+1. **Defence 1 — the annotation.** `UpdateGradeLevelDto` and `UpdateTermDto` are real classes declared inline beside
+   their POST siblings, with bounds **copied verbatim** — `UpdateTermDto.orderIndex` carries `@IsInt()` and
+   deliberately **no `@Min`**, because `TermDto` has none and a PATCH that refuses what its own POST accepts is a new
+   inconsistency smuggled in under cover of a hardening slice. Defence 1 restores the global pipe and nothing else
+   had to change for an unknown key to become a 400. It lives entirely in the annotation and **dies silently** on one
+   edit back to `Partial<>`, `unknown` or `any`.
+2. **Defence 2 — the field pick.** `data: { code, name, orderIndex }` with `?? undefined`. This is a property of the
+   **call site**, not of a decorator, so it holds even if defence 1 is regressed.
+
+A status code cannot tell the two apart, so **no test asserts one**: the pipe test drives a real `ValidationPipe`,
+and the mass-assignment test calls the handler **directly** — bypassing the pipe phase exactly as a regression would
+— and asserts on `Object.keys(...).sort()` of the argument handed to a deliberately **non-filtering** Prisma double.
+`expect(data.tenantId).toBeUndefined()` would have been green on the defect; the key-set oracle is not.
+
+**The durable half is a derived ratchet.** `apps/api/src/shared/quality/body-metatype-gate.spec.ts` parses all **41**
+controllers with the TypeScript compiler API (parse, never grep — the `hermetic-spec-writers-gate` doctrine), finds
+all **77** `@Body()` parameters, and asserts that none erases to `Object`. The single sanctioned second style is
+**derived, not listed**: a body `.parse()`/`.safeParse()`d by a schema **value-imported** from `@pilotage/contracts`
+— **4** such handlers today (`messaging.controller.ts:83/:225/:248`, `analytics.controller.ts:326`), and
+`MANUAL_ALLOWLIST` ships **empty**. `ParseUUIDPipe` lands on six path params.
+
+### What this slice deliberately did NOT do
+
+- **`PF-51` is `advanced`, never `closed`.** The row names three clauses — PATCH bodies, query params, enum. This
+  slice closes the first. The ratchet keys on `@Body()` metatypes and therefore **structurally cannot** hold the
+  other two closed. `OPEN.md:73`’s standing instruction — *“Do NOT flip this row on the strength of one
+  parameter”* — is obeyed, and **both** surviving remainders are named there: the notification-kind clause **and**
+  the three unvalidated query params of `GET /enrollments` (`enrollments.controller.ts:122`).
+- **`PF-283` was not touched.** It was ranked first by the previous land pass and it stays first.
+- **`PF-287` — the field-pick rule is not ratchet-enforced.** `ADR-064` states two rules; the gate enforces one.
+  Two `data: body` mass-assignments survive: `cycles.controller.ts:132` (`CyclesController.update`, **twelve lines
+  above** the handler this slice repaired) and `subjects.controller.ts:168`. Both are safe **today** only because
+  their DTO is a real class — defence 1 alone, the exact posture this slice’s own docblock argues is insufficient.
+- **`PF-284`** (a one-sided date PATCH skips `assertDateOrder`, which runs only when *both* dates are present, so a
+  term’s stored order can still be inverted — `@IsDateString()` provably cannot close it, because it validates each
+  field in isolation and never sees the row already loaded), **`PF-285`** (**six** privileged structural mutations
+  write no audit row: `createTerm`/`updateTerm`/`deleteTerm` and all three grade-level handlers — `cycles.controller.ts`
+  does not even import `writeAudit`), **`PF-286`** (the four Zod handlers never traverse the global pipe, so unknown
+  keys are silently **stripped**, not refused).
+
+### Evidence, and its named limits (DNC-06)
+
+- `pnpm typecheck` **13/13 tasks successful, 0 errors**; `git diff --check` exit 0.
+- The gate’s first pass returned **34 errors, all 34 inside the two new spec files**, none in the production
+  controllers. Two fixes are load-bearing rather than cosmetic. (a) An `expect(site).toBeDefined()` sitting
+  immediately above an indexed read was neither a TypeScript guard **nor** a runtime one: the worst failure of a
+  ratchet — the classifier stops recognising anything and greens the entire tree — would have surfaced as
+  `Cannot read properties of undefined` instead of its own message. All eleven sites now route through an
+  `onlySite()` that throws with the count it actually saw. (b) `PERMISSION_SITES` was annotated
+  `{ prototype: Record<string, object> }`, an annotation satisfiable **only** by adding an index signature to
+  `CyclesController`/`AcademicYearsController` — deforming production code to please its test. The annotation was
+  fixed; the controllers were not.
+- **Neither new suite has ever been executed.** The census figures (41 controllers / 77 `@Body()` / 4 sanctioned / 0
+  offenders) were re-derived by running the ratchet’s own classifier standalone against the repo’s `typescript`.
+  That is evidence for the **classifier**, not for jest.
+- **No HTTP request was issued and no browser was driven.** No `where` or `data` object built here has reached the
+  PostgreSQL query engine.
+
+### Merge conditions — none of them fixed here
+
+1. **Execute both suites**, and prove **defence 2 by mutation**: revert `data:` to `data: body` and watch AC-4 go
+   red. Defence 1 has eight fixture-driven red proofs; defence 2 — the half that survives a regression — has none.
+2. **`GLOBAL_PIPE_OPTIONS` is a hand-transcribed twin** of the literal at `main.ts:141-145`, labelled “RECOPIÉES”.
+   Delete `forbidNonWhitelisted` from `main.ts` and **every assertion in this PR stays green while production stops
+   refusing `{"tenantId":…}`** — and at that moment the only surviving defence is a field pick that exists at exactly
+   one call site. This is the paired-list drift this repo has already paid for. Derive the options from `main.ts`
+   (the gate spec already has `typescript` loaded) instead of transcribing them.
+3. **The `Partial<` census no longer returns zero.** `grep -rn "@Body() [a-zA-Z]*: Partial<" apps/api/src` now
+   returns **2 hits**, both of them the ratchet’s own **fixture string literals**. AC-1 asked for exit 1. This is the
+   same string-literal collision `hermetic-spec-writers-gate.spec.ts:26-34` already documents for `rmSync`; build the
+   fixture from a concatenation, or restate AC-1 as `--include=*.controller.ts`, and **re-measure** rather than
+   letting the PR body claim it.
+
+### Next run
+
+**`PF-283` still outranks everything this epic carries**, unchanged and undischarged — this run was scheduled over
+it, not instead of it. Then **`PF-287`**, which ranks second and not lower because it is the only entry whose price
+*rises with every slice that lands*: each new controller inherits a rule that is written down in `ADR-064` and
+enforced on one axis of two. Then `PF-284`, `PF-267`, `PF-277`, `PF-279`, and `S-E05-2b` as the standing pointer.
+
+**Id-allocation note.** This run took **`ADR-064`** and **`PF-284`** … **`PF-287`**. The escalation panel and two
+reviewers referred to the surviving-`data: body` finding as *“PF-289”*; that label is cited from **no** source file
+and **no** ledger row, and `PF-287`/`PF-288` were unallocated, so it is recorded here as **`PF-287`** — contiguous
+allocation, arbitrated the same way the `PF-185`/`PF-186` collision was. **The next run allocates from `PF-288` and
+`ADR-065`**, after re-checking open PRs.
