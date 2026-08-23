@@ -1,5 +1,7 @@
 # Next story
 
+> **Allocation note (run 72, at land).** The unwritten file-level source ratchet named in the run-72 section below is a finding in its own right — **`PF-279`** (P2, recorded in `traceability/OPEN.md`) — not merely a sentence in a narrative. The next run allocates from **`PF-280`** and **`ADR-063`**, after re-checking open PRs.
+
 # NEXT — written by run 72 (`S-E05-6`), 2026-08-23 — **this section supersedes every section below**
 
 ## ✅ The attendance roster payload stops being MAXIMAL — and the recommendation that produced the slice was half wrong
