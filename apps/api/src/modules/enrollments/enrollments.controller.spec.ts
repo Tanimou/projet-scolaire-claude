@@ -4,6 +4,7 @@ import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
 import type { PrismaService } from '../../shared/prisma/prisma.service';
 import type { NotificationsService } from '../notifications/notifications.service';
+import type { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { EnrollmentsController } from './enrollments.controller';
 
@@ -134,10 +135,20 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
   const users = { ensureUser: jest.fn().mockResolvedValue({ id: ACTOR, tenantId: TENANT }) };
   const notifications = { createMany: jest.fn().mockResolvedValue(undefined) };
 
+  // S-E05-14 — 4e argument du constructeur. Ce harnais ne touche AUCUN chemin
+  // qui le lit (`roster` est couvert par `enrollments-roster-abac.spec.ts`) :
+  // le talon existe pour que la construction reste valide, et AUCUNE assertion
+  // de ce fichier n’est modifiée (`AC-9`).
+  const teachers = {
+    findForUser: jest.fn().mockResolvedValue(null),
+    ensureForUser: jest.fn(),
+  };
+
   const controller = new EnrollmentsController(
     prisma as unknown as PrismaService,
     users as unknown as UserSyncService,
     notifications as unknown as NotificationsService,
+    teachers as unknown as TeacherProfileService,
   );
 
   return {

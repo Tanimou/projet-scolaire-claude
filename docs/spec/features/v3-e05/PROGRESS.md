@@ -2,8 +2,8 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-23)** `in-progress` — **eight slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)** and **`S-E05-6` (2026-08-23, this PR)**. Each was authored and implemented in the same
+**Status (2026-08-23)** `in-progress` — **nine slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, this PR — `PF-278` + `PF-280`, `ADR-063`)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
 remaining four (`S-E05-1`, `S-E05-4`, `S-E05-8` … `S-E05-10`) — plus **`S-E05-13`**, the renumbered
 `PF-51` placeholder, see the note below — still exist as **rows in
@@ -26,8 +26,37 @@ ahead of `PF-267`: `GET /api/v1/enrollments/roster/:classSectionId` (`enrollment
 defect this slice just closed — `include: { student: true }` on a class roster — but guarded only by
 `enrollments.read`, **which `parent` holds**, with a tenant check and no ABAC at all. Wider audience, no 403, same
 handler name, one module over. Ranking after this run: **`PF-278` → `PF-267` → `PF-277` → `S-E05-2b`**.)*
+*(Annotated a THIRD time 2026-08-23, `S-E05-14` land pass — **not** deleted, for the sixth time and the same
+reason: `S-E05-14` was scheduled over this pointer by operator override, and an override **schedules over** a
+recommendation without refuting it. `S-E05-2b` is still open, still unclaimed, still the epic's only live
+escalation path. **The header pointer at line 13 is contradicted by this file’s own "Next run" section and by
+`OPEN.md`, and has been since run 71; it is out of date, not an instruction.** `PF-278` — ranked first by the
+annotation directly above — is **closed by this PR**, on **both axes of its handler** and *not* as an exposure
+class: the same peer enumeration survives one handler over at `enrollments.controller.ts:122` and joins the queue
+as **`PF-283`** (`ADR-063 §D6`). Ranking after this run: **`PF-283` → `PF-267` → `PF-277` → `PF-279` →
+`S-E05-2b`** — `PF-283` leads because it is the only P1 in the queue and it is the residue this slice knowingly
+left. `PF-281` (`findForUser` ignores `TeacherProfile.active`) and `PF-282` (`ADR-060` is missing from
+`docs/adr/`) also join, at P2 and P3.)*
 Still open, still unclaimed: `S-E05-7` was scheduled over it by operator override, not instead of it. See "Next run"
 below, and § `S-E05-7` → "Next run" for the ranking as it stands after this slice.
+
+> **OPERATIVE NEXT SLICE (2026-08-23, `S-E05-14` land pass) → `S-E05-15` — `PF-283`: the enrollments LIST path gets
+> the wall `roster` just got.** The `Next slice →` line above is the *standing pointer* and is preserved by
+> convention (six overrides have now scheduled over it without refuting it); **this** line is the *ranking*, and
+> where the two disagree this is the one the next run should read. `S-E05-15` is **not yet authored** — no story
+> file exists under [`stories/`](./stories/) — and it must open with its own consumer census, because unlike
+> `roster` the **path** is consumed (`apps/web/src/app/admin/students/actions.ts:55`). Scope it to **both**
+> unscoped query axes (`?classSectionId=` **and** `?studentId=`) and to the
+> `classSection: { include: { gradeLevel: true } }` payload, or the ledger will read clean while the live half of
+> the exposure `PF-278`/`PF-280` name is still on the wire.
+>
+> **Census correction, taken at land and not inherited.** Three artefacts of this run — the `PF-283` row as first
+> written, `ADR-063 §D6`, and the escalation panel — state that this path "is consumed, unlike `roster`". That is
+> true of the **path** and false of the **handler**. `grep -rn "api/v1/enrollments" apps/web/src` returns three
+> hits and **all three are mutations**: `actions.ts:55` `POST /api/v1/enrollments`, `:74` `POST /:id/transfer`,
+> `:92` `PATCH /:id`. **No first-party caller issues the `GET`.** So `S-E05-15` may take the *same* treatment
+> `roster` just took — wall **and** projection — with no compatibility census owed. The correction runs in the
+> slice's favour, which is exactly why it would have been easy to carry the wrong version forward.
 
 *(Corrected 2026-08-11, `S-E05-2` land pass. Lines 5-12 used to read "`S-E05-12` … is the only one with a written
 story" and "**Next slice → not in this epic** … nothing in this epic is enumerated". Both were falsified by the diff
@@ -705,3 +734,78 @@ The third option, a **`V3-E06` follow-up** (resolve a baseline row's finding id 
 instead of a regex; clear `PF-103` a/b/c), is unchanged in priority by this slice.
 
 </details>
+
+---
+
+## `S-E05-14` — the enrollments roster gains the ABAC and the projection the attendance roster already had
+
+**Landed 2026-08-23 (run 73).** Closes `PF-278` (P1) and `PF-280` (P1, raised and closed in the same commit).
+Advances `PF-51` — **partial, ONE site**, never claimed closed. Decision record: `ADR-063`.
+
+### What changed
+
+`GET /api/v1/enrollments/roster/:classSectionId` (`apps/api/src/modules/enrollments/enrollments.controller.ts`)
+carried a tenant comparison and nothing else, while `enrollments.read` is held by `school_admin`, `teacher` **and
+`parent`**. Any authenticated parent of the establishment could enumerate any class section by id and read
+`medicalNotes`, `address`, `phone`, `email` and `birthDate` for every child in it, plus the class's admin-only
+`internalNotes`. The handler is now four steps: `ParseUUIDPipe` → `select`-only guard read (404) → ownership
+verdict (403) → projected payload. Privileged callers (`super_admin`/`school_admin`) pass; a teacher passes iff a
+`TeachingAssignment` row exists on that `classSectionId`; **everyone else, `parent` included, gets 403**.
+
+### The three things worth carrying forward
+
+1. **`ADR-061 §D1`’s academic-year coupling was deliberately NOT copied, and that is the one decision a reviewer
+   will read as an oversight.** `ADR-061`’s wall is *student*-keyed, where the year is free on both sides; this one
+   is *section*-keyed, and `ClassSection` is itself year-pinned (`academicYearId` non-null,
+   `@@unique([academicYearId, gradeLevelId, name])`), so the path parameter already supplies the year. Copying the
+   clause would have 403’d teachers who genuinely teach the class — `TeachingAssignment.academicYearId` has no
+   composite FK to `ClassSection.academicYearId`, so the two can diverge in data — and with **zero consumers**
+   nobody would ever have reported it. `ADR-063 §D1`, pinned by a fixture whose assignment carries a lapsed year.
+2. **The fail-open this slice could have shipped is a Prisma semantics trap, not a logic slip.** Prisma **drops
+   `undefined` keys from a `where`**, so `teacherProfileId: tp?.id` with a null profile would have matched *the
+   section's first assignment belonging to anyone* and **granted** the caller. Two mechanisms guard it: the pure
+   comparator checks the null first and independently, and the exported `teacherOfSectionWhere` builder types
+   `teacherProfileId` as non-optional so the dangerous call is unrepresentable. `ADR-063 §D2`; the spec asserts the
+   assignment query was never *issued*, which is the only assertion that can tell the two apart.
+3. **`PF-278` is closed on a HANDLER, not on a CLASS — and the PR says so.** `GET /enrollments?classSectionId=<id>`
+   (`:122`, same controller, same permission, same parent grant) has no ABAC either. Its student projection is
+   already `ADR-062`-shaped so the medical-data leak is not there, but peer identity enumeration survives.
+   Recorded as `PF-283`; it is consumed (`apps/web/src/app/admin/students/actions.ts:55`) so it needs its own
+   census and its own slice. Claiming the class closed would have been a `DNC-06` violation at story level.
+
+### What was NOT executed
+
+No agent in this run ran jest, `pnpm typecheck` or any build (CPU budget: only the test-architect runs the chain).
+What actually ran is the schema read, the permission-catalogue read, and the **consumer census**:
+`grep -rn "enrollments/roster" apps/ packages/` → exit 1, **zero first-party callers** across admin, teacher,
+parent and student. The census is the G-PORTAL evidence; four asserted ticks would not have been. The `role`-table
+count in the `PF-268` docblock is **cited** from `attendance.controller.ts:133`, not re-measured — copying it as a
+fresh observation would have fabricated evidence.
+
+### Next run
+
+**`PF-283` outranks everything else this epic carries**, for the same reason `PF-278` did last run and with one
+difference: it is the residue this slice knowingly left, and it is named in `ADR-063 §D6` rather than discovered.
+Then `PF-267` (`justify` still has no ownership check on a WRITE), then `PF-277` (the residual `student: true`
+sites), then `PF-279` (the file-level source ratchet in `attendance`). `S-E05-2b` remains the epic’s standing
+pointer, scheduled over a sixth time and not refuted. New this run: `PF-281` (P2, `findForUser` ignores
+`TeacherProfile.active` — cross-cutting, it silently tightens four already-landed handlers) and `PF-282` (P3,
+`ADR-060` is missing from `docs/adr/`).
+
+**Id-collision note.** Three agents allocated `PF-280` to three different subjects in the same planning pass. It
+was arbitrated **by meaning**, not by date (the `PF-185`/`PF-186` rule from runs 53/54), and the arbitration table
+is recorded in `ADR-063` § "Id arbitration": `PF-280` = the roster `ClassSection` payload (closed here, because
+the story spec is the operator override and names it), `PF-281` = `findForUser`/`active`, `PF-282` = the missing
+`ADR-060`, `PF-283` = the list-path peer enumeration.
+
+### `PF-282` — corrected at the land pass of `S-E05-14` (2026-08-23)
+
+`PF-282` was raised as *« `ADR-060` is absent from `docs/adr/` »* and it was **true when measured**: `ADR-060` was
+authored by `S-E01-1l`, which was sitting in **held** PR `#263`, so a run reading `main` genuinely saw a gap in the
+citation namespace. `#263` merged mid-run (`825a009`) and the rebase brought the file in. The row is moved to
+`CLOSED-L0.md` as `closed-by-other-work` rather than deleted.
+
+**The mechanism is worth keeping**, because it is the documentation-side twin of `PF-231`/`PF-232`: a held PR does not
+update `main`, so the next run measures a hole that is already fixed in flight and spends a finding id on it. The
+cheap defence is the one this run used by accident — **re-measure every raised finding after the rebase**, not only
+the one being closed.

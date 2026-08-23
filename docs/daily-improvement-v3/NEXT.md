@@ -1,5 +1,82 @@
 # Next story
 
+> **Allocation note (run 73, at land).** This run took **`ADR-063`** and allocated **`PF-280`** … **`PF-283`**.
+> Three planning agents each allocated `PF-280` to a **different** subject in the same pass; it was arbitrated **by
+> meaning**, not by date (the `PF-185`/`PF-186` rule from runs 53/54), and the arbitration table lives in `ADR-063`
+> § "Id arbitration". **The next run allocates from `PF-284` and `ADR-064`**, after re-checking open PRs.
+
+# NEXT — written by run 73 (`S-E05-14`), 2026-08-23 — **this section supersedes every section below**
+
+## ✅ The enrollments roster gains the ABAC and the projection the attendance roster already had
+
+Runs 71 and 72 closed both axes of `PF-07` in `attendance`. **The identical defect was still live one module over,
+on a handler with the same name and a WIDER audience.** `GET /api/v1/enrollments/roster/:classSectionId`
+(`apps/api/src/modules/enrollments/enrollments.controller.ts`) was guarded by `enrollments.read` — a permission
+`parent` holds (`permissions.constants.ts:259`) — carried **only** a tenant comparison, took `classSectionId` as a
+free path parameter, and returned `include: { student: true }` plus the **whole `ClassSection` row**. Any
+authenticated parent of the establishment could enumerate **any** class section by id and read `medicalNotes`,
+`address`, `phone`, `email` and `birthDate` for every child in it, plus the class's admin-only `internalNotes`.
+
+It is now four steps: `ParseUUIDPipe` → `select`-only guard read (404) → ownership verdict (403) → projected
+payload. `PF-278` and `PF-280` are closed; `PF-51` gains **partial** progress on **one** site and is **not** flipped.
+
+### ⚠️ Read these three before re-implementing anything from the run-72 section below
+
+1. **`ADR-061 §D1`’s academic-year coupling is deliberately NOT copied here — `ADR-063 §D1`.** It reads as an
+   oversight and is not one. `ADR-061`’s wall is *student*-keyed, where the year is free on both sides. This one is
+   *section*-keyed, and `ClassSection` is year-pinned (`academicYearId` non-null, `@@unique([academicYearId,
+   gradeLevelId, name])`), so the path parameter already supplies the year. Copying the clause would 403 teachers
+   who **genuinely** teach the class — `TeachingAssignment.academicYearId` has no composite FK to
+   `ClassSection.academicYearId`, so the two can diverge in data — and with zero consumers nobody would ever report
+   it. Do not "restore consistency" with `ADR-061` here.
+2. **Prisma drops `undefined` keys from a `where`, and that is a fail-open on an ABAC path.**
+   `teachingAssignment.findFirst({ where: { tenantId, classSectionId, teacherProfileId: tp?.id } })` with a null
+   profile matches *the section's first assignment belonging to anyone* and **grants** the caller. The exported
+   `teacherOfSectionWhere` builder types `teacherProfileId` as **non-optional** so the dangerous call is
+   unrepresentable, and the pure comparator refuses the null **before** the `where` is built. `ADR-063 §D2`. The
+   only assertion that distinguishes the two is *"the assignment query was never issued"* — assert that, not the
+   403 alone.
+3. **`PF-278` is closed on a HANDLER, not on an exposure CLASS.** Do not write "any authenticated parent can
+   enumerate any class section — closed". `GET /enrollments?classSectionId=<id>` (`:122`, same controller, same
+   permission, same `parent` grant) still has **no ABAC**. Its student projection is already `ADR-062`-shaped, so
+   the medical-data leak is not there — but **peer identity enumeration survives**. `ADR-063 §D6`.
+
+## ⛔ CLAIMED IDS — do not re-select, do not re-allocate
+
+- **`PF-280` was allocated THREE times and has been arbitrated.** `PF-280` = the roster response emitting the whole
+  `ClassSection` row (`internalNotes` + `options`), **closed by this PR** — the story spec is the operator override
+  and it names `PF-280` as the payload finding. `PF-281` = `findForUser` ignores `TeacherProfile.active`.
+  `PF-282` = `ADR-060` is missing from `docs/adr/`. `PF-283` = the list-path peer enumeration, renumbered **by
+  meaning** off `PF-280`. Full table: `ADR-063` § "Id arbitration".
+- **This run took `ADR-063`.** The next run allocates from **`PF-284`** and **`ADR-064`**.
+
+## The ranking after this run
+
+**`PF-283` → `PF-267` → `PF-277` → `PF-279` → `S-E05-2b`.**
+
+`PF-283` leads because it is the only P1 in the queue and it is the residue this slice knowingly left — the natural
+`S-E05-15`. Unlike `roster`, that path **is** consumed (`apps/web/src/app/admin/students/actions.ts:55`, admin
+portal), so it needs its own consumer census before it can be locked; that census is the work, not the guard.
+Then `PF-267` (`justify` — the only unguarded MUTATION in `attendance.controller.ts`), then `PF-277` (the residual
+`include: { student: true }` sites outside attendance, plus two in the worker), then `PF-279` (the file-level
+source ratchet). `S-E05-2b` remains the epic’s standing pointer, scheduled over a **sixth** time and not refuted.
+
+## What was NOT executed, said plainly
+
+No agent ran jest, `pnpm typecheck` or any build this run (CPU budget: only the test-architect runs the chain), so
+**the new spec has never been executed by its author**. What actually ran: the schema read
+(`ClassSection.academicYearId` + its `@@unique`; `TeachingAssignment`’s `@@unique` and its absent `active` flag),
+the permission-catalogue read (`student` does **not** hold `enrollments.read`, so the student portal is refused at
+the guard before any new code), and the **consumer census** — `grep -rn "enrollments/roster" apps/ packages/` →
+exit 1, **zero first-party callers**. The census *is* the G-PORTAL evidence. The `select count(*) from role` → 0
+figure in the new `PF-268` docblock is **cited** from `attendance.controller.ts:133`, not re-measured.
+
+**G-MIGRATION is NOT triggered** — `schema.prisma` was read, not edited; zero migrations; therefore **no
+`scripts/restore-drill-baseline.json` entry is owed**. Stated explicitly because that omission has burned four runs.
+`scripts/boot-route-baseline.json:68` stays byte-unchanged — a `ParseUUIDPipe` on a `@Param` changes no path.
+
+---
+
 > **Allocation note (run 72, at land).** The unwritten file-level source ratchet named in the run-72 section below is a finding in its own right — **`PF-279`** (P2, recorded in `traceability/OPEN.md`) — not merely a sentence in a narrative. The next run allocates from **`PF-280`** and **`ADR-063`**, after re-checking open PRs.
 
 # NEXT — written by run 72 (`S-E05-6`), 2026-08-23 — **this section supersedes every section below**
