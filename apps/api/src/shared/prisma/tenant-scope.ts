@@ -152,6 +152,28 @@ export interface AppRolePrivilegeRequirement {
  * pas seulement pour le module fautif. Les tables FK-dérivées (`announcement_
  * receipt`, `user_role`) ont un ensemble de privilèges CLOS sans `DELETE`
  * (ADR-042 §D5) : c'est là que la faute est la plus facile à commettre.
+ *
+ * S-E01-1k — CETTE LISTE N'EST PLUS SEULE À SE RELIRE. Elle reste écrite à la
+ * main — une RAISON ne se dérive pas — mais elle est désormais comparée, DANS
+ * LES DEUX SENS, à une clôture DÉRIVÉE du corpus par
+ * `scripts/tenant-adversarial-check.js` (`derivePrivilegeClosure` /
+ * `privilegeClosureDrift`, ADR-059). La dérivation part des sites d'appel
+ * attribués EXACTEMENT `scoped` — jamais d'un grep `tx.`, qui confondrait la
+ * portée locataire avec le `$transaction` du PROPRIÉTAIRE — puis elle DESCEND la
+ * profondeur relationnelle que `where` / `select` / `include` / `orderBy` /
+ * `_count.select` traversent, en résolvant chaque relation contre
+ * `schema.prisma`. Une paire dérivée absente d'ici échoue (`undeclared-pair`) ;
+ * une entrée d'ici que la dérivation ne voit pas échoue aussi
+ * (`dead-entry-advisory`) — mais elle ne s'EFFACE PAS sur ce seul constat : la
+ * dérivation est bornée par ce qu'une analyse statique peut voir, donc retirer
+ * une paire exige un négatif MESURÉ (REVOKE sur une base jetable, le handler
+ * toujours 200). Supprimer un droit sur la foi d'un `dead-entry` serait une
+ * panne 42501 verte au démarrage, sur les quatre portails à la fois.
+ *
+ * CE QUE LA MÉCANISATION A TROUVÉ DÈS SON PREMIER PASSAGE : `guardian.SELECT`.
+ * Trente-sept entrées relues à la main sur cinq tranches, et la trente-huitième
+ * a été nommée par la machine en une exécution. C'est la mesure du défaut, pas
+ * une anecdote.
  */
 export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[] = Object.freeze([
   // ── calendar (S-E01-1d, S-E01-5) ────────────────────────────────────────
@@ -235,6 +257,18 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
     privilege: 'SELECT',
     why: 'ABAC parent de lessons/list (branche `studentId`) : sans elle, le portail PARENT — le ' +
       'cœur du produit — refuse chaque consultation du cahier de texte d’un enfant',
+  },
+  {
+    table: 'guardian',
+    privilege: 'SELECT',
+    why: 'S-E01-1k / PF-246 — la garde ABAC parent de lessons/list ne filtre pas sur une colonne ' +
+      'mais sur une RELATION : le `findFirst` sur `guardianship` porte un `where` dont le membre ' +
+      '`guardian` est lui-même un objet `userProfileId` (lessons.controller.ts:366). Sous RLS un filtre relationnel ' +
+      'est une LECTURE de la table cible — Postgres joint `guardian` et lève 42501 sans ce ' +
+      'privilège. La table N’EST PAS un délégué racine : aucun `tx.guardian.<verbe>(` n’existe ' +
+      'dans l’arbre, et c’est exactement pourquoi TROIS relectures humaines de cette liste ne ' +
+      'l’ont pas vue. C’est la DÉRIVATION de cette tranche qui l’a nommée, mesurée détenue ' +
+      '(app_user : SELECT sur `guardian`, RLS active, 1 policy) AVANT d’être déclarée',
   },
   {
     table: 'subject',

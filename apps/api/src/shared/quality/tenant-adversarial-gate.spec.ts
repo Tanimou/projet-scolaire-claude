@@ -2,6 +2,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { TENANT_GUC } from '../prisma/prisma.service';
+// S-E01-1k / AC-5 — la liste GÉNUINEMENT IMPORTÉE, celle sur laquelle
+// `appRoleVerdict` démarre. La fidélité du lecteur du gate se prouve CONTRE
+// elle : sans cet import, tout ce fichier pourrait être vert sur une liste que
+// personne ne charge.
+import { APP_ROLE_REQUIRED_PRIVILEGES } from '../prisma/tenant-scope';
 
 /**
  * S-E01-3 / VAL-02 — LE GARDE HERMÉTIQUE de `scripts/tenant-adversarial-check.js`.
@@ -177,6 +182,27 @@ function executableJs(source: string): string {
 
 const CHECKER_CODE = executableJs(CHECKER);
 
+/**
+ * S-E01-1k — les deux formes que la clôture dérivée fait circuler, NOMMÉES une
+ * seule fois : un `any` ici rendrait muettes toutes les assertions ci-dessous.
+ */
+interface PrismaModelNode {
+  name: string;
+  clientProperty: string;
+  table: string | null;
+  fields: Map<string, { type: string; isRelation: boolean; list: boolean; optional: boolean }>;
+  relations: Map<string, string>;
+  compoundKeys: Map<string, string[]>;
+}
+interface DerivedPair {
+  table: string;
+  privilege: string;
+  origin: 'root' | 'relation' | 'policy';
+  example: string;
+  via: string | null;
+  hits: number;
+}
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 const checker = require(CHECKER_PATH) as {
   APPEND_ONLY_TABLES: readonly string[];
@@ -244,6 +270,49 @@ const checker = require(CHECKER_PATH) as {
     unbalanced: number;
   };
   prismaModelName: (table: string) => string;
+  // S-E01-1k / ADR-059 — la clôture de privilèges DÉRIVÉE. Même règle que
+  // ci-dessus : un nom de champ périmé ici est un échec de TYPECHECK, jamais un
+  // spec qui passe en silence.
+  APP_ROLE_CLOSURE_EXCEPTIONS: ReadonlyArray<{ table: string; privilege: string; why: string }>;
+  MIN_CLOSURE_INPUT_SITES: number;
+  PRISMA_ARGUMENT_KEYS: Record<string, 'relation' | 'inert' | 'write-payload'>;
+  RELATION_MODIFIER_KEYS: readonly string[];
+  NESTED_WRITE_KEYS: readonly string[];
+  closureKey: (table: string, privilege: string) => string;
+  parseAppRoleRequiredPrivileges: (source: string) => {
+    pairs: Array<{ table: string; privilege: string; why: string; key: string }>;
+    problems: Array<{ kind: string; detail?: string; table?: string; privilege?: string }>;
+  };
+  parsePrismaSchema: (source: string) => {
+    models: Map<string, PrismaModelNode>;
+    byClientProperty: Map<string, PrismaModelNode>;
+    modelToTable: Map<string, string>;
+    problems: Array<{ kind: string; model?: string; detail?: string }>;
+  };
+  parseDerivedChildParents: (sql: string) => {
+    parents: Map<string, { parent: string; fk: string; privileges: string }>;
+    problems: Array<{ kind: string; detail?: string }>;
+  };
+  derivePrivilegeClosure: (input: {
+    sources: ReadonlyArray<{ path: string; text: string }>;
+    schema: unknown;
+    derivedChildParents?: Map<string, { parent: string; fk: string; privileges: string }>;
+  }) => {
+    derived: Map<string, DerivedPair>;
+    problems: Array<{ kind: string; where?: string; detail?: string }>;
+    scopedSites: number;
+    sitesWalked: number;
+    unbalancedFiles: Map<string, number>;
+  };
+  privilegeClosureDrift: (input: {
+    declared?: ReadonlyArray<{ table: string; privilege: string; why?: string }>;
+    declaredProblems?: ReadonlyArray<{ kind: string; detail?: string; table?: string; privilege?: string }>;
+    derived?: Map<string, DerivedPair>;
+    derivedProblems?: ReadonlyArray<{ kind: string; where?: string; detail?: string }>;
+    exceptions?: ReadonlyArray<unknown>;
+    unbalancedFiles?: Map<string, number>;
+    scopedSites?: number;
+  }) => Array<{ kind: string; pair: string | null; detail: string }>;
 };
 const sibling = require(SIBLING_PATH) as {
   AUTO_DISCRIMINANT_PRIVILEGES: string;
@@ -1904,3 +1973,677 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
     expect("'RLS: isolated'").not.toContain('the APPLICATION IS NOT');
   });
 });
+
+/**
+ * S-E01-1k / PF-246 / PF-219 / ADR-059 — LA CLÔTURE DE LA SONDE DE DÉMARRAGE
+ * CESSE D'ÊTRE ÉCRITE À LA MAIN ET DEVIENT DÉRIVÉE.
+ *
+ * CE QUE CE `describe` ACHÈTE, ET POURQUOI IL EST ICI PLUTÔT QUE DANS UN MODULE.
+ * `APP_ROLE_REQUIRED_PRIVILEGES` est parcourue AU DÉMARRAGE par `appRoleVerdict` :
+ * une paire MANQUANTE fait certifier `enforcing: true` sur une clôture jamais
+ * vérifiée (42501 à l'exécution), une paire EN TROP rend `refused_unusable` et
+ * refuse la DEUXIÈME connexion de l'application — admin, teacher, parent ET
+ * student tombent ENSEMBLE. Le rayon de souffle est global, donc la preuve l'est
+ * aussi : elle vit avec les autres gardes transverses, pas dans un module.
+ *
+ * TOUT CE QUI SUIT EST HERMÉTIQUE (ADR-039) : des fonctions PURES nourries de
+ * source SYNTHÉTIQUE, sans base de données et sans scan du dépôt — sauf UNE
+ * assertion, la fidélité du lecteur (AC-5), qui DOIT lire le vrai fichier
+ * puisque c'est précisément ce qu'elle prouve.
+ *
+ * LES TROIS PIÈGES QUE CES TESTS ÉPINGLENT, chacun mesuré et non imaginé :
+ *  1. `tx` est le paramètre de callback de la portée locataire ET de
+ *     `this.prisma.$transaction`, qui tourne sur la connexion du PROPRIÉTAIRE.
+ *     Un grep `tx.` produit trois paires FANTÔMES. Seule l'attribution
+ *     POSITIONNELLE les distingue.
+ *  2. Une relation traversée par un `where`, un `select`, un `include`, un
+ *     `orderBy` ou un `_count.select` est une table LUE sous RLS. Un dérivateur
+ *     qui ne voit que les délégués racines est MOINS complet que la liste qu'il
+ *     remplace, et ses angles morts se présentent comme des `dead-entry` — donc
+ *     comme une invitation à supprimer un droit dont le runtime a besoin.
+ *  3. Un `include: CONSTANTE_HISSÉE` (20 sites mesurés, dont huit `PLAN_INCLUDE`)
+ *     est invisible à un dérivateur qui ne lit que les littéraux en ligne.
+ */
+describe('S-E01-1k / ADR-059 — la clôture de privilèges est DÉRIVÉE, dans les deux sens', () => {
+  /** Un schéma SYNTHÉTIQUE minuscule : la forme, pas le vrai catalogue. */
+  const SCHEMA = [
+    'enum Status { active }',
+    'model Grade {',
+    '  id           String  @id',
+    '  tenantId     String  @map("tenant_id")',
+    '  assessmentId String  @map("assessment_id")',
+    '  assessment   Assessment @relation(fields: [assessmentId], references: [id])',
+    '  @@map("grade")',
+    '}',
+    'model Assessment {',
+    '  id       String @id',
+    '  termId   String @map("term_id")',
+    '  term     Term   @relation(fields: [termId], references: [id])',
+    '  grades   Grade[]',
+    '  @@unique([id, termId])',
+    '  @@map("assessment")',
+    '}',
+    'model Term {',
+    '  id     String @id',
+    '  status Status',
+    '  @@map("term")',
+    '}',
+    'model Booking {',
+    '  id     String @id',
+    '  tutorId String @map("tutor_id")',
+    '  tutor  Tutor  @relation(fields: [tutorId], references: [id])',
+    '  @@map("booking")',
+    '}',
+    'model Tutor {',
+    '  id       String    @id',
+    '  bookings Booking[]',
+    '  @@map("tutor")',
+    '}',
+    'model AuditLog {',
+    '  id String @id',
+    '  @@map("audit_log")',
+    '}',
+  ].join('\n');
+
+  const schema = (): ReturnType<typeof checker.parsePrismaSchema> => checker.parsePrismaSchema(SCHEMA);
+  const derive = (
+    text: string,
+    path = 'apps/api/src/modules/fixture/fixture.service.ts',
+  ): ReturnType<typeof checker.derivePrivilegeClosure> =>
+    checker.derivePrivilegeClosure({ sources: [{ path, text }], schema: schema() });
+  const keys = (out: ReturnType<typeof checker.derivePrivilegeClosure>): string[] =>
+    [...out.derived.values()].map((e) => `${e.table}.${e.privilege}`).sort();
+
+  // -------------------------------------------------------------------------
+  describe('ADR-059 §D2 — le graphe modèle → table → relation vient de schema.prisma', () => {
+    it('il lit les @@map, les relations ET les clés composées', () => {
+      const parsed = schema();
+      expect(parsed.problems).toEqual([]);
+      expect(parsed.modelToTable.get('grade')).toBe('grade');
+      expect(parsed.byClientProperty.get('grade')?.relations.get('assessment')).toBe('Assessment');
+      // `@@unique([id, termId])` devient la clé de recherche `id_termId`, qui
+      // n'est NI une colonne NI une relation. Sans elle, `where:
+      // { id_termId: {...} }` remontait comme un champ inconnu — un refus
+      // fail-closed sur une simple recherche scalaire (mesuré deux fois sur le
+      // vrai corpus).
+      expect([...(parsed.byClientProperty.get('assessment')?.compoundKeys.keys() ?? [])]).toEqual(['id_termId']);
+    });
+
+    it('un modèle SANS @@map est NOMMÉ, jamais toléré (DNC-08)', () => {
+      const bad = checker.parsePrismaSchema('model Orphan {\n  id String @id\n}');
+      expect(bad.problems.map((p) => p.kind)).toContain('model-without-map');
+    });
+
+    it('un schéma VIDE est un PROBLÈME, pas un graphe vide', () => {
+      // La direction dangereuse : un graphe vide rend toute relation invisible et
+      // fait passer la liste déclarée ENTIÈRE pour morte.
+      const empty = checker.parsePrismaSchema('');
+      expect(empty.problems.map((p) => p.kind)).toContain('no-models');
+      expect(empty.models.size).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('AC-2 / AC-1 — l’attribution est POSITIONNELLE, jamais un grep `tx.`', () => {
+    /**
+     * LE PIÈGE, REPRODUIT EN MINIATURE. Les deux callbacks lient `tx`. Le premier
+     * est la portée locataire (`app_user`, RLS appliqué) ; le second est
+     * `this.prisma.$transaction`, la connexion du PROPRIÉTAIRE, qui échappe aux
+     * policies. Un dérivateur sans attribution positionnelle rend DEUX paires.
+     */
+    const BOTH = [
+      'export class Fixture {',
+      '  async run(a: string) {',
+      '    await this.scope.run(a, async (tx) => {',
+      '      await tx.grade.findMany({ where: { tenantId: a } });',
+      '    });',
+      '    await this.prisma.$transaction(async (tx) => {',
+      '      await tx.booking.create({ data: { id: a } });',
+      '    });',
+      '  }',
+      '}',
+    ].join('\n');
+
+    it('UNE paire dérivée, pas deux : l’écriture du `$transaction` propriétaire est REFUSÉE', () => {
+      const out = derive(BOTH);
+      expect(out.problems).toEqual([]);
+      expect(out.scopedSites).toBe(1);
+      expect(keys(out)).toEqual(['grade.SELECT']);
+      // La direction qui échoue, énoncée : la paire fantôme est ABSENTE.
+      expect(out.derived.has(checker.closureKey('booking', 'INSERT'))).toBe(false);
+    });
+
+    it('un récepteur PROPRIÉTAIRE dans une portée ne compte pas non plus', () => {
+      const owner = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await this.prisma.grade.findMany({ where: { tenantId: a } });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      const out = derive(owner);
+      // `classifyCallSite` rend `owner-inside-scope` : la requête tourne sur la
+      // connexion du propriétaire, donc elle n'exige AUCUN droit d'`app_user`.
+      expect(out.scopedSites).toBe(0);
+      expect(keys(out)).toEqual([]);
+    });
+
+    it('un fichier dont la portée ne se referme pas contribue ZÉRO et est NOMMÉ (TOOL-39)', () => {
+      const unbalanced = [
+        '/**',
+        ' * Une phrase de docblock qui nomme this.scope.run( sans jamais la refermer.',
+        ' */',
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.grade.findMany({ where: { tenantId: a } });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      const out = derive(unbalanced);
+      expect(out.unbalancedFiles.size).toBe(1);
+      expect(keys(out)).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('AC-3 — la PROFONDEUR RELATIONNELLE est marchée, et l’illisible est NOMMÉ', () => {
+    it('trois niveaux : grade → assessment → term, depuis un `select` imbriqué', () => {
+      const deep = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.grade.findMany({',
+        '        where: { tenantId: a },',
+        '        select: { id: true, assessment: { select: { term: { select: { id: true } } } } },',
+        '      });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      const out = derive(deep);
+      expect(out.problems).toEqual([]);
+      expect(keys(out)).toEqual(['assessment.SELECT', 'grade.SELECT', 'term.SELECT']);
+      expect(out.derived.get(checker.closureKey('term', 'SELECT'))?.origin).toBe('relation');
+      expect(out.derived.get(checker.closureKey('term', 'SELECT'))?.via).toBe('select.assessment.term');
+    });
+
+    it('un FILTRE relationnel de `where` compte autant qu’un `include` — c’est PF-246', () => {
+      const filtered = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.grade.findFirst({ where: { tenantId: a, assessment: { termId: a } } });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      expect(keys(derive(filtered))).toEqual(['assessment.SELECT', 'grade.SELECT']);
+    });
+
+    it('`orderBy` sur une relation est une JOINTURE, donc une LECTURE', () => {
+      const ordered = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.grade.findMany({ where: { tenantId: a }, orderBy: { assessment: { id: "desc" } } });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      expect(keys(derive(ordered))).toEqual(['assessment.SELECT', 'grade.SELECT']);
+    });
+
+    it('`_count: { select: { relation } }` compte ; `_count: { _all: true }` ne compte pas', () => {
+      const counted = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.tutor.findMany({ select: { id: true, _count: { select: { bookings: true } } } });',
+        '      await tx.tutor.findMany({ select: { _count: { _all: true } } });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      expect(keys(derive(counted))).toEqual(['booking.SELECT', 'tutor.SELECT']);
+    });
+
+    it('PF-250 — une CONSTANTE HISSÉE passée en `include:` est RÉSOLUE, pas ignorée', () => {
+      // La forme mesurée sur le vrai arbre : `PLAN_INCLUDE` est déclaré ligne 21,
+      // HORS de toute portée, et utilisé à huit sites d'appel DANS une portée. Un
+      // dérivateur en-ligne-seulement rend zéro relation, puis la comparaison
+      // bidirectionnelle déclare MORTES deux paires correctement déclarées.
+      const hoisted = [
+        'const PLAN_INCLUDE = {',
+        '  assessment: { select: { term: { select: { id: true } } } },',
+        '} satisfies Prisma.GradeInclude;',
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.grade.findMany({ where: { tenantId: a }, include: PLAN_INCLUDE });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      const out = derive(hoisted);
+      expect(out.problems).toEqual([]);
+      expect(keys(out)).toEqual(['assessment.SELECT', 'grade.SELECT', 'term.SELECT']);
+    });
+
+    it('un identifiant NON résoluble est NOMMÉ et FAIT ÉCHOUER — jamais « aucune relation »', () => {
+      const unknown = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.grade.findMany({ where: { tenantId: a }, include: SOMETHING_ELSE });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      const out = derive(unknown);
+      expect(out.problems.map((p) => p.kind)).toEqual(['unresolvable-argument-reference']);
+      // …et le problème REMONTE jusqu'au verdict, il ne reste pas dans un coin.
+      const drift = checker.privilegeClosureDrift({
+        declared: declaredFixture(40),
+        derived: out.derived,
+        derivedProblems: out.problems,
+        scopedSites: 70,
+      });
+      expect(drift.map((f) => f.kind)).toContain('unparseable-argument');
+    });
+
+    it('une clé d’argument HORS du jeu FERMÉ est NOMMÉE (DNC-08)', () => {
+      const weird = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.grade.findMany({ whereish: { tenantId: a } });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      expect(derive(weird).problems.map((p) => p.kind)).toEqual(['unknown-argument-key']);
+      // Le jeu est FERMÉ, et il est affirmé ici plutôt que raconté.
+      expect(checker.PRISMA_ARGUMENT_KEYS.orderBy).toBe('relation');
+      expect(checker.PRISMA_ARGUMENT_KEYS.data).toBe('write-payload');
+      expect(checker.PRISMA_ARGUMENT_KEYS.whereish).toBeUndefined();
+    });
+
+    it('une ÉCRITURE IMBRIQUÉE sous `data` est REFUSÉE plutôt que modélisée', () => {
+      // Grepé sur les cinq modules convertis à aaff53b : ZÉRO. Ce n'est donc pas
+      // un trou vivant, c'est le PROCHAIN PF-246, et il coûte une entrée de jeu
+      // fermé à désamorcer.
+      const nested = [
+        'export class Fixture {',
+        '  async run(a: string) {',
+        '    await this.scope.run(a, async (tx) => {',
+        '      await tx.booking.create({ data: { id: a, tutor: { connect: { id: a } } } });',
+        '    });',
+        '  }',
+        '}',
+      ].join('\n');
+      expect(derive(nested).problems.map((p) => p.kind)).toEqual(['nested-write-under-payload']);
+    });
+
+    it('PF-252 — une policy FK-dérivée ajoute le SELECT du PARENT, que nul site d’appel ne montre', () => {
+      const sql = [
+        'derived CONSTANT text[][] := ARRAY[',
+        "  ARRAY['announcement_receipt', 'announcement_id', 'announcement', 'SELECT, INSERT, UPDATE'],",
+        "  ARRAY['grade_revision',       'grade_id',        'grade',        'SELECT, INSERT']",
+        '];',
+      ].join('\n');
+      const policies = checker.parseDerivedChildParents(sql);
+      expect(policies.problems).toEqual([]);
+      expect(policies.parents.get('grade_revision')?.parent).toBe('grade');
+      const out = checker.derivePrivilegeClosure({
+        sources: [
+          {
+            path: 'apps/api/src/modules/fixture/fixture.service.ts',
+            text: [
+              'export class Fixture {',
+              '  async run(a: string) {',
+              '    await this.scope.run(a, async (tx) => {',
+              '      await tx.booking.findMany({ where: { tenantId: a } });',
+              '    });',
+              '  }',
+              '}',
+            ].join('\n'),
+          },
+        ],
+        schema: schema(),
+        derivedChildParents: new Map([['booking', { parent: 'tutor', fk: 'tutor_id', privileges: 'SELECT' }]]),
+      });
+      expect(keys(out)).toEqual(['booking.SELECT', 'tutor.SELECT']);
+      expect(out.derived.get(checker.closureKey('tutor', 'SELECT'))?.origin).toBe('policy');
+    });
+
+    it('un tableau ARRAY vide ou introuvable dans la migration est un PROBLÈME', () => {
+      expect(checker.parseDerivedChildParents('-- rien ici').problems.map((p) => p.kind)).toEqual([
+        'derived-policy-table-not-found',
+      ]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('ADR-059 §D1 — le côté DÉCLARÉ est LU, jamais retapé ni pris dans dist/', () => {
+    const FIXTURE = [
+      'export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[] = Object.freeze([',
+      "  // Un commentaire qui cite `assessment: { teachingAssignment: { subjectId } }`,",
+      '  // exactement la forme qui avait fabriqué trois entrées fantômes.',
+      "  { table: 'grade', privilege: 'SELECT', why: 'les notes publiées de l’élève lui-même' },",
+      '  {',
+      "    table: 'assessment',",
+      "    privilege: 'SELECT',",
+      "    why: 'relation TRAVERSÉE, pas racine : chaque note descend son assessment ' +",
+      "      '(titre, barème, coefficient)',",
+      '  },',
+      ']);',
+    ].join('\n');
+
+    it('il lit les entrées, y compris une raison CONCATÉNÉE sur plusieurs lignes', () => {
+      const read = checker.parseAppRoleRequiredPrivileges(FIXTURE);
+      expect(read.pairs.map((p) => `${p.table}.${p.privilege}`)).toEqual(['grade.SELECT', 'assessment.SELECT']);
+      // La deuxième raison est REJOINTE, pas tronquée à son premier fragment :
+      // une raison tronquée fait juger la garde anti-vacuité sur une phrase
+      // qu'elle n'a jamais vue.
+      expect(read.pairs[1]?.why).toContain('coefficient');
+    });
+
+    it('une accolade dans un COMMENTAIRE ne fabrique pas d’entrée fantôme', () => {
+      const read = checker.parseAppRoleRequiredPrivileges(FIXTURE);
+      expect(read.problems.filter((p) => p.kind === 'entry-without-pair')).toEqual([]);
+    });
+
+    it('une constante ABSENTE, un `Object.freeze(` introuvable, une entrée sans paire : tous NOMMÉS', () => {
+      expect(
+        checker.parseAppRoleRequiredPrivileges('const AUTRE = [];').problems.map((p) => p.kind),
+      ).toEqual(['constant-not-found']);
+      expect(
+        checker
+          .parseAppRoleRequiredPrivileges('const APP_ROLE_REQUIRED_PRIVILEGES = [{ table: "x" }];')
+          .problems.map((p) => p.kind),
+      ).toEqual(['object-freeze-boundary-not-found']);
+      const noPair = checker.parseAppRoleRequiredPrivileges(
+        'const APP_ROLE_REQUIRED_PRIVILEGES = Object.freeze([{ privilege: "SELECT", why: "une raison assez longue" }]);',
+      );
+      expect(noPair.problems.map((p) => p.kind)).toContain('entry-without-pair');
+    });
+
+    it('une raison VACUEUSE est refusée par la MÊME règle que `tenant-scope.ts:159-164`', () => {
+      const vacuous = checker.parseAppRoleRequiredPrivileges(
+        'const APP_ROLE_REQUIRED_PRIVILEGES = Object.freeze([{ table: "grade", privilege: "SELECT", why: "grade" }]);',
+      );
+      expect(vacuous.problems.map((p) => p.kind)).toContain('entry-with-vacuous-reason');
+    });
+
+    it('un parseur qui rend [] est un feu VERT qui ne prouve rien — il est REFUSÉ (AC-4)', () => {
+      const none = checker.parseAppRoleRequiredPrivileges(
+        'const APP_ROLE_REQUIRED_PRIVILEGES = Object.freeze([]);',
+      );
+      expect(none.problems.map((p) => p.kind)).toContain('no-entries-parsed');
+    });
+
+    it('AUCUN chemin sous `apps/api/dist` n’est lu — dist est PÉRIMÉ par construction', () => {
+      // Les agents ne construisent jamais (GUARDRAILS §4), donc `dist` décrit un
+      // état que la source a déjà dépassé : comparer contre lui, c'est PF-246
+      // reproduit DANS son propre correctif.
+      const READER = lf(readFileSync(join(REPO_ROOT, 'scripts', 'lib', 'app-role-closure.js'), 'utf8'));
+      expect(executableJs(READER)).not.toContain('apps/api/dist');
+      // La négation porte sur une LECTURE, pas sur le mot : le vérificateur NOMME
+      // `apps/api/dist` dans la phrase qui explique pourquoi il ne le lit pas, et
+      // une assertion sur le mot nu ne serait verte qu’en supprimant l’explication.
+      expect(CHECKER_CODE).not.toMatch(/(?:require|readFileSync|readFileOrEmpty)\([^)]*dist/);
+      // …et la source qu'il lit est NOMMÉE.
+      expect(CHECKER_CODE).toContain('apps/api/src/shared/prisma/tenant-scope.ts');
+    });
+
+    /**
+     * AC-5 — LA FIDÉLITÉ DU LECTEUR, la seule assertion de ce `describe` qui lit
+     * un vrai fichier, parce que c'est exactement ce qu'elle prouve : ce que le
+     * gate PARSE est ce que l'application IMPORTE. Sans elle, tout le reste
+     * pourrait être vert sur une liste que personne ne charge au démarrage.
+     */
+    it('AC-5 — ce que le gate PARSE === ce que l’application IMPORTE, paire par paire', () => {
+      const source = lf(
+        readFileSync(join(REPO_ROOT, 'apps', 'api', 'src', 'shared', 'prisma', 'tenant-scope.ts'), 'utf8'),
+      );
+      const parsed = checker.parseAppRoleRequiredPrivileges(source);
+      expect(parsed.problems).toEqual([]);
+      const fromParse = parsed.pairs.map((p) => `${p.table}.${p.privilege}`).sort();
+      const fromImport = APP_ROLE_REQUIRED_PRIVILEGES.map((r) => `${r.table}.${r.privilege}`).sort();
+      expect(fromParse).toEqual(fromImport);
+      // Non-vacuité : une comparaison de deux ensembles vides serait verte.
+      expect(fromImport.length).toBeGreaterThanOrEqual(38);
+      // …et les RAISONS sont lues entières, pas seulement les paires.
+      for (const pair of parsed.pairs) expect(pair.why.trim().length).toBeGreaterThan(10);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  /**
+   * AC-7 — CHAQUE ESPÈCE DE DÉRIVE EST POUSSÉE AU ROUGE EXPRÈS.
+   *
+   * Le même motif qu'`enumerationDrift` : un cliquet qu'on ne peut pas faire
+   * rougir n'est pas un cliquet, c'est une décoration qu'on supprimera le premier
+   * vendredi où elle gêne.
+   */
+  describe('AC-7 — `privilegeClosureDrift` MORD, espèce par espèce', () => {
+    const derivedMap = (
+      pairs: ReadonlyArray<[string, string, ('root' | 'relation' | 'policy')?]>,
+    ): Map<string, DerivedPair> => {
+      const out = new Map<string, DerivedPair>();
+      for (const [table, privilege, origin] of pairs) {
+        out.set(checker.closureKey(table, privilege), {
+          table,
+          privilege,
+          origin: origin ?? 'root',
+          example: 'apps/api/src/modules/fixture/fixture.service.ts:1',
+          via: null,
+          hits: 1,
+        });
+      }
+      return out;
+    };
+
+    it('le CHEMIN VERT existe : 40 paires des deux côtés, zéro finding', () => {
+      const declared = declaredFixture(40);
+      const derived = derivedMap(declared.map((d) => [d.table, d.privilege] as [string, string]));
+      expect(
+        checker.privilegeClosureDrift({ declared, derived, scopedSites: 70 }),
+      ).toEqual([]);
+    });
+
+    it('`undeclared-pair` — une instruction de portée en a besoin, la liste ne la porte pas', () => {
+      const declared = declaredFixture(40);
+      const derived = derivedMap([
+        ...declared.map((d) => [d.table, d.privilege] as [string, string]),
+        ['guardian', 'SELECT', 'relation'],
+      ]);
+      const drift = checker.privilegeClosureDrift({ declared, derived, scopedSites: 70 });
+      expect(drift.map((f) => f.kind)).toEqual(['undeclared-pair']);
+      expect(drift[0]?.pair).toBe('guardian.SELECT');
+      // Le finding NOMME son site d'appel : un mur de paires sans `file:line` est
+      // un cliquet qu'on supprime le premier vendredi.
+      expect(drift[0]?.detail).toContain('fixture.service.ts:1');
+    });
+
+    it('`dead-entry-advisory` — et son détail INTERDIT la suppression sur ce seul constat (PM-1)', () => {
+      const declared = declaredFixture(40);
+      const derived = derivedMap(declared.slice(1).map((d) => [d.table, d.privilege] as [string, string]));
+      const drift = checker.privilegeClosureDrift({ declared, derived, scopedSites: 70 });
+      expect(drift.map((f) => f.kind)).toEqual(['dead-entry-advisory']);
+      // L'ASYMÉTRIE est ENCODÉE, pas commentée : la complétude de la dérivation
+      // est bornée par ce qu'une analyse statique VOIT, donc « mort » veut dire
+      // « le marcheur ne l'a pas vu » au moins aussi souvent que « personne n'en
+      // a besoin ». Supprimer sur cette foi = 42501 sur quatre portails.
+      expect(drift[0]?.detail).toContain('DO NOT DELETE IT ON THIS FINDING ALONE');
+      expect(drift[0]?.detail).toContain('MEASURED negative');
+    });
+
+    it('TOOL-39 — tant qu’un fichier ne se referme pas, AUCUN `dead-entry` n’est réclamé', () => {
+      const declared = declaredFixture(40);
+      const drift = checker.privilegeClosureDrift({
+        declared,
+        derived: derivedMap([]),
+        unbalancedFiles: new Map([['apps/api/src/modules/x/x.service.ts', 1]]),
+        scopedSites: 70,
+      });
+      // Fail-closed VERS la déclaration — le côté sûr. Un `.run(` égaré dans un
+      // docblock ferait sinon passer un module entier pour des droits morts.
+      expect(drift.map((f) => f.kind)).toEqual(['unbalanced-scope-file']);
+      expect(drift[0]?.detail).toContain('x.service.ts');
+    });
+
+    it('`entry-without-reason` — une liste de RAISONS, pas de chemins', () => {
+      const declared = [...declaredFixture(39), { table: 'zz', privilege: 'SELECT', why: '   ' }];
+      const derived = derivedMap(declared.map((d) => [d.table, d.privilege] as [string, string]));
+      const drift = checker.privilegeClosureDrift({ declared, derived, scopedSites: 70 });
+      expect(drift.map((f) => f.kind)).toEqual(['entry-without-reason']);
+    });
+
+    it('`unparseable-argument` et `unmapped-relation-target` remontent du marcheur au verdict', () => {
+      const declared = declaredFixture(40);
+      const derived = derivedMap(declared.map((d) => [d.table, d.privilege] as [string, string]));
+      const drift = checker.privilegeClosureDrift({
+        declared,
+        derived,
+        derivedProblems: [
+          { kind: 'unparseable-argument', where: 'a.ts:1', detail: 'ne ferme pas' },
+          { kind: 'unmapped-relation-target', where: 'b.ts:2', detail: 'aucune table' },
+        ],
+        scopedSites: 70,
+      });
+      expect(drift.map((f) => f.kind).sort()).toEqual(['unmapped-relation-target', 'unparseable-argument']);
+    });
+
+    it('`exception-without-reason` et `dead-exception` — AC-6 vérifiée AVANT d’être crue', () => {
+      // Une exception excuse une paire que la dérivation NE PEUT PAS VOIR. Donc
+      // `seen` est DÉCLARÉE **et** dérivée : l'excuse est morte, la paire n'est
+      // pas en dérive, et le seul finding qu’elle doit produire est le sien.
+      const declared = [...declaredFixture(40), { table: 'seen', privilege: 'SELECT', why: 'lue par le handler de la fixture, dans sa portée' }];
+      const derived = derivedMap(declared.map((d) => [d.table, d.privilege] as [string, string]));
+      const drift = checker.privilegeClosureDrift({
+        declared,
+        derived,
+        scopedSites: 70,
+        exceptions: [
+          // Une raison qui RÉPÈTE la table : refusée par la garde anti-vacuité.
+          { table: 'ghost', privilege: 'SELECT', why: 'ghost' },
+          // Une exception que la dérivation VOIT maintenant : elle est MORTE.
+          { table: 'seen', privilege: 'SELECT', why: 'la dérivation ne peut pas voir ce chemin car X' },
+        ],
+      });
+      expect(drift.map((f) => f.kind).sort()).toEqual(['dead-exception', 'exception-without-reason']);
+    });
+
+    it('une exception VALIDE excuse la paire — et c’est la seule façon d’en excuser une', () => {
+      // La forme RÉELLE d’une exception : une paire DÉCLARÉE que la dérivation ne
+      // voit pas. Sans l'exception elle serait un `dead-entry-advisory` ; avec
+      // elle, et seulement avec une raison qui dit POURQUOI, le verdict est vide.
+      const declared = [...declaredFixture(40), { table: 'invisible', privilege: 'SELECT', why: 'exigée par un trigger, hors de tout site d’appel' }];
+      const derived = derivedMap(declaredFixture(40).map((d) => [d.table, d.privilege] as [string, string]));
+      const drift = checker.privilegeClosureDrift({
+        declared,
+        derived,
+        scopedSites: 70,
+        exceptions: [
+          {
+            table: 'invisible',
+            privilege: 'SELECT',
+            why: 'la dérivation ne peut pas la voir : le privilège est exigé par un TRIGGER, pas par un site d’appel',
+          },
+        ],
+      });
+      expect(drift).toEqual([]);
+    });
+
+    it('AC-4 — les DEUX planchers de non-vacuité sont des MURS (DNC-10)', () => {
+      // Côté déclaré : une liste effondrée est une panne de parseur, jamais un
+      // corpus qui a rétréci.
+      const thin = checker.privilegeClosureDrift({
+        declared: declaredFixture(3),
+        derived: derivedMap([]),
+        scopedSites: 70,
+      });
+      expect(thin.map((f) => f.kind)).toContain('vacuous-comparison');
+      // Côté dérivé : zéro site attribué `scoped` rendrait TOUTE la liste morte.
+      const noSites = checker.privilegeClosureDrift({
+        declared: declaredFixture(40),
+        derived: derivedMap(declaredFixture(40).map((d) => [d.table, d.privilege] as [string, string])),
+        scopedSites: 0,
+      });
+      expect(noSites.map((f) => f.kind)).toContain('vacuous-comparison');
+      // Et le plancher est une CONSTANTE nommée, pas un argument tunable.
+      expect(checker.MIN_CLOSURE_INPUT_SITES).toBeGreaterThanOrEqual(40);
+    });
+
+    it('la comparaison est un ENSEMBLE, pas un multi-ensemble', () => {
+      // Un DEUXIÈME site d'appel qui a besoin du même privilège n'est pas une
+      // deuxième obligation. (`enumerationDrift` compare des multi-ensembles
+      // parce qu'une deuxième EXCUSE est un vrai élargissement ; un deuxième
+      // BESOIN est le même droit.)
+      const declared = declaredFixture(40);
+      const derived = derivedMap(declared.map((d) => [d.table, d.privilege] as [string, string]));
+      const head = declared[0]!;
+      const first = derived.get(checker.closureKey(head.table, head.privilege));
+      if (first) first.hits = 17;
+      expect(checker.privilegeClosureDrift({ declared, derived, scopedSites: 70 })).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('AC-10 / DNC-10 — la dérivation est dans le VERDICT, et rien ne peut l’éteindre', () => {
+    it('la dérive fait ÉCHOUER, elle n’est pas imprimée en `[LIMIT]`', () => {
+      // Une note dont personne n'échoue reproduirait PF-02 DANS le mécanisme
+      // construit pour le fermer.
+      const at = CHECKER_CODE.indexOf('readiness.closureDrift.length > 0');
+      expect(at).toBeGreaterThan(-1);
+      const branch = CHECKER_CODE.slice(at, at + 400);
+      expect(branch).toContain('fail(');
+      expect(branch).not.toContain('limit(');
+    });
+
+    it('AUCUN drapeau, AUCUNE variable d’environnement ne touche la clôture', () => {
+      const CLOSURE_CODE = [
+        executableJs(lf(readFileSync(join(REPO_ROOT, 'scripts', 'lib', 'app-role-closure.js'), 'utf8'))),
+        executableJs(lf(readFileSync(join(REPO_ROOT, 'scripts', 'lib', 'prisma-schema-graph.js'), 'utf8'))),
+        executableJs(lf(readFileSync(join(REPO_ROOT, 'scripts', 'lib', 'js-source-scan.js'), 'utf8'))),
+      ].join('\n');
+      expect(CLOSURE_CODE).not.toContain('process.env');
+      expect(CLOSURE_CODE).not.toMatch(/\b(SKIP|ALLOW|FORCE|BYPASS|IGNORE|DISABLE)_[A-Z_]+/);
+      expect(CLOSURE_CODE).not.toContain('NODE_ENV');
+    });
+
+    it('la liste d’exceptions AC-6 est VIDE sur le corpus d’aujourd’hui, et c’est une MESURE', () => {
+      // Le jour où elle ne l'est plus, chaque entrée doit dire POURQUOI la
+      // dérivation ne peut pas la voir — pas « autoriser cette table ».
+      expect(checker.APP_ROLE_CLOSURE_EXCEPTIONS).toEqual([]);
+    });
+
+    it('un SEUL matcher de délimiteurs existe (TOOL-39), et il est PARTAGÉ', () => {
+      // Deux matchers auraient été la maladie de cette tranche elle-même.
+      expect(CHECKER_CODE).toContain("require('./lib/js-source-scan')");
+      expect(CHECKER_CODE).not.toContain('function matchingParen(');
+      // …et le comportement re-exporté est IDENTIQUE à celui qui était livré.
+      expect(checker.matchingParen('f(a, b)', 1)).toBe(6);
+      expect(checker.matchingParen('f(a, (b)', 1)).toBe(-1);
+      expect(checker.matchingParen("f('(')", 1)).toBe(5);
+    });
+  });
+});
+
+/**
+ * Une liste déclarée SYNTHÉTIQUE de `n` paires, au-dessus des deux planchers.
+ * Elle existe pour que chaque assertion de dérive isole SON espèce au lieu de
+ * tomber d'abord sur une comparaison vacueuse.
+ */
+function declaredFixture(n: number): Array<{ table: string; privilege: string; why: string }> {
+  return Array.from({ length: n }, (_unused, i) => ({
+    table: `t${String(i).padStart(2, '0')}`,
+    privilege: 'SELECT',
+    why: `la table t${i} est lue par le handler numéro ${i} de la fixture, dans sa portée`,
+  }));
+}

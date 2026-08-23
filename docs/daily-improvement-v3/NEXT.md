@@ -1,5 +1,83 @@
 # Next story
 
+# NEXT — written by run 69 (`S-E01-1k`), 2026-08-23 — **this section supersedes every section below**
+
+## ✅ The closure stops re-reading itself, and the machine found the 38th entry in one pass
+
+`APP_ROLE_REQUIRED_PRIVILEGES` is still hand-written — **a REASON cannot be derived** — but it is no longer
+the only thing that reads it. `scripts/tenant-adversarial-check.js` now DERIVES a closure from the call
+sites attributed **exactly `scoped`**, descends the relation depth that `where` / `select` / `include` /
+`orderBy` / `_count.select` traverse (resolving every hop against `schema.prisma`), and compares the two
+sets **in both directions**, wired to `fail()`. `ADR-059`.
+
+**The result, and it is the measure of the defect rather than an anecdote: `guardian.SELECT`.**
+Thirty-seven entries, five slices, three human re-reads of this list — and the thirty-eighth was named by
+the machine on its first execution. It is invisible to root-delegate review by construction: **no
+`tx.guardian.<verb>(` exists anywhere in the tree.** It is reached only as a RELATION FILTER — the
+`findFirst` on `guardianship` carries a `where` whose `guardian` member is itself an object
+(`lessons.controller.ts:366`). Under RLS a relation filter is a **READ** of the target table: Postgres
+joins `guardian` and raises `42501` without the privilege. Measured **held** on the stack database
+(`app_user`, RLS active, 1 policy) *before* being declared — a declared-but-absent pair refuses the
+application's whole second connection at boot.
+
+## ⚠️ THE REVIEW PANEL TURNED THE SLICE'S OWN THESIS AGAINST IT — `PF-255`, fixed at land
+
+`parseDerivedChildParents` BUILDS a `problems` array and its docblock states the parse *"is refused rather
+than returned empty"* (DNC-08). **Its only caller destructured `.parents` and dropped `.problems`**, so the
+refusal was unreachable code. Four reviewers reproduced it independently: feed the parser an empty string —
+what `readFileOrEmpty` returns the moment the ONE hard-coded migration directory is renamed, squashed or
+relocated — and the whole comparison still returned `[]` and printed **GREEN**, offering
+`0 RLS derived-child policies read` as its evidence, with the `PF-252` parent-`SELECT` rule silently
+disarmed.
+
+Fixed in the same PR and **re-proved at land**, not asserted: the comparison goes from 1 finding to 2, the
+new one `[vacuous-comparison] [derived-policy-table-not-found]`, which fails.
+
+> **The durable lesson, worth more than the fix.** A gate whose refusal path has no consumer is not
+> fail-closed; it is a comment that reads like a guarantee. When a slice's whole thesis is "make the
+> invariant derived and fail closed", the first thing to grep is whether every `problems` array a new
+> parser returns is actually **read by something that can fail**.
+
+## 🔬 What is NOT proven, stated plainly
+
+The derivation is bounded by what static analysis can see, and the bounds are now NAMED rather than
+implied — that is why `dead-entry-advisory` does **not** licence deleting a grant. Removing a pair requires
+a **measured negative** (REVOKE on a disposable database, handler still 200). Deleting a privilege on the
+strength of a `dead-entry` alone would be a green boot and a `42501` on all four portals at once.
+
+Nothing here is claimed for `pilotage.srv861861.hstgr.cloud`, which was not contacted (Step −1).
+
+## ▶ Recommended next story
+
+1. **`S-E01-1l` — convert `alerts.service.ts` (33 call sites), and it is now CHEAP.** This is the slice the
+   derivation was built to de-risk: the closure it needs is now computed, not guessed, and a missing
+   relation-deep grant fails the gate instead of surfacing as a request-time `42501`. `alerts.service.ts`
+   is the **producer** of the alert rows `remediation` already reads inside a scope, so converting it
+   closes the alert → plan loop on one connection. **The id `S-E01-1k` is CLAIMED by the derivation slice —
+   do not re-select it.** Measured ranking of what remains: `analytics.service.ts` 93 ·
+   **`alerts.service.ts` 33** · `messaging.service.ts` 32 · `guardians.controller.ts` 20 ·
+   `exports.service.ts` 19 · `attendance.controller.ts` 18. `analytics.service.ts` remains deliberately
+   **not** the recommendation: 93 sites is three slices, not one.
+2. **`PF-254` (P2) — close the `RETURNING` gap BEFORE the next conversion, it is three lines.**
+   `VERB_PRIVILEGES` gives `create → [INSERT]` and no `SELECT`, but Prisma's singular writes all emit
+   `… RETURNING` and Postgres requires `SELECT` on every column returned. **Accidentally correct today**
+   (every write table in the derived set also has a read site) and **load-bearing from now on**, because
+   the mapping is now the authority for a comparison wired to `fail()`. The first module that writes a
+   table it never reads ships a green gate and a `42501`.
+3. **`PF-219` residue (P2) — the DERIVED side is still comment-blind.** The declared side was moved onto
+   the comment-aware lexer and immediately found three phantom entries hiding in `//` comments; the derived
+   side still runs `PRISMA_CALL_SITE_RE` over raw text, so a `tx.<model>.<verb>` written in a docblock
+   inside a scope range contributes a real pair. Fail-LOUD (it surfaces as `undeclared-pair`), not
+   fail-open — which is why it is ranked below `PF-254`. Fix by blanking comment spans with
+   `scripts/lib/js-source-scan.js` before matching.
+4. **`PF-253` (P2) — raw SQL inside a scope carries an obligation the derivation cannot see.** A
+   `tx.$queryRaw` inside a scope reads real tables as `app_user`; today it lands in a global `[LIMIT]`
+   counter nobody fails on. Latent, not live (two raw sites, both outside scopes). Its second half arrived
+   with `PF-255`: the derived-child migration is still located by a hard-coded directory literal instead of
+   a glob.
+5. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** Unchanged and still open: `jwt.strategy.ts`
+   `validate()` checks `sub` and nothing else.
+
 # NEXT — written by run 68 (`S-E01-1j`), 2026-08-22 — **this section supersedes every section below**
 
 ## ✅ The fifth module, and the first that catches a Prisma error and keeps going
