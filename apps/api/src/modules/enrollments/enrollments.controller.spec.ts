@@ -4,6 +4,7 @@ import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
 import type { PrismaService } from '../../shared/prisma/prisma.service';
 import type { NotificationsService } from '../notifications/notifications.service';
+import type { StudentAccessService } from '../students/student-access.service';
 import type { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { EnrollmentsController } from './enrollments.controller';
@@ -144,11 +145,21 @@ function makeDb(faults: { entity?: Error; audit?: Error } = {}) {
     ensureForUser: jest.fn(),
   };
 
+  // S-E05-15 — 5e argument du constructeur. Même raison que le 4e : ce harnais
+  // ne touche AUCUN chemin qui le lit (`list` est couvert par
+  // `enrollments-list-abac.spec.ts`). Le talon existe pour que la construction
+  // reste valide, et AUCUNE assertion de ce fichier n’est modifiée (`AC-9`).
+  const studentAccess = {
+    scopeForUser: jest.fn().mockResolvedValue({ studentIds: [], reason: 'stub' }),
+    canAccessStudent: jest.fn().mockResolvedValue(false),
+  };
+
   const controller = new EnrollmentsController(
     prisma as unknown as PrismaService,
     users as unknown as UserSyncService,
     notifications as unknown as NotificationsService,
     teachers as unknown as TeacherProfileService,
+    studentAccess as unknown as StudentAccessService,
   );
 
   return {

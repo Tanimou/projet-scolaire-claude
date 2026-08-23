@@ -8,6 +8,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  ParseEnumPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -33,6 +34,7 @@ import { RequiresPermission } from '../../shared/auth/requires-permission.decora
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StudentAccessService } from '../students/student-access.service';
 import { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 /**
@@ -228,6 +230,226 @@ export function teacherOfSectionWhere(input: {
   };
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+ * S-E05-15 / PF-283 / PF-51 (b) / ADR-065 — LA COUCHE DE DÉCISION DE `list`.
+ *
+ * `roster` (:531) a gagné son mur au run précédent ; `list` (:324), DOUZE
+ * LIGNES PLUS HAUT dans ce même fichier, portait la MÊME permission et AUCUN
+ * mur. Son `where` était `{ tenantId }` plus quatre filtres fournis par
+ * l'APPELANT — c'est-à-dire que le filtre était le paramètre de l'attaquant.
+ * Deux axes, mesurés sur `permissions.constants.ts:168` / `:225` / `:259` :
+ *
+ *  (a) `GET /enrollments` NU → toute inscription du tenant, avec `firstName`,
+ *      `lastName`, `externalRef` de CHAQUE enfant. C'est l'axe LE PLUS LARGE
+ *      et c'est celui qu'on oublie en ne regardant que le `?classSectionId=`.
+ *  (b) `GET /enrollments?classSectionId=<id>` → la liste d'appel de N'IMPORTE
+ *      QUELLE classe, c'est-à-dire exactement ce que `roster` vient de fermer,
+ *      par une autre porte du même contrôleur.
+ *
+ * `student` NE PEUT PAS atteindre ce handler : `enrollments.read` est ABSENT de
+ * son catalogue (`permissions.constants.ts:291-299`, relu ce run — sept
+ * permissions, toutes `.self` sauf `branding.read`). `PermissionsGuard` refuse
+ * AVANT que le corps du handler ne lise quoi que ce soit. Formulation d'ORDRE
+ * exacte : Nest exécute les gardes AVANT les pipes, et `PermissionsGuard` lit
+ * `userProfile` — dire « avant toute lecture de base » serait faux.
+ *
+ * FORME IMPOSÉE (maison, `isPrivilegedEnrollmentsCaller:133`,
+ * `assertClassRosterReadable:161`) : le contrôleur RÉSOUT l'identité, puis passe
+ * des VALEURS SIMPLES à des fonctions EXPORTÉES et PURES. Aucun paramètre
+ * `bypass` / `allow` / `skip`, aucune variable d'environnement (`DNC-10`).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** Un SEUL littéral pour le refus de `list`, forme LECTURE, sans id ni table (`ADR-048 §D9`). */
+const ENROLLMENT_LIST_REFUSAL =
+  "Vous ne pouvez consulter que les inscriptions relevant de votre périmètre.";
+
+/**
+ * `AC-1` / `AC-3` / `FR-1` — la CLASSIFICATION, pure, sur les seuls rôles.
+ *
+ * Elle RÉUTILISE `isPrivilegedEnrollmentsCaller` (:133) : `PF-270` enregistre
+ * déjà TROIS copies divergentes du test « rôle privilégié » dans ce dépôt, et
+ * une quatrième serait un finding bloquant. C'est pourquoi `'school_admin'`
+ * n'apparaît qu'UNE fois comme littéral dans ce fichier — la spec l'asserte par
+ * un comptage sur la source, parce qu'une consigne en prose n'empêche pas une
+ * copie, alors qu'une assertion en forme de `grep` si.
+ *
+ * ORDRE DE RÉSOLUTION (le plus privilégié gagne), aligné sur
+ * `student-access.service.ts:33-63` pour ne pas créer une seconde sémantique :
+ * privilégié → enseignant → parent → refus. Un appelant portant `teacher` ET
+ * `parent` est traité en ENSEIGNANT ; c'est le comportement de `scopeForUser`,
+ * et diverger ici créerait deux réponses pour un même jeton.
+ *
+ * `'denied'` est un membre de CE type et n'existe PAS dans `EnrollmentListScope`
+ * : un appelant refusé ne peut donc pas, par typage, atteindre le constructeur
+ * de `where`.
+ */
+export type EnrollmentListCallerKind = 'privileged' | 'teacher' | 'guardian' | 'denied';
+
+export function classifyEnrollmentListCaller(roles: readonly string[]): EnrollmentListCallerKind {
+  if (isPrivilegedEnrollmentsCaller(roles)) return 'privileged';
+  if (roles.includes('teacher')) return 'teacher';
+  if (roles.includes('parent')) return 'guardian';
+  return 'denied';
+}
+
+/**
+ * La PORTÉE effective d'un appelant AUTORISÉ. Trois membres, pas quatre : le
+ * refus est un `throw` du contrôleur, jamais une valeur qui traverse le
+ * constructeur de `where`.
+ *
+ * `readonly string[]` et NON `string[] | null` : `null` est le sentinel
+ * « non restreint » de `StudentAccessService` (`student-access.service.ts:20`),
+ * et l'admettre ici rouvrirait précisément la porte que cette tranche ferme. Le
+ * tableau VIDE est le REFUS ; c'est la clé ABSENTE qui est le fail-open.
+ */
+export type EnrollmentListScope =
+  | { readonly kind: 'tenant' }
+  | { readonly kind: 'sections'; readonly classSectionIds: readonly string[] }
+  | { readonly kind: 'students'; readonly studentIds: readonly string[] };
+
+/** Les quatre filtres fournis par l'appelant, APRÈS les pipes (donc déjà bien formés). */
+export interface EnrollmentListFilters {
+  readonly studentId?: string;
+  readonly classSectionId?: string;
+  readonly academicYearId?: string;
+  readonly status?: EnrollmentStatus;
+}
+
+/**
+ * `AC-3` / `AC-4` / `FR-4` — le `where` de `list`, construit, jamais épissé.
+ *
+ * DEUX FAIL-OPEN SONT RENDUS INEXPRIMABLES ICI, et tous deux sont des bugs
+ * d'ÉCRITURE, pas de logique :
+ *
+ *  1. LA COLLISION DE CLÉS PAR ÉTALEMENT. Le handler d'origine composait son
+ *     `where` avec quatre `...(x ? { x } : {})`. Ajouter la portée ABAC par un
+ *     cinquième étalement crée une collision « dernière clé gagne » sur
+ *     `studentId` / `classSectionId` : dans un sens le filtre de l'appelant
+ *     DISPARAÎT, dans l'autre il ÉCRASE l'ABAC — et le second est un IDOR
+ *     complet qui a l'air scopé. On n'écrit donc AUCUNE clé ABAC par étalement :
+ *     les filtres de l'appelant et la clause de portée sont deux MEMBRES
+ *     DISTINCTS d'un `AND`, où la conjonction est la sémantique voulue
+ *     (INTERSECTION, jamais union) et où aucun des deux ne peut effacer l'autre.
+ *  2. `...(ids.length ? { … } : {})` — le réflexe « éviter un `IN` vide » — est
+ *     INTERDIT NOMMÉMENT : il transforme l'appelant le MOINS habilité (zéro
+ *     affectation, zéro tutelle) en appelant NON FILTRÉ. La clé est TOUJOURS
+ *     émise ; `{ in: [] }` est le refus, et la spec asserte le `{ in: [] }`
+ *     émis, jamais « la clé est absente ».
+ *
+ * `tenantId` est la PREMIÈRE clé des trois branches, littéralement. Sur
+ * `degraded_no_app_url` — tous les déploiements d'aujourd'hui — la connexion du
+ * PROPRIÉTAIRE échappe à ses propres policies RLS (`ADR-032 §D5` /
+ * `ADR-042 §D1`), donc cette clause est la SEULE chose qui filtre par tenant.
+ *
+ * `[...scope.xIds]` copie le tableau en lecture seule vers le `string[]` mutable
+ * qu'attend `Prisma.StringFilter.in` — la copie est le prix du `readonly`, et
+ * elle empêche accessoirement le contrôleur de muter la portée après coup.
+ */
+export function buildEnrollmentListWhere(input: {
+  readonly tenantId: string;
+  readonly scope: EnrollmentListScope;
+  readonly filters: EnrollmentListFilters;
+}): Prisma.EnrollmentWhereInput {
+  const { tenantId, scope, filters } = input;
+
+  // Les filtres de l'APPELANT, isolés dans leur propre objet : ils ne partagent
+  // jamais un espace de clés avec la clause de portée.
+  const callerFilters: Prisma.EnrollmentWhereInput = {
+    ...(filters.studentId ? { studentId: filters.studentId } : {}),
+    ...(filters.classSectionId ? { classSectionId: filters.classSectionId } : {}),
+    ...(filters.academicYearId ? { academicYearId: filters.academicYearId } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+  };
+
+  switch (scope.kind) {
+    case 'tenant':
+      return { tenantId, AND: [callerFilters] };
+    case 'sections':
+      return {
+        tenantId,
+        AND: [callerFilters, { classSectionId: { in: [...scope.classSectionIds] } }],
+      };
+    case 'students':
+      return {
+        tenantId,
+        AND: [callerFilters, { studentId: { in: [...scope.studentIds] } }],
+      };
+  }
+}
+
+/**
+ * `AC-4` / `FR-3` — les sections qu'un professeur ENSEIGNE, et le type qui rend
+ * le fail-open INEXPRIMABLE.
+ *
+ * Jumeau de `teacherOfSectionWhere` (:220) pour le cas LISTE : `teacherProfileId`
+ * est NON OPTIONNEL, délibérément. Prisma RETIRE les clés `undefined` d'un
+ * `where` : écrit naïvement `{ tenantId, teacherProfileId: tp?.id }` avec
+ * `tp === null`, la requête devient « TOUTES les affectations du tenant » et
+ * l'appelant sans profil reçoit la portée de l'établissement entier — un
+ * fail-open SILENCIEUX, en HTTP 200, strictement pire que le bug d'origine. Le
+ * contrôleur doit donc rendre son 403 AVANT que ce `where` existe, et cette
+ * signature fait qu'il ne peut pas faire autrement.
+ *
+ * `tenantId` est EXPLICITE pour la raison d'`ADR-032 §D5` rappelée ci-dessus :
+ * c'est lui qui garantit que la liste de portée ne peut pas contenir la section
+ * d'un AUTRE tenant, et donc qu'un `?classSectionId=<section étrangère>` tombe
+ * sur une INTERSECTION VIDE au lieu d'être autorisé.
+ *
+ * AUCUNE clause d'année scolaire, pour la raison déjà arbitrée en
+ * `ADR-063 §D1` : `ClassSection` est elle-même épinglée à une année
+ * (`academicYearId` non nul, `schema.prisma`), donc l'id de section porte DÉJÀ
+ * l'année ; et `TeachingAssignment.academicYearId` peut DIVERGER de celui de sa
+ * section (colonne simple, pas de clé étrangère composite), donc filtrer
+ * refuserait un professeur qui enseigne réellement la classe aujourd'hui.
+ */
+export function teacherSectionsWhere(input: {
+  readonly tenantId: string;
+  readonly teacherProfileId: string;
+}): Prisma.TeachingAssignmentWhereInput {
+  return {
+    tenantId: input.tenantId,
+    teacherProfileId: input.teacherProfileId,
+  };
+}
+
+/**
+ * S-E05-15 / PF-283 / `ADR-065 §D3` — la projection `classSection` de `list`.
+ *
+ * `list` rendait `classSection: { include: { gradeLevel: true } }`, c'est-à-dire
+ * la ligne `ClassSection` ENTIÈRE et la ligne `GradeLevel` ENTIÈRE. Ce qui part
+ * du fil, ÉNUMÉRÉ (lu dans `schema.prisma`, `model ClassSection` et
+ * `model GradeLevel`, ce run) :
+ *
+ *  • `ClassSection` perd `tenantId`, `academicYearId`, `gradeLevelId`,
+ *    `maxStudents`, `room`, `color`, `icon`, `options` (`Json?`),
+ *    `internalNotes` (texte libre de direction À PROPOS de la classe),
+ *    `status`, `createdAt`, `updatedAt` — ONZE colonnes.
+ *  • `GradeLevel` perd `tenantId`, `schoolId`, `cycleId`, `createdAt`.
+ *
+ * `internalNotes` est un champ ADMIN ; le livrer à un professeur (qui détient
+ * `enrollments.read`, `permissions.constants.ts:225`) dans la tranche même qui
+ * pose le mur serait la contradiction que `ADR-062 §D1` évite déjà ailleurs.
+ *
+ * CE QUI RESTE et POURQUOI : `id` (clé de jointure), `name` (le libellé de la
+ * classe), et `gradeLevel.{id, code, name, orderIndex}` — le libellé de niveau
+ * humain, seule raison pour laquelle `gradeLevel` était inclus, plus
+ * `orderIndex` qui est la clé de TRI de ce libellé. Il n'y a ZÉRO consommateur
+ * de première partie aujourd'hui (recensement ci-dessous), donc « les champs
+ * réellement rendus » n'a pas de réponse empirique : la liste est DÉRIVÉE DU
+ * MODÈLE, et c'est dit plutôt qu'affirmé (`DNC-06`).
+ *
+ * Module-locale, NON exportée, et `ENROLLMENT_ROSTER_CLASS_SECTION_SELECT` (:89)
+ * n'est PAS importée : `ADR-062 §D3` interdit une projection PARTAGÉE entre
+ * décisions, et sa forme est de toute façon fausse ici (elle porte
+ * `maxStudents` — la CAPACITÉ, préoccupation de `roster` — et pas de
+ * `gradeLevel`). Deux constantes, deux décisions, chacune révocable seule.
+ */
+const ENROLLMENT_LIST_CLASS_SECTION_SELECT = {
+  id: true,
+  name: true,
+  gradeLevel: { select: { id: true, code: true, name: true, orderIndex: true } },
+} as const;
+
 class CreateEnrollmentDto {
   @IsUUID() studentId!: string;
   @IsUUID() classSectionId!: string;
@@ -259,6 +481,25 @@ export class EnrollmentsController {
      * `AttendanceModule` (`attendance.module.ts`). Aucun provider n'est ajouté.
      */
     private readonly teachers: TeacherProfileService,
+    /**
+     * S-E05-15 — le mur PARENT de `list`, et RIEN d'autre.
+     *
+     * `GUARDRAILS §2` impose que l'accès parent passe par `StudentAccessService`
+     * (`ADR-015` / `ADR-021`), et c'est la bonne mécanique POUR CET AXE : la
+     * branche `parent` de `scopeForUser` (`student-access.service.ts:41-52`)
+     * lit les tutelles ACTIVES et rend un tableau, jamais `null`.
+     *
+     * Le mur ENSEIGNANT ne passe DÉLIBÉRÉMENT pas par ce service — voir
+     * `resolveEnrollmentListScope` et `ADR-065 §D2`. Cette asymétrie est
+     * DÉCLARÉE, pas subie.
+     *
+     * Fourni LOCALEMENT par `EnrollmentsModule` (`providers`), pas importé via
+     * `StudentsModule` : ce service ne dépend que de `PrismaService`, module
+     * GLOBAL. Précédent maison exact et commenté : `calendar.module.ts:13-17`.
+     * Cela évite d'attacher `EnrollmentsModule` à `StudentsModule` (et donc à
+     * `SchoolStructureModule`) pour un seul provider sans état.
+     */
+    private readonly studentAccess: StudentAccessService,
   ) {}
 
   /** Fan-out: notify every active guardian of the student about the enrollment event. */
@@ -321,32 +562,179 @@ export class EnrollmentsController {
     }
   }
 
+  /**
+   * S-E05-15 / PF-283 / PF-51 (b) / `ADR-065` — la liste des inscriptions,
+   * désormais SCOPÉE, PROJETÉE et VALIDÉE.
+   *
+   * TROIS DÉFAUTS FERMÉS ICI, dans cet ordre d'exécution :
+   *
+   *  1. VALIDATION DE PARAMÈTRE (`PF-51` clause (b)). Les trois ids atteignaient
+   *     des colonnes `@db.Uuid` sans pipe. `status` était TYPÉ `EnrollmentStatus`
+   *     mais un paramètre de requête est une CHAÎNE brute à l'exécution, donc
+   *     une valeur arbitraire atteignait un filtre d'enum Prisma. HONNÊTETÉ SUR
+   *     LA MESURE (`DNC-06`) : cet agent n'a PAS interrogé de moteur vivant sur
+   *     l'état ANTÉRIEUR. Ce qu'il a mesuré, c'est (i) qu'il n'existe AUCUN
+   *     filtre d'exception Prisma global dans `apps/api/src` — donc toute erreur
+   *     Prisma remonte en 500 —, et (ii) que les deux pipes du build épinglé
+   *     `@nestjs/common@10.4.22` ouvrent leur `transform` sur
+   *     `if (isNil(value) && this.options?.optional) return value` (lu dans
+   *     `node_modules/.../pipes/parse-uuid.pipe.js` et `parse-enum.pipe.js`).
+   *     Que l'état antérieur ait été un 500 `PrismaClientValidationError` ou un
+   *     résultat silencieusement vide n'est donc PAS tranché ici — le pipe rend
+   *     la question sans objet. Écrire un nombre que personne n'a pris serait
+   *     `DNC-06`.
+   *
+   *     CHANGEMENT DE SÉMANTIQUE À DÉCLARER, pas à découvrir : `isNil` ne
+   *     couvre que `null | undefined`. `?studentId=` (présent, VIDE) vaut `''`,
+   *     n'est pas nil, tombait dans le garde falsy `...(studentId ? …)` et était
+   *     IGNORÉ EN SILENCE ; il devient un 400. `?studentId=a&studentId=b` est
+   *     parsé en TABLEAU et devient un 400 lui aussi (`isUUID` lève sur un non
+   *     `string`). Avec ZÉRO consommateur GET, rien ne casse — mais c'est un vrai
+   *     changement et il est écrit.
+   *
+   *  2. ABAC (`PF-283`, les DEUX axes). `classifyEnrollmentListCaller` puis
+   *     `resolveEnrollmentListScope`, AVANT que la moindre inscription soit
+   *     matérialisée. Un appelant refusé (`student`, rôles vides) reçoit 403 sans
+   *     qu'aucune requête d'inscription ne soit émise.
+   *
+   *  3. PROJECTION. `classSection` passe d'un `include` de ligne entière à
+   *     `ENROLLMENT_LIST_CLASS_SECTION_SELECT` : `internalNotes` et `options`
+   *     quittent le fil. `student`, `academicYear` et
+   *     `orderBy: [{ enrolledAt: 'desc' }]` sont INCHANGÉS.
+   *
+   * POURQUOI UNE LECTURE SCOPÉE ET NON UN 403 EN BLOC (`AC-1`, arbitré) :
+   *  • Un ENSEIGNANT lisant l'inscription des élèves de SES classes est
+   *    l'usage même de cette route ; `roster`, UNE route plus loin, lui accorde
+   *    déjà une lecture par section sur la MÊME clé de jointure. Livrer un 403
+   *    ici alors que `roster` autorise créerait une incohérence qu'un lecteur
+   *    ultérieur « harmoniserait » — dans le sens du relâchement.
+   *  • Un PARENT a qualité sur les LIGNES de SON enfant. `list` est une vue
+   *    RANGÉES sur `Enrollment` ; `roster` est une vue de PAIRS (« qui d'autre
+   *    est dans la classe X ») sur laquelle un parent n'a aucune qualité. Même
+   *    code de permission, ressources de forme différente, verdicts différents —
+   *    c'est la décision que `ADR-065 §D1` écrit pour qu'elle ne soit pas
+   *    « corrigée » plus tard.
+   *
+   * CE QU'UN 403 EN BLOC AURAIT COÛTÉ, si un relecteur impose la tranche plus
+   * étroite : supprimer la branche `guardian` laisserait `parent` détenteur de
+   * `enrollments.read` (`:259`) SANS AUCUNE route lisible — de la dérive de
+   * catalogue sous un autre nom (`PF-264` / `PF-53`) —, et forcerait le premier
+   * consommateur UI à écrire une branche d'ERREUR là où une portée vide se
+   * dégrade naturellement en état VIDE. Le coût est donc : une entrée de
+   * catalogue devenue mensongère, plus une branche d'erreur à écrire côté web.
+   *
+   * SURFACE DE RENDU (`G-TRUTH`, MESURÉ ce run) : AUCUNE.
+   * `grep -rn "v1/enrollments" apps/web/src apps/web/e2e apps/worker/src packages/*&#47;src`
+   * → TROIS occurrences, toutes dans `apps/web/src/app/admin/students/actions.ts`
+   * (`:55` POST, `:74` POST `/transfer`, `:92` PATCH), toutes des MUTATIONS.
+   * Aucun portail — admin, teacher, parent, student — n'émet un GET sur cette
+   * route. `internalNotes` et `options` quittent LE FIL, pas un écran : aucun
+   * libellé, aucune colonne, aucun état vide ne change.
+   */
   @Get()
   @RequiresPermission('enrollments.read')
   async list(
     @CurrentJwt() jwt: KeycloakJwtPayload,
-    @Query('studentId') studentId?: string,
-    @Query('classSectionId') classSectionId?: string,
-    @Query('academicYearId') academicYearId?: string,
-    @Query('status') status?: EnrollmentStatus,
+    @Query('studentId', new ParseUUIDPipe({ optional: true })) studentId?: string,
+    @Query('classSectionId', new ParseUUIDPipe({ optional: true })) classSectionId?: string,
+    @Query('academicYearId', new ParseUUIDPipe({ optional: true })) academicYearId?: string,
+    @Query('status', new ParseEnumPipe(EnrollmentStatus, { optional: true }))
+    status?: EnrollmentStatus,
   ) {
     const me = await this.users.ensureUser(jwt);
+    const scope = await this.resolveEnrollmentListScope(me, jwt);
     const data = await this.prisma.enrollment.findMany({
-      where: {
+      where: buildEnrollmentListWhere({
         tenantId: me.tenantId,
-        ...(studentId ? { studentId } : {}),
-        ...(classSectionId ? { classSectionId } : {}),
-        ...(academicYearId ? { academicYearId } : {}),
-        ...(status ? { status } : {}),
-      },
+        scope,
+        filters: { studentId, classSectionId, academicYearId, status },
+      }),
       orderBy: [{ enrolledAt: 'desc' }],
       include: {
         student: { select: { id: true, firstName: true, lastName: true, externalRef: true } },
-        classSection: { include: { gradeLevel: true } },
+        classSection: { select: ENROLLMENT_LIST_CLASS_SECTION_SELECT },
         academicYear: { select: { id: true, name: true, status: true } },
       },
     });
     return { data };
+  }
+
+  /**
+   * S-E05-15 — la RÉSOLUTION d'identité de `list`, et l'ordre des lignes EST le
+   * contrôle.
+   *
+   * `ADR-065 §D2` — POURQUOI LE MUR ENSEIGNANT NE PASSE PAS PAR
+   * `StudentAccessService`, ALORS QUE LE MUR PARENT SI. Mesuré ce run,
+   * `student-access.service.ts:38-40` :
+   *
+   *     if (roles.includes('teacher')) {
+   *       // TODO Phase 4: when teaching assignments exist, filter by …
+   *       return { studentIds: null, reason: 'teacher (unrestricted …)' };
+   *
+   * `studentIds: null` est le sentinel NON RESTREINT. Déléguer l'axe enseignant
+   * à ce service livrerait donc un contrôle qui est un NO-OP pour `teacher` —
+   * tous les tests négatifs PARENT passeraient au vert pendant que la fuite
+   * survit, le pire résultat possible pour une tranche `G-AUTHZ`. Les
+   * `TeachingAssignment` que ce TODO attend EXISTENT et sont déjà parcourues par
+   * ce contrôleur (`teacherOfSectionWhere:220`). On les parcourt donc ICI.
+   * `student-access.service.ts` n'est PAS corrigé : c'est hors du périmètre
+   * déclaré (`AC-9`) et cinq autres contrôleurs dépendent du comportement
+   * actuel. Enregistré en `PF-288`.
+   *
+   * DÉFENSE EN PLUS DU CONTRAT : si `scopeForUser` rendait `null` sur la branche
+   * parent (il ne le fait pas aujourd'hui), on REFUSE. Le sentinel « non
+   * restreint » ne peut structurellement pas devenir un filtre — c'est la
+   * traduction en code de la raison pour laquelle `EnrollmentListScope` n'admet
+   * pas `null`.
+   *
+   * `findForUser` (`teacher-profile.service.ts:94`) et JAMAIS `ensureForUser` :
+   * ce dernier est un UPSERT, et le poser sur un chemin de refus provisionnerait
+   * une ligne `TeacherProfile` à CHAQUE sonde (`PF-265` / `ADR-051 §D1`). Sur une
+   * route de LISTE, atteignable à chaque chargement de page, c'est un puits.
+   *
+   * Le profil nul rend son 403 AVANT que `teacherSectionsWhere` soit construit,
+   * parce que le type de ce dernier n'accepte pas `undefined` (voir son
+   * docblock : Prisma retire les clés `undefined`, ce qui rendrait la portée
+   * ÉGALE au tenant entier).
+   *
+   * `new Set` et non `distinct: 'classSectionId'` : un professeur détient une
+   * affectation PAR MATIÈRE sur la même section
+   * (`@@unique([teacherProfileId, classSectionId, subjectId])`), donc les
+   * doublons sont NORMAUX. La déduplication est faite en JS parce qu'un double
+   * jest ignorerait silencieusement un `distinct` Prisma et rendrait la portée
+   * vraie pour de mauvaises raisons.
+   *
+   * `_schoolId` est passé en chaîne VIDE : le paramètre est nommé `_schoolId`
+   * dans `scopeForUser` et n'est JAMAIS lu (`student-access.service.ts:32`).
+   * Résoudre une vraie école exigerait d'importer `SchoolStructureModule` pour
+   * une valeur que l'appelé jette. La dimension « école » de cette portée est
+   * illusoire aujourd'hui — enregistré, non corrigé (`PF-288`).
+   */
+  private async resolveEnrollmentListScope(
+    me: { id: string; tenantId: string },
+    jwt: KeycloakJwtPayload,
+  ): Promise<EnrollmentListScope> {
+    const kind = classifyEnrollmentListCaller(jwt.realm_access?.roles ?? []);
+
+    if (kind === 'denied') throw new ForbiddenException(ENROLLMENT_LIST_REFUSAL);
+    if (kind === 'privileged') return { kind: 'tenant' };
+
+    if (kind === 'teacher') {
+      const tp = await this.teachers.findForUser(me);
+      if (tp === null) throw new ForbiddenException(ENROLLMENT_LIST_REFUSAL);
+      const assignments = await this.prisma.teachingAssignment.findMany({
+        where: teacherSectionsWhere({ tenantId: me.tenantId, teacherProfileId: tp.id }),
+        select: { classSectionId: true },
+      });
+      return {
+        kind: 'sections',
+        classSectionIds: [...new Set(assignments.map((a) => a.classSectionId))],
+      };
+    }
+
+    const scope = await this.studentAccess.scopeForUser(me, jwt, '');
+    if (scope.studentIds === null) throw new ForbiddenException(ENROLLMENT_LIST_REFUSAL);
+    return { kind: 'students', studentIds: scope.studentIds };
   }
 
   /**
