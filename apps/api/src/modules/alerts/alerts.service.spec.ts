@@ -1,3 +1,5 @@
+import { ServiceUnavailableException } from '@nestjs/common';
+
 import type { NotificationsService } from '../notifications/notifications.service';
 
 import { AlertsService } from './alerts.service';
@@ -10,6 +12,34 @@ const USER = 'admin-1';
 // portal), now passed explicitly by the controller rather than hardcoded in the
 // service. Tests that exercise other roles override these.
 const SCHOOL_ADMIN = { actorRole: 'school_admin', portal: 'admin' } as const;
+
+/**
+ * S-E01-1l — LE FAUX `TenantScopeService`, ET CE QU'IL PROUVE RÉELLEMENT.
+ *
+ * Il n'ouvre AUCUNE transaction et ne pose AUCUN GUC : ce spec n'a pas de base
+ * et ne prétend pas en avoir une. Ce qu'il rend observable est la moitié que la
+ * preuve exécutée (`scripts/tenant-adversarial-check.js`, base réelle) ne peut
+ * PAS voir — chaque instruction Prisma des méthodes converties n'est
+ * atteignable QUE par le callback de `run(…)`, et le tenant de chaque ouverture
+ * est enregistré, donc une portée ouverte sur autre chose qu'`args.tenantId`
+ * devient visible plutôt que déduite.
+ *
+ * LIMITE À DIRE PLUTÔT QU'À CONTOURNER (PF-247) : un faux `run` qui appelle
+ * `fn(prisma)` n'a AUCUNE transaction à avorter, donc aucun test de ce fichier
+ * ne peut distinguer « la récupération ouvre une portée FRAÎCHE » de « elle
+ * réutilise une transaction morte ». Cette propriété-là n'est prouvable que
+ * LEXICALEMENT — `alerts-scope-ownership.spec.ts`.
+ */
+function makeScope(prisma: unknown) {
+  const scopeTenants: string[] = [];
+  const run = jest.fn(
+    async (tenantId: string, fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => {
+      scopeTenants.push(tenantId);
+      return fn(prisma);
+    },
+  );
+  return { scope: { run }, scopeTenants };
+}
 
 function makeService(initialStatus: string = 'open') {
   const updatedRow = { id: ALERT_ID, tenantId: TENANT, status: initialStatus };
@@ -28,11 +58,13 @@ function makeService(initialStatus: string = 'open') {
   const notifications = {
     markReadBySource: jest.fn().mockResolvedValue(2),
   };
+  const { scope, scopeTenants } = makeScope(prisma);
   const service = new AlertsService(
+    scope as never,
     prisma as never,
     notifications as unknown as NotificationsService,
   );
-  return { service, prisma, notifications };
+  return { service, prisma, notifications, scope, scopeTenants };
 }
 
 describe('AlertsService notification retraction on lifecycle close', () => {
@@ -380,11 +412,13 @@ describe('AlertsService.recordMeetingIntent (E1-S3 — MeetingRequest model + au
       markReadBySource: jest.fn(),
       createMany: jest.fn().mockResolvedValue({ created: 1 }),
     };
+    const { scope, scopeTenants } = makeScope(prisma);
     const service = new AlertsService(
+      scope as never,
       prisma as never,
       notifications as unknown as NotificationsService,
     );
-    return { service, prisma, notifications };
+    return { service, prisma, notifications, scope, scopeTenants };
   }
 
   it('creates ONE MeetingRequest (open) AND writes the append-only audit row', async () => {
@@ -552,6 +586,45 @@ describe('AlertsService.recordMeetingIntent (E1-S3 — MeetingRequest model + au
     expect(prisma.meetingRequest.create).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
+
+  /**
+   * S-E01-1l / PF-258 — LE TEST LE PLUS UTILE DE CETTE TRANCHE.
+   *
+   * `resolveMeetingAssignee` dégrade à `null` sur toute erreur, et cette
+   * dégradation est PERSISTÉE : `assignedToId: null` est écrit UNE fois, pour
+   * toujours. Avant cette tranche, les seules erreurs possibles étaient des
+   * pannes base. La conversion en AJOUTE une classe — le refus de portée
+   * (`refused_unusable` → 503) — et l'avaler transformerait un défaut de
+   * configuration en perte silencieuse sur la promesse centrale du produit :
+   * l'enseignant ne verrait JAMAIS la demande, et la ligne n'en garderait
+   * aucune trace. La faute d'infrastructure doit donc REMONTER.
+   */
+  it('un refus de portée (503) REMONTE au lieu de créer une demande non assignée', async () => {
+    const { service, prisma } = makeIntentService({});
+    // La portée refuse à partir de la résolution d'assigné (3ᵉ ouverture) :
+    // l'alerte et la sonde d'idempotence ont déjà répondu.
+    let opened = 0;
+    (service as unknown as { scope: { run: jest.Mock } }).scope.run = jest.fn(
+      async (_tenantId: string, fn: (tx: unknown) => Promise<unknown>) => {
+        opened += 1;
+        if (opened >= 3) throw new ServiceUnavailableException('refusé');
+        return fn(prisma);
+      },
+    );
+
+    await expect(
+      service.recordMeetingIntent({
+        tenantId: TENANT,
+        id: ALERT_ID,
+        userProfileId: 'parent-1',
+        ...PARENT,
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    // LA propriété : rien n'a été écrit. Une demande non assignée créée ici
+    // serait indiscernable d'une école sans enseignant référent.
+    expect(prisma.meetingRequest.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('AlertsService audit provenance is derived from the caller (not hardcoded)', () => {
@@ -666,11 +739,13 @@ describe('AlertsService.listForStudent meetingRequestedAt read-path (E1-S3 carri
       meetingRequest: { findMany: jest.fn().mockResolvedValue(opts.meetingRows ?? []) },
     };
     const notifications = {};
+    const { scope, scopeTenants } = makeScope(prisma);
     const service = new AlertsService(
+      scope as never,
       prisma as never,
       notifications as unknown as NotificationsService,
     );
-    return { service, prisma };
+    return { service, prisma, scope, scopeTenants };
   }
 
   it('stamps meetingRequestedAt on the alert the caller has requested (keyed on their own requestedBy)', async () => {

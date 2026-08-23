@@ -423,8 +423,12 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
   //     réservation vit dans `booking.service.ts`, que cette tranche ne convertit
   //     PAS. Le déclarer certifierait une clôture qu'aucune instruction de portée
   //     n'exerce ;
-  //   • `alert_instance.UPDATE` — l'alerte est LUE pour dériver le diagnostic ;
-  //     sa mutation (acquittement) appartient au module alerts, non converti.
+  //   • `alert_instance.UPDATE` — NOTE CADUQUE, corrigée en S-E01-1l. Elle
+  //     disait « sa mutation appartient au module alerts, NON CONVERTI » ; le
+  //     module l'est depuis, et la paire est déclarée dans le bloc `alerts`
+  //     ci-dessous. Une exclusion motivée par « pas encore converti » périme au
+  //     module suivant : elle est corrigée dans le diff qui la périme, jamais
+  //     laissée à faire lire « non converti » d'un module qui l'est.
   //
   // Les sept paires sont VÉRIFIÉES DÉTENUES sur la base de la pile AVANT d'être
   // déclarées (`information_schema.role_table_grants` : 20/20 sur les cinq
@@ -485,6 +489,113 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
     why: 'l’`include: { availabilities }` du catalogue et le `findFirst` de ' +
       '`loadBookableAvailability` : sans ce privilège aucun créneau n’est affichable ni ' +
       'réservable, et la boucle alerte → plan → séance s’arrête à la moitié',
+  },
+  // ── alerts (S-E01-1l) ───────────────────────────────────────────────────
+  // NEUF entrées, 38 -> 47, et pas une de plus. `AlertsService` convertit 26 de
+  // ses 32 instructions et `MeetingRequestsService` les CINQ siennes ; les onze
+  // tables que leur clôture relationnelle traverse déjà (`student`, `subject`,
+  // `class_section`, `enrollment`, `academic_year`, `teaching_assignment`,
+  // `teacher_profile`, `user_profile`, `guardianship`, `alert_instance` en
+  // SELECT, `grade` — via aucune relation ici) sont DÉCLARÉES PLUS HAUT et ne
+  // sont pas dupliquées.
+  //
+  // CES NEUF PAIRES NE SONT PAS DEVINÉES : elles sont celles que
+  // `scripts/tenant-adversarial-check.js` a DÉRIVÉES du corpus après la
+  // conversion (`undeclared-pair` × 9, exécuté le 2026-08-23 contre le
+  // conteneur `pilotage_postgres`), puis déclarées à l'identique. L'égalité
+  // d'ensembles étant BIDIRECTIONNELLE depuis ADR-059, une paire de trop
+  // échouerait tout autant qu'une paire manquante.
+  //
+  // VÉRIFIÉES DÉTENUES AVANT DÉCLARATION (mesuré le 2026-08-23,
+  // `information_schema.role_table_grants`, grantee `app_user`) :
+  //   alert_rule      → SELECT, INSERT, UPDATE, DELETE
+  //   alert_instance  → SELECT, INSERT, UPDATE, DELETE
+  //   meeting_request → SELECT, INSERT, UPDATE, DELETE
+  //   audit_log       → SELECT, INSERT  ← et RIEN D'AUTRE, délibérément
+  //                     (ADR-037 §D4 / GUARDRAILS §1 : la chaîne de hachage
+  //                     d'audit ne doit pas devenir réinscriptible). Aucune
+  //                     entrée `audit_log.UPDATE` / `.DELETE` n'est déclarée
+  //                     ici, et il ne faut JAMAIS en ajouter une : la matrice
+  //                     la retient, donc la sonde rendrait `refused_unusable`
+  //                     et 503 sur les QUATRE portails, pas seulement alerts.
+  //
+  // CE QUI EST DÉLIBÉRÉMENT ABSENT :
+  //   • `audit_log.UPDATE` / `audit_log.DELETE` — voir ci-dessus ;
+  //   • tout `DELETE` — aucun chemin de suppression n'existe dans les deux
+  //     services convertis ; `app_user` détient pourtant DELETE sur les trois
+  //     tables non append-only, donc une telle entrée démarrerait au VERT et
+  //     serait MORTE (elle ne pourrait plus faire échouer l'égalité) ;
+  //   • `guardianship` / `notification` du chemin `evaluateAll` — ce chemin est
+  //     ÉNUMÉRÉ hors portée (ADR-060 §D1), et déclarer un privilège qu'aucune
+  //     instruction de portée n'exerce certifierait une clôture non vérifiée.
+  {
+    table: 'alert_rule',
+    privilege: 'SELECT',
+    why: '`ensureRules` inventorie les règles du tenant, `updateRule` résout la ligne à écrire par ' +
+      'sa clé composée nullable, et la relecture qui suit la matérialisation les rend au portail ' +
+      'admin : sans ce privilège l’écran « Règles d’alerte » ne s’ouvre plus du tout',
+  },
+  {
+    table: 'alert_rule',
+    privilege: 'INSERT',
+    why: 'les huit règles par défaut sont MATÉRIALISÉES au premier accès plutôt qu’au moment de ' +
+      'l’installation (`createMany`, sans RETURNING donc sans SELECT de retour) — sans ce droit, ' +
+      'un tenant neuf n’acquiert jamais de règles et n’émet donc JAMAIS d’alerte',
+  },
+  {
+    table: 'alert_rule',
+    privilege: 'UPDATE',
+    why: 'activer une règle, changer sa sévérité ou ses seuils — la seule commande que l’école a ' +
+      'sur ce que la plateforme lui signale ; l’écriture partage la portée de sa lecture de garde, ' +
+      'donc sans ce droit la garde passerait et l’écriture qu’elle autorise lèverait 42501',
+  },
+  {
+    table: 'alert_instance',
+    privilege: 'UPDATE',
+    why: 'les transitions acquitter / résoudre / rejeter, écrites dans la MÊME portée que le ' +
+      '`findFirst` gardé par `tenantId` qui les ancre (l’`update` ne porte qu’un `id`, donc c’est ' +
+      'cette lecture qui ferme la fenêtre TOCTOU). Exercé depuis les portails admin, enseignant ET ' +
+      'parent : sans ce droit, la boucle « information → action » s’arrête sur son premier geste',
+  },
+  {
+    table: 'meeting_request',
+    privilege: 'SELECT',
+    why: 'la garde d’idempotence de l’intention de rendez-vous, la relecture du GAGNANT après ' +
+      'P2002, le marqueur « Demande envoyée » rechargé par le parent, et la file d’action ' +
+      'enseignant/admin avec son compte — huit sites de portée ; c’est aussi le SELECT qu’exigent ' +
+      'l’`INSERT … RETURNING` de la création et le `WHERE` de la résolution (ADR-060 §D2)',
+  },
+  {
+    table: 'meeting_request',
+    privilege: 'INSERT',
+    why: 'la promotion de l’intention parentale en demande QUERYABLE, avec son assigné résolu côté ' +
+      'serveur : c’est l’instruction qui fait exister « le parent a demandé à parler à ' +
+      'l’enseignant », et son unicité `(tenant, alerte, demandeur)` est ce qui rend le double-clic ' +
+      'inoffensif',
+  },
+  {
+    table: 'meeting_request',
+    privilege: 'UPDATE',
+    why: 'la clôture open → resolved par l’enseignant ou l’admin, écrite dans la portée de la ' +
+      'lecture filtrée par RÔLE qui interdit à un enseignant de fermer la file d’un autre — RLS ' +
+      'isole le TENANT, jamais deux enseignants du même établissement',
+  },
+  {
+    table: 'audit_log',
+    privilege: 'INSERT',
+    why: 'les trois lignes append-only qu’alerts écrit — `alert.meeting_intent`, les transitions ' +
+      'de cycle de vie, et `meeting_request.resolve`. C’est la PREMIÈRE table franchement ' +
+      'WRITE-ONLY à entrer dans une portée : ce module l’écrit et ne la lit jamais, ce qui rend la ' +
+      'règle RETURNING de `VERB_PRIVILEGES` porteuse au lieu d’accidentelle (ADR-060 §D2)',
+  },
+  {
+    table: 'audit_log',
+    privilege: 'SELECT',
+    why: 'PAS une lecture métier — il n’en existe AUCUNE ici — mais l’exigence du moteur : Prisma ' +
+      'émet `INSERT … RETURNING` sur un `create` singulier, et PostgreSQL réclame SELECT sur toute ' +
+      'colonne rendue. Rogner ce « SELECT redondant » ferait rendre `refused_unusable` à la sonde ' +
+      'de démarrage et 503 sur les quatre portails ; l’ajouter n’élargit rien, la matrice ' +
+      'l’accorde déjà (ADR-032 §D7 : append-only = SELECT, INSERT, et rien de plus)',
   },
 ]);
 

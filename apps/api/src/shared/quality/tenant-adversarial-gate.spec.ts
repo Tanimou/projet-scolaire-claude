@@ -1841,16 +1841,54 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
    * sans base de données et sans scan du dépôt.
    */
   describe('AC-10 — le classifieur verbe -> privilège est PUR, et un verbe inconnu est REMONTÉ', () => {
-    it('les quatre familles de verbes rendent le privilège que le moteur exigera', () => {
-      for (const verb of ['create', 'createMany', 'createManyAndReturn']) {
-        expect(checker.privilegesForVerb(verb)).toEqual(['INSERT']);
+    /**
+     * S-E01-1l / PF-254 + PF-256 — CES ASSERTIONS SONT RÉÉCRITES, PAS COMPLÉTÉES.
+     *
+     * Celles d'avant (`create -> ['INSERT']`, `update -> ['UPDATE']`,
+     * `delete -> ['DELETE']`, `upsert -> ['INSERT','UPDATE']`) ENCODAIENT le
+     * défaut : elles étaient vertes sur une table de correspondance qui
+     * sous-dérive. Ajouter une assertion neuve à côté d'une assertion périmée
+     * qui passe encore est exactement la forme « deux listes qui divergent » —
+     * la règle est donc réécrite à l'endroit unique où elle est affirmée.
+     *
+     * LA RÈGLE, ET CE N'EST PAS UNE SYMÉTRIE LECTURE/ÉCRITURE :
+     * PostgreSQL exige `SELECT` sur toute colonne qu'une instruction LIT. Une
+     * écriture en lit à deux endroits, tous deux produits par Prisma sans qu'on
+     * le demande :
+     *   • `RETURNING` — les écritures SINGULIÈRES (`create`, `update`, `delete`,
+     *     `upsert`) et `createManyAndReturn` rendent la ligne ;
+     *   • `WHERE` — `update`/`updateMany`/`delete`/`deleteMany` lisent les
+     *     colonnes de leur condition (`updateMany` compile en
+     *     `UPDATE … WHERE id IN (SELECT …)`).
+     * `createMany` est le SEUL verbe d'écriture qui ne rende rien et ne lise
+     * aucune condition : il garde son privilège d'écriture seul.
+     */
+    it('une écriture qui RETOURNE des lignes exige aussi SELECT — la moitié `RETURNING`', () => {
+      // Prisma émet `INSERT … RETURNING` sur un `create` singulier et sur
+      // `createManyAndReturn`. Sans SELECT sur les colonnes rendues, le moteur
+      // lève 42501 sur une instruction dont le privilège d'écriture EST détenu.
+      for (const verb of ['create', 'createManyAndReturn']) {
+        expect(checker.privilegesForVerb(verb)).toEqual(['INSERT', 'SELECT']);
       }
+      // Le seul verbe d'écriture qui ne rend RIEN et ne lit AUCUNE condition.
+      expect(checker.privilegesForVerb('createMany')).toEqual(['INSERT']);
+    });
+
+    it('une écriture qui lit un `WHERE` exige aussi SELECT — la moitié que PF-254 laissait ouverte', () => {
+      // `updateMany` / `deleteMany` rendent un COMPTE, donc la moitié
+      // `RETURNING` ne dit rien d'eux ; mais leur `WHERE` LIT des colonnes.
+      // `tenant-scope.ts` motive déjà `remediation_plan.UPDATE` par « les deux
+      // `updateMany`, dont le `WHERE` exige SELECT » : la liste DÉCLARÉE
+      // connaissait la règle que la table de correspondance omettait.
       for (const verb of ['update', 'updateMany']) {
-        expect(checker.privilegesForVerb(verb)).toEqual(['UPDATE']);
+        expect(checker.privilegesForVerb(verb)).toEqual(['UPDATE', 'SELECT']);
       }
       for (const verb of ['delete', 'deleteMany']) {
-        expect(checker.privilegesForVerb(verb)).toEqual(['DELETE']);
+        expect(checker.privilegesForVerb(verb)).toEqual(['DELETE', 'SELECT']);
       }
+    });
+
+    it('les verbes de LECTURE n’exigent que SELECT — la moitié qui ne bouge pas', () => {
       for (const verb of [
         'findFirst',
         'findFirstOrThrow',
@@ -1865,11 +1903,60 @@ describe('G-TRUTH — aucune phrase du diff ne peut se lire « l’app est isol�
       }
     });
 
-    it('`upsert` exige LES DEUX, et c’est la raison pour laquelle un contrôle par table ne pouvait rien dire', () => {
+    it('`upsert` exige LES TROIS, et c’est la raison pour laquelle un contrôle par table ne pouvait rien dire', () => {
       // `register.controller.ts` fait `tenant.upsert` sur une table qui détient
       // `SELECT`. Un contrôle « la table a-t-elle une ligne de grant ? » répond
-      // oui ; la vérité est qu'il lui manque INSERT **et** UPDATE (PF-185).
-      expect(checker.privilegesForVerb('upsert')).toEqual(['INSERT', 'UPDATE']);
+      // oui ; la vérité est qu'il lui manque INSERT **et** UPDATE (PF-185) —
+      // et il RETOURNE la ligne ET lit un `WHERE`, donc SELECT aussi.
+      expect(checker.privilegesForVerb('upsert')).toEqual(['INSERT', 'UPDATE', 'SELECT']);
+    });
+
+    it('la RAISON est écrite dans le code, pour qu’elle ne se relise pas comme une symétrie', () => {
+      // Une table `create -> [INSERT, SELECT]` sans sa raison se relit comme
+      // « écrire implique lire », ce qui est faux et invite à « simplifier ».
+      // La cause — l'instruction LIT des colonnes — est donc dans la source.
+      //
+      // L'assertion porte sur `CHECKER` (la source BRUTE) et non sur
+      // `CHECKER_CODE`, qui BLANCHIT les commentaires : c'est le seul endroit de
+      // ce fichier où la prose EST la propriété vérifiée, parce que la règle
+      // qu'on protège est une raison, et qu'une raison ne s'exécute pas.
+      expect(CHECKER).toContain('POSTGRESQL REQUIRES `SELECT` ON EVERY COLUMN A STATEMENT *READS*');
+      expect(CHECKER).toContain('UPDATE … WHERE id IN (SELECT …)');
+      // …et pourquoi cette tranche et pas une plus tard : `audit_log` est la
+      // première table franchement write-only à entrer dans une portée.
+      expect(CHECKER).toContain('audit_log` is the first genuinely WRITE-ONLY table');
+      // GARDE DE LA GARDE : `CHECKER_CODE` blanchit bien les commentaires, donc
+      // la même assertion posée dessus DOIT échouer. Sans cette ligne, un futur
+      // changement d'`executableJs` rendrait la précédente vraie par accident.
+      expect(CHECKER_CODE).not.toContain('POSTGRESQL REQUIRES');
+    });
+
+    /**
+     * S-E01-1l — LA MOITIÉ MÉCANISABLE DE LA « TROISIÈME LISTE » (PF-257).
+     *
+     * La clôture DÉCLARÉE est comparée dans les deux sens à la clôture DÉRIVÉE
+     * (ADR-059), mais NI l'une NI l'autre n'est comparée à la MATRICE DE GRANTS
+     * que la migration décide. Une paire déclarée que la matrice retient rend
+     * `refused_unusable` au démarrage : vert au boot, puis 503 sur les QUATRE
+     * portails — pas un échec circonscrit au module fautif.
+     *
+     * La moitié APPEND-ONLY de cette obligation est vérifiable SANS base, et
+     * c'est précisément celle que cette tranche rend atteignable : `audit_log`
+     * entre dans une portée, et sa tentation naturelle (« la table est écrite,
+     * déclarons UPDATE ») serait la panne. Le reste de la troisième liste
+     * (l'appartenance aux 44 tables tenant) reste non mécanisé — PF-257.
+     */
+    it('AUCUNE paire déclarée ne réclame UPDATE/DELETE sur une table APPEND-ONLY (ADR-032 §D7)', () => {
+      const appendOnly = new Set(checker.APPEND_ONLY_TABLES);
+      // NON-VACUITÉ : la tranche fait entrer `audit_log` dans la clôture, donc
+      // cette assertion porte sur au moins une table réellement déclarée.
+      const touched = APP_ROLE_REQUIRED_PRIVILEGES.filter((r) => appendOnly.has(r.table));
+      expect(touched.length).toBeGreaterThanOrEqual(2);
+      const forbidden = touched.filter((r) => r.privilege === 'UPDATE' || r.privilege === 'DELETE');
+      expect(forbidden).toEqual([]);
+      // …et la matrice que la migration accorde à ces tables est bien la paire
+      // restreinte, lue depuis le contrôleur plutôt que retapée ici.
+      expect(checker.APPEND_ONLY_DML).toBe('INSERT|SELECT');
     });
 
     it('un verbe INCONNU rend `null` — remonté, jamais silencieusement ignoré', () => {

@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
-import { PrismaService } from '../../shared/prisma/prisma.service';
+import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 
 import { MeetingRequestDto, MeetingRequestStatus } from './alerts.types';
 
@@ -46,12 +46,36 @@ type MeetingRequestFull = Prisma.MeetingRequestGetPayload<{
  * tenant-scoped AND role-scoped. Every state change writes an append-only audit
  * row. No request is ever updated cross-tenant or cross-teacher (404 instead of
  * leaking existence).
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ S-E01-1l — CONVERTI EN ENTIER, ET LE CONSTRUCTEUR EST LA PREUVE          │
+ * │ (ADR-057 §D4, appliqué ; ADR-060 §D4)                                   │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * `PrismaService` n'est plus injecté ici. Les CINQ instructions de ce fichier
+ * passent toutes par `TenantScopeService.run(args.tenantId, tx => …)`, donc
+ * l'absence de référence au client PROPRIÉTAIRE est une propriété du
+ * CONSTRUCTEUR et non une convention de revue. Le tenant est TOUJOURS
+ * `args.tenantId`, jamais `row.tenantId`.
+ *
+ * Les gardes `tenantId:` explicites de `buildScopeWhere` RESTENT : sans
+ * `DATABASE_URL_APP`, `run` s'exécute sur la connexion du propriétaire
+ * (ADR-056), qui échappe à ses propres policies. Le filtre de RÔLE
+ * (`assignedToId = moi` ∪ `assignedToId IS NULL`) reste lui aussi intact — RLS
+ * isole le TENANT, jamais la file d'un enseignant de celle d'un autre.
+ *
+ * G-AUDIT (ADR-060 §D5) — l'`auditLog.create` de `resolve` était déjà
+ * post-mutation, best-effort, sa propre instruction, avec un `catch` qui avale.
+ * Il ouvre donc sa PROPRE portée, `try` dehors et `catch` dehors (ADR-058 §D1) :
+ * partagé avec la portée de l'`update`, un échec avalé avorterait la
+ * transaction et la RÉSOLUTION que la ligne consigne serait perdue pendant que
+ * le handler rend 200. La relation transactionnelle est inchangée : aucune.
  */
 @Injectable()
 export class MeetingRequestsService {
   private readonly logger = new Logger(MeetingRequestsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly scope: TenantScopeService) {}
 
   /** Map the caller's realm roles to an effective action-center scope. */
   scopeFromRoles(roles: string[], userProfileId: string): MeetingRequestScope {
@@ -102,16 +126,20 @@ export class MeetingRequestsService {
       status: args.status,
     };
 
-    const [rows, total] = await Promise.all([
-      this.prisma.meetingRequest.findMany({
+    // Le `Promise.all` d'origine est SÉQUENTIALISÉ : une transaction interactive
+    // est UNE connexion, et deux `await` concurrents sur le même `tx` ne sont
+    // pas un ordonnancement supporté. Le résultat rendu est identique.
+    const { rows, total } = await this.scope.run(args.tenantId, async (tx) => {
+      const found = await tx.meetingRequest.findMany({
         where,
         include: MEETING_REQUEST_INCLUDE,
         orderBy: { createdAt: 'desc' },
         skip: args.offset,
         take: args.limit,
-      }),
-      this.prisma.meetingRequest.count({ where }),
-    ]);
+      });
+      const count = await tx.meetingRequest.count({ where });
+      return { rows: found, total: count };
+    });
     return { data: rows.map((r) => this.toDto(r)), total };
   }
 
@@ -134,40 +162,64 @@ export class MeetingRequestsService {
     const scopeWhere = this.buildScopeWhere(args);
     if (!scopeWhere) throw new NotFoundException('Meeting request not found');
 
-    const row = await this.prisma.meetingRequest.findFirst({
-      where: { ...scopeWhere, id: args.id },
-      include: MEETING_REQUEST_INCLUDE,
-    });
-    if (!row) throw new NotFoundException('Meeting request not found');
+    // La garde de rôle ET l'écriture partagent UNE portée : l'`update` ne porte
+    // qu'un `id`, donc c'est le `findFirst` filtré par `scopeWhere` qui interdit
+    // à un enseignant de résoudre la demande d'un autre — sans TOCTOU. Les deux
+    // sorties anticipées (404, no-op) sont rendues comme des VALEURS et traitées
+    // une fois la portée refermée : une exception levée depuis le callback
+    // avorterait la transaction au lieu de la clore.
+    // Le `where` est composé DEHORS, comme dans `list`, et passé par son nom :
+    // la dérivation de clôture (`scripts/tenant-adversarial-check.js`) résout un
+    // identifiant mais NOMME un spread local qu'elle ne peut pas résoudre
+    // (`unresolvable-argument-reference`, PF-250). Composer ici plutôt qu'à
+    // l'intérieur de l'appel garde la profondeur relationnelle DÉRIVABLE au lieu
+    // de la faire dépendre d'une branche silencieuse.
+    const where: Prisma.MeetingRequestWhereInput = { ...scopeWhere, id: args.id };
 
-    // Idempotent: only open → resolved transitions. A second resolve (or
-    // resolving a cancelled request) is a no-op — no re-stamp, no duplicate audit.
-    if (row.status !== 'open') return this.toDto(row);
-
-    const updated = await this.prisma.meetingRequest.update({
-      where: { id: args.id },
-      data: {
-        status: 'resolved',
-        resolvedAt: new Date(),
-        resolvedBy: args.userProfileId,
-      },
-      include: MEETING_REQUEST_INCLUDE,
-    });
-
-    try {
-      await this.prisma.auditLog.create({
-        data: {
-          tenantId: args.tenantId,
-          actorId: args.userProfileId,
-          actorRole: args.actorRole,
-          portal: args.portal,
-          action: 'meeting_request.resolve',
-          resourceType: 'meeting_request',
-          resourceId: args.id,
-          before: { status: 'open' } as Prisma.InputJsonValue,
-          after: { status: 'resolved' } as Prisma.InputJsonValue,
-        },
+    const outcome = await this.scope.run(args.tenantId, async (tx) => {
+      const row = await tx.meetingRequest.findFirst({
+        where,
+        include: MEETING_REQUEST_INCLUDE,
       });
+      if (!row) return null;
+
+      // Idempotent: only open → resolved transitions. A second resolve (or
+      // resolving a cancelled request) is a no-op — no re-stamp, no duplicate audit.
+      if (row.status !== 'open') return { transitioned: false as const, row };
+
+      const updated = await tx.meetingRequest.update({
+        where: { id: args.id },
+        data: {
+          status: 'resolved',
+          resolvedAt: new Date(),
+          resolvedBy: args.userProfileId,
+        },
+        include: MEETING_REQUEST_INCLUDE,
+      });
+      return { transitioned: true as const, row: updated };
+    });
+    if (!outcome) throw new NotFoundException('Meeting request not found');
+    if (!outcome.transitioned) return this.toDto(outcome.row);
+    const updated = outcome.row;
+
+    // G-AUDIT — SA PROPRE portée, ouverte après la fermeture de celle de
+    // l'`update`, `try` dehors et `catch` dehors (ADR-058 §D1).
+    try {
+      await this.scope.run(args.tenantId, async (tx) =>
+        tx.auditLog.create({
+          data: {
+            tenantId: args.tenantId,
+            actorId: args.userProfileId,
+            actorRole: args.actorRole,
+            portal: args.portal,
+            action: 'meeting_request.resolve',
+            resourceType: 'meeting_request',
+            resourceId: args.id,
+            before: { status: 'open' } as Prisma.InputJsonValue,
+            after: { status: 'resolved' } as Prisma.InputJsonValue,
+          },
+        }),
+      );
     } catch (err) {
       this.logger.error(
         `Failed to write meeting_request.resolve audit row for ${args.id} (status unaffected): ${(err as Error).message}`,

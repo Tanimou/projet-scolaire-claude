@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 // `Prisma` is imported as a runtime value (used for `instanceof
 // Prisma.PrismaClientKnownRequestError` in the P2002 idempotency catch) as well
 // as for its `Prisma.*` type helpers.
@@ -13,6 +19,8 @@ import type {
 } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { TenantScopeError } from '../../shared/prisma/tenant-scope';
+import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 import {
@@ -52,11 +60,106 @@ const RULE_FN: Partial<Record<AlertRuleCode, RuleFn>> = {
   // BEHAVIOR_ALERT remains a stub — it will be wired in a subsequent iteration.
 };
 
+/**
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ S-E01-1l — LE SIXIÈME MODULE ENTRE DANS LA PORTÉE TENANT, ET LE PREMIER  │
+ * │ QUI NE CONVERTIT PAS TOUT (ADR-060 §D1)                                  │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * VINGT-SIX des trente-deux instructions de ce fichier passent désormais par
+ * `TenantScopeService.run(args.tenantId, tx => …)`, dans la forme livrée par
+ * `remediation.service.ts` et `student-portal.service.ts`. Le tenant est
+ * TOUJOURS `args.tenantId` — la valeur dérivée du serveur, jamais
+ * `row.tenantId`, ce qui ferait de la clé de portée une fonction de la donnée
+ * que la portée filtre.
+ *
+ * Les gardes `tenantId:` explicites de chaque `where` RESTENT : sur un
+ * déploiement sans `DATABASE_URL_APP`, `run` s'exécute sur la connexion du
+ * PROPRIÉTAIRE (ADR-056), qui échappe à ses propres policies. Les retirer ferait
+ * de l'isolation une propriété d'UN fichier d'environnement.
+ *
+ * CE QUI RESTE DEHORS, ET POURQUOI (l'inverse d'un oubli — ADR-060 §D1) :
+ * `evaluateAll`, `notifyGuardiansOfAlert` et `tenantsWithEnabledRules` gardent
+ * le client PROPRIÉTAIRE et sont ÉNUMÉRÉS dans `ENUMERATED_OUTSIDE_SCOPE`
+ * (`scripts/tenant-adversarial-check.js`), instruction par instruction, avec
+ * leur raison propre :
+ *
+ *  1. `evaluateAll` est un LOT. Il ouvre en éventail sur sept évaluateurs
+ *     `rules/*.rule.ts`, chacun recevant `RuleContext.prisma: PrismaService` et
+ *     émettant ses propres requêtes sur TOUT le tenant, puis boucle PAR
+ *     DÉTECTION sur un `findFirst` de déduplication + un `create` + un fan-out
+ *     de notifications. C'est O(règles × détections) allers-retours ; la couture
+ *     borne explicitement une portée à « ≤ 2 instructions » et Prisma coupe une
+ *     transaction interactive à 5 s. L'y enfermer rendrait P2028 sur le bouton
+ *     admin « Lancer l'évaluation » ET annulerait les alertes déjà matérialisées.
+ *  2. La convertir exigerait de retyper `RuleContext.prisma` en
+ *     `Prisma.TransactionClient` et de convertir sept fichiers de règles — le
+ *     rayon de souffle d'un AUTRE module. Laissée à moitié, elle produirait des
+ *     `ctx.prisma.*` sur la connexion propriétaire À L'INTÉRIEUR d'une portée
+ *     ouverte : l'inverse dangereux de PF-200, invisible au compilateur.
+ *  3. `tenantsWithEnabledRules` ne prend AUCUN tenantId et `distinct` dessus :
+ *     elle PRODUIT l'ensemble des tenants que le cron évalue. L'entrée d'une
+ *     portée ne peut pas être émise depuis l'intérieur de cette portée.
+ *
+ * `PrismaService` reste donc injecté ICI, et c'est une DÉCISION : le cliquet
+ * « le constructeur EST la preuve » (ADR-057 §D4) ne s'applique PAS à cette
+ * classe tant que l'évaluateur n'est pas converti, et le simuler en masquant le
+ * client propriétaire derrière un helper serait une preuve fausse.
+ * `MeetingRequestsService`, lui, l'atteint.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ ADR-058 §D1 — UNE ERREUR RATTRAPÉE DOIT SORTIR DE SA PORTÉE              │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * `run` ouvre une transaction INTERACTIVE : toute erreur l'AVORTE et chaque
+ * instruction suivante sur le même `tx` rend `25P02`. Ce fichier porte CINQ
+ * récupérations qui avalent et continuent, contre trois pour `remediation`.
+ * Chacune respecte la règle : le `try {` s'ouvre AVANT `this.scope.run(…)`, le
+ * `catch` se ferme APRÈS, et toute instruction de RÉCUPÉRATION ouvre une portée
+ * FRAÎCHE. La forme naïve — une portée par handler avec les `catch` dedans —
+ * serait strictement PIRE que l'état actuel : un `auditLog.create` en échec
+ * avalé ferait dégénérer le `COMMIT` en `ROLLBACK`, et l'acquittement que la
+ * ligne d'audit se contentait de CONSIGNER serait perdu en silence pendant que
+ * le handler rend 200.
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ G-AUDIT — LA RELATION TRANSACTIONNELLE EST INCHANGÉE (ADR-060 §D5)       │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * MESURÉ : ce fichier n'a AUCUN `$transaction`. Les deux `auditLog.create`
+ * (`recordMeetingIntent`, `writeAuditEntry`) sont déjà post-mutation,
+ * best-effort, chacun sa propre instruction, avec un `catch` qui avale et ne
+ * remonte rien. Ils gardent EXACTEMENT cette relation : chacun ouvre sa PROPRE
+ * portée, jamais celle de la mutation qu'il consigne. Cette tranche ne rend pas
+ * la piste d'audit transactionnelle, et ne l'affaiblit pas non plus.
+ *
+ * `audit_log` est la PREMIÈRE table franchement WRITE-ONLY à entrer dans une
+ * portée — ce fichier l'écrit et ne la lit jamais — et c'est ce qui rend la
+ * règle `RETURNING` de `VERB_PRIVILEGES` porteuse plutôt qu'accidentelle
+ * (ADR-060 §D2).
+ *
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ CE QUI NE DOIT JAMAIS ENTRER DANS UNE PORTÉE                             │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * `this.notifications.*` détient le client PROPRIÉTAIRE et lit `user_profile`.
+ * Appelé DEPUIS un callback de portée, il prendrait une seconde connexion du
+ * pool, sans GUC, pendant que la connexion `app_user` tient une transaction
+ * interactive ouverte — l'inverse de PF-200 — et son `catch` empoisonnerait la
+ * portée hôte. Chaque appel est donc LEXICALEMENT hors de tout `run`.
+ *
+ * RETOUR ARRIÈRE : remplacer les `this.scope.run(args.tenantId, tx => …)` par
+ * `this.prisma` rétablit mot pour mot le comportement d'avant la tranche.
+ */
 @Injectable()
 export class AlertsService {
   private readonly logger = new Logger(AlertsService.name);
 
   constructor(
+    private readonly scope: TenantScopeService,
+    // ENCORE INJECTÉ, et nommé comme tel : `evaluateAll`,
+    // `notifyGuardiansOfAlert` et `tenantsWithEnabledRules` restent sur la
+    // connexion du propriétaire (voir le docblock de classe, ADR-060 §D1).
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
   ) {}
@@ -69,9 +172,14 @@ export class AlertsService {
    * with `enabled=false`. Idempotent.
    */
   async ensureRules(args: { tenantId: string; schoolId: string | null }): Promise<AlertRule[]> {
-    const existing = await this.prisma.alertRule.findMany({
-      where: { tenantId: args.tenantId, schoolId: args.schoolId ?? null },
-    });
+    // PORTÉE 1/2 — l'inventaire. Fermée AVANT le calcul de `toCreate` : ce
+    // calcul est pur, et le tenir dans une transaction interactive la ferait
+    // durer pour rien (budget « ≤ 2 instructions », tenant-scope.service.ts).
+    const existing = await this.scope.run(args.tenantId, async (tx) =>
+      tx.alertRule.findMany({
+        where: { tenantId: args.tenantId, schoolId: args.schoolId ?? null },
+      }),
+    );
     const existingByCode = new Map(existing.map((r) => [r.code, r]));
     const toCreate = RULE_CODES.filter((c) => !existingByCode.has(c)).map((code) => ({
       tenantId: args.tenantId,
@@ -82,9 +190,15 @@ export class AlertsService {
       parameters: RULE_DEFAULTS[code].parameters as Prisma.InputJsonValue,
     }));
     if (toCreate.length === 0) return existing;
-    await this.prisma.alertRule.createMany({ data: toCreate });
-    return this.prisma.alertRule.findMany({
-      where: { tenantId: args.tenantId, schoolId: args.schoolId ?? null },
+    // PORTÉE 2/2 — l'écriture PUIS sa relecture, dans la MÊME portée : elles
+    // étaient déjà deux instructions consécutives sans transaction, et les
+    // réunir ne change aucun résultat observable tout en évitant qu'un `BEGIN`
+    // de plus soit payé sur le premier GET de chaque tenant.
+    return this.scope.run(args.tenantId, async (tx) => {
+      await tx.alertRule.createMany({ data: toCreate });
+      return tx.alertRule.findMany({
+        where: { tenantId: args.tenantId, schoolId: args.schoolId ?? null },
+      });
     });
   }
 
@@ -95,16 +209,19 @@ export class AlertsService {
     const rules = await this.ensureRules(args);
     const byCode = new Map(rules.map((r) => [r.code, r]));
 
-    // Tally open instances per code in one query
-    const openCounts = await this.prisma.alertInstance.groupBy({
-      by: ['code'],
-      where: {
-        tenantId: args.tenantId,
-        status: 'open',
-        ...(args.schoolId ? { schoolId: args.schoolId } : {}),
-      },
-      _count: { _all: true },
-    });
+    // Tally open instances per code in one query. `ensureRules` a fermé SA
+    // portée avant celle-ci : deux portées séquentielles, jamais imbriquées.
+    const openCounts = await this.scope.run(args.tenantId, async (tx) =>
+      tx.alertInstance.groupBy({
+        by: ['code'],
+        where: {
+          tenantId: args.tenantId,
+          status: 'open',
+          ...(args.schoolId ? { schoolId: args.schoolId } : {}),
+        },
+        _count: { _all: true },
+      }),
+    );
     const openByCode = new Map(openCounts.map((c) => [c.code, c._count._all]));
 
     return RULE_CODES.map((code) => {
@@ -132,25 +249,34 @@ export class AlertsService {
     await this.ensureRules({ tenantId: args.tenantId, schoolId: args.schoolId });
     // Nullable compound unique keys don't get a clean `where` input in Prisma —
     // resolve the row id first, then update by primary key.
-    const existing = await this.prisma.alertRule.findFirst({
-      where: {
-        tenantId: args.tenantId,
-        schoolId: args.schoolId ?? null,
-        code: args.code,
-      },
-      select: { id: true },
+    //
+    // UNE SEULE portée pour la garde ET l'écriture (le motif `calendar_event.
+    // UPDATE`) : l'`update` ne porte qu'un `id`, donc sans la lecture de garde
+    // dans la même transaction il resterait une fenêtre TOCTOU. Le 404 est levé
+    // DEHORS, une fois la portée refermée — jamais depuis le callback, où il
+    // avorterait la transaction plutôt que de la clore proprement.
+    const updated = await this.scope.run(args.tenantId, async (tx) => {
+      const existing = await tx.alertRule.findFirst({
+        where: {
+          tenantId: args.tenantId,
+          schoolId: args.schoolId ?? null,
+          code: args.code,
+        },
+        select: { id: true },
+      });
+      if (!existing) return null;
+      return tx.alertRule.update({
+        where: { id: existing.id },
+        data: {
+          ...(args.dto.enabled != null ? { enabled: args.dto.enabled } : {}),
+          ...(args.dto.severity ? { severity: args.dto.severity } : {}),
+          ...(args.dto.parameters
+            ? { parameters: args.dto.parameters as Prisma.InputJsonValue }
+            : {}),
+        },
+      });
     });
-    if (!existing) throw new NotFoundException('Alert rule not found');
-    const updated = await this.prisma.alertRule.update({
-      where: { id: existing.id },
-      data: {
-        ...(args.dto.enabled != null ? { enabled: args.dto.enabled } : {}),
-        ...(args.dto.severity ? { severity: args.dto.severity } : {}),
-        ...(args.dto.parameters
-          ? { parameters: args.dto.parameters as Prisma.InputJsonValue }
-          : {}),
-      },
-    });
+    if (!updated) throw new NotFoundException('Alert rule not found');
     const defaults = RULE_DEFAULTS[args.code];
     return {
       id: updated.id,
@@ -179,8 +305,12 @@ export class AlertsService {
       ...(args.status ? { status: args.status } : {}),
       ...(args.studentId ? { studentId: args.studentId } : {}),
     };
-    const [rows, total] = await Promise.all([
-      this.prisma.alertInstance.findMany({
+    // Le `Promise.all` d'origine est SÉQUENTIALISÉ : une transaction interactive
+    // est UNE connexion, et deux `await` concurrents sur le même `tx` ne sont
+    // pas un ordonnancement supporté par Prisma. Le résultat rendu est
+    // identique ; seul le parallélisme des deux requêtes disparaît.
+    const { rows, total } = await this.scope.run(args.tenantId, async (tx) => {
+      const found = await tx.alertInstance.findMany({
         where,
         include: {
           student: { select: { firstName: true, lastName: true } },
@@ -190,9 +320,10 @@ export class AlertsService {
         orderBy: [{ status: 'asc' }, { detectedAt: 'desc' }],
         skip: args.offset,
         take: args.limit,
-      }),
-      this.prisma.alertInstance.count({ where }),
-    ]);
+      });
+      const count = await tx.alertInstance.count({ where });
+      return { rows: found, total: count };
+    });
     // Admin list does not surface a per-caller meeting-request marker (it is a
     // parent-confirmation read-path concern); pass an empty map → null field.
     return { data: rows.map((r) => this.toDto(r as AlertInstanceFull)), total };
@@ -211,10 +342,15 @@ export class AlertsService {
     tenantId: string;
     id: string;
   }): Promise<string | null> {
-    const row = await this.prisma.alertInstance.findFirst({
-      where: { id: args.id, tenantId: args.tenantId },
-      select: { studentId: true },
-    });
+    // La portée se REFERME avant que le contrôleur n'appelle
+    // `canAccessStudent` : le mur ABAC tourne sur la connexion du propriétaire,
+    // hors de toute transaction, exactement comme avant cette tranche.
+    const row = await this.scope.run(args.tenantId, async (tx) =>
+      tx.alertInstance.findFirst({
+        where: { id: args.id, tenantId: args.tenantId },
+        select: { studentId: true },
+      }),
+    );
     return row?.studentId ?? null;
   }
 
@@ -225,35 +361,46 @@ export class AlertsService {
     actorRole: string | null;
     portal: string | null;
   }) {
-    const row = await this.prisma.alertInstance.findFirst({
-      where: { id: args.id, tenantId: args.tenantId },
+    // La garde ET l'écriture partagent UNE portée : l'`update` ne porte qu'un
+    // `id`, donc c'est la lecture gardée par `tenantId` qui l'ancre au tenant.
+    // Le 404 est levé une fois la portée refermée.
+    const outcome = await this.scope.run(args.tenantId, async (tx) => {
+      const row = await tx.alertInstance.findFirst({
+        where: { id: args.id, tenantId: args.tenantId },
+      });
+      if (!row) return null;
+      const didTransition = row.status === 'open';
+      const updated = await tx.alertInstance.update({
+        where: { id: args.id },
+        data: {
+          status: didTransition ? 'acknowledged' : row.status,
+          acknowledgedAt: row.acknowledgedAt ?? new Date(),
+          acknowledgedBy: row.acknowledgedBy ?? args.userProfileId,
+        },
+      });
+      return { didTransition, beforeStatus: row.status, updated };
     });
-    if (!row) throw new NotFoundException('Alert not found');
-    const didTransition = row.status === 'open';
-    const updated = await this.prisma.alertInstance.update({
-      where: { id: args.id },
-      data: {
-        status: didTransition ? 'acknowledged' : row.status,
-        acknowledgedAt: row.acknowledgedAt ?? new Date(),
-        acknowledgedBy: row.acknowledgedBy ?? args.userProfileId,
-      },
-    });
+    if (!outcome) throw new NotFoundException('Alert not found');
     // Best-effort, post-update audit trail. Only logged when acknowledge is a
     // real transition (open -> acknowledged); a no-op acknowledge writes no row
     // so the append-only trail stays meaningful. Never rolls back the status.
-    if (didTransition) {
+    //
+    // G-AUDIT — la portée de la mutation est DÉJÀ FERMÉE ici. L'audit ouvre la
+    // sienne, comme il émettait déjà sa propre instruction : sa relation
+    // transactionnelle à l'acquittement est INCHANGÉE (ADR-060 §D5).
+    if (outcome.didTransition) {
       await this.writeAuditEntry({
         tenantId: args.tenantId,
         alertId: args.id,
         actorId: args.userProfileId,
         action: 'alert.acknowledge',
-        beforeStatus: row.status,
+        beforeStatus: outcome.beforeStatus,
         afterStatus: 'acknowledged',
         actorRole: args.actorRole,
         portal: args.portal,
       });
     }
-    return updated;
+    return outcome.updated;
   }
 
   async resolve(args: {
@@ -263,26 +410,35 @@ export class AlertsService {
     actorRole: string | null;
     portal: string | null;
   }) {
-    const row = await this.prisma.alertInstance.findFirst({
-      where: { id: args.id, tenantId: args.tenantId },
-    });
-    if (!row) throw new NotFoundException('Alert not found');
     // Idempotent terminal transition: only open/acknowledged alerts may move to
     // resolved. A second resolve (or a resolve of an already-dismissed alert) is
     // a no-op — it must NOT re-stamp resolvedAt/resolvedBy nor write a duplicate
     // audit row, keeping the append-only trail one-row-per-real-transition and
     // preventing status regression / provenance pollution (e.g. a parent
     // double-click or "resolving" a dismissed alert).
-    const didTransition = row.status === 'open' || row.status === 'acknowledged';
-    if (!didTransition) return row;
-    const updated = await this.prisma.alertInstance.update({
-      where: { id: args.id },
-      data: {
-        status: 'resolved',
-        resolvedAt: new Date(),
-        resolvedBy: args.userProfileId,
-      },
+    //
+    // Garde + écriture dans UNE portée ; les deux sorties anticipées (404, no-op)
+    // sont rendues comme des VALEURS et traitées une fois la portée refermée.
+    const outcome = await this.scope.run(args.tenantId, async (tx) => {
+      const row = await tx.alertInstance.findFirst({
+        where: { id: args.id, tenantId: args.tenantId },
+      });
+      if (!row) return null;
+      const didTransition = row.status === 'open' || row.status === 'acknowledged';
+      if (!didTransition) return { didTransition, beforeStatus: row.status, updated: row };
+      const updated = await tx.alertInstance.update({
+        where: { id: args.id },
+        data: {
+          status: 'resolved',
+          resolvedAt: new Date(),
+          resolvedBy: args.userProfileId,
+        },
+      });
+      return { didTransition, beforeStatus: row.status, updated };
     });
+    if (!outcome) throw new NotFoundException('Alert not found');
+    if (!outcome.didTransition) return outcome.updated;
+    const updated = outcome.updated;
     // Best-effort: retract the guardian bell notifications for this alert. The
     // status transition is the source of truth — a notification failure must
     // never roll it back or surface to the admin (mirrors dispatchEmails).
@@ -303,7 +459,7 @@ export class AlertsService {
       alertId: args.id,
       actorId: args.userProfileId,
       action: 'alert.resolve',
-      beforeStatus: row.status,
+      beforeStatus: outcome.beforeStatus,
       afterStatus: 'resolved',
       actorRole: args.actorRole,
       portal: args.portal,
@@ -318,23 +474,29 @@ export class AlertsService {
     actorRole: string | null;
     portal: string | null;
   }) {
-    const row = await this.prisma.alertInstance.findFirst({
-      where: { id: args.id, tenantId: args.tenantId },
-    });
-    if (!row) throw new NotFoundException('Alert not found');
     // Idempotent terminal transition: only open/acknowledged alerts may move to
     // dismissed. A second dismiss (or dismissing an already-resolved alert) is a
     // no-op — no re-stamp, no duplicate audit row (see resolve for rationale).
-    const didTransition = row.status === 'open' || row.status === 'acknowledged';
-    if (!didTransition) return row;
-    const updated = await this.prisma.alertInstance.update({
-      where: { id: args.id },
-      data: {
-        status: 'dismissed',
-        resolvedAt: new Date(),
-        resolvedBy: args.userProfileId,
-      },
+    const outcome = await this.scope.run(args.tenantId, async (tx) => {
+      const row = await tx.alertInstance.findFirst({
+        where: { id: args.id, tenantId: args.tenantId },
+      });
+      if (!row) return null;
+      const didTransition = row.status === 'open' || row.status === 'acknowledged';
+      if (!didTransition) return { didTransition, beforeStatus: row.status, updated: row };
+      const updated = await tx.alertInstance.update({
+        where: { id: args.id },
+        data: {
+          status: 'dismissed',
+          resolvedAt: new Date(),
+          resolvedBy: args.userProfileId,
+        },
+      });
+      return { didTransition, beforeStatus: row.status, updated };
     });
+    if (!outcome) throw new NotFoundException('Alert not found');
+    if (!outcome.didTransition) return outcome.updated;
+    const updated = outcome.updated;
     // Best-effort retraction (see resolve): a dismissed alert is closed, so its
     // guardian bell notifications stop ringing. Never blocks the dismiss.
     try {
@@ -354,7 +516,7 @@ export class AlertsService {
       alertId: args.id,
       actorId: args.userProfileId,
       action: 'alert.dismiss',
-      beforeStatus: row.status,
+      beforeStatus: outcome.beforeStatus,
       afterStatus: 'dismissed',
       actorRole: args.actorRole,
       portal: args.portal,
@@ -390,32 +552,37 @@ export class AlertsService {
     actorRole: string | null;
     portal: string | null;
   }): Promise<{ ok: true; alreadyRequested: boolean; requestedAt: string }> {
-    const row = await this.prisma.alertInstance.findFirst({
-      where: { id: args.id, tenantId: args.tenantId },
-      select: {
-        studentId: true,
-        code: true,
-        subjectId: true,
-        schoolId: true,
-        title: true,
-        student: { select: { firstName: true, lastName: true } },
-      },
-    });
+    // PORTÉE 1/4 — le diagnostic, dérivé du serveur sous la garde `{id, tenantId}`.
+    const row = await this.scope.run(args.tenantId, async (tx) =>
+      tx.alertInstance.findFirst({
+        where: { id: args.id, tenantId: args.tenantId },
+        select: {
+          studentId: true,
+          code: true,
+          subjectId: true,
+          schoolId: true,
+          title: true,
+          student: { select: { firstName: true, lastName: true } },
+        },
+      }),
+    );
     if (!row) throw new NotFoundException('Alert not found');
 
-    // Fast-path idempotency check (friendly echo). The DB `@@unique` is the real
-    // guarantee — the create below catches P2002 so two concurrent POSTs still
-    // yield exactly one row + one notification (closes carried debt #3).
-    const existing = await this.prisma.meetingRequest.findUnique({
-      where: {
-        tenantId_alertId_requestedBy: {
-          tenantId: args.tenantId,
-          alertId: args.id,
-          requestedBy: args.userProfileId,
+    // PORTÉE 2/4 — Fast-path idempotency check (friendly echo). The DB `@@unique`
+    // is the real guarantee — the create below catches P2002 so two concurrent
+    // POSTs still yield exactly one row + one notification (closes carried debt #3).
+    const existing = await this.scope.run(args.tenantId, async (tx) =>
+      tx.meetingRequest.findUnique({
+        where: {
+          tenantId_alertId_requestedBy: {
+            tenantId: args.tenantId,
+            alertId: args.id,
+            requestedBy: args.userProfileId,
+          },
         },
-      },
-      select: { createdAt: true },
-    });
+        select: { createdAt: true },
+      }),
+    );
     if (existing) {
       return {
         ok: true,
@@ -432,22 +599,30 @@ export class AlertsService {
       subjectId: row.subjectId ?? null,
     });
 
+    // ADR-058 §D1 — le `try {` s'ouvre AVANT la portée 3/4 et le `catch` se
+    // ferme APRÈS : la violation d'unicité AVORTE la transaction de la
+    // création, donc la relecture du gagnant ne peut pas y être émise (elle
+    // rendrait 25P02). Elle ouvre une portée FRAÎCHE.
     let created: { id: string; createdAt: Date };
     try {
-      created = await this.prisma.meetingRequest.create({
-        data: {
-          tenantId: args.tenantId,
-          schoolId: row.schoolId ?? null,
-          alertId: args.id,
-          studentId: row.studentId,
-          subjectId: row.subjectId ?? null,
-          alertCode: row.code,
-          requestedBy: args.userProfileId,
-          assignedToId,
-          status: 'open',
-        },
-        select: { id: true, createdAt: true },
-      });
+      // PORTÉE 3/4 — l'écriture. `select` fait un `INSERT … RETURNING`, qui
+      // exige SELECT sur `meeting_request` en plus d'INSERT (ADR-060 §D2).
+      created = await this.scope.run(args.tenantId, async (tx) =>
+        tx.meetingRequest.create({
+          data: {
+            tenantId: args.tenantId,
+            schoolId: row.schoolId ?? null,
+            alertId: args.id,
+            studentId: row.studentId,
+            subjectId: row.subjectId ?? null,
+            alertCode: row.code,
+            requestedBy: args.userProfileId,
+            assignedToId,
+            status: 'open',
+          },
+          select: { id: true, createdAt: true },
+        }),
+      );
     } catch (err) {
       // Concurrency: a parallel POST won the @@unique race. Treat as
       // already-requested (read the original row's createdAt) — one row, one
@@ -456,16 +631,20 @@ export class AlertsService {
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
-        const winner = await this.prisma.meetingRequest.findUnique({
-          where: {
-            tenantId_alertId_requestedBy: {
-              tenantId: args.tenantId,
-              alertId: args.id,
-              requestedBy: args.userProfileId,
+        // PORTÉE 4/4 — FRAÎCHE, ouverte DANS le `catch`, après que la
+        // transaction fautive a été fermée par la propagation de l'erreur.
+        const winner = await this.scope.run(args.tenantId, async (tx) =>
+          tx.meetingRequest.findUnique({
+            where: {
+              tenantId_alertId_requestedBy: {
+                tenantId: args.tenantId,
+                alertId: args.id,
+                requestedBy: args.userProfileId,
+              },
             },
-          },
-          select: { createdAt: true },
-        });
+            select: { createdAt: true },
+          }),
+        );
         return {
           ok: true,
           alreadyRequested: true,
@@ -477,24 +656,32 @@ export class AlertsService {
 
     // Keep the append-only audit trail unbroken (S1/S2 promise) — written only
     // on a genuine new create, alongside the queryable model. Best-effort.
+    //
+    // G-AUDIT / ADR-058 §D1 — SA PROPRE portée, `try` dehors, `catch` dehors.
+    // Partager la portée de la création ci-dessus retournerait la promesse de ce
+    // `catch` : l'échec avalé avorterait la transaction, le `COMMIT` dégénérerait
+    // en `ROLLBACK`, et la DEMANDE DE RENDEZ-VOUS elle-même disparaîtrait
+    // pendant que le handler rend 200.
     try {
-      await this.prisma.auditLog.create({
-        data: {
-          tenantId: args.tenantId,
-          actorId: args.userProfileId,
-          actorRole: args.actorRole,
-          portal: args.portal,
-          action: 'alert.meeting_intent',
-          resourceType: 'alert_instance',
-          resourceId: args.id,
-          after: {
-            studentId: row.studentId,
-            alertCode: row.code,
-            subjectId: row.subjectId ?? null,
-            meetingRequestId: created.id,
-          } as Prisma.InputJsonValue,
-        },
-      });
+      await this.scope.run(args.tenantId, async (tx) =>
+        tx.auditLog.create({
+          data: {
+            tenantId: args.tenantId,
+            actorId: args.userProfileId,
+            actorRole: args.actorRole,
+            portal: args.portal,
+            action: 'alert.meeting_intent',
+            resourceType: 'alert_instance',
+            resourceId: args.id,
+            after: {
+              studentId: row.studentId,
+              alertCode: row.code,
+              subjectId: row.subjectId ?? null,
+              meetingRequestId: created.id,
+            } as Prisma.InputJsonValue,
+          },
+        }),
+      );
     } catch (err) {
       this.logger.error(
         `Failed to write alert.meeting_intent audit row for meeting request ${created.id} (request unaffected): ${(err as Error).message}`,
@@ -550,46 +737,73 @@ export class AlertsService {
     studentId: string;
     subjectId: string | null;
   }): Promise<string | null> {
+    // ADR-058 §D1 — le `try` de la MÉTHODE enveloppe les TROIS portées, et
+    // chacune se referme avant la suivante. Aucun `catch` ne vit à l'intérieur
+    // d'un callback : une dégradation gracieuse à `null` ne doit jamais devenir
+    // « continuer d'émettre dans une transaction avortée ».
     try {
-      const enrollment = await this.prisma.enrollment.findFirst({
-        where: {
-          tenantId: args.tenantId,
-          studentId: args.studentId,
-          status: 'active',
-          academicYear: { status: 'active' },
-        },
-        orderBy: { enrolledAt: 'desc' },
-        select: { classSectionId: true, academicYearId: true },
-      });
+      const enrollment = await this.scope.run(args.tenantId, async (tx) =>
+        tx.enrollment.findFirst({
+          where: {
+            tenantId: args.tenantId,
+            studentId: args.studentId,
+            status: 'active',
+            academicYear: { status: 'active' },
+          },
+          orderBy: { enrolledAt: 'desc' },
+          select: { classSectionId: true, academicYearId: true },
+        }),
+      );
       if (!enrollment) return null;
 
       // 1. Subject teacher for (current class section, subject) in the active year.
       if (args.subjectId) {
-        const subjectAssignment = await this.prisma.teachingAssignment.findFirst({
-          where: {
-            tenantId: args.tenantId,
-            classSectionId: enrollment.classSectionId,
-            subjectId: args.subjectId,
-            academicYearId: enrollment.academicYearId,
-          },
-          select: { teacherProfile: { select: { userProfileId: true } } },
-        });
+        const subjectId = args.subjectId;
+        const subjectAssignment = await this.scope.run(args.tenantId, async (tx) =>
+          tx.teachingAssignment.findFirst({
+            where: {
+              tenantId: args.tenantId,
+              classSectionId: enrollment.classSectionId,
+              subjectId,
+              academicYearId: enrollment.academicYearId,
+            },
+            select: { teacherProfile: { select: { userProfileId: true } } },
+          }),
+        );
         const subjectTeacherId = subjectAssignment?.teacherProfile.userProfileId ?? null;
         if (subjectTeacherId) return subjectTeacherId;
       }
 
       // 2. Main teacher of the current class section.
-      const mainAssignment = await this.prisma.teachingAssignment.findFirst({
-        where: {
-          tenantId: args.tenantId,
-          classSectionId: enrollment.classSectionId,
-          academicYearId: enrollment.academicYearId,
-          isMainTeacher: true,
-        },
-        select: { teacherProfile: { select: { userProfileId: true } } },
-      });
+      const mainAssignment = await this.scope.run(args.tenantId, async (tx) =>
+        tx.teachingAssignment.findFirst({
+          where: {
+            tenantId: args.tenantId,
+            classSectionId: enrollment.classSectionId,
+            academicYearId: enrollment.academicYearId,
+            isMainTeacher: true,
+          },
+          select: { teacherProfile: { select: { userProfileId: true } } },
+        }),
+      );
       return mainAssignment?.teacherProfile.userProfileId ?? null;
     } catch (err) {
+      // S-E01-1l / PF-258 — CE `catch` NE PEUT PLUS AVALER UN REFUS DE PORTÉE.
+      //
+      // Avant cette tranche, les trois lectures ci-dessus ne pouvaient échouer
+      // que sur une panne base. Cette tranche AJOUTE une classe d'erreur —
+      // `refused_unusable` (503) et l'imbrication refusée — et la dégradation
+      // héritée l'écrirait dans la DONNÉE : `assignedToId: null` est persisté UNE
+      // FOIS, POUR TOUJOURS, l'enseignant ne voit jamais la demande, et elle
+      // atterrit dans le seau « non assigné » de l'admin sans trace de la cause.
+      // Un défaut de configuration deviendrait une perte silencieuse sur la
+      // promesse centrale du produit (le parent demande → l'enseignant agit).
+      // On REMONTE donc les fautes d'INFRASTRUCTURE et on ne dégrade que sur ce
+      // qui pouvait déjà échouer avant : le comportement hérité est préservé
+      // pour toute erreur qui existait, et refusé pour celle que ce diff crée.
+      if (err instanceof TenantScopeError || err instanceof ServiceUnavailableException) {
+        throw err;
+      }
       this.logger.error(
         `Failed to resolve meeting assignee for student ${args.studentId} (request will be unassigned): ${(err as Error).message}`,
       );
@@ -603,7 +817,7 @@ export class AlertsService {
    * status change nor surfacing to the controller (mirrors the notification
    * retraction). Tenant-scoped — `tenantId` always carries `args.tenantId`, and
    * the alert id has already been confirmed in-tenant by the caller's findFirst.
-   * Uses the established inline `prisma.auditLog.create` convention (no shared
+   * Uses the established inline `tx.auditLog.create` convention (no shared
    * AuditService exists). `hash`/`prevHash` are left unset, matching every other
    * call site. `actorRole`/`portal` are now derived from the authenticated
    * caller's JWT by the controller (see `deriveAlertActorProvenance`) instead of
@@ -620,20 +834,26 @@ export class AlertsService {
     actorRole: string | null;
     portal: string | null;
   }): Promise<void> {
+    // G-AUDIT / ADR-058 §D1 — SA PROPRE portée, ouverte APRÈS que celle de la
+    // mutation s'est refermée, avec le `try` dehors et le `catch` dehors. La
+    // relation transactionnelle à l'acquittement / la résolution / le rejet est
+    // exactement celle d'avant la tranche : aucune (ADR-060 §D5).
     try {
-      await this.prisma.auditLog.create({
-        data: {
-          tenantId: args.tenantId,
-          actorId: args.actorId,
-          actorRole: args.actorRole,
-          portal: args.portal,
-          action: args.action,
-          resourceType: 'alert_instance',
-          resourceId: args.alertId,
-          before: { status: args.beforeStatus } as Prisma.InputJsonValue,
-          after: { status: args.afterStatus } as Prisma.InputJsonValue,
-        },
-      });
+      await this.scope.run(args.tenantId, async (tx) =>
+        tx.auditLog.create({
+          data: {
+            tenantId: args.tenantId,
+            actorId: args.actorId,
+            actorRole: args.actorRole,
+            portal: args.portal,
+            action: args.action,
+            resourceType: 'alert_instance',
+            resourceId: args.alertId,
+            before: { status: args.beforeStatus } as Prisma.InputJsonValue,
+            after: { status: args.afterStatus } as Prisma.InputJsonValue,
+          },
+        }),
+      );
     } catch (err) {
       this.logger.error(
         `Failed to write audit entry ${args.action} for alert ${args.alertId} (status unaffected): ${(err as Error).message}`,
@@ -651,6 +871,20 @@ export class AlertsService {
    *  - Admin "Lancer l'évaluation" button via POST /alerts/evaluate
    *  - Worker cron (every 15 min)
    *  - Future event triggers (grade.publish, attendance.batch)
+   *
+   * S-E01-1l — HORS PORTÉE, ÉNUMÉRÉ, PAS OUBLIÉ (ADR-060 §D1). Les quatre
+   * instructions ci-dessous restent sur `this.prisma` et sont déclarées une par
+   * une dans `ENUMERATED_OUTSIDE_SCOPE` avec leur raison. Les DEUX raisons,
+   * indépendantes :
+   *  (a) c'est un LOT — O(règles × détections) allers-retours, dont sept
+   *      évaluateurs de règles qui émettent leurs propres requêtes sur tout le
+   *      tenant. La couture borne une portée à « ≤ 2 instructions » et Prisma
+   *      coupe une transaction interactive à 5 s : l'y enfermer rendrait P2028
+   *      sur le bouton admin ET annulerait les alertes déjà matérialisées ;
+   *  (b) la convertir exige de retyper `RuleContext.prisma` en
+   *      `Prisma.TransactionClient` et de convertir sept fichiers `rules/*` —
+   *      un autre module. À moitié convertie, elle mettrait des `ctx.prisma.*`
+   *      sur la connexion PROPRIÉTAIRE à l'intérieur d'une portée ouverte.
    */
   async evaluateAll(args: { tenantId: string; schoolId: string | null }): Promise<{
     rulesRun: number;
@@ -762,6 +996,12 @@ export class AlertsService {
    * to the student via `Guardianship` and create one in-app notification per
    * guardian (deduplicated by `sourceId = alertId` so the same alert never
    * notifies the same guardian twice).
+   *
+   * S-E01-1l — HORS PORTÉE avec `evaluateAll`, dont il est le fan-out par
+   * détection : il est appelé DEPUIS la boucle de l'évaluateur, donc le
+   * convertir seul ouvrirait une portée par détection à l'intérieur d'un lot
+   * que rien ne borne, et il enchaîne sur `this.notifications.createMany`, qui
+   * détient le client propriétaire. Déclaré dans `ENUMERATED_OUTSIDE_SCOPE`.
    */
   private async notifyGuardiansOfAlert(args: {
     tenantId: string;
@@ -826,20 +1066,22 @@ export class AlertsService {
     userProfileId?: string;
     limit?: number;
   }): Promise<AlertInstanceDto[]> {
-    const rows = await this.prisma.alertInstance.findMany({
-      where: {
-        tenantId: args.tenantId,
-        studentId: args.studentId,
-        status: { in: ['open', 'acknowledged'] },
-      },
-      include: {
-        student: { select: { firstName: true, lastName: true } },
-        subject: { select: { id: true, name: true, code: true } },
-        classSection: { select: { id: true, name: true } },
-      },
-      orderBy: { detectedAt: 'desc' },
-      take: args.limit ?? 10,
-    });
+    const rows = await this.scope.run(args.tenantId, async (tx) =>
+      tx.alertInstance.findMany({
+        where: {
+          tenantId: args.tenantId,
+          studentId: args.studentId,
+          status: { in: ['open', 'acknowledged'] },
+        },
+        include: {
+          student: { select: { firstName: true, lastName: true } },
+          subject: { select: { id: true, name: true, code: true } },
+          classSection: { select: { id: true, name: true } },
+        },
+        orderBy: { detectedAt: 'desc' },
+        take: args.limit ?? 10,
+      }),
+    );
 
     const requestedAtByAlert = await this.loadMeetingRequestedAt({
       tenantId: args.tenantId,
@@ -864,15 +1106,25 @@ export class AlertsService {
   }): Promise<Map<string, string>> {
     const map = new Map<string, string>();
     if (!args.userProfileId || args.alertIds.length === 0) return map;
+    // ADR-058 §D1 — `try` AVANT la portée, `catch` APRÈS. La dégradation à
+    // « non demandé » reste une dégradation, pas une transaction avortée dans
+    // laquelle on continuerait d'émettre.
+    //
+    // Le filtre `requestedBy: args.userProfileId` est CONSERVÉ mot pour mot :
+    // c'est lui, et pas la portée tenant, qui empêche la fuite inter-tuteurs —
+    // deux tuteurs d'un même élève partagent le tenant.
+    const userProfileId = args.userProfileId;
     try {
-      const requests = await this.prisma.meetingRequest.findMany({
-        where: {
-          tenantId: args.tenantId,
-          alertId: { in: args.alertIds },
-          requestedBy: args.userProfileId,
-        },
-        select: { alertId: true, createdAt: true },
-      });
+      const requests = await this.scope.run(args.tenantId, async (tx) =>
+        tx.meetingRequest.findMany({
+          where: {
+            tenantId: args.tenantId,
+            alertId: { in: args.alertIds },
+            requestedBy: userProfileId,
+          },
+          select: { alertId: true, createdAt: true },
+        }),
+      );
       for (const r of requests) map.set(r.alertId, r.createdAt.toISOString());
     } catch (err) {
       this.logger.error(
@@ -915,6 +1167,19 @@ export class AlertsService {
   /**
    * Returns every tenant id that has at least one enabled rule. Used by the
    * worker cron to know which tenants need evaluation.
+   *
+   * S-E01-1l — HORS PORTÉE PAR CONSTRUCTION, et c'est la raison la plus nette
+   * de la liste : cette requête ne prend AUCUN `tenantId` et fait `distinct`
+   * dessus. Elle PRODUIT l'ensemble des tenants qu'un appelant scoperait
+   * ensuite ; l'entrée d'une portée ne peut pas être émise depuis l'intérieur
+   * de cette portée. Déclarée dans `ENUMERATED_OUTSIDE_SCOPE`.
+   *
+   * MESURÉ 2026-08-23 (PF-259) : aucun appelant dans `apps/api` ni dans
+   * `apps/worker` — le cron du worker a son propre miroir
+   * (`apps/worker/src/modules/alerts-cron/alerts-evaluator.service.ts`). La
+   * méthode est CONSERVÉE (retirer une méthode publique d'un service exporté
+   * n'est pas une conversion de portée), et la raison énumérée dit ce qu'elle
+   * est plutôt que d'inventer un appelant.
    */
   async tenantsWithEnabledRules(): Promise<string[]> {
     const rows = await this.prisma.alertRule.findMany({

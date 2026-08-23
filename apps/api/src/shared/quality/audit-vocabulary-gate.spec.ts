@@ -407,8 +407,32 @@ function extract(sources: Map<string, ts.SourceFile> = SOURCES): Extraction {
       } else {
         return;
       }
-      const fn = enclosingFunction(expr);
-      const info = parameterInfo(fn, rootName, memberName);
+      // LEXICAL RESOLUTION, NOT INNERMOST-ONLY (S-E01-1l, PF-262).
+      //
+      // This read `enclosingFunction(expr)` once and gave up when the INNERMOST
+      // function did not declare `rootName`. That held only while every
+      // `auditLog.create` sat directly in the body of the helper whose parameter
+      // it forwards. Converting a module to the tenant scope wraps the write in
+      // `this.scope.run(tenantId, async (tx) => …)`, so the innermost function
+      // became the arrow — whose only parameter is `tx` — and `args.action`
+      // stopped resolving. It did NOT fail loudly: `parameterInfo` returned
+      // undefined, this returned early, and three real codes
+      // (`alert.acknowledge`, `alert.resolve`, `alert.dismiss`) silently left
+      // WRITTEN_ACTIONS, which then made the REVERSE completeness direction
+      // demand that their labels be DELETED — a green-looking instruction to
+      // remove vocabulary the runtime still writes.
+      //
+      // A closure referencing `args` resolves it in an ENCLOSING scope, which is
+      // what TypeScript itself does, so the walk goes outward until a function
+      // DECLARES the name. Stopping at the first match preserves shadowing.
+      // Every future module conversion crosses this same boundary, so the fix
+      // belongs here rather than in the shape of the converted service.
+      let fn = enclosingFunction(expr);
+      let info = parameterInfo(fn, rootName, memberName);
+      while (fn && !info) {
+        fn = enclosingFunction(fn);
+        info = parameterInfo(fn, rootName, memberName);
+      }
       if (!info) return;
       // Shapes 2 & 3 — a union-typed parameter (`'a' | 'b'`) resolves here.
       if (fromTypeNode(info.typeNode, axis)) return;

@@ -2376,6 +2376,82 @@ const ENUMERATED_OUTSIDE_SCOPE = Object.freeze([
       }),
     ]),
   }),
+  Object.freeze({
+    kind: 'bootstrap',
+    glob: 'apps/api/src/modules/alerts/alerts.service.ts',
+    reason:
+      'S-E01-1l / ADR-060 §D1 — THE FIRST PARTIALLY-CONVERTED FILE, and the partition is the point. ' +
+      '26 of this file’s 32 statements run inside `TenantScopeService.run`; the six below stay on ' +
+      'the OWNER connection for two MECHANISM reasons, never for pending work (ADR-048 §D6). ' +
+      '`evaluateAll` is a BATCH — it fans out through seven `rules/*.rule.ts` evaluators that each ' +
+      'issue their own tenant-wide queries, then loops PER DETECTION over a dedup read, a write and ' +
+      'a notification fan-out; that is O(rules × detections) round-trips against a seam whose own ' +
+      'budget is "≤ 2 statements" and a Prisma interactive transaction that times out at 5 s. And ' +
+      '`tenantsWithEnabledRules` takes NO tenantId at all: it PRODUCES the set a scope would key on. ' +
+      'The seventh entry is a matcher artifact, declared rather than hidden (PF-219 shape)',
+    statements: Object.freeze([
+      Object.freeze({
+        model: 'auditLog',
+        verb: 'create',
+        reason:
+          'NOT A STATEMENT — a MATCHER ARTIFACT, declared because both sides of this ratchet are ' +
+          'derived by the same text matcher and hiding it would be a second, invisible list. It is ' +
+          'the `writeAuditEntry` docblock naming the inline `tx.auditLog.create` convention it ' +
+          'follows; the real statement it describes IS inside a scope, two dozen lines below. Same ' +
+          'PF-219 shape as `user-sync.service.ts`: the matcher cannot tell code from a comment',
+      }),
+      Object.freeze({
+        model: 'alertRule',
+        verb: 'findMany',
+        reason:
+          '`evaluateAll` reads the ENABLED rules that seed the batch. Opening a scope here would ' +
+          'hold one app-pool connection for the whole cron fan-out, not for a request',
+      }),
+      Object.freeze({
+        model: 'academicYear',
+        verb: 'findFirst',
+        reason:
+          'the active-year resolution `evaluateAll` hands DOWN to every rule evaluator — it is read ' +
+          'once outside the loop precisely so it is not re-read inside it, and it belongs to the ' +
+          'same unbounded unit of work as the rules it parameterises',
+      }),
+      Object.freeze({
+        model: 'alertInstance',
+        verb: 'findFirst',
+        reason:
+          'the PER-DETECTION dedup probe. It runs once per detection inside a loop with no bound ' +
+          'the request can state, so it is the statement that would make the 5 s transaction budget ' +
+          'a function of how noisy the school’s term has been',
+      }),
+      Object.freeze({
+        model: 'alertInstance',
+        verb: 'create',
+        reason:
+          'materialises ONE alert per surviving detection. Held inside the batch’s transaction, a ' +
+          'P2028 timeout would roll back every alert already materialised in the same run — the ' +
+          'admin button would report success and the school would see nothing',
+      }),
+      Object.freeze({
+        model: 'guardianship',
+        verb: 'findMany',
+        reason:
+          '`notifyGuardiansOfAlert` resolves the guardians of a freshly-created alert and then calls ' +
+          '`NotificationsService`, which holds the OWNER client and reads `user_profile`; scoping ' +
+          'the read alone would put an owner write immediately after an app-connection read inside ' +
+          'one logical step (the dangerous inverse of PF-200)',
+      }),
+      Object.freeze({
+        model: 'alertRule',
+        verb: 'findMany',
+        reason:
+          '`tenantsWithEnabledRules` carries NO tenant predicate and `distinct`s on `tenantId`: it ' +
+          'is the cross-tenant scheduler fan-out that PRODUCES the ids a scope would be opened on. ' +
+          'MEASURED 2026-08-23 (PF-259): currently unreferenced in `apps/api` and `apps/worker` — ' +
+          'the worker cron carries its own evaluator — and kept rather than deleted, because ' +
+          'removing a public method of an exported service is not a scope conversion',
+      }),
+    ]),
+  }),
 ]);
 
 /** The two enumeration kinds, as a named closed set rather than two string literals. */
@@ -2525,26 +2601,63 @@ function enumerationDrift(declared, observedByGlob) {
  * the failure mode of a lookup table is that a new Prisma verb (or a helper
  * named like one) quietly classifies as "needs nothing".
  */
+// ---------------------------------------------------------------------------
+// S-E01-1l / PF-254 + PF-256 — THE REASON A WRITE VERB ALSO NEEDS `SELECT`, and
+// it is NOT read/write symmetry. Written here so it can never be read back as a
+// tidy-looking pairing rule someone later "simplifies" away.
+//
+//   POSTGRESQL REQUIRES `SELECT` ON EVERY COLUMN A STATEMENT *READS*.
+//
+// A write statement reads columns in exactly two places, and both are ordinary
+// Prisma output:
+//
+//   1. `RETURNING`. Prisma's SINGULAR writes (`create`, `update`, `delete`,
+//      `upsert`, and `createManyAndReturn`) all return the row, so the emitted
+//      SQL carries a `RETURNING` list. Without `SELECT` on the returned columns
+//      the engine raises 42501 on a statement whose write privilege is held.
+//   2. `WHERE`. `update`/`updateMany`/`delete`/`deleteMany` all read the columns
+//      their condition names — Prisma compiles `updateMany` to
+//      `UPDATE … WHERE id IN (SELECT …)`, which makes the read explicit.
+//
+// `createMany` is the ONLY write verb that neither returns rows nor reads a
+// condition, so it is the only one that keeps its write privilege alone.
+//
+// WHY THIS SLICE AND NOT A LATER ONE (ADR-060 §D2): until `alerts` converted,
+// every table in the derived closure that was WRITTEN inside a scope also had a
+// READ site contributing `SELECT`, so the omission was invisible — the mapping
+// was ACCIDENTALLY correct. `audit_log` is the first genuinely WRITE-ONLY table
+// to enter a scope (alerts writes it at two sites and never reads it), so from
+// this slice on the omission would have produced a boot-GREEN closure missing
+// `audit_log.SELECT` and a 42501 on the first audit write after cutover.
+// `tenant-scope.ts` already rationalises `remediation_plan.INSERT` by pointing
+// at `INSERT … RETURNING`, and `remediation_plan.UPDATE` by pointing at the
+// `WHERE` its two `updateMany` read — i.e. the DECLARED list already knew both
+// halves of the rule this table omitted.
+// ---------------------------------------------------------------------------
 const VERB_PRIVILEGES = Object.freeze({
   aggregate: Object.freeze(['SELECT']),
   count: Object.freeze(['SELECT']),
-  create: Object.freeze(['INSERT']),
+  // Singular `create` emits `INSERT … RETURNING`; so does `createManyAndReturn`.
+  create: Object.freeze(['INSERT', 'SELECT']),
+  // The ONE write verb that neither returns rows nor reads a condition.
   createMany: Object.freeze(['INSERT']),
-  createManyAndReturn: Object.freeze(['INSERT']),
-  delete: Object.freeze(['DELETE']),
-  deleteMany: Object.freeze(['DELETE']),
+  createManyAndReturn: Object.freeze(['INSERT', 'SELECT']),
+  // `delete` returns the row; `deleteMany` returns a count but READS its `WHERE`.
+  delete: Object.freeze(['DELETE', 'SELECT']),
+  deleteMany: Object.freeze(['DELETE', 'SELECT']),
   findFirst: Object.freeze(['SELECT']),
   findFirstOrThrow: Object.freeze(['SELECT']),
   findMany: Object.freeze(['SELECT']),
   findUnique: Object.freeze(['SELECT']),
   findUniqueOrThrow: Object.freeze(['SELECT']),
   groupBy: Object.freeze(['SELECT']),
-  // `upsert` needs BOTH, and that is the whole reason a table-level check could
-  // never have said anything useful: `tenant.upsert` (PF-185) needs INSERT and
-  // UPDATE on a table that holds SELECT.
-  upsert: Object.freeze(['INSERT', 'UPDATE']),
-  update: Object.freeze(['UPDATE']),
-  updateMany: Object.freeze(['UPDATE']),
+  // `upsert` needs BOTH writes, and that is the whole reason a table-level check
+  // could never have said anything useful: `tenant.upsert` (PF-185) needs INSERT
+  // and UPDATE on a table that holds SELECT. It also RETURNS and reads a WHERE.
+  upsert: Object.freeze(['INSERT', 'UPDATE', 'SELECT']),
+  // `update` returns the row; `updateMany` returns a count but READS its `WHERE`.
+  update: Object.freeze(['UPDATE', 'SELECT']),
+  updateMany: Object.freeze(['UPDATE', 'SELECT']),
 });
 
 function privilegesForVerb(verb) {
@@ -2730,9 +2843,12 @@ function cutoverVerdict({
 //     `tx.booking.update` / `tx.booking.create` inside it. Those are OWNER
 //     writes; `booking.INSERT` / `booking.UPDATE` are NOT due, and the declared
 //     list is right to hold only `booking.SELECT`. A derivation without
-//     positional attribution emits all three phantoms — and `audit_log.INSERT`,
-//     whose grant IS held (measured), so the phantom would boot GREEN and be
-//     dead forever (TOOL-40).
+//     positional attribution emits both phantoms, whose grants ARE held
+//     (measured), so a phantom entry would boot GREEN and be dead forever
+//     (TOOL-40). S-E01-1l — `audit_log.INSERT` used to be a third phantom for
+//     the same reason; since `alerts` writes its audit rows INSIDE a scope the
+//     pair is genuinely derived, and the sentinel was retired rather than left
+//     to fail a correct conversion.
 //  2. RELATION DEPTH IS WALKED. Under RLS a relation a `where` filter, a
 //     `select`, an `include`, an `orderBy` or a `_count.select` traverses is a
 //     table READ: Prisma issues its own query against the target and raises
@@ -4672,15 +4788,21 @@ $mut$;`;
       );
     }
     // AC-1's fail-before / pass-after, ASSERTED rather than narrated. A
-    // derivation without POSITIONAL attribution emits these three: `booking`'s
-    // two writes sit inside an OWNER `$transaction(async (tx) => …)`, and
-    // `audit_log` is written outside every scope. `audit_log` holds INSERT
-    // (measured), so a phantom entry would boot GREEN and be dead forever —
-    // TOOL-40, and the reason the held-probe is not a backstop for attribution.
+    // derivation without POSITIONAL attribution emits both of these: `booking`'s
+    // two writes sit inside an OWNER `$transaction(async (tx) => …)`, so they
+    // are NOT due and the declared list is right to hold only `booking.SELECT`.
+    //
+    // S-E01-1l — `audit_log.INSERT` LEFT THIS LIST, and that is the correct
+    // direction. It sat here because every `auditLog.create` in the tree was
+    // issued OUTSIDE every scope, so deriving it could only mean the attribution
+    // had regressed to a bare `tx.` grep. `alerts` now writes the audit row
+    // INSIDE a tenant scope (three sites), so the pair is GENUINELY derived and
+    // is declared in `APP_ROLE_REQUIRED_PRIVILEGES`. Keeping it here would have
+    // turned a real conversion into a red — a sentinel that outlives its
+    // premise stops testing the mechanism and starts testing the past.
     for (const phantom of [
       ['booking', 'INSERT'],
       ['booking', 'UPDATE'],
-      ['audit_log', 'INSERT'],
     ]) {
       const key = closureKey(phantom[0], phantom[1]);
       if (readiness.derivedPrivileges.has(key)) {
