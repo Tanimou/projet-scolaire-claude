@@ -14,6 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ALERT_STATUS } from '@pilotage/contracts';
 import type { AlertRuleCode, AlertStatus } from '@prisma/client';
 
 import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
@@ -28,6 +29,23 @@ import { StudentAccessService } from '../students/student-access.service';
 
 import { AlertsService } from './alerts.service';
 import { EvaluateAlertsDto, RULE_CODES, UpdateAlertRuleDto } from './alerts.types';
+
+/**
+ * S-E05-17 / ADR-067 §D0+§D3 — l'allowlist des statuts d'alerte, LIEE.
+ *
+ * `ALERT_STATUS` existait deja dans `@pilotage/contracts` et le web s'en sert
+ * deja ; `alerts.controller.ts` en avait pourtant une COPIE ecrite a la main
+ * (PF-315). On consomme donc le contrat — mais un `as const` nu n'a AUCUN lien
+ * de compilation avec Prisma : ajouter une 5e valeur a l'enum `AlertStatus`
+ * refuserait alors silencieusement une valeur legitime en 400, sans rien de
+ * rouge. C'est la derive de listes jumelles deplacee d'un fichier, pas fermee.
+ *
+ * L'annotation `ReadonlyArray<AlertStatus>` est la fermeture, gratuite : elle
+ * prouve a la compilation que le contrat est un sous-ensemble de l'enum. Meme
+ * idiome que `RULE_CODES` (`alerts.types.ts`) et que `NOTIFICATION_KINDS` cote
+ * notifications.
+ */
+const ALERT_STATUSES: ReadonlyArray<AlertStatus> = ALERT_STATUS;
 
 @ApiTags('alerts')
 @ApiBearerAuth()
@@ -73,17 +91,24 @@ export class AlertsController {
   @ApiOperation({ summary: 'List materialised alerts (with filters)' })
   async listInstances(
     @CurrentJwt() jwt: KeycloakJwtPayload,
-    @Query('status') statusRaw: string | undefined,
+    // S-E05-17 / ADR-067 §D3 — DEFAUT DE VERITE, pas simple defaut de validation.
+    // Avant : un statut inconnu retombait sur `undefined`, donc AUCUN filtre,
+    // donc la liste COMPLETE rendue en 200 (mesure) — l'admin lisait des alertes
+    // resolues et rejetees sous un en-tete « Ouvertes ». Un elargissement
+    // silencieux d'une projection de LECTURE. Desormais 400.
+    @Query(
+      'status',
+      new ParseEnumPipe(ALERT_STATUSES as unknown as { [k: string]: AlertStatus }, {
+        optional: true,
+      }),
+    )
+    status: AlertStatus | undefined,
     @Query('studentId') studentId: string | undefined,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
   ) {
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
-    const status =
-      statusRaw && ['open', 'acknowledged', 'resolved', 'dismissed'].includes(statusRaw)
-        ? (statusRaw as AlertStatus)
-        : undefined;
     return this.alerts.listInstances({
       tenantId: me.tenantId,
       schoolId,
