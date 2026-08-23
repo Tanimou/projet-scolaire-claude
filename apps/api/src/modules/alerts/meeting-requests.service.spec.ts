@@ -42,8 +42,29 @@ function makeService(opts: { row?: unknown; rows?: unknown[] } = {}) {
     },
     auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
   };
-  const service = new MeetingRequestsService(prisma as never);
-  return { service, prisma };
+  /**
+   * S-E01-1l — LE FAUX `TenantScopeService` REMPLACE le faux `PrismaService`.
+   *
+   * Ce service est converti EN ENTIER : le client n'est plus atteignable
+   * autrement que par le callback de `run(…)`, ce que ce double rend
+   * structurel plutôt que conventionnel. `scopeTenants` enregistre le tenant de
+   * CHAQUE ouverture — une portée ouverte sur autre chose qu'`args.tenantId`
+   * devient visible au lieu d'être déduite, et c'est la moitié qu'une preuve
+   * exécutée contre une vraie base ne peut pas observer.
+   *
+   * CE QU'IL NE PROUVE PAS (PF-247) : ce `run` n'ouvre aucune transaction, donc
+   * rien ne peut y être AVORTÉ. La règle ADR-058 §D1 est prouvée lexicalement
+   * dans `alerts-scope-ownership.spec.ts`, pas ici.
+   */
+  const scopeTenants: string[] = [];
+  const scope = {
+    run: jest.fn(async (tenantId: string, fn: (tx: unknown) => Promise<unknown>) => {
+      scopeTenants.push(tenantId);
+      return fn(prisma);
+    }),
+  };
+  const service = new MeetingRequestsService(scope as never);
+  return { service, prisma, scope, scopeTenants };
 }
 
 describe('MeetingRequestsService.scopeFromRoles', () => {

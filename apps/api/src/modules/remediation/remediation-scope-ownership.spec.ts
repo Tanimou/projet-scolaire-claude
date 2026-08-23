@@ -680,7 +680,18 @@ describe('AC-5 — les sites d’appel Prisma de remediation ⊆ la clôture dé
     // portails. C'est désormais le contrôle d'égalité d'ensembles du gate qui
     // porte la charge de preuve ; ce littéral n'est plus que la sonde de
     // non-vacuité qui refuse un ajout muet.
-    expect(APP_ROLE_REQUIRED_PRIVILEGES).toHaveLength(38);
+    //
+    // S-E01-1l — 38 -> 47, ET PF-251 VIENT DE SE PRODUIRE EXACTEMENT COMME ÉCRIT.
+    // La conversion d'`alerts`, qui ne touche pas une ligne de `remediation`, a
+    // fait virer au ROUGE la suite de CE module par un littéral GLOBAL. Le
+    // symptôme est désormais MESURÉ et non plus prédit. Le littéral est mis à
+    // jour plutôt que retiré — une borne inférieure accepterait silencieusement
+    // une 48ᵉ entrée, dont la sonde de démarrage rendrait `refused_unusable` —
+    // mais la ligne appartient à `apps/api/src/shared/quality/`, pas à un
+    // module, et c'est ce que PF-251 demande. Les NEUF ajouts sont ceux que la
+    // dérivation a NOMMÉS (`alert_rule` ×3, `alert_instance.UPDATE`,
+    // `meeting_request` ×3, `audit_log` ×2), jamais des ajouts « par symétrie ».
+    expect(APP_ROLE_REQUIRED_PRIVILEGES).toHaveLength(47);
     // …et chaque entrée porte SA raison, jamais une chaîne partagée ni le verbe
     // répété. La garde tourne sur la liste ENTIÈRE : une raison mince ajoutée
     // par un module futur vire au rouge ici aussi.
@@ -721,6 +732,22 @@ describe('AC-5 — les sites d’appel Prisma de remediation ⊆ la clôture dé
     // les quatre verbes sur les cinq tables : une entrée DELETE démarrerait donc
     // au VERT et serait MORTE — or une entrée morte ne peut plus faire échouer le
     // contrôle d'égalité d'ensembles que PF-246 / PF-219 existent pour acheter.
+    //
+    // ⚠️ RE-POINTÉE SUR LE DÉRIVÉ LOCAL (S-E01-1l, PF-263). Cette garde lisait
+    // `declared` — `APP_ROLE_REQUIRED_PRIVILEGES`, la clôture GLOBALE de TOUS
+    // les modules convertis — pour énoncer une propriété de REMEDIATION. Les
+    // deux ont coïncidé tant que remediation était le seul module à toucher ces
+    // tables ; la conversion d'`alerts` a déclaré `alert_instance.UPDATE` en
+    // toute légitimité (acquittement / résolution / rejet) et a fait ROUGIR
+    // cette assertion sans qu'une seule ligne de remediation ait bougé. Une
+    // garde nommée « aucune mutation d'alerte [par remediation] » qui échoue
+    // parce qu'un AUTRE module en émet une n'énonce pas ce que son nom dit.
+    // Elle porte désormais sur les sites d'appel de CE fichier — exactement la
+    // mesure que la moitié `derivedDeletes` ci-dessous faisait déjà, appliquée
+    // aux deux moitiés.
+    const emitted = new Set(
+      sites.map((s) => privilegeKey(s.table, VERB_PRIVILEGE[s.verb] ?? 'UNKNOWN')),
+    );
     for (const key of [
       'remediation_plan.DELETE',
       'booking.DELETE',
@@ -731,7 +758,7 @@ describe('AC-5 — les sites d’appel Prisma de remediation ⊆ la clôture dé
       'alert_instance.DELETE',
       'alert_instance.UPDATE',
     ]) {
-      expect(declared.has(key)).toBe(false);
+      expect(emitted.has(key)).toBe(false);
     }
     // …et le dérivé ne réclame aucun DELETE non plus (les deux moitiés d'accord).
     const derivedDeletes = sites.filter((s) => VERB_PRIVILEGE[s.verb] === 'DELETE');
