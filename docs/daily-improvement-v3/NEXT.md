@@ -1,3 +1,86 @@
+# NEXT — written by run 78 (`S-E05-4`), 2026-08-23 — **this section supersedes every section below**
+
+> **Allocation note (run 78, at land — supersedes every note below).** This run took **`ADR-068`** and
+> **`PF-320`**, **`PF-321`**, **`PF-322`**, **`PF-323`**, **`PF-324`** and **`PF-325`**. **The next run allocates from `PF-326` and `ADR-069`**, after
+> re-checking open PRs. No arbitration was needed: this run allocated alone.
+
+## ✅ `PF-11` is closed — and it is a ROADMAP finding, which is the point
+
+Nine consecutive E05 runs closed findings the routine had discovered about itself (`PF-58+`), riding on
+`PF-51` for their roadmap credit. `PF-51` closed last run, so that coattail is gone. `PF-11` — from the
+original audit register, `open` with an **empty Evidence column since the register was written** — is this
+run's answer to `RULE 0`.
+
+`NotificationsService.createMany` deduplicated on `(userProfileId, sourceType, sourceId)` with **no
+`tenantId` anywhere**, under a docblock claiming the dedup ran *"within the same tenant"*. Parsed across both
+applications it was **the only one of eleven `Notification` filter queries carrying no tenant** — the four
+worker siblings that copy the same idea all carry one, under a comment saying they *"mirror
+NotificationsService.createMany"*. Full evidence, named limits and the honest severity re-scoping:
+`docs/spec/features/v3-e05/PROGRESS.md` § `S-E05-4`, and `ADR-068`.
+
+### Three things worth carrying, before anything is re-implemented from the sections below
+
+1. **The severity was re-scoped DOWNWARD, on measurement, and the finding was still worth closing.** Every
+   `OR` branch also constrained `userProfileId`, and a profile belongs to one tenant — so no cross-recipient
+   leak was reachable. `ADR-068 §1.1` says so plainly instead of inheriting `BROKEN_SECURITY` from the label.
+   What made it real: the only thing keeping the query correct was an invariant **nothing in the code stated**,
+   and `PF-02` (RLS) is being built on the premise that application queries are already tenant-keyed. Do not
+   "correct" the register back upward, and do not use this as licence to close a finding by re-labelling it.
+2. **The conditional spread is the same defect wearing a type.** `...(tenantId ? { tenantId } : {})` on a
+   parameter typed `tenantId?: string` reads as defence-in-depth and is a fail-open — Prisma drops an
+   `undefined` key and the query widens to every tenant. Four resolvers in `preferences.service.ts` carried it;
+   the gate's RED pass names all four. **`ADR-065 §D5` already forbade this shape and it was live in a second
+   module anyway.** If you are anywhere near a `where`, grep your own diff for it.
+3. **A `where` fixed on the database side must be fixed in memory too.** The dedup `Set` was keyed
+   `${userProfileId}|${sourceType}|${sourceId}`. Narrowing only the query would have moved the collision from
+   Postgres into the process. `dedupKey()` is tenant-first for that reason.
+
+## ➡️ Next: `PF-294` — `GET /api/v1/classes/:id` returns any class's full roster, to any `classes.read` holder
+
+**`PF-294` → `PF-287` → `PF-284` + `PF-285` → `PF-267` → `PF-277` → `PF-279` → `S-E05-2b`.**
+
+`PF-294` leads for the reason `PF-288` led two runs ago: it is **not a paper finding — it is a live hole on a
+wider payload than the two doors already closed.** `classes.controller.ts:130` returns the full active roster
+of **any** class in the tenant with `gender`, `birthDate` and `email` — a **wider** child projection than
+either enrollments door — to any holder of `classes.read`, which includes `teacher`. `parent` does not hold
+it, so the parent axis really is closed; the teacher axis is not. Run 77 reserved **`S-E05-18`** for it.
+
+Behind it, unchanged from run 77's ranking: `PF-287` (the surviving `data: body` mass-assignment in
+`cycles.controller.ts:132` and `subjects.controller.ts:168`), then `PF-284` + `PF-285` as one `terms` slice
+(date-order on a partial PATCH, plus six unaudited write sites), then `PF-267`, `PF-277`, `PF-279`, and
+`S-E05-2b` as the epic's standing pointer — scheduled over a **seventh** time and still not refuted.
+
+### ⚠️ Still live, still not touched, and now named for the third run running
+
+`calendar.controller.ts`'s teacher fail-open (`ADR-066 §D5` — `teacher` folded into `isPrivileged` **before**
+`scopeForUser`). Run 77 declared it out of scope; run 78 did not touch the module at all. It sits inside the
+same seam `PF-288` was closed in. It is not on the ranking above because no id owns it as a standalone story —
+**that is itself the gap**, and the next run that touches `calendar.controller.ts` should allocate one rather
+than declare it out of scope a fourth time.
+
+## ⚠️ The gate went RED once on this diff, and it was NOT the diff — read this before trusting a single run
+
+`bash scripts/ci-gate.sh` returned `GATE: FAIL (1 stage(s))` on `test:api (ratchet)`. The stage did not fail a
+test: it failed on **`ENOENT … /ratchet-XhoeON/jest.json`** thrown inside jest’s own `processResults` — the
+`mkdtempSync` scratch directory had vanished mid-run. That same run printed `11 failed, 3669 passed`, and
+`node scripts/test-ratchet.js api` alone on the identical tree printed the identical counts plus `✓ no drift`,
+**exit 0**. Same numbers, opposite verdict. Recorded as **`PF-324`**. And while re-running it, a SECOND gate hazard surfaced: `tenant-scope-deployment-check.js:261` prints a bare **`GATE: PASS`** — the harness’s own final-verdict token — at line 84 of a 1171-line run, so a watcher grepping for the verdict reports green ~700 s early. **Read the LAST `GATE:` line, never the first match.** Recorded as **`PF-325`**.
+
+The operative lesson, because it cuts the other way from the one already in the ledger: *“un échec « excess » est
+DIAGNOSTIQUE — présumer qu’il est de toi”* is still right, and following it here is what produced the answer. The
+11 failures were checked against `scripts/known-test-failures.json` **before** anything was concluded, and they
+matched it exactly (`PF-63` ×7, `PF-64` ×4). **Check the named tests against the baseline first; only then read
+the stage’s own error line.** Do not skip straight to “flake”.
+
+## What was NOT executed, said plainly
+
+No Docker container was rebuilt, started or probed this run, and nothing was measured against a running
+service. The evidence is jest over the real corpus (`21/21` gate, `51/51` behavioural, RED-before/GREEN-after
+on the same command) plus `pnpm typecheck` **13/13 exit 0**. `scripts/ci-gate.sh` was run at the land pass and
+its verdict line is in the PR body. The BMAD sprint Workflow was **not** invoked — see `PROGRESS.md`
+§ `S-E05-4` "One deviation from the routine, declared".
+
+
 # Next story
 
 > **Allocation note (run 75, at land — supersedes both notes below).** This run took **`ADR-065`** and

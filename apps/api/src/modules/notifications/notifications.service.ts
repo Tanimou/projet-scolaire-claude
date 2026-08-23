@@ -40,6 +40,54 @@ export interface CreateNotificationArgs {
 }
 
 /**
+ * Stable dedup identity of a notification: the tenant FIRST, because a
+ * `(userProfileId, sourceType, sourceId)` triple alone is a cross-tenant key
+ * (`PF-11`). Null-ish source parts collapse to the empty string, which is safe
+ * because items with a partial source pair are filtered out before this is ever
+ * consulted.
+ */
+export function dedupKey(
+  tenantId: string,
+  userProfileId: string,
+  sourceType: string | null | undefined,
+  sourceId: string | null | undefined,
+): string {
+  return [tenantId, userProfileId, sourceType ?? '', sourceId ?? ''].join('|');
+}
+
+/**
+ * Refuse a fan-out batch that mixes tenants, and return the one tenant it is for.
+ *
+ * `createMany` resolves notification preferences ONCE per batch and derives the
+ * tenant for that lookup from the batch itself. Every producer in this codebase
+ * loops per tenant, so the batch is single-tenant in practice — but that was a
+ * code comment, and a comment cannot stop a future producer from concatenating
+ * two tenants' recipients into one call. If one ever did, the preference gates
+ * would resolve tenant A's toggles for tenant B's recipients and silently
+ * deliver or suppress the wrong notifications.
+ *
+ * Throwing is the correct failure here rather than filtering: silently dropping
+ * the foreign items would make a producer bug invisible (`ADR-068 §D2`). Every
+ * caller already wraps `createMany` in try/catch or is itself inside one, so a
+ * mixed batch degrades to "no notification + a logged error", never to a
+ * wrong-tenant delivery.
+ */
+export function assertSingleTenantBatch(
+  items: ReadonlyArray<{ tenantId: string }>,
+): string {
+  const first = items[0]!.tenantId;
+  for (const i of items) {
+    if (i.tenantId !== first) {
+      throw new Error(
+        'NotificationsService.createMany: mixed-tenant batch refused ' +
+          `(saw ${first} and ${i.tenantId}); fan-out must be one batch per tenant`,
+      );
+    }
+  }
+  return first;
+}
+
+/**
  * Notifications service — owns the unified in-app feed.
  *
  * Producer methods (`create`, `createMany`) are called by:
@@ -85,20 +133,34 @@ export class NotificationsService {
   }
 
   /**
-   * Bulk fan-out. Deduplicates by (userProfileId, sourceType, sourceId)
-   * within the same tenant so a single source event doesn't ping the same
-   * recipient twice even if dispatchers fire concurrently. Then drops items
-   * whose recipient has explicitly disabled the in-app channel for that kind
-   * (via `/notifications/preferences`), so the settings toggles actually gate
+   * Bulk fan-out. Deduplicates by (tenantId, userProfileId, sourceType,
+   * sourceId) so a single source event doesn't ping the same recipient twice
+   * even if dispatchers fire concurrently. Then drops items whose recipient
+   * has explicitly disabled the in-app channel for that kind (via
+   * `/notifications/preferences`), so the settings toggles actually gate
    * delivery.
+   *
+   * TENANCY (`PF-11`, `ADR-068`). Until 2026-08-23 the docblock above claimed
+   * the dedup ran "within the same tenant" and the query carried no
+   * `tenantId` at all — the only `notification` query in either app that did
+   * not. Every OR branch now carries its item's OWN `tenantId`, so the query
+   * is correct for any batch rather than correct only because callers happen
+   * to loop per tenant. `assertSingleTenantBatch` then enforces that habit,
+   * because the two preference gates below derive their tenant POSITIONALLY
+   * from the batch and a mixed batch would resolve one tenant's toggles
+   * against another tenant's recipients.
    */
   async createMany(items: CreateNotificationArgs[]): Promise<{ created: number }> {
     if (items.length === 0) return { created: 0 };
+    const batchTenantId = assertSingleTenantBatch(items);
 
-    // Dedup keys to skip
+    // Dedup keys to skip. `tenantId` is carried per item, NOT pinned from
+    // `items[0]`: a `where` that is only tenant-correct under an unenforced
+    // convention is the shape `ADR-063 §D2` refuses.
     const sourceKeys = items
       .filter((i) => i.sourceType && i.sourceId)
       .map((i) => ({
+        tenantId: i.tenantId,
         userProfileId: i.userProfileId,
         sourceType: i.sourceType!,
         sourceId: i.sourceId!,
@@ -108,21 +170,27 @@ export class NotificationsService {
       ? await this.prisma.notification.findMany({
           where: {
             OR: sourceKeys.map((k) => ({
+              tenantId: k.tenantId,
               userProfileId: k.userProfileId,
               sourceType: k.sourceType,
               sourceId: k.sourceId,
             })),
           },
-          select: { userProfileId: true, sourceType: true, sourceId: true },
+          select: {
+            tenantId: true,
+            userProfileId: true,
+            sourceType: true,
+            sourceId: true,
+          },
         })
       : [];
     const seen = new Set(
-      existing.map((e) => `${e.userProfileId}|${e.sourceType ?? ''}|${e.sourceId ?? ''}`),
+      existing.map((e) => dedupKey(e.tenantId, e.userProfileId, e.sourceType, e.sourceId)),
     );
 
     const deduped = items.filter((i) => {
       if (!i.sourceType || !i.sourceId) return true;
-      return !seen.has(`${i.userProfileId}|${i.sourceType}|${i.sourceId}`);
+      return !seen.has(dedupKey(i.tenantId, i.userProfileId, i.sourceType, i.sourceId));
     });
     if (deduped.length === 0) return { created: 0 };
 
@@ -131,12 +199,13 @@ export class NotificationsService {
     // table: `skip` (cadence `off` wins, or in-app channel off while instant),
     // `hiddenSource` (in-app channel off but cadence `daily_digest` → write a
     // hidden readAt=now row so the daily cron has a durable source), or a normal
-    // visible row (the default for any kind with no override / in-app on). Every
-    // item in a fan-out batch shares one tenant (producers loop per tenant).
-    const inAppTenantId = deduped[0]!.tenantId;
+    // visible row (the default for any kind with no override / in-app on). The
+    // tenant is the one `assertSingleTenantBatch` PROVED at entry, not
+    // `deduped[0]` — the same value today, but derived from a checked invariant
+    // instead of from position (`ADR-068 §D2`).
     const { skip, hiddenSource } = await this.preferences.inAppPlan(
       deduped.map((i) => ({ userProfileId: i.userProfileId, kind: i.kind })),
-      inAppTenantId,
+      batchTenantId,
     );
     const now = new Date();
     const toInsert = deduped
@@ -190,10 +259,10 @@ export class NotificationsService {
   private async dispatchEmails(items: CreateNotificationArgs[]): Promise<void> {
     try {
       if (items.length === 0) return;
-      // Every item in a fan-out batch shares one tenant (producers loop per
-      // tenant); pin it so both downstream queries are tenant-scoped, matching
-      // the worker cron sibling (`dispatchAlertEmails`) and ADR-002.
-      const tenantId = items[0]!.tenantId;
+      // One tenant per batch, ENFORCED by `assertSingleTenantBatch` in the
+      // caller rather than assumed; both downstream queries are tenant-scoped,
+      // matching the worker cron sibling (`dispatchAlertEmails`) and ADR-002.
+      const tenantId = assertSingleTenantBatch(items);
       // E5-S2 FR-2 email gate: enqueue a per-event email only for keys that are
       // emailEnabled AND cadence=instant. `daily_digest` keys are suppressed here
       // (the notifications-digest cron bundles them into one grouped email/day);
