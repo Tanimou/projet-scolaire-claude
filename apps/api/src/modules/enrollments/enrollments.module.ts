@@ -20,8 +20,16 @@ import { EnrollmentsController } from './enrollments.controller';
  * pour un seul provider sans état.
  *
  * `StudentsModule` continue d'exporter le même service pour ses autres
- * consommateurs ; il n'est PAS modifié, et aucune instance partagée n'est
- * attendue (le service est sans état : il ne fait que lire).
+ * consommateurs ; aucune instance partagée n'est attendue (le service est sans
+ * état : il ne fait que lire).
+ *
+ * S-E05-16 / `PF-296` / `DNC-06` — LA PRÉMISSE « ne dépend que de
+ * `PrismaService` » CI-DESSUS EST PÉRIMÉE. `StudentAccessService` dépend
+ * désormais AUSSI de `TeacherProfileService` (mur enseignant, `PF-288`). Ce
+ * module-ci est le seul des trois injecteurs à ne rien avoir à changer : il
+ * importe DÉJÀ `TeachingModule` (`S-E05-14`, ligne `imports` ci-dessous).
+ * `StudentsModule` et `CalendarModule` ont dû l'ajouter, sous peine d'échec de
+ * résolution AU BOOTSTRAP.
  */
 @Module({
   imports: [AuthModule, TeachingModule],

@@ -36,6 +36,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StudentAccessService } from '../students/student-access.service';
 import { TeacherProfileService } from '../teaching/teacher-profile.service';
+import { teacherOfSectionWhere, teacherSectionsWhere } from '../teaching/teaching-wall.where';
 
 /**
  * S-E05-14 / PF-278 / `ADR-063 §D3` — la projection de la liste d'appel.
@@ -174,61 +175,11 @@ export function assertClassRosterReadable(decision: {
   }
 }
 
-/**
- * `AC-3` + `AC-12` — le mur d'enseignement, en UNE instruction entièrement
- * SCALAIRE, et le type qui rend le fail-open INEXPRIMABLE.
- *
- * `teacherProfileId` est NON OPTIONNEL, délibérément. Prisma RETIRE les clés
- * `undefined` d'un `where` : écrit naïvement
- * `{ tenantId, classSectionId, teacherProfileId: tp?.id }` avec `tp === null`,
- * la requête devient « la première affectation de cette classe, à QUI QUE CE
- * SOIT » et l'appelant sans profil est ACCORDÉ. Le contrôleur doit donc rendre
- * son 403 AVANT que ce `where` existe — et la signature ci-dessous fait qu'il
- * ne peut pas faire autrement.
- *
- * `ADR-063 §D1` — POURQUOI AUCUNE CLAUSE D'ANNÉE SCOLAIRE ICI, ALORS QUE
- * `ADR-061 §D1` EN EXIGEAIT UNE. Le mur d'`attendance` est ÉLÈVE-clé : il
- * marche `professeur → affectations → classes → inscriptions → élève`, où
- * l'année est LIBRE, et comme `@@unique([teacherProfileId, classSectionId,
- * subjectId])` ne contient PAS `academicYearId`, une affectation SURVIT au
- * changement d'année et rejoindrait une inscription COURANTE. Ici les deux
- * côtés sont ancrés sur le MÊME `classSectionId`, et `ClassSection` est
- * elle-même épinglée à une année (`academicYearId` non nul, `@@unique(
- * [academicYearId, gradeLevelId, name])`, `schema.prisma:457`, `:478`) : l'id
- * de section fournit DÉJÀ l'année. Une affectation périmée pointe vers
- * l'ANCIENNE section — un autre id, dont la liste d'appel est l'ancienne.
- *
- * Pire, une clause d'année NUIRAIT :
- *  • `TeachingAssignment.academicYearId` est une colonne simple, sans clé
- *    étrangère composite vers `ClassSection.academicYearId` — les deux peuvent
- *    DIVERGER en données, et filtrer refuserait un professeur qui enseigne
- *    RÉELLEMENT la classe aujourd'hui ;
- *  • elle refuserait aussi un professeur consultant une section d'une année
- *    RÉVOLUE qu'il a authentiquement enseignée.
- * Précédent maison pour un contrôle section-clé : `announcements.controller.ts:1155`
- * — `{ tenantId, teacherProfileId, classSectionId }`, sans année.
- *
- * `findFirst` et non `findUnique` : un professeur peut détenir une affectation
- * PAR MATIÈRE sur la même section (la clé d'unicité inclut `subjectId`), donc
- * plusieurs lignes satisfont ce `where`. Seule leur EXISTENCE nous intéresse.
- *
- * `tenantId` est EXPLICITE et n'est pas redondant : les déploiements
- * d'aujourd'hui empruntent le chemin `degraded_no_app_url`, où la connexion du
- * PROPRIÉTAIRE échappe à ses propres policies RLS (`ADR-032 §D5` /
- * `ADR-042 §D1`). Cette clause est la SEULE chose qui filtre, et sans elle une
- * ligne d'affectation dérivée d'un autre tenant AUTORISERAIT.
+/*
+ * `teacherOfSectionWhere` a DÉMÉNAGÉ (S-E05-16 / `ADR-066 §D3`) vers
+ * `../teaching/teaching-wall.where.ts`, logique inchangée. Voir la note de son
+ * jumeau `teacherSectionsWhere`, plus bas, pour le motif.
  */
-export function teacherOfSectionWhere(input: {
-  readonly tenantId: string;
-  readonly classSectionId: string;
-  readonly teacherProfileId: string;
-}): Prisma.TeachingAssignmentWhereInput {
-  return {
-    tenantId: input.tenantId,
-    classSectionId: input.classSectionId,
-    teacherProfileId: input.teacherProfileId,
-  };
-}
 
 /* ══════════════════════════════════════════════════════════════════════════════
  * S-E05-15 / PF-283 / PF-51 (b) / ADR-065 — LA COUCHE DE DÉCISION DE `list`.
@@ -377,40 +328,20 @@ export function buildEnrollmentListWhere(input: {
   }
 }
 
-/**
- * `AC-4` / `FR-3` — les sections qu'un professeur ENSEIGNE, et le type qui rend
- * le fail-open INEXPRIMABLE.
+/*
+ * `teacherSectionsWhere` a DÉMÉNAGÉ (S-E05-16 / `ADR-066 §D3`) vers
+ * `../teaching/teaching-wall.where.ts`, avec son jumeau `teacherOfSectionWhere`
+ * et SANS un caractère de logique changé.
  *
- * Jumeau de `teacherOfSectionWhere` (:220) pour le cas LISTE : `teacherProfileId`
- * est NON OPTIONNEL, délibérément. Prisma RETIRE les clés `undefined` d'un
- * `where` : écrit naïvement `{ tenantId, teacherProfileId: tp?.id }` avec
- * `tp === null`, la requête devient « TOUTES les affectations du tenant » et
- * l'appelant sans profil reçoit la portée de l'établissement entier — un
- * fail-open SILENCIEUX, en HTTP 200, strictement pire que le bug d'origine. Le
- * contrôleur doit donc rendre son 403 AVANT que ce `where` existe, et cette
- * signature fait qu'il ne peut pas faire autrement.
- *
- * `tenantId` est EXPLICITE pour la raison d'`ADR-032 §D5` rappelée ci-dessus :
- * c'est lui qui garantit que la liste de portée ne peut pas contenir la section
- * d'un AUTRE tenant, et donc qu'un `?classSectionId=<section étrangère>` tombe
- * sur une INTERSECTION VIDE au lieu d'être autorisé.
- *
- * AUCUNE clause d'année scolaire, pour la raison déjà arbitrée en
- * `ADR-063 §D1` : `ClassSection` est elle-même épinglée à une année
- * (`academicYearId` non nul, `schema.prisma`), donc l'id de section porte DÉJÀ
- * l'année ; et `TeachingAssignment.academicYearId` peut DIVERGER de celui de sa
- * section (colonne simple, pas de clé étrangère composite), donc filtrer
- * refuserait un professeur qui enseigne réellement la classe aujourd'hui.
+ * Motif, mesuré et non esthétique : `student-access.service.ts` a désormais
+ * besoin de ce prédicat (`S-E05-16` / `PF-288`), et l'importer D'ICI aurait
+ * fermé un cycle `require` CJS DUR — ce contrôleur importe déjà
+ * `StudentAccessService` (`:37`), donc l'objet de module de `students/` serait
+ * à moitié initialisé au moment où les décorateurs de ce contrôleur
+ * s'exécutent. `teaching/` est une FEUILLE, importable des deux côtés.
+ * `PF-270` (les TROIS copies divergentes du prédicat) reste OUVERT : ce
+ * déplacement crée l'adresse de convergence, il n'ajoute pas de quatrième copie.
  */
-export function teacherSectionsWhere(input: {
-  readonly tenantId: string;
-  readonly teacherProfileId: string;
-}): Prisma.TeachingAssignmentWhereInput {
-  return {
-    tenantId: input.tenantId,
-    teacherProfileId: input.teacherProfileId,
-  };
-}
 
 /**
  * S-E05-15 / PF-283 / `ADR-065 §D3` — la projection `classSection` de `list`.
@@ -663,9 +594,20 @@ export class EnrollmentsController {
    * S-E05-15 — la RÉSOLUTION d'identité de `list`, et l'ordre des lignes EST le
    * contrôle.
    *
-   * `ADR-065 §D2` — POURQUOI LE MUR ENSEIGNANT NE PASSE PAS PAR
-   * `StudentAccessService`, ALORS QUE LE MUR PARENT SI. Mesuré ce run,
-   * `student-access.service.ts:38-40` :
+   * `ADR-065 §D2` — POURQUOI LE MUR ENSEIGNANT NE PASSAIT PAS PAR
+   * `StudentAccessService`, ALORS QUE LE MUR PARENT SI.
+   *
+   * ⚠️ S-E05-16 / `ADR-066 §D1` SUPERSÈDE CE RAISONNEMENT — sa PRÉMISSE a été
+   * SUPPRIMÉE, pas contredite. Le paragraphe qui suit est conservé comme
+   * HISTORIQUE parce qu'il explique pourquoi ce contrôleur porte encore sa
+   * propre résolution ; il ne décrit PLUS l'état de `student-access.service.ts`.
+   * Depuis `S-E05-16` (`PF-288`), `scopeForUser` rend pour `teacher` un
+   * `string[]` BORNÉ et jamais `null` : déléguer ne serait plus un no-op. La
+   * convergence des deux résolutions reste ouverte (`PF-270`) et n'est PAS faite
+   * ici ; ce qui A été fait, c'est de déplacer le prédicat partagé vers
+   * `../teaching/teaching-wall.where.ts`, que les deux appelants importent
+   * désormais. Texte d'origine, mesuré au run `S-E05-15`,
+   * `student-access.service.ts:38-40` de l'époque :
    *
    *     if (roles.includes('teacher')) {
    *       // TODO Phase 4: when teaching assignments exist, filter by …
@@ -676,7 +618,7 @@ export class EnrollmentsController {
    * tous les tests négatifs PARENT passeraient au vert pendant que la fuite
    * survit, le pire résultat possible pour une tranche `G-AUTHZ`. Les
    * `TeachingAssignment` que ce TODO attend EXISTENT et sont déjà parcourues par
-   * ce contrôleur (`teacherOfSectionWhere:220`). On les parcourt donc ICI.
+   * ce contrôleur (`teaching-wall.where.ts`). On les parcourt donc ICI.
    * `student-access.service.ts` n'est PAS corrigé : c'est hors du périmètre
    * déclaré (`AC-9`) et cinq autres contrôleurs dépendent du comportement
    * actuel. Enregistré en `PF-288`.

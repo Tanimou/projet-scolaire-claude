@@ -39,7 +39,12 @@ import {
  *    authentifiée de chaque portail répondrait 403 `ACCOUNT_NOT_PROVISIONED`.
  *  - `SchoolContextService.forTenant` et `StudentAccessService.scopeForUser`
  *    sont dans le même cas : `school`, `academic_year`, `guardianship`,
- *    `student` sont toutes sous policy.
+ *    `student` sont toutes sous policy — et depuis `S-E05-16` / `PF-288`,
+ *    `scopeForUser` en lit TROIS de plus sur son axe enseignant
+ *    (`teacher_profile` via `TeacherProfileService.findForUser`,
+ *    `teaching_assignment`, `enrollment`), ce qui RENFORCE le corollaire
+ *    ci-dessous au lieu de l'affaiblir : la méthode est passée de ZÉRO à TROIS
+ *    instructions pour un appelant `teacher`.
  *
  * La résolution d'identité reste donc sur la connexion du PROPRIÉTAIRE, par
  * NÉCESSITÉ et jusqu'à la bascule globale — pas par préférence. C'est la raison

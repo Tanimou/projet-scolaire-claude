@@ -181,8 +181,20 @@ export class AlertsController {
   // is insufficient for the admin POST /alerts/instances/:id/* routes. The alert's
   // studentId is resolved in-tenant first (never trusted from the client) and the
   // guardianship check runs BEFORE any mutation, so a parent can only transition
-  // an alert for a child they have an active Guardianship for. Admin/teacher tokens
-  // (scope studentIds:null) pass the ABAC check unrestricted, matching the read.
+  // an alert for a child they have an active Guardianship for.
+  //
+  // S-E05-16 / `PF-300` / DNC-06 — this paragraph used to end with "Admin/teacher
+  // tokens (scope studentIds:null) pass the ABAC check unrestricted, matching the
+  // read." BOTH clauses of that sentence are now false for a TEACHER. Since
+  // `S-E05-16` (`PF-288`) only `super_admin`/`school_admin` still resolve to the
+  // `studentIds: null` unrestricted sentinel; a teacher resolves to exactly the
+  // students they hold a TeachingAssignment for, so these two routes — guarded by
+  // `profile.read.self`, which `teacher` DOES hold — now refuse a teacher acting
+  // on a non-taught child's alert. That TIGHTENING IS INTENDED (`AC-5`): a teacher
+  // could previously ack/resolve/dismiss ANY child's alert in the tenant.
+  // Recorded consequence, NOT fixed here: the teacher-facing alert LIST does not
+  // run through `scopeForUser`, so a teacher can still SEE an alert they can no
+  // longer act on — a 403 dead-end, `PF-302`.
 
   /**
    * Resolve the alert's in-tenant studentId and enforce the guardianship ABAC

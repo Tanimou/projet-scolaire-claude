@@ -8,13 +8,15 @@ import {
   Get,
   NotFoundException,
   Param,
+  ParseEnumPipe,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { StudentStatus } from '@prisma/client';
+import { Prisma, StudentStatus } from '@prisma/client';
 import {
   IsDateString,
   IsEmail,
@@ -85,14 +87,73 @@ export class StudentsController {
     private readonly access: StudentAccessService,
   ) {}
 
+  /**
+   * S-E05-16 / `PF-288` / `PF-51` clause 3 / `ADR-066` — LE MUR ENSEIGNANT ET
+   * LES PIPES DE CETTE LISTE.
+   *
+   * `AC-6` — VALIDATION AU PIPE, et non plus un CAST. `@Query('status')
+   * status?: StudentStatus` n'était qu'une annotation TypeScript : la valeur
+   * arrivait telle quelle du fil et repartait telle quelle dans un `where`
+   * Prisma (`?status=<garbage>` → `P2023` → 500 non mappé ; la forme SYSTÉMIQUE
+   * de ce défaut est `PF-291`, hors périmètre). `classSectionId` et
+   * `academicYearId` atteignaient des colonnes `@db.Uuid` sans aucun contrôle.
+   *
+   * L'option `optional` est VÉRIFIÉE contre la source ÉPINGLÉE
+   * `@nestjs/common@10.4.22` (`ADR-065 §D4` a posé ce précédent), pas supposée :
+   * `parse-enum.pipe.js` et `parse-uuid.pipe.js` ouvrent tous deux `transform`
+   * par `if (isNil(value) && this.options?.optional) return value;`, et
+   * `ParseEnumPipeOptions` / `ParseUUIDPipeOptions` déclarent bien
+   * `optional?: boolean`.
+   *
+   * CHANGEMENT DE COMPORTEMENT À ÉNONCER, jamais à revendiquer comme
+   * pré-existant (`DNC-06`) : `isNil` ne couvre que `null`/`undefined`. Un
+   * `?status=` PRÉSENT MAIS VIDE vaut `''`, qui n'est pas nil, donc il est
+   * désormais REFUSÉ EN 400 là où l'ancien `...(status ? { status } : {})` le
+   * traitait comme absent. Aucun appelant première-partie ne l'émet
+   * (`apps/web/src/app/admin/students/page.tsx:140-142` et
+   * `StudentsPageFilters.tsx:39-40` suppriment les valeurs falsy), mais une URL
+   * mise en favori ou éditée à la main l'atteint — enregistré en `PF-304`.
+   *
+   * PAS de `{ version: '4' }` sur `ParseUUIDPipe` : tous les ids du schéma sont
+   * `@default(uuid()) @db.Uuid`, mais les lignes IMPORTÉES ou SEMÉES ne sont pas
+   * garanties v4 et la regex `all` est le mur sûr.
+   *
+   * NON CORRIGÉ ICI, enregistré : `?limit=` / `?offset=` passent toujours par un
+   * `parseInt` à repli silencieux, et `?unenrolled=` reste une chaîne comparée à
+   * `'true'` (`PF-303` — paramètre MORT : zéro appelant web, et structurellement
+   * vide pour un enseignant, dont la portée DÉRIVE des inscriptions actives).
+   *
+   * `AC-11` / `ADR-065 §D5` — LA FORME DU `where`. Deux défauts DISTINCTS sont
+   * fermés ici :
+   *  • `...(scope.studentIds ? … : {})` était le FAIL-OPEN PAR CLÉ ABSENTE :
+   *    `null` ET `[]` tombaient tous deux sur `{}`. `[]` étant truthy en JS, le
+   *    cas vide narrowait correctement — par ACCIDENT. Le test est désormais
+   *    `=== null` EXPLICITE : jamais la truthiness, JAMAIS `.length` (un
+   *    refactor en `scope.studentIds?.length ? … : {}` rendrait l'école ENTIÈRE
+   *    à un enseignant sans `TeacherProfile`).
+   *  • `where.enrollments = …` était une AFFECTATION : le filtre
+   *    `classSectionId` fourni par l'APPELANT écrasait toute clause de portée
+   *    exprimée relationnellement — exactement le défaut que `S-E05-15` a fermé
+   *    une route plus loin. Les filtres appelant passent maintenant par
+   *    `AND: []`, c'est-à-dire une INTERSECTION, la forme adoptée par
+   *    `buildEnrollmentListWhere`. Ainsi `?classSectionId=<section non
+   *    enseignée>` rend `[]`, et une section d'un AUTRE tenant tombe sur une
+   *    intersection VIDE, jamais sur une autorisation.
+   *
+   * `Prisma.StudentWhereInput` et non `Record<string, unknown>` (`PF-301`) :
+   * l'ancienne annotation DÉSACTIVAIT le typecheck Prisma sur l'objet EXACT où
+   * la clause ABAC se replie, ce qui rendait inapplicable la règle « le
+   * typecheck porte la sécurité » d'`ADR-065 §D5`.
+   */
   @Get()
   @RequiresPermission('students.read')
   async list(
     @CurrentJwt() jwt: KeycloakJwtPayload,
     @Query('q') q?: string,
-    @Query('status') status?: StudentStatus,
-    @Query('classSectionId') classSectionId?: string,
-    @Query('academicYearId') academicYearId?: string,
+    @Query('status', new ParseEnumPipe(StudentStatus, { optional: true }))
+    status?: StudentStatus,
+    @Query('classSectionId', new ParseUUIDPipe({ optional: true })) classSectionId?: string,
+    @Query('academicYearId', new ParseUUIDPipe({ optional: true })) academicYearId?: string,
     @Query('unenrolled') unenrolled?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
@@ -101,36 +162,54 @@ export class StudentsController {
     const { schoolId, activeAcademicYearId } = await this.ctx.forUser(me);
     const scope = await this.access.scopeForUser(me, jwt, schoolId);
 
-    const where: Record<string, unknown> = {
+    // Extrait en CONSTANTE ANNOTÉE, et non laissé en `...(q ? { … } : {})` :
+    // dans un spread conditionnel, l'objet littéral n'est PAS typé
+    // contextuellement par `Prisma.StudentWhereInput`, donc `mode: 'insensitive'`
+    // s'inférerait en `string` et ne serait plus assignable à `QueryMode`. Le
+    // `Record<string, unknown>` d'avant masquait cela en désactivant TOUT le
+    // typecheck Prisma sur cet objet — c'est précisément `PF-301`.
+    const searchClause: Prisma.StudentWhereInput = q
+      ? {
+          OR: [
+            { firstName: { contains: q, mode: 'insensitive' } },
+            { lastName: { contains: q, mode: 'insensitive' } },
+            { externalRef: { contains: q, mode: 'insensitive' } },
+            { email: { contains: q, mode: 'insensitive' } },
+          ],
+        }
+      : {};
+
+    const where: Prisma.StudentWhereInput = {
       tenantId: me.tenantId,
       schoolId,
-      ...(scope.studentIds ? { id: { in: scope.studentIds } } : {}),
+      // `=== null` EXPLICITE : `null` est le sentinel NON RESTREINT (admins
+      // seuls) ; `[]` est le REFUS et DOIT produire `id: { in: [] }`.
+      ...(scope.studentIds === null ? {} : { id: { in: scope.studentIds } }),
       ...(status ? { status } : {}),
-      ...(q
-        ? {
-            OR: [
-              { firstName: { contains: q, mode: 'insensitive' } },
-              { lastName: { contains: q, mode: 'insensitive' } },
-              { externalRef: { contains: q, mode: 'insensitive' } },
-              { email: { contains: q, mode: 'insensitive' } },
-            ],
-          }
-        : {}),
+      ...searchClause,
     };
 
+    // INTERSECTION, jamais AFFECTATION : les filtres de l'appelant s'AJOUTENT à
+    // la portée, ils ne la remplacent pas.
+    const callerFilters: Prisma.StudentWhereInput[] = [];
     if (classSectionId) {
-      where.enrollments = {
-        some: {
-          classSectionId,
-          status: 'active',
-          ...(academicYearId ? { academicYearId } : {}),
+      callerFilters.push({
+        enrollments: {
+          some: {
+            classSectionId,
+            status: 'active',
+            ...(academicYearId ? { academicYearId } : {}),
+          },
         },
-      };
+      });
     } else if (unenrolled === 'true' && activeAcademicYearId) {
-      where.enrollments = {
-        none: { academicYearId: activeAcademicYearId, status: 'active' },
-      };
+      callerFilters.push({
+        enrollments: {
+          none: { academicYearId: activeAcademicYearId, status: 'active' },
+        },
+      });
     }
+    if (callerFilters.length > 0) where.AND = callerFilters;
 
     const take = Math.min(parseInt(limit ?? '50', 10) || 50, 200);
     const skip = parseInt(offset ?? '0', 10) || 0;
