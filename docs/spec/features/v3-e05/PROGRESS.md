@@ -3,10 +3,10 @@
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
 **Status (2026-08-23)** `in-progress` — **thirteen slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, #268 — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)** and **`S-E05-16` (2026-08-23, this PR — `PF-288` closed **at the service, not as a class**, `PF-51` clause 3 advanced on one route, `ADR-066`)** and **`S-E05-17` (2026-08-23, this PR — `PF-314` + `PF-315` closed, **`PF-51` closed: clause 3 of 3**, `ADR-067`)**. **Thirteen landed rows against a twelve-row backlog is not a completion, and "12 of 12" in the roadmap table is numerically true and semantically false:** five of the thirteen (`S-E05-2c`, `S-E05-14`, `S-E05-15`, `S-E05-16`, `S-E05-17`) came from *outside* the backlog, and six backlog rows (`S-E05-1`, `S-E05-4`, `S-E05-8`, `S-E05-9`, `S-E05-10`, `S-E05-2b`) are still unenumerated — plus `S-E05-18`, the `PF-294` placeholder renumbered by run 77. Each was authored and implemented in the same
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, #268 — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)** and **`S-E05-16` (2026-08-23, this PR — `PF-288` closed **at the service, not as a class**, `PF-51` clause 3 advanced on one route, `ADR-066`)** and **`S-E05-17` (2026-08-23, this PR — `PF-314` + `PF-315` closed, **`PF-51` closed: clause 3 of 3**, `ADR-067`)**. and **`S-E05-4` (2026-08-23, run 78, this PR — **`PF-11` CLOSED**, the first of the six matrix-row-only backlog allocations to be discharged since `S-E05-13`; `ADR-068`)**. **Thirteen landed rows against a twelve-row backlog is not a completion, and "12 of 12" in the roadmap table is numerically true and semantically false:** five of the thirteen (`S-E05-2c`, `S-E05-14`, `S-E05-15`, `S-E05-16`, `S-E05-17`) came from *outside* the backlog, and six backlog rows (`S-E05-1`, `S-E05-4`, `S-E05-8`, `S-E05-9`, `S-E05-10`, `S-E05-2b`) are still unenumerated — plus `S-E05-18`, the `PF-294` placeholder renumbered by run 77. Each was authored and implemented in the same
 `S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, this PR — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
-remaining four (`S-E05-1`, `S-E05-4`, `S-E05-8` … `S-E05-10`) still exist as **rows in
+remaining three (`S-E05-1`, `S-E05-8` … `S-E05-10`; **`S-E05-4` left this list on 2026-08-23, run 78**) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
 `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
 without an authoring pass of its own. *(**`S-E05-13` left this list on 2026-08-23**: the renumbered `PF-51`
@@ -1655,3 +1655,127 @@ rather than to the brief.
 `scopeForUser`) sits ~20 lines from an edit this slice makes and is **not touched**. Neither are
 `meeting-requests.controller.ts`, `admin-child-claims.controller.ts`, `schema.prisma`, `prisma/migrations/`,
 `apps/web`, `apps/worker` or `.claude/`.
+
+## `S-E05-4` (2026-08-23, run 78) — the notification fan-out stops being tenant-scoped by convention
+
+**Closes `PF-11`** — a ROADMAP finding, `BROKEN_SECURITY`, `G-TENANT`, `open` with an empty Evidence column since
+the register was written. **Records `PF-320`, `PF-321`, `PF-322`. `ADR-068`. Story:**
+[`stories/S-E05-4.md`](./stories/S-E05-4.md).
+
+### The finding reproduced, and the parse put it in proportion
+
+`NotificationsService.createMany` filtered its source-dedup `OR` on `(userProfileId, sourceType, sourceId)` with
+**no `tenantId` anywhere**, under a docblock claiming the dedup ran *"within the same tenant"*. Parsed across both
+applications, it was **the only one of the eleven `Notification` filter queries carrying no tenant** — and the four
+worker siblings that copy the same idea all carry one, under a comment saying they *"mirror
+NotificationsService.createMany"*. This was never a position anybody argued for: one site drifted and a docblock
+covered for it.
+
+**Severity is stated, not inherited from the label** (`ADR-068 §1.1`). Every `OR` branch also constrained
+`userProfileId`, and a `UserProfile` belongs to exactly one tenant — so the query could not return another tenant's
+notification for a *different* recipient, and the realistic blast radius is narrower than `BROKEN_SECURITY` reads on
+first sight. What makes it worth closing rather than reclassifying: the only thing keeping it correct was an
+invariant **nothing in the code stated**, no test asserted, and which any repair keying the dedup on a student or a
+source rather than a profile would silently void — and `PF-02` (RLS, still `in-progress`) is being built on the
+premise that application queries are already tenant-keyed.
+
+### The softer form, one file over, folded into the same slice
+
+`preferences.service.ts` carried the identical defect on **four** batch resolvers. Three declared `tenantId?: string`
+and spread it in conditionally; `disabledInAppKeys` had **no tenant parameter at all**. The conditional spread is the
+absent-key fail-open `ADR-065 §D5` names and forbids: Prisma drops an `undefined` key from a `where`, so an omitted
+argument does not narrow the query — it **widens it to every tenant**, silently, while the docblock asserted
+*"the lookup is tenant-scoped"*. These resolvers **are** the fan-out — `createMany` consults them between the dedup
+and the insert — so fixing the dedup alone would have been half of one path.
+
+### What landed
+
+1. **The tenant on every `OR` branch, taken from each item** — never pinned from `items[0]`, which would be correct
+   only *because of* the unenforced looping convention that had just been shown to be unwritten.
+2. **`dedupKey()` realigned tenant-first**, so a query narrowed on the database side is not undone by a `Set` keyed
+   the old way.
+3. **`assertSingleTenantBatch` refuses a mixed-tenant batch before any query runs.** This is what makes the two
+   positional tenant derivations feeding the preference gates legitimate. All **eight** production producers were
+   read first (`alerts.service.ts` ×2, `announcements.controller.ts`, `child-claims.service.ts` ×2,
+   `enrollments.controller.ts`, `assessments.controller.ts`, `lessons.controller.ts`) — every one sets a single
+   scalar tenant per batch, so this is a hardening with **no behaviour change on any live path**. Throwing rather
+   than filtering is `DNC-08` applied to a producer: a filtered batch would hand the caller a plausible `created`
+   count and hide the bug.
+4. **`tenantId` required on all four resolvers**, spread replaced by a plain key — the unscoped call becomes
+   unrepresentable (`ADR-063 §D2`) and `ADR-002` is enforced by the type checker instead of a docblock.
+5. **`apps/api/src/shared/quality/notification-tenant-scope-gate.spec.ts`** — the ratchet.
+
+### The ratchet is proven to MEASURE, not asserted to
+
+With the two service files replaced by their `origin/main` versions
+(`git checkout origin/main -- apps/api/src/modules/notifications/*.service.ts`), the same gate on the same machine
+reported **2 failed / 19 passed** and NAMED five sites:
+
+```
+apps/api/src/modules/notifications/notifications.service.ts:108  notification.findMany
+    — 1 OR branch(es) carry no tenantId
+apps/api/src/modules/notifications/preferences.service.ts:203    notificationPreference.findMany
+apps/api/src/modules/notifications/preferences.service.ts:241    notificationPreference.findMany
+apps/api/src/modules/notifications/preferences.service.ts:273    notificationPreference.findMany
+apps/api/src/modules/notifications/preferences.service.ts:315    notificationPreference.findMany
+```
+
+Files restored → **21/21**, `OFFENDERS = []`. The four `preferences.service.ts` hits are the conditional spread: the
+classifier does not credit it as a static `tenantId` key, which is the correct verdict, because at runtime it is not
+one either whenever the argument is omitted.
+
+Three properties, each chosen against a failure this repository has already paid for: the model set is **derived
+from `schema.prisma`** (every `model` beginning with `Notification` declaring a `tenantId` scalar) rather than
+hand-listed — two hand-maintained lists drift; the corpus is **parsed with `typescript`, never text-scanned**,
+because this file's own negative-control fixtures contain the offending shapes as string literals and a text scan
+could only be greened by weakening it (`R-30`); and the one exemption is **structural, not an allowlist**
+(`DNC-10`) — a query selecting `tenantId` and nothing else with a `distinct` on it is a tenant *enumeration*, reads
+no tenant-owned column, and loses the exemption automatically the moment it selects a second column. The gate
+asserts there are exactly two such queries and names both.
+
+### The ceiling is DECLARED, which is the part most likely to be skipped
+
+`findUnique` / `findUniqueOrThrow` / `update` / `delete` / `upsert` take a **unique selector**, and
+`NotificationPreference`'s unique is `@@unique([userProfileId, kind])` (`schema.prisma:1484`) — **no tenant in it**,
+so Prisma *refuses* a `tenantId` there. Requiring one would be a rule the type system cannot satisfy. Rather than
+let the gate's silence read as coverage, it **counts** those sites (3: two `findUnique`, one `upsert`) and asserts
+the count, so a fourth cannot appear unnoticed. The two live ones are recorded as `PF-320` and `PF-321`.
+
+### Evidence, executed
+
+| What | Command | Result |
+|---|---|---|
+| The ratchet | `pnpm --filter @pilotage/api exec jest src/shared/quality/notification-tenant-scope-gate.spec.ts` | **21/21** |
+| The same ratchet on `origin/main`'s two files | idem | **2 failed / 19 passed**, five sites named |
+| Behavioural specs | `pnpm --filter @pilotage/api exec jest src/modules/notifications/` | **51/51**, 2 suites |
+| Typecheck | `pnpm typecheck` | **13/13, exit 0** |
+
+The behavioural specs gained ten cases. The two carrying the finding: *"does NOT let a foreign tenant's identical
+(user, source) row suppress the insert"*, and *"refuses a mixed-tenant batch BEFORE any query runs"* — which asserts
+on the **queries not issued**, not only on the thrown message, because a filter-instead-of-throw implementation
+would satisfy a message assertion alone. One pre-existing fixture had to change: the dedup test's mock row carried
+no `tenantId`. That is not collateral damage, it **is** the measurement — the fixture was under-specified precisely
+because the query was.
+
+### G-PORTAL — the real number
+
+**3/4, not 4/4.** The in-app bell is admin / teacher / parent; `apps/web/src/app/student/` has no `settings/` route
+(`PF-57`, pre-existing, out of scope). *"No student surface exists"* is the accurate statement; *"student
+unaffected"* is not.
+
+### Explicitly out of scope, so the omission is not read as an oversight
+
+`schema.prisma`, `prisma/migrations/`, `apps/web`, every controller, every RLS policy (`PF-02` stays open — this is
+application-layer defence, the layer `ADR-002` governs), the two unique-selector preference sites (`PF-320` /
+`PF-321`), and the systemic form of the gate (`PF-322` → `PF-291`). **Nothing was executed against a running
+container**: the evidence is jest over the real corpus plus a typecheck, and this report says so rather than
+implying a live probe.
+
+### One deviation from the routine, declared
+
+Step 3's BMAD Workflow was **not** invoked. The slice had already been measured end to end at Step 2 — the defect
+located, the eight producers read, the census parsed — and `project_workflow_worktree_path_bug` records that sprint
+agents write into the main repo *or* the session worktree regardless of `args.worktree`, which this run would then
+have had to relocate by patch. The budget was spent on **executing** the evidence instead (the RED/GREEN gate pass,
+51 specs, a full typecheck), which is V3's stated premise. Recorded here rather than left for the next reader to
+infer from a missing `journal.jsonl` entry.

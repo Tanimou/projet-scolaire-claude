@@ -193,15 +193,23 @@ export class NotificationPreferencesService {
    * of `${userProfileId}|${kind}` keys whose in-app channel is *explicitly*
    * disabled. Pairs with no override row are absent from the result (default
    * in-app on), so callers keep them. One query per batch, deduplicated.
+   *
+   * `tenantId` is REQUIRED (`PF-11` / `ADR-068 §D3`). This method had NO tenant
+   * parameter at all until 2026-08-23 — it is superseded by `inAppPlan` and has
+   * no production caller today, which is exactly why the hole was invisible.
+   * The next caller would have inherited a cross-tenant read, so the parameter
+   * is added rather than left for them to remember.
    */
   async disabledInAppKeys(
     pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
+    tenantId: string,
   ): Promise<Set<string>> {
     if (pairs.length === 0) return new Set();
     const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
     for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
     const rows = await this.prisma.notificationPreference.findMany({
       where: {
+        tenantId,
         OR: [...uniq.values()].map((p) => ({
           userProfileId: p.userProfileId,
           kind: p.kind,
@@ -223,9 +231,13 @@ export class NotificationPreferencesService {
    * missing override row means "no email" and is absent from the result — the
    * dispatcher emails only recipients who opted in. One query per batch.
    *
-   * `tenantId` is optional but the dispatcher always passes it, so the lookup is
-   * tenant-scoped — defence-in-depth matching the worker cron sibling
-   * (`dispatchAlertEmails`) and ADR-002 ("every query scoped by tenant_id").
+   * `tenantId` is REQUIRED (`PF-11` / `ADR-068 §D3`). It used to be optional and
+   * spread in as `...(tenantId ? { tenantId } : {})` — the absent-key fail-open
+   * `ADR-065 §D5` names and forbids, because Prisma drops an `undefined` key
+   * from a `where` and the query silently widens to every tenant. A plain
+   * required key makes the unscoped call unrepresentable, which is the
+   * `ADR-063 §D2` posture; ADR-002 ("every query scoped by tenant_id") is then
+   * enforced by the type checker rather than by the caller's discipline.
    *
    * NOTE (E5-S2): this returns *email-enabled* keys regardless of cadence. The
    * per-event dispatcher (`dispatchEmails`) layers the FR-2 cadence gate on top
@@ -233,14 +245,14 @@ export class NotificationPreferencesService {
    */
   async emailEnabledKeys(
     pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
-    tenantId?: string,
+    tenantId: string,
   ): Promise<Set<string>> {
     if (pairs.length === 0) return new Set();
     const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
     for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
     const rows = await this.prisma.notificationPreference.findMany({
       where: {
-        ...(tenantId ? { tenantId } : {}),
+        tenantId,
         OR: [...uniq.values()].map((p) => ({
           userProfileId: p.userProfileId,
           kind: p.kind,
@@ -265,14 +277,14 @@ export class NotificationPreferencesService {
    */
   async instantEmailKeys(
     pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
-    tenantId?: string,
+    tenantId: string,
   ): Promise<Set<string>> {
     if (pairs.length === 0) return new Set();
     const uniq = new Map<string, { userProfileId: string; kind: NotificationKind }>();
     for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
     const rows = await this.prisma.notificationPreference.findMany({
       where: {
-        ...(tenantId ? { tenantId } : {}),
+        tenantId,
         OR: [...uniq.values()].map((p) => ({
           userProfileId: p.userProfileId,
           kind: p.kind,
@@ -305,7 +317,7 @@ export class NotificationPreferencesService {
    */
   async inAppPlan(
     pairs: ReadonlyArray<{ userProfileId: string; kind: NotificationKind }>,
-    tenantId?: string,
+    tenantId: string,
   ): Promise<{ skip: Set<string>; hiddenSource: Set<string> }> {
     const skip = new Set<string>();
     const hiddenSource = new Set<string>();
@@ -314,7 +326,7 @@ export class NotificationPreferencesService {
     for (const p of pairs) uniq.set(`${p.userProfileId}|${p.kind}`, p);
     const rows = await this.prisma.notificationPreference.findMany({
       where: {
-        ...(tenantId ? { tenantId } : {}),
+        tenantId,
         OR: [...uniq.values()].map((p) => ({
           userProfileId: p.userProfileId,
           kind: p.kind,

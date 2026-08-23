@@ -1,4 +1,9 @@
-import { NotificationsService, type CreateNotificationArgs } from './notifications.service';
+import {
+  assertSingleTenantBatch,
+  dedupKey,
+  NotificationsService,
+  type CreateNotificationArgs,
+} from './notifications.service';
 import { NotificationPreferencesService } from './preferences.service';
 
 type CreatedRow = { userProfileId: string; kind: string; readAt: Date | null };
@@ -129,8 +134,12 @@ describe('NotificationsService.createMany — preference gating', () => {
   it('applies source-based dedup before preference gating', async () => {
     const { service, prisma, created } = makeService();
     // Recipient u1 already has a notification for this source → skipped by dedup.
+    // `tenantId` is part of the fixture since `PF-11`: the dedup key is now
+    // (tenant, user, sourceType, sourceId), so a row carrying no tenant matches
+    // nothing. The omission was harmless only while the query itself was
+    // unscoped — which is the defect.
     prisma.notification.findMany.mockResolvedValue([
-      { userProfileId: 'u1', sourceType: 'grade', sourceId: 'g1' },
+      { tenantId: 't1', userProfileId: 'u1', sourceType: 'grade', sourceId: 'g1' },
     ]);
 
     const res = await service.createMany([
@@ -352,5 +361,113 @@ describe('NotificationsService.markReadBySource — source retraction', () => {
     });
 
     expect(count).toBe(0);
+  });
+});
+
+describe('NotificationsService.createMany — tenant scoping (PF-11 / ADR-068)', () => {
+  it('carries tenantId on every branch of the dedup OR — the query is never cross-tenant', async () => {
+    const { service, prisma } = makeService();
+
+    await service.createMany([
+      item({ userProfileId: 'u1', sourceType: 'grade', sourceId: 'g1' }),
+      item({ userProfileId: 'u2', sourceType: 'grade', sourceId: 'g1' }),
+    ]);
+
+    const where = prisma.notification.findMany.mock.calls[0]![0].where as {
+      OR: Array<Record<string, unknown>>;
+    };
+    expect(where.OR).toHaveLength(2);
+    for (const branch of where.OR) {
+      expect(branch).toMatchObject({ tenantId: 't1' });
+    }
+  });
+
+  it('does NOT let a foreign tenant’s identical (user, source) row suppress the insert', async () => {
+    const { service, prisma, created } = makeService();
+    // Same userProfileId, same sourceType, same sourceId — different tenant.
+    // Before PF-11 this row matched and the tenant-t1 notification was silently
+    // dropped: the cross-tenant suppression the finding describes.
+    prisma.notification.findMany.mockResolvedValue([
+      { tenantId: 't2', userProfileId: 'u1', sourceType: 'grade', sourceId: 'g1' },
+    ]);
+
+    const res = await service.createMany([
+      item({ tenantId: 't1', userProfileId: 'u1', sourceType: 'grade', sourceId: 'g1' }),
+    ]);
+
+    expect(res.created).toBe(1);
+    expect(created).toHaveLength(1);
+  });
+
+  it('still dedups when the existing row is in the SAME tenant (scoping did not disable dedup)', async () => {
+    const { service, prisma, created } = makeService();
+    prisma.notification.findMany.mockResolvedValue([
+      { tenantId: 't1', userProfileId: 'u1', sourceType: 'grade', sourceId: 'g1' },
+    ]);
+
+    const res = await service.createMany([
+      item({ tenantId: 't1', userProfileId: 'u1', sourceType: 'grade', sourceId: 'g1' }),
+    ]);
+
+    expect(res.created).toBe(0);
+    expect(created).toHaveLength(0);
+  });
+
+  it('resolves the in-app preference plan with the batch tenant', async () => {
+    const { service, prefs } = makeService();
+
+    await service.createMany([item({ tenantId: 't7', userProfileId: 'u1' })]);
+
+    expect(prefs.inAppPlan.mock.calls[0]![1]).toBe('t7');
+  });
+
+  it('refuses a mixed-tenant batch BEFORE any query runs, rather than mis-scoping the preference gate', async () => {
+    const { service, prisma, prefs, created } = makeService();
+
+    await expect(
+      service.createMany([
+        item({ tenantId: 't1', userProfileId: 'u1' }),
+        item({ tenantId: 't2', userProfileId: 'u2' }),
+      ]),
+    ).rejects.toThrow(/mixed-tenant batch refused/);
+
+    // Assert on the QUERIES, not only on the throw: a filter-instead-of-throw
+    // implementation would satisfy a message assertion alone.
+    expect(prisma.notification.findMany).not.toHaveBeenCalled();
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+    expect(prefs.inAppPlan).not.toHaveBeenCalled();
+    expect(created).toHaveLength(0);
+  });
+
+  it('accepts a single-tenant batch of many items (the invariant is not an accidental size limit)', async () => {
+    const { service, created } = makeService();
+
+    const res = await service.createMany(
+      ['u1', 'u2', 'u3', 'u4'].map((u) => item({ tenantId: 't1', userProfileId: u })),
+    );
+
+    expect(res.created).toBe(4);
+    expect(created).toHaveLength(4);
+  });
+});
+
+describe('assertSingleTenantBatch / dedupKey — unit', () => {
+  it('returns the single tenant of a homogeneous batch', () => {
+    expect(assertSingleTenantBatch([{ tenantId: 'a' }, { tenantId: 'a' }])).toBe('a');
+  });
+
+  it('throws naming both tenants it saw', () => {
+    expect(() => assertSingleTenantBatch([{ tenantId: 'a' }, { tenantId: 'b' }])).toThrow(
+      /saw a and b/,
+    );
+  });
+
+  it('keys the tenant FIRST, so two tenants never collide on one source triple', () => {
+    expect(dedupKey('t1', 'u1', 'grade', 'g1')).not.toBe(dedupKey('t2', 'u1', 'grade', 'g1'));
+  });
+
+  it('collapses null-ish source parts without merging distinct tenants', () => {
+    expect(dedupKey('t1', 'u1', null, undefined)).toBe('t1|u1||');
+    expect(dedupKey('t2', 'u1', null, undefined)).toBe('t2|u1||');
   });
 });
