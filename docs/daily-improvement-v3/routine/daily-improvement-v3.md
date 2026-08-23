@@ -137,6 +137,32 @@ Read the printed line:
 
 If you proceed past Step 0 you are responsible for releasing the lock in Step 7, on every path including errors.
 
+### THE DOCS LANE — a second, narrow mutex for work that cannot collide with a build
+
+> Added 2026-08-23 (run 79), `ADR-069 §D4`. **This does NOT make the implementation lane parallel.**
+
+Spec, story and triage work is pure `docs/` editing, yet it currently queues behind whichever run is holding the
+write lock for a 1–2.5 h build. `scripts/docs-lane-lock.sh` gives that work its own lock so it stops competing:
+
+```
+bash scripts/docs-lane-lock.sh conflicts   # refuses if the build lane has uncommitted docs/ changes
+bash scripts/docs-lane-lock.sh acquire
+bash scripts/docs-lane-lock.sh guard <paths…>   # REFUSES any path outside docs/
+bash scripts/docs-lane-lock.sh release
+```
+
+**Read the reversal correctly.** V3 restored the single writer on purpose: the three-track coordinator (S3,
+2026-08-12) wedged all three tracks and logged `GATE=BUSY` with zero throughput for hours before PR #227 reverted
+it. This is not that. It touches neither `routine-lock.sh` nor `write.lock`, adds exactly one lane, and that lane
+is **enforced** to write only under `docs/` — never `apps/`, `packages/`, `scripts/`, `infra/` or `prisma/`, never
+a build, never the sprint Workflow.
+
+**The limit, stated rather than discovered later.** Two writers in one checkout can still collide on a FILE even
+when neither builds, and `OPEN.md` is the obvious candidate because both lanes write it. That is why `conflicts`
+exists and why it must be run first: it refuses while the implementation lane has uncommitted `docs/` changes. The
+separate mutex keeps the docs lane off the build lane's critical path; it does **not** make concurrent edits to the
+same file safe.
+
 ## Step 1 — Load state and select ONE story
 
 Read, in this order:
@@ -161,9 +187,113 @@ Read, in this order:
 **Never** select a story whose `requiresDecision`, `requiresCredential` or `requiresLegalReview` field is set and
 unresolved in `open-decisions.md`. Those are Step 6 stop conditions, not work.
 
+### RULE 0 — THE ROADMAP COMES FIRST, AND `TOOL-xx` IS NOT THE ROADMAP
+
+> Added 2026-08-13 by operator instruction, after a measurement. **This rule outranks rules 1–5 above.**
+
+**The measurement that produced this rule.** On 2026-08-13, twelve PRs merged in one day and **eleven of the twelve
+findings they closed were `TOOL-xx`** — this routine's own tooling. Roadmap progress that day moved **9/93 → 9/93,
+i.e. zero**. Cumulatively: of 86 closed findings, **7** belong to the original audit set; 61 are `PF-58+` the routine
+discovered about itself, and 16 are `TOOL`. The routine had been improving its own workshop faster than it shipped the
+product, and nothing in the selection rule prevented that — because every `TOOL` finding lives in `V3-E02`, which is
+layer L0, so rule 1 always elects it.
+
+**A `ROADMAP finding` means:** an id named in the `Closes` column of an epic row in `docs/daily-improvement-v3/roadmap.md`
+— i.e. `PF-01…PF-57`, `LG-xx`, `VAL-xx`. **Everything else — every `TOOL-xx`, every `PF-58+` — is NOT roadmap work**,
+however useful it is.
+
+**The second measurement, 2026-08-23 (run 77) — the rule above did not work, and here is the number.** Over the full
+V3 window (2026-08-02 → 2026-08-23, **77 runs, 22 days**) the routine closed **119 findings. Exactly 13 were roadmap
+findings.** That is **0.17 roadmap findings per run** against **1.38 self-generated closures per run** — an 11 / 89
+split. Roadmap completion stands at **13/87 = 14.9%**, with L0 at 30.2% and L1–L4 at **0%**. The self-generated backlog
+is *growing*: **245 `PF-58+` raised, 91 closed, 154 still open**, plus 23 open `TOOL-xx`. The open self-generated
+backlog (177) is now **2.4× the open roadmap backlog (74)**.
+
+**Why the original rule failed is structural, not a matter of diligence.** Clause 5 asked the run to *report* the ratio
+in **Step 8** — after the work was chosen, done and merged, when the number can no longer change anything. Clause 1
+asked each run to re-derive the previous run's ratio from PR titles, which is slow, silently skippable, and leaves no
+artefact — so clause 4 ("never two consecutive tooling-only runs") was **never mechanically checkable by anybody**.
+A rule enforced only by a retrospective report is a measurement, not a gate.
+
+**The rule.**
+
+1. **Count first, select second — and READ the count, do not re-derive it.** Run:
+
+   ```
+   node scripts/roadmap-selection-check.js
+   ```
+
+   Exit **0** = the previous run was roadmap work, this run may choose freely (subject to clause 5).
+   Exit **1** = `MUST-SELECT-ROADMAP`. The message says why, and it is not advisory.
+
+   It reads the last entry of `~/.claude/scheduled-tasks/daily-improvement-v3/state/selection-log.jsonl`.
+   **The ledger lives OUTSIDE the checkout on purpose:** it must be writable while another run holds the write
+   lock, and it must survive branch switches and the gate's salvage-stash. An absent ledger is treated as
+   "previous run was NOT roadmap" — it fails safe toward roadmap work. **The CHECKER is versioned in the repo and
+   covered by `apps/api/src/shared/quality/routine-governance-gate.spec.ts`; the LEDGER is not.** That asymmetry is
+   deliberate (`ADR-069`). The checker is deliberately NOT part of `routine-lock.sh`: a policy check inside a mutex
+   is a policy check that can wedge every future run.
+2. **If the previous entry is not roadmap work, this run MUST select a ROADMAP finding** — unless *every* unblocked
+   candidate is genuinely blocked, demonstrated story by story in the run log, not asserted.
+3. **Write your selection to the ledger at Step 1, BEFORE Step 3 — never at Step 8.**
+
+   ```
+   node scripts/roadmap-selection-check.js --append '{"run":N,"date":"YYYY-MM-DD","story":"S-Exx-n","roadmapIds":["PF-11"],"nonRoadmapIds":[],"roadmap":true,"justification":"…"}'
+   ```
+
+   `--append` **validates before writing** and refuses: an id that is not `PF-01…57`/`LG-xx`/`VAL-xx`, a `roadmap`
+   flag that disagrees with `roadmapIds` (the exact lie the ledger exists to prevent), or a non-roadmap run with no
+   justification. Writing it *before* the sprint is the whole point: the commitment is made when it can still be
+   changed, and the next run inherits a fact rather than a chore.
+4. **Never two consecutive tooling-only runs.** If the last ledger entry has `"roadmap": false`, a second such run is
+   forbidden outright, whatever its merit. This is now mechanically checkable in one `tail -1`.
+5. **A `TOOL-xx` *or* `PF-58+` slice is selectable only when it BLOCKS a named roadmap story**, and both the ledger
+   `justification` and the PR body must name that story in one sentence. *"It improves the gate"* is not that sentence.
+   **This clause now covers `PF-58+`, which the original did not — and that omission is where the leak was:** 91 of the
+   106 non-roadmap closures were `PF-58+`, not `TOOL-xx`, so the original clause 3 policed the smaller half.
+6. **RECORD, DON'T FIX, is the default for everything self-discovered.** Recording a `PF-58+`/`TOOL-xx` finding **is
+   already the win** — the ledger row preserves the knowledge and costs nothing. Fixing one costs a run that the
+   roadmap does not get. Fix it only under clause 5. A run that closes a self-discovered finding it merely *noticed*
+   while passing has spent roadmap capacity on convenience.
+7. **Report the ratio in Step 8, every run**, in this exact shape, so the drift stays visible:
+   `Roadmap findings closed/advanced this run: N · Tooling findings: M`. This is now a *receipt* for a decision already
+   recorded at Step 1, not the enforcement mechanism.
+
+**Why this is not a licence to skip real blockers.** Tooling that genuinely blocks the roadmap still gets fixed —
+clause 3 exists for exactly that, and 2026-08-13's gate work qualified under it: the probe-file race and the database
+address were the reason `S-E01-2b` (RLS, `PF-02`, a roadmap finding) had been unbuildable for seven runs, and it
+shipped the moment they were repaired. The rule forbids tooling *for its own sake*, not tooling *in service of a
+story*. The test is whether you can name the story.
+
 **On the very first run:** the eligible work is Sprint 01 (`V3-E02` and `V3-E06`) — start with `S-E02-1` (baseline
 migration + stop `db push`) unless it is already closed. `S-E02-3` is blocked on decision **D-01** and `S-E06-4`'s
-content half is blocked on **D-08**; report those rather than attempting them.
+content half is blocked on **D-08**; report those rather than attempting them. *(Historical: `S-E02-1` closed run 19.)*
+
+### STANDING DIRECTIVE — `V3-E03` IS THE CRITICAL PATH, AND SELECTION KEEPS MISSING IT
+
+> Added 2026-08-23 (run 77) by operator instruction, after the same measurement that rewrote RULE 0.
+> **This directive outranks selection rule 2** ("the first epic whose dependencies are all closed").
+
+**Measured:** `V3-E03` (canonical truth and query contracts) is **0 of 9 findings after 22 days and 77 runs** — the
+largest wholly untouched L0 epic. Over the same window `V3-E05` took **five slices in the final two days alone**.
+
+**Why that happened is a defect in the selection rule, not in anyone's judgement.** Rule 2 elects "the first epic whose
+dependencies are all closed", and an epic that has already been worked always *looks* more tractable — its stories are
+enumerated, its seams are familiar, and each landed slice raises fresh `PF-58+` findings inside the same epic that then
+present as the obvious next thing. Activity is self-perpetuating. `V3-E03` has no enumerated stories, so it never wins
+a comparison against an epic that does.
+
+**Why it is the critical path.** `V3-E03` is what **all 17 L1 findings read from** — assessments, grades, attendance,
+alerts and communications all consume the read projections E03 is meant to make canonical. L1 is 0/17 and cannot
+honestly start while one dataset still yields incompatible counts across portals (`PF-04`), the parent grades page
+returns zero (`PF-05`), and the snapshot queue has no consumer (`PF-24`). Every run spent elsewhere in L0 extends the
+same wait.
+
+**The directive.** Until `V3-E03` has at least **four** of its nine findings closed, a run that selects any *other*
+epic must justify that choice against `V3-E03` explicitly in the run log and in the ledger `justification` — naming
+which `V3-E03` story it examined and why that story is genuinely blocked. "Another epic was already in progress" is
+not a justification; it is the exact bias this directive exists to correct. `V3-E03`'s first job is enumeration: it has
+no story files, so the first slice is legitimately an `epic-spec` run.
 
 ## Step 2 — Verify dependencies and assumptions BEFORE changing anything
 
@@ -257,6 +387,35 @@ evidence is a **blocker**, exactly like a failed build.
 test is not yet possible (e.g. RLS not yet enabled), record an explicit `evidence: deferred — <reason> — tracked as
 <finding id>` line; that is honest and traceable. **Never record evidence you did not produce.**
 
+### EVIDENCE TIERS — the bar is graded by risk, and it is not optional to grade it
+
+> Added 2026-08-23 (run 77). **Cost per finding is a throughput variable, and it had drifted to one setting: maximum.**
+
+**The measurement.** Recent slices ship, uniformly: the fix, a derived allowlist, a repo-wide one-way ratchet with
+anti-vacuity floors and a negative control, an executed live probe against a rebuilt container, and a multi-section
+ADR. `S-E05-17` (run 77) did all five **for a missing enum guard on three query parameters**. That rigour is exactly
+right for an authorization seam. Applied to a stale link or a missing `safe()` wrapper it is a run spent on ceremony,
+and at 0.17 roadmap findings per run the routine cannot afford it.
+
+**Grade every finding before producing evidence. State the tier in the PR body.**
+
+| Tier | Applies to | Required | NOT required |
+|---|---|---|---|
+| **A — full rigour** | authZ/authN, tenancy, RLS, audit, migrations, finance, anything `BROKEN_SECURITY`, anything that changes a response code or a permission | everything in the gate table **plus** a one-way ratchet, an executed probe where a live seam exists, and an ADR | — |
+| **B — proportionate** | correctness, resilience, data-shape, pagination, N+1, error handling | a red-before/green-after test, the triggered gates, and an evidence line | a ratchet; a live probe; an ADR **unless a real judgement call was made** |
+| **C — cheap** | dead links, copy, cosmetics, docs drift, a missing wrapper with no reachable failure | one measurement or one test, whichever is cheaper, and the evidence line | a ratchet; a probe; an ADR; a story file |
+
+**Three rules that keep this from becoming a loophole.**
+
+1. **Tier A is not negotiable and not gradeable downward.** If the seam is in the Tier A list, it is Tier A even when
+   the diff is one line. The `PF-51` clause-3 fix *was* Tier A — it changed response codes on permission-guarded
+   routes — and shipping the ratchet is what let the row close as a class rather than as three sites.
+2. **A ratchet is still mandatory whenever a finding is closed as a CLASS rather than as a site.** The tier governs
+   how much *ceremony* a finding carries, never whether a closure claim is honest. If you cannot afford the ratchet,
+   close the site and leave the class open — say so.
+3. **Grading down is a decision and gets one sentence in the PR body.** "Tier C: no reachable failure path, so no
+   ratchet." A tier asserted without a reason is a Tier A finding wearing a disguise.
+
 ## Step 6 — Land, and update traceability
 
 Stage only the sprint's files. **Never `git add .claude/`.** Include untracked new files (specs/tests/stories).
@@ -335,6 +494,30 @@ Do not delete the local branch if the PR was left open. Run Step 7 on every path
 Output: story id and title, layer/epic, findings closed/advanced/discovered, **gate evidence table**, build result,
 typecheck result, branch, commit, PR link, merge decision, gate decision from Step 0, remaining risks, and the
 **recommended next story** with its blockers.
+
+**Plus, mandatory, one line — the RULE 0 ratio:**
+
+```
+Roadmap findings closed/advanced this run: N · Tooling findings (TOOL-xx, PF-58+): M
+```
+
+`N = 0` is permitted only when the run log demonstrates, story by story, that every unblocked roadmap candidate was
+blocked — or when RULE 0 clause 5 applies and the PR body names the roadmap story the tooling unblocks. Two consecutive
+runs reporting `N = 0` is a **rule violation**, not a statistic: say so in the report rather than letting the next run
+discover it.
+
+**Plus, mandatory, two more lines — the ledger receipt and the tier:**
+
+```
+Selection ledger: <the JSON line written at Step 1>  (written BEFORE the sprint, per RULE 0 clause 3)
+Evidence tier:    A | B | C — <one sentence of justification, per Step 5>
+```
+
+If the ledger entry you wrote at Step 1 turns out to disagree with what the run actually closed — you selected a
+roadmap finding and closed only self-discovered ones, or vice versa — **append a corrected entry rather than editing
+the original**, and say so here. The ledger is append-only: its value is that it records what was *intended* at
+selection time, which is the only moment the decision was still open. A ledger rewritten to match the outcome measures
+nothing.
 
 ---
 
