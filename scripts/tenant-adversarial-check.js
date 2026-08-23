@@ -126,6 +126,43 @@ const {
 const { postgresClient } = require('./lib/postgres-client-path');
 
 /**
+ * S-E01-1k / ADR-059 §D1 — THE LEXER IS IMPORTED, NOT DUPLICATED.
+ *
+ * `matchingParen` and its skip helpers used to be defined below. This slice needs
+ * the SAME lexer to walk a Prisma call's `{ … }` argument object and to find the
+ * balanced `Object.freeze( … )` of a TypeScript constant, so it was generalised
+ * over the three delimiter pairs and moved to `lib/js-source-scan.js`. When the
+ * character at the open index is `(` the behaviour is byte-for-byte what shipped;
+ * `matchingParen` survives as the name every existing caller and the gate spec
+ * already use. TOOL-39 is on the ledger because ONE matcher fed a docblock with
+ * an unbalanced parenthesis zeroed a whole file — two matchers would have made
+ * that failure plural.
+ */
+const {
+  matchingDelimiter,
+  matchingParen,
+  nextSignificantIndex,
+  objectLiteralProperties,
+  skipQuoted,
+  skipRegexLiteral,
+  skipTemplateLiteral,
+  startsRegexLiteral,
+} = require('./lib/js-source-scan');
+
+/**
+ * S-E01-1k / ADR-059 §D1-D2 — the two PURE parsers this slice's derivation reads
+ * its two sides from: the DECLARED closure out of `tenant-scope.ts` source, and
+ * the model -> table -> relation graph out of `schema.prisma`.
+ */
+const {
+  MIN_DECLARED_PAIRS,
+  PAIR_KEY_SEPARATOR,
+  isVacuousReason,
+  parseAppRoleRequiredPrivileges,
+} = require('./lib/app-role-closure');
+const { compareModelToTable, parsePrismaSchema } = require('./lib/prisma-schema-graph');
+
+/**
  * The sibling is REQUIRED, never edited (hard constraint 2). Its `main()` is
  * guarded by `require.main === module`, so this import creates no database.
  *
@@ -1827,6 +1864,20 @@ function sourceFiles(root) {
   return out;
 }
 
+/**
+ * S-E01-1k — a gate INPUT that is missing must READ as missing, not as empty.
+ * The caller turns `''` into a NAMED problem via the parsers' own anti-vacuity
+ * branches (`no-models`, `derived-policy-table-not-found`), which is the only
+ * reason returning a string here is safe.
+ */
+function readFileOrEmpty(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 /** `outbox_event` -> `outboxEvent`, the name Prisma's client exposes. */
 function prismaModelName(table) {
   return table.replace(/_([a-z0-9])/g, (_m, ch) => String(ch).toUpperCase());
@@ -1953,172 +2004,15 @@ const SCOPE_RECEIVERS = Object.freeze(['scope', 'this.scope', 'tenantScope', 'th
 const SCOPE_OPENING_RE =
   /(?<![.\w$])((?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*[A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(withTenant|run)\s*\(/g;
 
-/**
- * Where a `/` may legally begin a REGEX LITERAL rather than a division.
- *
- * This is the standard preceding-token heuristic, and it is here for one reason:
- * a `(` or `)` inside a regex literal must not move the brace matcher's depth.
- * The failure it prevents is not cosmetic — see `matchingParen`.
- */
-function startsRegexLiteral(previousSignificant) {
-  return previousSignificant === '' || '(,=:[!&|?{};+-*%^~<>'.includes(previousSignificant);
-}
-
-/** The closing quote of a `'…'` / `"…"` literal, or -1 if it does not close. */
-function skipQuoted(text, start, quote) {
-  for (let i = start + 1; i < text.length; i += 1) {
-    const c = text[i];
-    if (c === '\\') {
-      i += 1;
-      continue;
-    }
-    if (c === quote) return i;
-    // A newline inside a single/double-quoted literal means the lexer has lost
-    // its place. Bail rather than run to EOF: see `matchingParen`'s fail-closed
-    // rule.
-    if (c === '\n') return -1;
-  }
-  return -1;
-}
-
-/** The closing `/` of a regex literal, character classes included, or -1. */
-function skipRegexLiteral(text, start) {
-  for (let i = start + 1; i < text.length; i += 1) {
-    const c = text[i];
-    if (c === '\\') {
-      i += 1;
-      continue;
-    }
-    if (c === '[') {
-      // Inside a character class `/` and `)` are literal and `]` is the exit.
-      for (i += 1; i < text.length; i += 1) {
-        if (text[i] === '\\') {
-          i += 1;
-          continue;
-        }
-        if (text[i] === ']') break;
-        if (text[i] === '\n') return -1;
-      }
-      continue;
-    }
-    if (c === '/') return i;
-    if (c === '\n') return -1;
-  }
-  return -1;
-}
-
-/** The closing backtick of a template literal, `${…}` substitutions included. */
-function skipTemplateLiteral(text, start) {
-  for (let i = start + 1; i < text.length; i += 1) {
-    const c = text[i];
-    if (c === '\\') {
-      i += 1;
-      continue;
-    }
-    if (c === '`') return i;
-    if (c === '$' && text[i + 1] === '{') {
-      let depth = 1;
-      i += 2;
-      for (; i < text.length; i += 1) {
-        const d = text[i];
-        if (d === '\\') {
-          i += 1;
-          continue;
-        }
-        if (d === '`') {
-          const end = skipTemplateLiteral(text, i);
-          if (end === -1) return -1;
-          i = end;
-          continue;
-        }
-        if (d === "'" || d === '"') {
-          const end = skipQuoted(text, i, d);
-          if (end === -1) return -1;
-          i = end;
-          continue;
-        }
-        if (d === '{') depth += 1;
-        else if (d === '}') {
-          depth -= 1;
-          if (depth === 0) break;
-        }
-      }
-      if (i >= text.length) return -1;
-      continue;
-    }
-  }
-  return -1;
-}
-
-/**
- * The index of the `)` matching the `(` at `openIndex`, or **-1**.
- *
- * A NAIVE DEPTH COUNTER OVER RAW TEXT IS NOT SAFE HERE, and the unsafe direction
- * is the silent one:
- *
- *  - a `)` inside a string closes the range EARLY, so sites really inside it are
- *    reported uncovered — noisy, and therefore self-correcting;
- *  - a `(` inside a string, a regex or a comment NEVER closes, so the range runs
- *    to END OF FILE and **every remaining Prisma call site in that file counts as
- *    covered**. That is mass phantom coverage, expressed as a number, which no
- *    reviewer sees. It is a manufactured green with no author.
- *
- * So strings, template literals (including `${…}`), regex literals and both
- * comment forms are skipped, and an unbalanced result is **-1** rather than a
- * guess. The caller's rule for -1 is FAIL-CLOSED: the file is REPORTED and every
- * site in it counts UNCOVERED. Under-reporting coverage is a limit; over-reporting
- * it is a lie.
- */
-function matchingParen(text, openIndex) {
-  let depth = 0;
-  let previousSignificant = '';
-  for (let i = openIndex; i < text.length; i += 1) {
-    const c = text[i];
-    const next = text[i + 1];
-    if (c === '/' && next === '/') {
-      const eol = text.indexOf('\n', i);
-      if (eol === -1) return -1;
-      i = eol;
-      continue;
-    }
-    if (c === '/' && next === '*') {
-      const end = text.indexOf('*/', i + 2);
-      if (end === -1) return -1;
-      i = end + 1;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      const end = skipQuoted(text, i, c);
-      if (end === -1) return -1;
-      i = end;
-      previousSignificant = c;
-      continue;
-    }
-    if (c === '`') {
-      const end = skipTemplateLiteral(text, i);
-      if (end === -1) return -1;
-      i = end;
-      previousSignificant = '`';
-      continue;
-    }
-    if (c === '/' && startsRegexLiteral(previousSignificant)) {
-      const end = skipRegexLiteral(text, i);
-      if (end !== -1) {
-        i = end;
-        previousSignificant = '/';
-        continue;
-      }
-    }
-    if (c === '(') depth += 1;
-    else if (c === ')') {
-      depth -= 1;
-      if (depth === 0) return i;
-      if (depth < 0) return -1;
-    }
-    if (!/\s/.test(c)) previousSignificant = c;
-  }
-  return -1;
-}
+// S-E01-1k / ADR-059 §D1 — `startsRegexLiteral`, `skipQuoted`, `skipRegexLiteral`,
+// `skipTemplateLiteral` and `matchingParen` MOVED to `lib/js-source-scan.js`, and
+// are imported at the top of this file. NOT a rewrite: with `(` at the open index
+// the generalised matcher is byte-for-byte the shipped behaviour, and
+// `module.exports.matchingParen` still names the same function, so
+// `tenant-adversarial-gate.spec.ts` drives exactly the same branches. They moved
+// because this slice needs the SAME lexer for `{` and `[`, and a second matcher
+// would have been this slice own disease — TOOL-39 is on the ledger because ONE
+// matcher, fed a docblock with an unbalanced parenthesis, zeroed a whole file.
 
 /**
  * Every tenant-scope callback's byte range in one file, PURE.
@@ -2806,6 +2700,888 @@ function cutoverVerdict({
   };
 }
 
+// ---------------------------------------------------------------------------
+// S-E01-1k / PF-246 / PF-219 / ADR-059 — THE BOOT-PROBE PRIVILEGE CLOSURE STOPS
+// BEING HAND-WRITTEN AND BECOMES DERIVED.
+//
+// THE DEFECT, TWICE MEASURED. `APP_ROLE_REQUIRED_PRIVILEGES` in
+// `apps/api/src/shared/prisma/tenant-scope.ts` is the list `appRoleVerdict`
+// walks AT BOOT. It is hand-written, the code it describes is written
+// separately, and the two have already drifted twice: `S-E01-1i` sized its slice
+// at three grants and owed five (`assessment`, `term` — relation targets a
+// nested `select` traverses), and `S-E01-1j` then added seven more relation-deep
+// entries. A missing pair is neither a compile error nor a test failure: it is a
+// 42501 at request time, on exactly the deployments where the tenant scope
+// works. A pair declared but NOT held is worse — `appRoleVerdict` refuses the
+// application's SECOND connection globally, so admin, teacher, parent and
+// student fail simultaneously.
+//
+// THE RULE THIS FILE NOW ENFORCES: set equality, in BOTH directions, between the
+// list READ from `tenant-scope.ts` and a set DERIVED from the call sites the
+// tenant scope actually covers.
+//
+// THREE THINGS MAKE THE DERIVATION HONEST RATHER THAN HOPEFUL
+// -----------------------------------------------------------
+//  1. ATTRIBUTION IS POSITIONAL, and only `scoped` counts. A bare `tx.` grep is
+//     WRONG: `tx` is the callback parameter of BOTH `this.scope.run(id, async
+//     (tx) => …)` (app_user, RLS enforced) AND `this.prisma.$transaction(async
+//     (tx) => …)` (the OWNER client, which bypasses RLS). Measured:
+//     `remediation/booking.service.ts` opens an owner `$transaction` and issues
+//     `tx.booking.update` / `tx.booking.create` inside it. Those are OWNER
+//     writes; `booking.INSERT` / `booking.UPDATE` are NOT due, and the declared
+//     list is right to hold only `booking.SELECT`. A derivation without
+//     positional attribution emits all three phantoms — and `audit_log.INSERT`,
+//     whose grant IS held (measured), so the phantom would boot GREEN and be
+//     dead forever (TOOL-40).
+//  2. RELATION DEPTH IS WALKED. Under RLS a relation a `where` filter, a
+//     `select`, an `include`, an `orderBy` or a `_count.select` traverses is a
+//     table READ: Prisma issues its own query against the target and raises
+//     42501 without the privilege. That is PF-246 itself. A root-delegate-only
+//     derivation would be LESS complete than the hand list it replaces, and
+//     because the comparison runs in both directions, its blind spots would
+//     present as `dead-entry` — an invitation to delete a grant the runtime
+//     needs. So the walk resolves hoisted `const` arguments (measured: 20 call
+//     sites pass an identifier as `include:`/`select:`, eight of them
+//     `PLAN_INCLUDE` in `remediation.service.ts`), and anything it cannot
+//     resolve is a NAMED failure, never "no relations found" (DNC-08).
+//  3. `dead-entry` IS ASYMMETRIC WITH `undeclared-pair`, and the asymmetry is
+//     ENCODED, not commented. Derivation completeness is bounded by what a
+//     static walk can see; declaration completeness is bounded by what a human
+//     wrote. So an `undeclared-pair` is a defect in the DECLARATION and fails;
+//     a `dead-entry` is reported as `dead-entry-advisory` and fails too, but its
+//     detail states in words that removing the pair requires a MEASURED negative
+//     (REVOKE on a scratch database, handler still 200) and never the finding
+//     alone. And no `dead-entry` is emitted at all while any file failed to
+//     brace-match: fail closed TOWARD the declaration, which is the safe side.
+//
+// NO BYPASS (DNC-10). There is no env var, no CLI flag, no `SKIP_`, no warn-only
+// mode and no ratio floor anywhere below. The non-vacuity floors are WALLS.
+// ---------------------------------------------------------------------------
+
+/**
+ * The TOP-LEVEL keys of a Prisma call's argument object, as a CLOSED set with a
+ * disposition each. A key outside this set is a NAMED failure.
+ *
+ * An open set was the tempting shape and it is the wrong one: the failure mode
+ * of "handle the keys I know, ignore the rest" is that the next Prisma feature
+ * that traverses a relation (`orderBy` on a relation compiles to a JOIN, and
+ * therefore to a SELECT on the target) is silently invisible. `orderBy` is in
+ * this set for exactly that reason, measured at `student-portal.service.ts:227`
+ * (`orderBy: { assessment: { scheduledAt: 'desc' } }`) and `:361`
+ * (`orderBy: { classSession: { date: 'desc' } }`).
+ */
+const PRISMA_ARGUMENT_KEYS = Object.freeze({
+  // Traversed: their contents are resolved against the model's relation fields.
+  where: 'relation',
+  select: 'relation',
+  include: 'relation',
+  orderBy: 'relation',
+  having: 'relation',
+  omit: 'relation',
+  _count: 'relation',
+  // Scalar-only by construction: a `cursor` and a `distinct` name unique/scalar
+  // columns, `take`/`skip` are numbers, `by` is a list of scalar names.
+  take: 'inert',
+  skip: 'inert',
+  cursor: 'inert',
+  distinct: 'inert',
+  by: 'inert',
+  skipDuplicates: 'inert',
+  relationLoadStrategy: 'inert',
+  _sum: 'inert',
+  _avg: 'inert',
+  _min: 'inert',
+  _max: 'inert',
+  _all: 'inert',
+  // WRITE PAYLOADS. Grepped across the five converted modules: ZERO nested-write
+  // constructs today. So this is not a live gap — it is the NEXT PF-246, and it
+  // costs one entry in a closed set to pre-empt. `data: { child: { create: … } }`
+  // is an INSERT on another table; `connect` is a SELECT plus an UPDATE; a nested
+  // `deleteMany` is a DELETE. None of them is modelled here, so any of them is a
+  // NAMED failure rather than a silent zero.
+  data: 'write-payload',
+  create: 'write-payload',
+  update: 'write-payload',
+});
+
+/**
+ * The keys that appear INSIDE a relation container and mean "keep going on the
+ * same model": Prisma's logical operators and its relation-filter modifiers.
+ */
+const RELATION_MODIFIER_KEYS = Object.freeze([
+  'AND',
+  'OR',
+  'NOT',
+  'some',
+  'every',
+  'none',
+  'is',
+  'isNot',
+]);
+
+/**
+ * Nested-write constructs. Their presence under a write payload is refused, not
+ * modelled: see `PRISMA_ARGUMENT_KEYS.data`.
+ */
+const NESTED_WRITE_KEYS = Object.freeze([
+  'connect',
+  'connectOrCreate',
+  'createMany',
+  'disconnect',
+  'deleteMany',
+  'updateMany',
+  'upsert',
+]);
+
+/**
+ * PM-5 / PF-252 — THE RLS DERIVED-CHILD RULE, which NO call-site derivation can
+ * ever see, parsed from the migration that creates it rather than re-typed.
+ *
+ * `20260813180000_tenant_rls_derived_policies` gives five tables a policy whose
+ * predicate is `EXISTS (SELECT 1 FROM public.<parent> p WHERE p.id = <child>.<fk>
+ * AND p.tenant_id = <GUC>)`, evaluated AS THE INVOKING ROLE. So reading
+ * `announcement_receipt` requires `announcement.SELECT` THROUGH THE POLICY, on
+ * top of whatever the call site asks for. Today the closure is ACCIDENTALLY
+ * correct — `announcement.SELECT` is independently derivable — and the rule is
+ * written down nowhere. `import_row`, `branding` and `grade_revision` are one
+ * module conversion away from making that accident load-bearing.
+ *
+ * This is DERIVABLE, so it is derived and not excused: every derived pair on a
+ * child in that table also emits `(parent, 'SELECT')` with origin `policy`.
+ */
+function parseDerivedChildParents(sql) {
+  const parents = new Map();
+  const problems = [];
+  const text = String(sql ?? '');
+  const block = /derived\s+CONSTANT\s+text\[\]\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]\s*;/.exec(text);
+  if (block === null) {
+    problems.push({
+      kind: 'derived-policy-table-not-found',
+      detail:
+        'the derived-policy ARRAY of 20260813180000_tenant_rls_derived_policies could not be located. The ' +
+        'parent-SELECT rule would silently vanish, so the parse is refused rather than returned empty.',
+    });
+    return { parents, problems };
+  }
+  for (const row of block[1].matchAll(/ARRAY\[\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*\]/g)) {
+    parents.set(row[1], { parent: row[3], fk: row[2], privileges: row[4] });
+  }
+  if (parents.size === 0) {
+    problems.push({
+      kind: 'derived-policy-table-empty',
+      detail: 'zero (child, parent) rows parsed from a block that was found — refused (DNC-08).',
+    });
+  }
+  return { parents, problems };
+}
+
+/**
+ * AC-6 / AC-7 — pairs the derivation PROVABLY cannot see.
+ *
+ * EMPTY ON TODAY'S CORPUS, and that is the measured result, not an aspiration.
+ * The shape is kept because the first entry will need it, and the rules are the
+ * ones `tenant-scope.ts:159-164` already enforces on its own reasons: an entry
+ * must say WHY THE DERIVATION CANNOT SEE IT — never "allow this table" — and a
+ * reason that merely repeats the table or the verb is refused as vacuous. Every
+ * entry is a PF-247-class review obligation.
+ */
+const APP_ROLE_CLOSURE_EXCEPTIONS = Object.freeze([]);
+
+/**
+ * The non-vacuity floor on the DERIVED side. Measured on this checkout: 70
+ * scoped call sites across five converted modules. A derivation that returns an
+ * empty set is a green light that proves nothing — the exact shape of PF-02 — so
+ * this is a WALL, not a tunable threshold (DNC-10).
+ *
+ * WHY IT IS NOT CALLED `MIN_SCOPED_*` (renamed at land, run 69). It was, and the
+ * ratchet in `tenant-adversarial-gate.spec.ts` refused it:
+ * `expect(CHECKER_CODE).not.toMatch(/MIN_(?:SCOPED|COVERAGE|COVERED_CALL)/)`. That
+ * prohibition reserves the `MIN_SCOPED*` family for a COVERAGE FLOOR — "90 % of the
+ * corpus is converted, call it good" — which is a knob, and a knob here is a bypass
+ * flag wearing a different hat. This constant runs the OPPOSITE direction: it can
+ * only ever make the check FAIL (too few inputs for the comparison to mean
+ * anything), never let a partial conversion pass. Renaming was therefore ADOPTING
+ * THE RECEIVING CONVENTION — `MIN_DECLARED_PAIRS`, `MIN_CLASSIFIED_CALL_SITES` and
+ * `MIN_COVERED_TABLES` are the three non-vacuity floors that already live here, and
+ * all three are permitted — not evading the ratchet, which stays exactly as strict
+ * as it was. Relaxing that assertion to admit the old name was the forbidden move,
+ * and it is the one a hurry would have chosen.
+ */
+const MIN_CLOSURE_INPUT_SITES = 40;
+
+/** `table<NUL>PRIVILEGE`, the key shape `required` already uses. One shape, not two. */
+function closureKey(table, privilege) {
+  return `${table}${PAIR_KEY_SEPARATOR}${String(privilege).toUpperCase()}`;
+}
+
+/**
+ * DERIVE the closure from the corpus. PURE over `sources` (a list of
+ * `{ path, text }`) and a parsed schema graph: no filesystem, no database, no
+ * repository scan, so the gate spec drives every branch on synthetic input.
+ *
+ * Returns `{ derived, problems, scopedSites, sitesWalked, unbalancedFiles }`
+ * where `derived` is a Map keyed `table<NUL>PRIVILEGE` carrying
+ * `{ table, privilege, origin: 'root'|'relation'|'policy', example, via }`.
+ *
+ * IT RE-ATTRIBUTES NOTHING. `scopeCallbackRanges` and `classifyCallSite` are the
+ * SAME functions the coverage arithmetic uses, called the same way, so the
+ * `70 scoped / 120 enumerated / 818 corpus` triple is untouched by this slice.
+ */
+function derivePrivilegeClosure({ sources = [], schema = null, derivedChildParents = new Map() } = {}) {
+  const derived = new Map();
+  const problems = [];
+  let scopedSites = 0;
+  let sitesWalked = 0;
+  const unbalancedFiles = new Map();
+
+  if (schema === null || schema.byClientProperty === undefined || schema.byClientProperty.size === 0) {
+    problems.push({
+      kind: 'schema-unavailable',
+      detail:
+        'the schema graph is empty, so no relation could be resolved and no model could be mapped to a ' +
+        'table. Refused rather than returning an empty closure, which would report the whole declared ' +
+        'list as dead (DNC-08).',
+    });
+    return { derived, problems, scopedSites, sitesWalked, unbalancedFiles };
+  }
+
+  const note = (kind, where, detail) => problems.push({ kind, where, detail });
+
+  for (const source of sources) {
+    const relative = source.path;
+    const text = source.text;
+    const scopes = scopeCallbackRanges(text);
+    if (scopes.unbalanced > 0) {
+      unbalancedFiles.set(relative, scopes.unbalanced);
+      // The SAME fail-closed rule the coverage arithmetic uses: a file whose
+      // scope callbacks did not brace-match contributes ZERO. TOOL-39 fired
+      // exactly here once, on a docblock.
+      continue;
+    }
+    if (scopes.ranges.length === 0) continue;
+    const covers = (index) => scopes.ranges.some((range) => index > range.start && index < range.end);
+
+    const lineStarts = [0];
+    for (let i = 0; i < text.length; i += 1) if (text[i] === '\n') lineStarts.push(i + 1);
+    const lineOf = (index) => {
+      let low = 0;
+      let high = lineStarts.length - 1;
+      while (low < high) {
+        const mid = (low + high + 1) >> 1;
+        if (lineStarts[mid] <= index) low = mid;
+        else high = mid - 1;
+      }
+      return low + 1;
+    };
+
+    // Module-level `const NAME = { … }` / `const NAME: T = { … }`, indexed once
+    // per file. This is PF-250: `include: PLAN_INCLUDE` is used at eight scoped
+    // sites in `remediation.service.ts` and the constant is declared at line 21,
+    // OUTSIDE every scope range. A walker that reads only inline literals sees
+    // zero relations there and then reports `student.SELECT` and `subject.SELECT`
+    // — both correctly declared — as dead.
+    const hoisted = new Map();
+    for (const match of text.matchAll(/^(?:export\s+)?const\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::[^=\n]+)?=\s*/gm)) {
+      const at = nextSignificantIndex(text, match.index + match[0].length);
+      if (at !== -1 && text[at] === '{') hoisted.set(match[1], at);
+    }
+
+    for (const match of text.matchAll(PRISMA_CALL_SITE_RE)) {
+      const [, model, verb] = match;
+      const receiver = match[0].slice(0, match[0].length - (model.length + verb.length + 2));
+      const attribution = classifyCallSite(receiver, { covered: covers(match.index), enumerated: false });
+      // ONLY `scoped`. `owner-inside-scope`, `enumerated` and `uncovered` are all
+      // statements the tenant scope does not run, and crediting any of them is
+      // how the three phantom pairs of AC-1 appear.
+      if (attribution !== 'scoped') continue;
+      scopedSites += 1;
+      const where = `${relative}:${lineOf(match.index)}`;
+
+      const entry = schema.byClientProperty.get(model);
+      if (entry === undefined || entry.table === null) {
+        note(
+          'unmapped-model',
+          where,
+          `\`${model}\` is not a model of schema.prisma (or carries no @@map), so the table its statement ` +
+            'reads cannot be named. A scoped statement whose table is unknown is refused, never dropped.',
+        );
+        continue;
+      }
+      const privileges = privilegesForVerb(verb);
+      if (privileges === null) {
+        note(
+          'unknown-verb',
+          where,
+          `\`${model}.${verb}\` uses a verb outside VERB_PRIVILEGES, so the privilege it needs is unknown. ` +
+            'The failure mode of a lookup table is that a new verb quietly classifies as "needs nothing".',
+        );
+        continue;
+      }
+
+      const add = (table, privilege, origin, via) => {
+        const key = closureKey(table, privilege);
+        if (!derived.has(key)) {
+          derived.set(key, {
+            table,
+            privilege: String(privilege).toUpperCase(),
+            origin,
+            example: where,
+            via: via ?? null,
+            hits: 0,
+          });
+        }
+        derived.get(key).hits += 1;
+        // PF-252 — the policy's own read of the PARENT, which no call site can
+        // express. Emitted for the child's every privilege, once, with the
+        // migration named as its source.
+        const child = derivedChildParents.get(table);
+        if (child !== undefined) {
+          const parentKey = closureKey(child.parent, 'SELECT');
+          if (!derived.has(parentKey)) {
+            derived.set(parentKey, {
+              table: child.parent,
+              privilege: 'SELECT',
+              origin: 'policy',
+              example: where,
+              via: `RLS derived-child policy on ${table}.${child.fk}`,
+              hits: 0,
+            });
+          }
+          derived.get(parentKey).hits += 1;
+        }
+      };
+
+      for (const privilege of privileges) add(entry.table, privilege, 'root', null);
+
+      // ---- the ARGUMENT OBJECT ------------------------------------------
+      const afterCall = match.index + match[0].length;
+      const paren = nextSignificantIndex(text, afterCall);
+      if (paren === -1 || text[paren] !== '(') {
+        note(
+          'call-without-argument-list',
+          where,
+          `\`${model}.${verb}\` is not followed by an argument list this lexer can find. It may be a ` +
+            'property read rather than a call; either way the relations it would traverse are unknown.',
+        );
+        continue;
+      }
+      const argsClose = matchingDelimiter(text, paren);
+      if (argsClose === -1) {
+        note(
+          'unparseable-argument',
+          where,
+          `the argument list of \`${model}.${verb}\` does not close. Fail-closed: an unbalanced range ` +
+            'would otherwise be read to end of file.',
+        );
+        continue;
+      }
+      const argStart = nextSignificantIndex(text, paren + 1);
+      if (argStart === -1 || argStart >= argsClose) {
+        sitesWalked += 1;
+        continue; // `findMany()` — no argument, therefore no relation.
+      }
+      sitesWalked += 1;
+
+      const seenConsts = new Set();
+      const resolveObject = (index, kind) => {
+        if (text[index] === '{') return index;
+        const raw = text.slice(index, argsClose).trim();
+        const ident = /^([A-Za-z_$][A-Za-z0-9_$]*)\s*[,)\s]?$/.exec(raw);
+        const name = ident === null ? null : ident[1];
+        if (name !== null && hoisted.has(name) && !seenConsts.has(name)) {
+          seenConsts.add(name);
+          return hoisted.get(name);
+        }
+        note(
+          'unresolvable-argument-reference',
+          where,
+          `the ${kind} of \`${model}.${verb}\` is \`${raw.slice(0, 40)}\`, which this walker cannot resolve ` +
+            'to an object literal. It is NAMED rather than read as "no relations found" — the silent ' +
+            'branch is how a correctly declared pair becomes a phantom dead-entry (PF-250).',
+        );
+        return -1;
+      };
+
+      /**
+       * The object literal(s) a property's value stands for — a LIST, because a
+       * value is not always one literal and pretending it is loses relations.
+       *
+       * Three shapes, all measured on this corpus:
+       *  - an inline `{ … }`                                    -> itself;
+       *  - a hoisted `const NAME = { … }` (PF-250, 20 sites)    -> the constant;
+       *  - an EXPRESSION that CONTAINS object literals, e.g.
+       *    `...(args.schoolId ? { schoolId } : {})` and
+       *    `OR: instanceList.map((i) => ({ … }))`               -> each literal.
+       *
+       * The third is conservative in the SAFE direction: walking a literal that
+       * turns out not to be a Prisma argument can only produce a NAMED
+       * `unknown-field-in-argument`, never a missing grant. An expression with NO
+       * literal in it at all is refused (DNC-08) — that is the branch where a
+       * relation could genuinely hide.
+       */
+      const resolveValues = (property, kind) => {
+        if (property.valueKind === 'object') return [property.valueStart];
+        const raw = String(property.text ?? '').trim();
+        if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(raw)) {
+          if (hoisted.has(raw)) {
+            if (seenConsts.has(raw)) return [];
+            seenConsts.add(raw);
+            return [hoisted.get(raw)];
+          }
+          note(
+            'unresolvable-argument-reference',
+            where,
+            `\`${property.key ?? '...'}\` under ${kind} of \`${model}.${verb}\` is the identifier ` +
+              `\`${raw}\`, which is not a module-level object constant of this file. It is NAMED rather ` +
+              'than read as "no relations found" — the silent branch is how a correctly declared pair ' +
+              'becomes a phantom dead-entry (PF-250).',
+          );
+          return [];
+        }
+        const inner = expressionObjectStarts(text, property.valueStart, property.valueEnd);
+        if (inner.length > 0) return inner;
+        note(
+          'unresolvable-argument-reference',
+          where,
+          `\`${property.key ?? '...'}\` under ${kind} of \`${model}.${verb}\` is a ` +
+            `${property.valueKind} (\`${raw.slice(0, 60)}\`) holding no object literal this walker can ` +
+            'read (DNC-08).',
+        );
+        return [];
+      };
+
+      /** Walk one relation container against `currentModel`. */
+      const walkRelations = (openIndex, currentModel, depth, via) => {
+        if (depth > 12) {
+          note('relation-depth-exceeded', where, `relation descent past depth 12 at \`${via}\` — refused`);
+          return;
+        }
+        const literal = objectLiteralProperties(text, openIndex);
+        if (literal.close === -1 || literal.problems.length > 0) {
+          note(
+            'unparseable-argument',
+            where,
+            `the object at \`${via || model}\` could not be read: ` +
+              (literal.problems.map((p) => p.kind).join(', ') || 'it does not close'),
+          );
+          return;
+        }
+        for (const property of literal.properties) {
+          if (property.valueKind === 'spread') {
+            for (const target of resolveValues(property, 'a spread')) {
+              walkRelations(target, currentModel, depth + 1, via);
+            }
+            continue;
+          }
+          const key = property.key;
+          if (key === null || property.computed) {
+            note(
+              'unparseable-argument',
+              where,
+              `a ${property.computed ? 'computed' : 'nameless'} key under \`${via || model}\` cannot be ` +
+                'resolved to a field or an operator',
+            );
+            continue;
+          }
+          const field = currentModel.fields.get(key);
+          if (field !== undefined && field.isRelation) {
+            const target = schema.models.get(field.type);
+            if (target === undefined || target.table === null) {
+              note(
+                'unmapped-relation-target',
+                where,
+                `\`${via}${key}\` targets model \`${field.type}\`, which carries no table. A relation whose ` +
+                  'target cannot be named is refused (DNC-08).',
+              );
+              continue;
+            }
+            add(target.table, 'SELECT', 'relation', `${via}${key}`);
+            if (property.valueKind === 'literal' || property.valueKind === 'shorthand') continue;
+            for (const nested of resolveValues(property, 'a relation')) {
+              walkRelations(nested, target, depth + 1, `${via}${key}.`);
+            }
+            continue;
+          }
+          if (field !== undefined) continue; // a scalar field and its filter operators
+          // A COMPOUND unique / id key (`@@unique([a, b])` -> `a_b`) is a scalar
+          // lookup Prisma synthesises; it names no column and no relation.
+          if (currentModel.compoundKeys !== undefined && currentModel.compoundKeys.has(key)) continue;
+          if (RELATION_MODIFIER_KEYS.includes(key) || PRISMA_ARGUMENT_KEYS[key] === 'relation') {
+            if (property.valueKind === 'literal' || property.valueKind === 'shorthand') continue;
+            if (property.valueKind === 'array') {
+              for (const element of arrayObjectStarts(text, property.valueStart)) {
+                walkRelations(element, currentModel, depth + 1, via);
+              }
+              continue;
+            }
+            for (const nested of resolveValues(property, `\`${key}\``)) {
+              walkRelations(nested, currentModel, depth + 1, via);
+            }
+            continue;
+          }
+          if (PRISMA_ARGUMENT_KEYS[key] === 'inert') continue;
+          if (PRISMA_ARGUMENT_KEYS[key] === 'write-payload') {
+            refuseNestedWrite(property, key);
+            continue;
+          }
+          note(
+            'unknown-field-in-argument',
+            where,
+            `\`${via}${key}\` is neither a field of \`${currentModel.name}\` nor a Prisma operator this ` +
+              'closed set models. An unmodelled key is where a traversed relation goes missing.',
+          );
+        }
+      };
+
+      const refuseNestedWrite = (property, key) => {
+        const body = text.slice(property.valueStart, property.valueEnd);
+        const found = NESTED_WRITE_KEYS.filter((k) => new RegExp(`\\b${k}\\s*:`).test(body));
+        if (found.length === 0) return;
+        note(
+          'nested-write-under-payload',
+          where,
+          `\`${key}\` of \`${model}.${verb}\` contains ${found.join(', ')} — a NESTED WRITE, which touches a ` +
+            'table other than the root and whose privileges this walker does not model. Grepped across the ' +
+            'five converted modules at aaff53b: zero such constructs. It is refused rather than modelled ' +
+            'so the next one cannot land silently.',
+        );
+      };
+
+      // ---- top level: argument keys only, never fields --------------------
+      const rootObject = resolveObject(argStart, 'argument');
+      if (rootObject === -1) continue;
+      const top = objectLiteralProperties(text, rootObject);
+      if (top.close === -1 || top.problems.length > 0) {
+        note(
+          'unparseable-argument',
+          where,
+          `the argument object of \`${model}.${verb}\` could not be read: ` +
+            (top.problems.map((p) => p.kind).join(', ') || 'it does not close'),
+        );
+        continue;
+      }
+      for (const property of top.properties) {
+        if (property.valueKind === 'spread') {
+          for (const target of resolveValues(property, 'a spread')) {
+            const spread = objectLiteralProperties(text, target);
+            for (const inner of spread.properties) top.properties.push(inner);
+          }
+          continue;
+        }
+        const key = property.key;
+        if (key === null || property.computed) {
+          note('unparseable-argument', where, `a computed or nameless top-level argument key on \`${model}.${verb}\``);
+          continue;
+        }
+        const disposition = PRISMA_ARGUMENT_KEYS[key];
+        if (disposition === undefined) {
+          note(
+            'unknown-argument-key',
+            where,
+            `\`${key}\` is not in the CLOSED set of Prisma argument keys. Handling only the keys we know and ` +
+              'ignoring the rest is how a relation-traversing feature becomes invisible.',
+          );
+          continue;
+        }
+        if (disposition === 'inert') continue;
+        if (disposition === 'write-payload') {
+          refuseNestedWrite(property, key);
+          continue;
+        }
+        if (property.valueKind === 'literal' || property.valueKind === 'shorthand') continue;
+        if (property.valueKind === 'array') {
+          for (const element of arrayObjectStarts(text, property.valueStart)) {
+            walkRelations(element, entry, 1, `${key}.`);
+          }
+          continue;
+        }
+        for (const nested of resolveValues(property, `\`${key}\``)) {
+          walkRelations(nested, entry, 1, `${key}.`);
+        }
+      }
+    }
+  }
+
+  // THE NON-VACUITY FLOORS LIVE IN `privilegeClosureDrift`, NOT HERE, and the
+  // placement is the decision. This function MEASURES a corpus; the floors are a
+  // property of the COMPARISON — the one place the verdict funnels through. Put
+  // here they would fire on every unit fixture, which would either make the gate
+  // spec unable to drive the walker at all, or invite someone to lower them.
+  // `scopedSites` is returned so the caller can apply them once, as a WALL.
+  return { derived, problems, scopedSites, sitesWalked, unbalancedFiles };
+}
+
+/**
+ * The `{` of every OUTERMOST object literal inside `[start, end)`.
+ *
+ * This is how an EXPRESSION-valued argument is read rather than refused:
+ * `...(args.schoolId ? { schoolId } : {})` yields two literals,
+ * `instanceList.map((i) => ({ availabilityId, sessionAt }))` yields one. Both are
+ * measured on this corpus. The walk stops descending once it enters a literal,
+ * so nested objects are the callee's business, not this helper's.
+ *
+ * It is deliberately conservative in the SAFE direction: a literal that is not a
+ * Prisma argument at all produces a NAMED `unknown-field-in-argument`, never a
+ * missing grant. An expression holding NO literal returns `[]`, and the caller
+ * turns that into a fail-closed finding.
+ */
+function expressionObjectStarts(text, start, end) {
+  const out = [];
+  let i = start;
+  while (i < end) {
+    const at = nextSignificantIndex(text, i);
+    if (at === -1 || at >= end) break;
+    const c = text[at];
+    if (c === '{') {
+      out.push(at);
+      const close = matchingDelimiter(text, at);
+      if (close === -1) break;
+      i = close + 1;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      const close = skipQuoted(text, at, c);
+      if (close === -1) break;
+      i = close + 1;
+      continue;
+    }
+    if (c === '`') {
+      const close = skipTemplateLiteral(text, at);
+      if (close === -1) break;
+      i = close + 1;
+      continue;
+    }
+    i = at + 1;
+  }
+  return out;
+}
+
+/** The `{` of every object element of the array literal at `openIndex`. */
+function arrayObjectStarts(text, openIndex) {
+  const out = [];
+  const close = matchingDelimiter(text, openIndex);
+  if (close === -1) return out;
+  let i = openIndex + 1;
+  while (i < close) {
+    const at = nextSignificantIndex(text, i);
+    if (at === -1 || at >= close) break;
+    const c = text[at];
+    if (c === '{') {
+      out.push(at);
+      const end = matchingDelimiter(text, at);
+      if (end === -1) break;
+      i = end + 1;
+      continue;
+    }
+    if (c === '[' || c === '(') {
+      const end = matchingDelimiter(text, at);
+      if (end === -1) break;
+      i = end + 1;
+      continue;
+    }
+    i = at + 1;
+  }
+  return out;
+}
+
+/**
+ * ADR-051 §D2's shape, one layer up: compare the DECLARED closure against the
+ * DERIVED one and return a LIST of NAMED findings, never a boolean.
+ *
+ * PURE, so `tenant-adversarial-gate.spec.ts` drives every kind to RED on
+ * synthetic input with no repository scan and no database — the same reason
+ * `enumerationDrift` is pure.
+ *
+ * Kinds:
+ *  - `undeclared-pair`         a scoped statement needs it, the list does not hold it
+ *  - `dead-entry-advisory`     the list holds it, the derivation never saw it
+ *  - `entry-without-reason`    a declared pair whose `why` is absent or vacuous
+ *  - `unparseable-argument`    a construct the walker refuses to read (DNC-08)
+ *  - `unmapped-relation-target` a relation whose target carries no table
+ *  - `exception-without-reason` an AC-6 exception that says nothing
+ *  - `dead-exception`          an exception for a pair the derivation now sees
+ *  - `vacuous-comparison`      either side is empty or below its floor
+ *  - `unbalanced-scope-file`   a file failed to brace-match, so no dead-entry is claimed
+ *
+ * SET, not multiset: a second call site needing the same privilege is not a
+ * second obligation. `enumerationDrift` compares multisets because a second
+ * EXCUSE for the same statement is a real widening; a second NEED for the same
+ * grant is the same grant.
+ */
+function privilegeClosureDrift({
+  declared = [],
+  declaredProblems = [],
+  derived = new Map(),
+  derivedProblems = [],
+  exceptions = APP_ROLE_CLOSURE_EXCEPTIONS,
+  unbalancedFiles = new Map(),
+  scopedSites = 0,
+} = {}) {
+  const findings = [];
+  const declaredList = Array.isArray(declared) ? declared : [];
+  const derivedMap = derived instanceof Map ? derived : new Map();
+
+  // ---- the two parsers' own refusals come first, and they are the loudest.
+  for (const problem of Array.isArray(declaredProblems) ? declaredProblems : []) {
+    findings.push({
+      kind: problem.kind === 'entry-without-reason' || problem.kind === 'entry-with-vacuous-reason'
+        ? 'entry-without-reason'
+        : 'declared-list-unreadable',
+      pair: problem.table ? `${problem.table}.${problem.privilege}` : null,
+      detail: problem.detail ?? problem.kind,
+    });
+  }
+  for (const problem of Array.isArray(derivedProblems) ? derivedProblems : []) {
+    const kind =
+      problem.kind === 'unmapped-relation-target'
+        ? 'unmapped-relation-target'
+        : problem.kind === 'unparseable-argument' ||
+            problem.kind === 'unresolvable-argument-reference' ||
+            problem.kind === 'unknown-argument-key' ||
+            problem.kind === 'unknown-field-in-argument' ||
+            problem.kind === 'nested-write-under-payload' ||
+            problem.kind === 'call-without-argument-list' ||
+            problem.kind === 'unknown-verb' ||
+            problem.kind === 'unmapped-model' ||
+            problem.kind === 'relation-depth-exceeded'
+          ? 'unparseable-argument'
+          : 'vacuous-comparison';
+    findings.push({ kind, pair: problem.where ?? null, detail: `[${problem.kind}] ${problem.detail}` });
+  }
+
+  // ---- non-vacuity, in BOTH directions, BEFORE any comparison.
+  if (declaredList.length < MIN_DECLARED_PAIRS) {
+    findings.push({
+      kind: 'vacuous-comparison',
+      pair: null,
+      detail:
+        `only ${declaredList.length} declared pair(s) were read, below the floor of ${MIN_DECLARED_PAIRS}. ` +
+        'A parser that silently returns [] is a green light that proves nothing (AC-4).',
+    });
+  }
+  if (scopedSites < MIN_CLOSURE_INPUT_SITES) {
+    findings.push({
+      kind: 'vacuous-comparison',
+      pair: null,
+      detail:
+        `only ${scopedSites} scoped call site(s) fed the derivation, below the floor of ` +
+        `${MIN_CLOSURE_INPUT_SITES}. Measured at aaff53b: 70.`,
+    });
+  }
+
+  // ---- the AC-6 exceptions are checked BEFORE they are trusted.
+  const excused = new Map();
+  for (const exception of Array.isArray(exceptions) ? exceptions : []) {
+    const table = exception && typeof exception === 'object' ? exception.table : undefined;
+    const privilege = exception && typeof exception === 'object' ? exception.privilege : undefined;
+    const why = exception && typeof exception === 'object' ? exception.why : undefined;
+    if (typeof table !== 'string' || typeof privilege !== 'string') {
+      findings.push({
+        kind: 'exception-without-reason',
+        pair: null,
+        detail: `${JSON.stringify(exception)} carries no (table, privilege) to excuse`,
+      });
+      continue;
+    }
+    const pair = `${table}.${privilege}`;
+    if (typeof why !== 'string' || why.trim().length === 0 || isVacuousReason(why, table, privilege)) {
+      findings.push({
+        kind: 'exception-without-reason',
+        pair,
+        detail:
+          `${pair} is excused with ${JSON.stringify(why ?? null)}. An exception must say WHY THE DERIVATION ` +
+          'CANNOT SEE IT — a blanket allowance, or a reason that repeats the table or the verb, is refused ' +
+          'by the same anti-vacuity rule as tenant-scope.ts:159-164.',
+      });
+      continue;
+    }
+    const key = closureKey(table, privilege);
+    if (derivedMap.has(key)) {
+      findings.push({
+        kind: 'dead-exception',
+        pair,
+        detail:
+          `${pair} is excused as invisible to the derivation, but the derivation now SEES it ` +
+          `(${derivedMap.get(key).origin}, e.g. ${derivedMap.get(key).example}). A dead exception is an ` +
+          'excuse kept alive after the mechanism that needed it was built.',
+      });
+      continue;
+    }
+    excused.set(key, exception);
+  }
+
+  // ---- direction 1: DERIVED -> DECLARED. A defect in the DECLARATION.
+  const declaredKeys = new Map();
+  for (const pair of declaredList) {
+    const key = closureKey(pair.table, pair.privilege);
+    declaredKeys.set(key, pair);
+    if (typeof pair.why !== 'string' || pair.why.trim().length === 0 || isVacuousReason(pair.why, pair.table, pair.privilege)) {
+      findings.push({
+        kind: 'entry-without-reason',
+        pair: `${pair.table}.${pair.privilege}`,
+        detail: 'the declared entry carries no non-vacuous reason; this list is a list of REASONS',
+      });
+    }
+  }
+  for (const [key, entry] of derivedMap) {
+    if (declaredKeys.has(key)) continue;
+    if (excused.has(key)) continue;
+    findings.push({
+      kind: 'undeclared-pair',
+      pair: `${entry.table}.${entry.privilege}`,
+      detail:
+        `a scoped statement needs ${entry.table}.${entry.privilege} (${entry.origin}` +
+        `${entry.via ? ` via ${entry.via}` : ''}, e.g. ${entry.example}, ${entry.hits} site(s)) and ` +
+        'APP_ROLE_REQUIRED_PRIVILEGES does not declare it. appRoleVerdict would certify `enforcing: true` ' +
+        'over a closure it never checked, and every request on that path would raise 42501.',
+    });
+  }
+
+  // ---- direction 2: DECLARED -> DERIVED, and it is DELIBERATELY ASYMMETRIC.
+  //
+  // PM-1 / PF-249: derivation completeness is bounded by what a static walk can
+  // see; declaration completeness is bounded by what a human wrote. So a
+  // `dead-entry` means "the walker did not see it" at least as often as "nobody
+  // needs it", and DELETING one on the strength of the finding alone is a
+  // silent, boot-green, runtime-42501 outage across all four portals. The
+  // finding therefore FAILS the check (it must be resolved) but its detail
+  // states the removal bar: a MEASURED negative, never the finding alone.
+  //
+  // And no `dead-entry` is claimed at all while a file failed to brace-match:
+  // `covers()` is fail-closed PER FILE, so one stray `.run(` in a docblock makes
+  // a whole module contribute zero and turns its pairs dead (TOOL-39 fired
+  // exactly this way). Fail closed TOWARD the declaration — the safe side.
+  if (unbalancedFiles instanceof Map && unbalancedFiles.size > 0) {
+    findings.push({
+      kind: 'unbalanced-scope-file',
+      pair: null,
+      detail:
+        `${unbalancedFiles.size} file(s) hold a scope call whose callback did not close: ` +
+        [...unbalancedFiles.keys()].join(', ') +
+        '. Their statements contribute NOTHING to the derivation, so no `dead-entry` may be claimed while ' +
+        'this is non-empty — a whole module would otherwise present as dead grants.',
+    });
+  } else {
+    for (const [key, pair] of declaredKeys) {
+      if (derivedMap.has(key)) continue;
+      if (excused.has(key)) continue;
+      findings.push({
+        kind: 'dead-entry-advisory',
+        pair: `${pair.table}.${pair.privilege}`,
+        detail:
+          `APP_ROLE_REQUIRED_PRIVILEGES declares ${pair.table}.${pair.privilege} and the derivation sees no ` +
+          'scoped statement needing it. RESOLVE IT, BUT DO NOT DELETE IT ON THIS FINDING ALONE: removal ' +
+          'requires a MEASURED negative (REVOKE on a scratch database and the module’s handler still ' +
+          '200). Either the pair is genuinely dead, or the walker is blind to the construct that needs it ' +
+          '— and the second case is a 42501 on four portals. Declared reason: ' +
+          String(pair.why ?? '').slice(0, 160),
+      });
+    }
+  }
+
+  return findings;
+}
+
 /**
  * S-E01-1c / TOOL-32 — the scan.
  *
@@ -2855,6 +3631,14 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
   const unknownVerbs = new Map();
   const unmappedModels = new Map();
   const foreignReceivers = new Map();
+  /**
+   * S-E01-1k — the corpus, kept as `{ path, text }` so `derivePrivilegeClosure`
+   * runs on the SAME bytes this loop attributed, with no second read and no
+   * second walk of the tree. The derivation is a separate PURE function rather
+   * than more code in this loop for the reason `enumerationDrift` is: the gate
+   * spec has to be able to drive it on synthetic input.
+   */
+  const sources = [];
 
   for (const file of files) {
     let text;
@@ -2864,6 +3648,7 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
       continue;
     }
     const relative = file.slice(REPO_ROOT.length + 1).split('\\').join('/');
+    sources.push({ path: relative, text });
 
     // S-E01-1d (b) — ATTRIBUTION, not occurrence counting. The ranges are
     // computed once per file; `covers()` is a linear scan over a list that holds
@@ -2984,8 +3769,91 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
   }
   unsatisfied.sort((a, b) => (a.table + a.privilege).localeCompare(b.table + b.privilege));
 
+  // -------------------------------------------------------------------------
+  // S-E01-1k — THE DERIVED CLOSURE, and the comparison PF-246 exists to buy.
+  //
+  // Everything below reads SOURCE only: `schema.prisma` for the model -> table
+  // -> relation graph, the derived-policy migration for the parent-SELECT rule,
+  // and `tenant-scope.ts` for the declared list — the same bytes this loop just
+  // walked, taken out of `sources` rather than read a second time. The live
+  // catalog is used ONLY as a cross-check (`compareModelToTable`), never as the
+  // mapping the derivation depends on: a derivation coupled to a running
+  // database cannot run where the drift is introduced (TOOL-40).
+  // -------------------------------------------------------------------------
+  const schemaPath = join(REPO_ROOT, 'apps', 'api', 'prisma', 'schema.prisma');
+  const schemaText = readFileOrEmpty(schemaPath);
+  const schema = parsePrismaSchema(schemaText);
+  const schemaCatalogDrift = compareModelToTable(schema.modelToTable, knownTables);
+  const derivedPolicySql = readFileOrEmpty(
+    join(
+      REPO_ROOT,
+      'apps',
+      'api',
+      'prisma',
+      'migrations',
+      '20260813180000_tenant_rls_derived_policies',
+      'migration.sql',
+    ),
+  );
+  const childPolicies = parseDerivedChildParents(derivedPolicySql);
+  const closure = derivePrivilegeClosure({
+    sources,
+    schema,
+    derivedChildParents: childPolicies.parents,
+  });
+  const declaredSource = sources.find((s) => s.path === 'apps/api/src/shared/prisma/tenant-scope.ts');
+  const declaredRead =
+    declaredSource === undefined
+      ? {
+          pairs: [],
+          problems: [
+            {
+              kind: 'declared-source-not-in-corpus',
+              detail:
+                'apps/api/src/shared/prisma/tenant-scope.ts was not among the walked sources, so the ' +
+                'declared closure could not be READ. It is never read from apps/api/dist — agents do not ' +
+                'build, so dist is stale by construction and would pass while the source drifts.',
+            },
+          ],
+        }
+      : parseAppRoleRequiredPrivileges(declaredSource.text);
+  const closureDrift = privilegeClosureDrift({
+    declared: declaredRead.pairs,
+    declaredProblems: declaredRead.problems,
+    derived: closure.derived,
+    // S-E01-1k review / PF-252 — `parseDerivedChildParents` BUILDS a `problems`
+    // array and its own docblock says the parse "is refused rather than returned
+    // empty" (DNC-08), but until this line only `.parents` was ever read. The
+    // refusal was therefore UNREACHABLE: feeding the parser an empty string —
+    // exactly what `readFileOrEmpty` returns when that ONE hard-coded migration
+    // directory is renamed, squashed or relocated — yields
+    // `derived-policy-table-not-found`, zero parents, and a comparison that still
+    // returned [] and printed GREEN with the PF-252 parent-SELECT rule silently
+    // disarmed. Four reviewers reproduced it independently. An unrecognised kind
+    // falls through to `vacuous-comparison`, which fails — which is the point: a
+    // fail-closed contract that no caller consumes is not fail-closed at all.
+    derivedProblems: [...closure.problems, ...childPolicies.problems],
+    exceptions: APP_ROLE_CLOSURE_EXCEPTIONS,
+    unbalancedFiles: closure.unbalancedFiles,
+    scopedSites: closure.scopedSites,
+  });
+
   return {
     files: files.length,
+    declaredPrivileges: declaredRead.pairs,
+    declaredPrivilegeProblems: declaredRead.problems,
+    derivedPrivileges: closure.derived,
+    derivedPrivilegeProblems: closure.problems,
+    derivedScopedSites: closure.scopedSites,
+    derivedSitesWalked: closure.sitesWalked,
+    derivedChildParents: childPolicies.parents,
+    /** PF-252 — returned so the refusal is INSPECTABLE, not merely consumed above. */
+    derivedChildParentProblems: childPolicies.problems,
+    schemaModels: schema.models.size,
+    schemaProblems: schema.problems,
+    schemaCatalogDrift,
+    closureExceptions: APP_ROLE_CLOSURE_EXCEPTIONS,
+    closureDrift,
     scopedCallSites,
     enumeratedCallSites,
     enumeratedByGlob,
@@ -3729,6 +4597,109 @@ $mut$;`;
       );
     }
 
+    // ---- 14a-bis. S-E01-1k / PF-246 / PF-219 / ADR-059 — THE BOOT-PROBE
+    //      PRIVILEGE CLOSURE, DERIVED AND COMPARED IN BOTH DIRECTIONS.
+    //
+    //      This block is the slice. It is a `fail`, never a `[LIMIT]`: a note
+    //      nobody fails on would reproduce PF-02 INSIDE the mechanism built to
+    //      close it — the guardrail claimed, the guardrail absent.
+    //
+    //      NON-VACUITY IS ASSERTED BEFORE THE COMPARISON IS BELIEVED, on both
+    //      sides and on both parsers, because every one of them has an empty
+    //      answer that would read as green.
+    if (readiness.schemaProblems.length > 0) {
+      for (const problem of readiness.schemaProblems) {
+        fail(
+          `AC-9 S-E01-1k the schema graph parsed cleanly: [${problem.kind}] ${problem.model ?? ''}`,
+          problem.detail ?? JSON.stringify(problem),
+        );
+      }
+    } else {
+      record(
+        'AC-9 S-E01-1k the model -> table -> relation graph is DERIVED from schema.prisma (ADR-059 §D2)',
+        `${readiness.schemaModels} models parsed, every one carrying @@map. ` +
+          `${readiness.derivedChildParents.size} RLS derived-child policies read from the migration that ` +
+          'creates them, so the parent-SELECT each policy predicate needs is DERIVED and not excused.',
+      );
+    }
+    // ADR-042 §D3 — the schema-derived mapping and the LIVE-CATALOG-derived one
+    // are two derivations of ONE fact. They are compared, and a disagreement is
+    // NAMED rather than silently resolved in either side's favour: `role_permission`
+    // is on the ledger because that preference was made once already.
+    if (readiness.schemaCatalogDrift.length > 0) {
+      for (const finding of readiness.schemaCatalogDrift) {
+        fail(
+          `AC-9 S-E01-1k schema.prisma and the live catalog agree on ${finding.table}: [${finding.kind}]`,
+          finding.detail,
+        );
+      }
+    } else {
+      record(
+        'AC-9 S-E01-1k schema.prisma and the LIVE CATALOG agree on every model -> table pair (ADR-042 §D3)',
+        `${readiness.schemaModels} models cross-checked against ${allTables.length} catalog tables; the ` +
+          'schema is the mapping the derivation uses and the catalog is the CROSS-CHECK, never the other ' +
+          'way round — a derivation coupled to a running database cannot run where the drift is introduced.',
+      );
+    }
+    if (readiness.closureDrift.length > 0) {
+      for (const finding of readiness.closureDrift) {
+        fail(
+          `AC-9 S-E01-1k PF-246 the boot-probe closure is DERIVED and MATCHES: [${finding.kind}]` +
+            (finding.pair ? ` ${finding.pair}` : ''),
+          finding.detail,
+        );
+      }
+    } else {
+      record(
+        'AC-9 S-E01-1k PF-246/PF-219 the boot-probe privilege closure is DERIVED, not hand-written (ADR-059)',
+        `${readiness.declaredPrivileges.length} declared pair(s) READ from ` +
+          'apps/api/src/shared/prisma/tenant-scope.ts (never from apps/api/dist, which is stale by ' +
+          `construction because agents do not build) === ${readiness.derivedPrivileges.size} pair(s) DERIVED ` +
+          `from ${readiness.derivedScopedSites} call sites attributed EXACTLY \`scoped\` across ` +
+          `${readiness.files} source files, ${readiness.derivedSitesWalked} of them argument-walked. Set ` +
+          'equality holds in BOTH directions: an undeclared pair fails, a dead entry fails. Relation depth ' +
+          'is WALKED — a relation a where/select/include/orderBy/_count traverses is a table READ under ' +
+          `RLS — and ${readiness.closureExceptions.length} exception(s) are claimed. No ratio floor, no env ` +
+          'flag, no warn-only mode: the non-vacuity floors are WALLS (DNC-10).',
+      );
+    }
+    // The exceptions are PRINTED with their reasons whether or not they drifted.
+    // A list whose entries are never printed is a list nobody audits.
+    for (const exception of readiness.closureExceptions) {
+      record(
+        `AC-9 S-E01-1k closure exception: ${exception.table}.${exception.privilege}`,
+        exception.why,
+      );
+    }
+    // AC-1's fail-before / pass-after, ASSERTED rather than narrated. A
+    // derivation without POSITIONAL attribution emits these three: `booking`'s
+    // two writes sit inside an OWNER `$transaction(async (tx) => …)`, and
+    // `audit_log` is written outside every scope. `audit_log` holds INSERT
+    // (measured), so a phantom entry would boot GREEN and be dead forever —
+    // TOOL-40, and the reason the held-probe is not a backstop for attribution.
+    for (const phantom of [
+      ['booking', 'INSERT'],
+      ['booking', 'UPDATE'],
+      ['audit_log', 'INSERT'],
+    ]) {
+      const key = closureKey(phantom[0], phantom[1]);
+      if (readiness.derivedPrivileges.has(key)) {
+        fail(
+          `AC-9 S-E01-1k the derivation is POSITIONAL: ${phantom[0]}.${phantom[1]} is NOT derived`,
+          `it was derived from ${readiness.derivedPrivileges.get(key).example}. \`tx\` is the callback ` +
+            'parameter of BOTH the tenant scope and `this.prisma.$transaction`, which runs on the OWNER ' +
+            'connection and bypasses RLS. Deriving this pair means the attribution regressed to a bare ' +
+            '`tx.` grep, and the phantom would be declared, held, green at boot and dead forever.',
+        );
+      } else {
+        record(
+          `AC-9 S-E01-1k POSITIONAL attribution refuses the phantom ${phantom[0]}.${phantom[1]}`,
+          'it is issued on the OWNER connection (an owner `$transaction`, or outside every scope), so no ' +
+            'scoped statement needs it and the declared list is right not to hold it',
+        );
+      }
+    }
+
     // ---- 14b. S-E01-1c / TOOL-32 — THE VERB-AWARE HALF.
     //
     //      NON-VACUITY FIRST, in both directions. Everything below is a
@@ -4048,6 +5019,22 @@ module.exports = {
   // S-E01-1e / ADR-051 §D2 — the statement-level ratchet, PURE, so the gate spec
   // can make it FAIL on purpose (AC-7) without touching the repository.
   enumerationDrift,
+  // S-E01-1k / ADR-059 — the DERIVED privilege closure, exported as PURE parts
+  // for the same reason: `tenant-adversarial-gate.spec.ts` drives every drift
+  // kind to RED on synthetic input, resolves a hoisted `include` constant, and
+  // proves the positional attribution refuses `booking.INSERT` — none of it
+  // touching the repository or a database.
+  APP_ROLE_CLOSURE_EXCEPTIONS,
+  MIN_CLOSURE_INPUT_SITES,
+  NESTED_WRITE_KEYS,
+  PRISMA_ARGUMENT_KEYS,
+  RELATION_MODIFIER_KEYS,
+  closureKey,
+  derivePrivilegeClosure,
+  parseAppRoleRequiredPrivileges,
+  parseDerivedChildParents,
+  parsePrismaSchema,
+  privilegeClosureDrift,
   globToRegExp,
   matchingParen,
   scopeCallbackRanges,

@@ -362,10 +362,20 @@ if changed_match "$CODE_RE"; then
   # not decoration: without it a diff touching ONLY the new checker would skip
   # this stage, which is the one its own edit is most likely to move (the two
   # share `apps/api/src/shared/prisma/` as a subject).
-  if changed_match '^(apps/api/prisma/|apps/api/src/shared/prisma/|scripts/tenant-adversarial-check\.js|scripts/tenant-scope-check\.js|scripts/rls-isolation-check\.js|\.env)'; then
+  # S-E01-1k / PF-249 / ADR-059 §D3 — `apps/api/src/modules/` and `scripts/lib/`
+  # JOIN THE TRIGGER. From this diff on the stage DERIVES the boot-probe privilege
+  # closure from the tenant-scoped call sites and compares it, BOTH directions,
+  # against `APP_ROLE_REQUIRED_PRIVILEGES`. The only diff class that CHANGES that
+  # closure is a module conversion, and a module conversion touches
+  # `apps/api/src/modules/**` and nothing else — measured: the next slice
+  # (`alerts.service.ts`, 33 call sites) would have skipped this stage entirely.
+  # A gate that polices module conversions and never runs on one cannot fire.
+  # The cost is real — a 300 s DB-bearing stage on a much larger share of diffs —
+  # which is why it carries an ADR rather than being a silent regex edit.
+  if changed_match '^(apps/api/prisma/|apps/api/src/shared/prisma/|apps/api/src/modules/|scripts/lib/|scripts/tenant-adversarial-check\.js|scripts/tenant-scope-check\.js|scripts/rls-isolation-check\.js|\.env)'; then
     run_stage 300 "tenant adversarial" node scripts/tenant-adversarial-check.js
   else
-    skip_stage "tenant adversarial" "no prisma, identity-seam or checker change"
+    skip_stage "tenant adversarial" "no prisma, module, identity-seam or checker change"
   fi
 
   # Then the client: without it typecheck/tests fail on unresolvable types.

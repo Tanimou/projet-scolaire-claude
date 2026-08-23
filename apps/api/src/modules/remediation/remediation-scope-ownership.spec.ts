@@ -667,7 +667,20 @@ describe('AC-5 — les sites d’appel Prisma de remediation ⊆ la clôture dé
     }
     // 30 -> 37, compté et non affirmé : une huitième entrée ajoutée « par
     // symétrie » est un privilège que la sonde de démarrage exigera VRAIMENT.
-    expect(APP_ROLE_REQUIRED_PRIVILEGES).toHaveLength(37);
+    //
+    // S-E01-1k — 37 -> 38, et le littéral N'EST PAS remonté « pour repasser au
+    // vert ». La trente-huitième entrée est `guardian.SELECT`, NOMMÉE par la
+    // dérivation de `scripts/tenant-adversarial-check.js` (ADR-059) : un filtre
+    // relationnel `guardian: { userProfileId }` dans la garde ABAC parent de
+    // lessons/list, invisible au matcher racine de CE fichier comme il l'était
+    // à trois relectures humaines. Le compteur reste une assertion GELÉE et non
+    // une borne inférieure (contrairement à la retraite proposée par PF-251) :
+    // la borne inférieure accepterait silencieusement une 39ᵉ entrée, et une
+    // entrée EN TROP rend `refused_unusable`, donc un 503 sur les quatre
+    // portails. C'est désormais le contrôle d'égalité d'ensembles du gate qui
+    // porte la charge de preuve ; ce littéral n'est plus que la sonde de
+    // non-vacuité qui refuse un ajout muet.
+    expect(APP_ROLE_REQUIRED_PRIVILEGES).toHaveLength(38);
     // …et chaque entrée porte SA raison, jamais une chaîne partagée ni le verbe
     // répété. La garde tourne sur la liste ENTIÈRE : une raison mince ajoutée
     // par un module futur vire au rouge ici aussi.
