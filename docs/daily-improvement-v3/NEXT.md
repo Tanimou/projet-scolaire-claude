@@ -1,5 +1,93 @@
 # Next story
 
+# NEXT — written by run 71 (`S-E05-5`), 2026-08-23 — **this section supersedes every section below**
+
+## ✅ The attendance READ paths gain the ABAC their WRITE paths already had — and the finding was bigger than the audit said
+
+`PF-07` said *"two attendance read endpoints have no teacher ABAC — any teacher reads any class’s roster and
+student PII."* Re-measured against `HEAD` before a line was written, it undercounts on **both** axes, and
+`ADR-061 §D0` supersedes the sentence rather than confirming it.
+
+**It is FOUR handlers, not two** — `sessionDetail`, `roster`, `studentAttendance` and `overview` each carried a
+`tenantId` comparison and nothing else, while the file’s own `assertOwnership` guarded exactly the three
+write-shaped ones. **And the exposed audience included `parent`, not only `teacher`:**
+`permissions.constants.ts:264-265` grants the `parent` realm role `class_sessions.read` **and**
+`attendance.read`. So any authenticated parent of the establishment could read a **full `Student` row** —
+`medicalNotes`, `address`, `notes`, `customFields`, `birthDate`, `email`, `phone` — for **every child in any
+class**, plus the establishment-wide recent-attendance feed. That is RGPD special-category data about other
+families’ children, on a read with no ABAC at all, against the one constraint `GUARDRAILS.md` §1 calls
+non-negotiable.
+
+**Shipped:** four exported **pure** decision functions plus two exported `where` builders, tested directly
+(`assertOwnedByTeacher`’s house form); identity resolved with the read-only `findForUser`, **never**
+`ensureForUser` (`ADR-051 §D1`); `sessionDetail` and `roster` split into a three-column guard read then the
+existing deep payload read, so the PII is never materialised for a caller about to be refused; `overview`
+refused **before** `ensureUser`, whose adoption branch can write.
+
+## ⚠️ THE TWO TRAPS THIS SLICE WALKED AROUND — write them down, they recur
+
+**1. Narrowing four handlers can WIDEN a fifth.** `studentAttendance` today reads
+`if (roles.includes(‘parent’)) { …guardianship… }` as a **terminal** branch, so a `school_admin` who is *also* a
+parent is limited to their own children. The "natural" resolver `privileged → guardian → teacher` would have
+silently **granted that caller cross-family access** — inside a story whose `AC-4` promises the parent path is
+unchanged to the byte. The order shipped is **`parent` → privileged → teacher → refuse** and two tests pin it
+(`[‘parent’,‘teacher’]` and `[‘parent’,‘school_admin’]`, both non-guardians, both expecting the **parent** refusal).
+`ADR-061 §D7`; the residual is `PF-266`.
+
+**2. A new wall must not be broader than the platform’s existing definition of the same relation.** The story’s
+pinned predicate said only *"an `active` enrolment in a `classSection` the caller is assigned to teach"* — but
+`messaging.service.ts:90` and `remediation.service.ts:912` both already constrain the **academic year**, and
+`TeachingAssignment`’s uniqueness is `@@unique([teacherProfileId, classSectionId, subjectId])` with
+**`academicYearId` NOT in the key**, so assignment rows survive year rollover. The literal predicate would have
+let a teacher who had `6ème B` two years ago read that class’s current attendance. Prisma cannot correlate the
+year across a relation filter, so the wall is **two statements**, exactly as the two existing copies are
+(`ADR-061 §D1`). Two divergences declared rather than discovered: the join key (`teacherProfileId`, forced by
+`AC-6`), and **no `try/catch → false`** — copying it would have reproduced `PF-248` inside the fix for `PF-07`.
+
+## 🔬 What is NOT proven, stated plainly
+
+`attendance-read-abac.spec.ts` was **written but never executed by its author** — agents run no jest, no
+`pnpm typecheck` and no build; only the test-architect runs the chain. `apps/api` has **no e2e coverage of
+attendance at all**, so that spec is the only net under these four handlers. `PF-07`’s row is therefore
+`in-progress`, not `CLOSED`: it flips on the test-architect’s green `G-AUTHZ` matrix, not on this diff.
+
+**And `PF-07` is closed on the WHO axis only.** The WHAT axis is untouched — `roster` and `sessionDetail` still
+return `include: { student: true }` to the *owning* teacher on every page load. Carried forward as **`PF-269`**
+(P1). `PF-07`’s row may not read `closed` without that sentence (`AC-21`).
+
+Nothing here is claimed for `pilotage.srv861861.hstgr.cloud`, which was not contacted.
+
+## ⛔ CLAIMED IDS — do not re-select, do not re-allocate
+
+- **`S-E01-1l` (convert `alerts.service.ts`) is claimed by the OPEN PR #263 and must NOT be re-selected.** The
+  section below still recommends it; that recommendation is **spent**. A held PR does not update `OPEN.md` on
+  `main`, which is exactly how #231/#232 duplicated a story (`PF-231`).
+- **PR #263 also claims `PF-256`…`PF-263` and `ADR-060`.** `main`’s maximum before this run was `PF-255`; this
+  run allocated **`PF-264`…`PF-274`** and took **`ADR-061`**. The next run allocates from **`PF-275`** and
+  **`ADR-062`**, after re-checking open PRs — id allocation reads `main`, not the open PRs, and that is what
+  produced the `PF-185`/`PF-186` collision on runs 53/54.
+
+## ▶ Recommended next story
+
+1. **`PF-269` — narrow the attendance roster PAYLOAD (P1, the other half of `PF-07`).** This is the highest-value
+   follow-on and it is now cheap: the audience is already correct, so the only question left is the projection.
+   Replace `include: { student: true }` on `roster` and `sessionDetail` with
+   `select: { id, firstName, lastName, externalRef, photoUrl }`. It touches a response contract consumed by
+   `apps/web/src/app/teacher/classes/[id]/attendance`, so it is a two-file slice (FE + BE) and needs `G-PORTAL`
+   evidence — which is precisely why it was not folded into `S-E05-5`, whose file set was `apps/api` only.
+   **Do this before `PF-07`’s row is ever allowed to read `closed`.**
+2. **`PF-267` — give `justify` the ownership check its docblock used to promise.** The docblock was corrected
+   in-slice (comment only) so `G-DNC` is honest; the runtime gap is a WRITE-handler change and stays open. It
+   reuses `assertSessionReadable`, already exported. Small, and it removes the file’s last unguarded mutation.
+3. **`PF-270` — consolidate the THREE copies of the teaching wall.** Blocked on one prior decision, and naming it
+   is the whole difficulty: remediation’s copy runs inside a `TenantScopeService` scope while messaging’s runs on
+   the owner connection, so a shared `TeachingWall` seam must take a **resolved client** as a parameter.
+   `PF-248`’s catch-narrowing lands in the same pass. Do not attempt it as a side effect of another slice.
+4. **`S-E05-2b`** remains the epic’s standing recommendation from the `S-E05-2` land pass — unclaimed, not
+   refuted, merely scheduled over three times now (`S-E05-7`, `S-E05-3`, `S-E05-5`).
+
+---
+
 # NEXT — written by run 69 (`S-E01-1k`), 2026-08-23 — **this section supersedes every section below**
 
 ## ✅ The closure stops re-reading itself, and the machine found the 38th entry in one pass

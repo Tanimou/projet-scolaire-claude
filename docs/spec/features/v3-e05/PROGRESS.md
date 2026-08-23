@@ -2,14 +2,19 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-22)** `in-progress` — **six slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)** and **`S-E05-3` (2026-08-22, this PR)**. Each was authored and implemented in the same
+**Status (2026-08-23)** `in-progress` — **seven slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)** **`S-E05-3` (2026-08-22)** and **`S-E05-5` (2026-08-23, this PR)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
-remaining seven (`S-E05-1`, `S-E05-4` … `S-E05-6`, `S-E05-8` … `S-E05-10`) still exist as **rows in
+remaining six (`S-E05-1`, `S-E05-4`, `S-E05-6`, `S-E05-8` … `S-E05-10`) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
 `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
 without an authoring pass of its own.
 **Next slice → `S-E05-2b` — the `realmRole` invite channel, the fifth grant path `S-E05-2` deliberately left open.**
+*(Annotated 2026-08-23, `S-E05-5` land pass — **not** deleted. `S-E05-5` was scheduled over this pointer by operator
+override, exactly as `S-E05-7` and `S-E05-3` were before it. An override **schedules over** a recommendation without
+refuting it: `S-E05-2b` is still open, still unclaimed, and still the standing recommendation of the `S-E05-2` land
+pass. The queue behind it now also carries **`PF-269`** — the attendance roster payload, the WHAT axis `S-E05-5`
+deliberately did not narrow — and **`PF-267`**, the ownership check `justify` still lacks.)*
 Still open, still unclaimed: `S-E05-7` was scheduled over it by operator override, not instead of it. See "Next run"
 below, and § `S-E05-7` → "Next run" for the ranking as it stands after this slice.
 
@@ -31,6 +36,13 @@ edit: the count read **five**, and the sentence at line 8 listed `S-E05-3` among
 slice-status row below moves from `⬜ unenumerated` to `⚠️ done`. The `Next slice` pointer is annotated, not deleted —
 `S-E05-3` ran on an operator override, which schedules over a recommendation without refuting it — and the queue behind
 it gains **`PF-240`**, the remediation sweep for the rows `PF-10` already wrote.)*
+
+*(Corrected a fourth time 2026-08-23, `S-E05-5` land pass. Three things above were falsified by the diff that carries
+this edit: the count read **six**; line 8 listed `S-E05-5` among the rows that "still exist as rows in
+`traceability-matrix.md` only"; and the slice-status row below read `⬜ unenumerated · matrix row only`. `S-E05-5.md`
+§0.1 named the first in advance — it argued that the brief undercounted at "5 of 12" and that **this file was right**
+about the count — and this pass discharges that instruction by moving it to seven. The `Next slice` pointer is
+annotated rather than deleted, on the same terms as the three corrections above it.)*
 
 > **Why there is no `spec.md` here.** Same posture as
 > [`docs/spec/features/v3-e02/PROGRESS.md`](../v3-e02/PROGRESS.md) and
@@ -58,7 +70,7 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | **S-E05-2c** | **The detection sweep for pre-ceiling escalated grants** (`PF-175`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as **#229** · spec: [`stories/S-E05-2c.md`](./stories/S-E05-2c.md) · **`PF-175` NARROWED, not closed** — the detector exists and is proven, but has **never been executed against a database** · evidence below |
 | **S-E05-3** | **The coefficient matrix stops accepting foreign-tenant identifiers** (`PF-10`) | ⚠️ done — **needs human review** | 2026-08-22 | spec: [`stories/S-E05-3.md`](./stories/S-E05-3.md) · **`PF-10` closed on its REACHABLE write path** — the composite key stays tenant-blind (`PF-239`) and the rows the defect already wrote are neither detected nor repaired (`PF-240`) · new **`ADR-055`** (scope-FK ownership over a COLLECTION) · also records **`PF-238`** (no cap on `entries[]`) · evidence below |
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
-| S-E05-5 | Attendance reads without ABAC (`PF-07`) | ⬜ unenumerated | — | matrix row only |
+| **S-E05-5** | **The attendance READ paths gain the ABAC their WRITE paths already have** (`PF-07`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-5.md`](./stories/S-E05-5.md) · **`PF-07` closed on the WHO axis ONLY** — four handlers (not the audit’s two) gain teacher/privileged ABAC via exported pure decision functions; the **WHAT** axis (`include: { student: true }` still returning `medicalNotes`/`address`/`notes`/`customFields`) is carried forward as **`PF-269`**, and the row may not read `closed` without that sentence · new **`ADR-061`** (§D0 supersedes the audit sentence — the exposed audience included **`parent`**, not only `teacher`; §D1 the teaching wall constrains the **active academic year** on both halves; §D3 ownership reads the denormalised `classSession.teacherProfileId`, the same bit the WRITE trusts; §D4 404 before 403; §D7 the parent branch stays byte-identical and `parent` deliberately precedes `privileged`) · also records **`PF-264`…`PF-274`** · test: `apps/api/src/modules/attendance/attendance-read-abac.spec.ts` — **written, not executed by its author** |
 | S-E05-6 | Unvalidated PATCH / query params / enum (`PF-51`) | ⬜ unenumerated | — | matrix row only; `S-E06-6` fixed **one DTO** of this family |
 | **S-E05-7** | **The public registration funnel gains an admission bound: two tiers, one fixed window, in process** (`PF-46`, throttling third) | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E05-7.md`](./stories/S-E05-7.md) · **`PF-46` NARROWED, not closed** — the `emailVerified` third (R-3) stays open · new **`ADR-038`** (in-process admission bounds on pre-auth endpoints) — shipped *against* the story's own §5 "no new ADR", on Winston's ruling · raises **R-1** (the global ceiling is itself a DoS lever, real fix `infra/nginx/`) and **R-2** (per-process counters, `ADR-038` D2) · **the shipped constants diverge from the story's §1.4 and a human must ratify the numbers** · evidence below |
 | S-E05-8 | Wrong password reported as "MFA required" (`PF-25`) | ⬜ unenumerated | — | matrix row only |

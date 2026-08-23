@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { AttendanceStatus } from '@prisma/client';
+import { AttendanceStatus, type Prisma } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -62,6 +62,191 @@ class BatchAttendanceDto {
 
 class JustifyDto {
   @IsString() @MaxLength(500) justification!: string;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * S-E05-5 / PF-07 / ADR-061 — LA COUCHE DE DÉCISION, EXPORTÉE ET PURE.
+ *
+ * Les QUATRE handlers de LECTURE de ce contrôleur (`sessionDetail`, `roster`,
+ * `studentAttendance`, `overview`) ne portaient qu'un contrôle de tenant. Leurs
+ * frères d'ÉCRITURE (`listSessions`, `openSession`, `batch`) exigent la
+ * propriété depuis toujours via `assertOwnership` (:451). Cette tranche donne
+ * aux lectures l'ABAC que les écritures avaient déjà.
+ *
+ * FORME IMPOSÉE (maison, `lessons.controller.ts:114` `assertOwnedByTeacher`) :
+ * le contrôleur RÉSOUT l'identité (une requête), puis passe des VALEURS SIMPLES
+ * à une fonction EXPORTÉE et PURE qui compare et lève. La fonction pure est ce
+ * que la spec teste directement — pas de module de test Nest, pas de conteneur
+ * d'injection. Aucun paramètre `bypass` / `allow` / `skip`, aucune variable
+ * d'environnement : un contrôle qu'on peut éteindre n'est pas un contrôle
+ * (`DNC-10`).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** Le contexte d'autorisation de l'appelant, résolu DEHORS, comparé PUREMENT. */
+export interface AttendanceReadContext {
+  /** `super_admin` / `school_admin` : la propriété n'est pas exigée d'eux. */
+  readonly isPrivileged: boolean;
+  /** `null` = l'appelant n'a AUCUN profil professeur (donc aucune séance). */
+  readonly teacherProfileId: string | null;
+}
+
+/**
+ * Le SEUL endroit qui nomme les deux rôles privilégiés de ce contrôleur.
+ * Identique au court-circuit pré-existant d'`assertOwnership`.
+ *
+ * LIMITE CONNUE, ÉCRITE PLUTÔT QUE DÉCOUVERTE (`PF-268`) : c'est un test sur le
+ * NOM d'un rôle de realm, alors que `PermissionsGuard` résout aussi les rôles
+ * PERSONNALISÉS via `UserSyncService.effectivePermissions` (`ADR-013`,
+ * `ADR-047` — les rôles custom sont globaux). Un rôle « vie scolaire » qui
+ * détiendrait `attendance.read` passerait le garde et serait refusé ici. Le
+ * remède honnête est un code de permission dédié, que `AC-9` interdit dans
+ * cette tranche. Mesuré le 2026-08-23 sur la pile locale : `select count(*)
+ * from role` → **0**, donc zéro appelant vivant est concerné aujourd'hui.
+ */
+export function isPrivilegedAttendanceCaller(roles: readonly string[]): boolean {
+  return roles.includes('super_admin') || roles.includes('school_admin');
+}
+
+/**
+ * `AC-1` + `AC-2` — la séance appartient-elle à l'appelant ?
+ *
+ * `teacherProfileId === null` rend le MÊME 403 : un appelant sans profil
+ * professeur ne possède aucune séance par construction de la clé étrangère.
+ * Le traduire en 404 ou en 500 serait un changement de sémantique de refus
+ * déguisé en refactor — et un `null` traité comme « laisser passer » serait
+ * exactement le fail-open que `G-AUTHZ` refuse.
+ *
+ * UN SEUL message, partagé par `sessionDetail` et `roster` (`AC-2` dit *même*
+ * message). Il ne réutilise PAS celui d'`assertOwnership` (« ouvrir une
+ * séance ») : ce dernier est de forme ÉCRITURE, et
+ * `teacher/classes/[id]/attendance/actions.ts:28` remonte `body.message`
+ * VERBATIM à l'écran du professeur — on ne dit pas à quelqu'un qui LIT qu'il ne
+ * peut pas OUVRIR. Il ne nomme ni tenant, ni table, ni code Prisma, ni id
+ * (discipline `ADR-048 §D9`).
+ */
+export function assertSessionReadable(
+  context: AttendanceReadContext,
+  sessionTeacherProfileId: string,
+): void {
+  if (context.isPrivileged) return;
+  if (
+    context.teacherProfileId === null ||
+    sessionTeacherProfileId !== context.teacherProfileId
+  ) {
+    throw new ForbiddenException('Vous ne pouvez consulter que les séances de vos affectations.');
+  }
+}
+
+/** `AC-5` — la vue ÉTABLISSEMENT est réservée à l'administration. */
+export function assertEstablishmentOverviewReadable(context: {
+  readonly isPrivileged: boolean;
+}): void {
+  if (!context.isPrivileged) {
+    throw new ForbiddenException(
+      "La vue d'ensemble de l'assiduité est réservée à l'administration de l'établissement.",
+    );
+  }
+}
+
+/**
+ * `AC-3` — l'assiduité d'UN élève. La règle COMPLÈTE, en un seul endroit.
+ *
+ * `ForbiddenException` **NUE, sans message** : byte-identique au refus parent
+ * pré-existant (:361), que `AC-4` gèle. Y ajouter un message serait un
+ * changement de copie produit sur les trois pages du portail parent.
+ *
+ * Les trois entrées sont prises en PARAMÈTRE même quand l'appelant sait déjà
+ * que l'une d'elles est fausse : la fonction énonce la règle entière et se
+ * teste sur les huit triplets booléens.
+ */
+export function assertStudentAttendanceReadable(decision: {
+  readonly isPrivileged: boolean;
+  readonly isGuardian: boolean;
+  readonly teachesStudent: boolean;
+}): void {
+  if (decision.isPrivileged || decision.isGuardian || decision.teachesStudent) return;
+  throw new ForbiddenException();
+}
+
+/**
+ * `AC-3` + `AC-8` — premier des DEUX `where` du mur d'enseignement.
+ *
+ * ADR-061 §D1 — POURQUOI DEUX INSTRUCTIONS ET NON UNE. La plateforme répond
+ * déjà DEUX fois à « ce professeur enseigne-t-il à cet élève ? »
+ * (`messaging.service.ts:90`, `remediation.service.ts:912`), et les deux
+ * CONTRAIGNENT L'ANNÉE SCOLAIRE : inscription active dans l'année **active**,
+ * puis affectation sur le couple `(classSectionId, academicYearId)` de CETTE
+ * inscription. La contrainte n'est pas cosmétique : l'unicité de
+ * `TeachingAssignment` est `@@unique([teacherProfileId, classSectionId,
+ * subjectId])` — `academicYearId` n'est PAS dans la clé — donc les affectations
+ * SURVIVENT au changement d'année. Sans le couple, un professeur qui a eu
+ * `6ème B` il y a deux ans lirait l'assiduité courante de cette classe. Prisma
+ * ne sait pas corréler `classSection.teachingAssignments.some.academicYearId`
+ * à `enrollment.academicYearId` dans un seul `where` : le couple exige une
+ * seconde instruction, exactement comme les deux copies existantes.
+ *
+ * La clause relationnelle `classSection.teachingAssignments.some` est conservée
+ * ici (forme épinglée par la story) : elle PRÉ-FILTRE sur les classes que
+ * l'appelant enseigne, année confondue, et elle est vérifiée telle quelle par
+ * la spec. Elle n'est pas suffisante seule — c'est la seconde instruction qui
+ * ferme l'année.
+ *
+ * **Les DEUX `tenantId` sont explicites et aucun n'est redondant.** Les
+ * déploiements d'aujourd'hui empruntent le chemin `degraded_no_app_url`, où la
+ * connexion du PROPRIÉTAIRE échappe à ses propres policies RLS
+ * (`ADR-032 §D5` / `ADR-042 §D1`) : ces clauses sont la SEULE chose qui filtre.
+ *
+ * Le chemin relationnel est `Enrollment.classSection → ClassSection.
+ * teachingAssignments → TeachingAssignment.teacherProfileId`
+ * (`schema.prisma:666`, `:474`, `:1009`) — vérifié contre le schéma.
+ */
+export function teacherOfStudentWhere(input: {
+  readonly tenantId: string;
+  readonly studentId: string;
+  readonly teacherProfileId: string;
+}): Prisma.EnrollmentWhereInput {
+  return {
+    tenantId: input.tenantId,
+    studentId: input.studentId,
+    status: 'active',
+    academicYear: { status: 'active' },
+    classSection: {
+      teachingAssignments: {
+        some: { tenantId: input.tenantId, teacherProfileId: input.teacherProfileId },
+      },
+    },
+  };
+}
+
+/**
+ * `AC-3` + `AC-8` — second `where` du mur d'enseignement : le couple
+ * `(classSectionId, academicYearId)` de l'inscription retenue, épinglé sur
+ * l'appelant. C'est CE `where` qui interdit au professeur d'une année révolue
+ * de lire l'assiduité courante (ADR-061 §D1).
+ *
+ * DIVERGENCE ASSUMÉE avec les deux copies existantes, et elle est déclarée
+ * plutôt que découverte : elles joignent `teacherProfile: { userProfileId }`
+ * parce qu'elles reçoivent un id de `UserProfile` ; ici `AC-6` impose
+ * `TeacherProfileService.findForUser`, qui rend un id de `TeacherProfile`, donc
+ * la comparaison est directe. Les deux jointures sont équivalentes.
+ *
+ * NE PAS copier le `try/catch → false` des deux copies : `PF-248` enregistre
+ * déjà cette forme comme un défaut (une panne d'infrastructure se présente
+ * alors comme un refus ABAC authentique, indiagnosticable). Ici les erreurs
+ * remontent.
+ */
+export function teacherOfStudentAssignmentWhere(input: {
+  readonly tenantId: string;
+  readonly classSectionId: string;
+  readonly academicYearId: string;
+  readonly teacherProfileId: string;
+}): Prisma.TeachingAssignmentWhereInput {
+  return {
+    tenantId: input.tenantId,
+    classSectionId: input.classSectionId,
+    academicYearId: input.academicYearId,
+    teacherProfileId: input.teacherProfileId,
+  };
 }
 
 @ApiTags('attendance')
@@ -245,10 +430,31 @@ export class AttendanceController {
     });
   }
 
+  /**
+   * S-E05-5 / `AC-1` — SCINDÉ EN REQUÊTE DE GARDE PUIS REQUÊTE DE CHARGE.
+   *
+   * L'`include` profond ci-dessous EST la donnée sensible : il rend la classe
+   * entière en lignes `Student` COMPLÈTES (`medicalNotes`, `address`, `notes`,
+   * `customFields`…). La matérialiser dans le processus pour un appelant qu'on
+   * s'apprête à refuser est le défaut, pas un détail d'ordonnancement. La garde
+   * ne lit donc que TROIS colonnes scalaires, et la charge n'est émise qu'après
+   * le verdict.
+   *
+   * ORDRE DE REFUS (`AC-10`, `ADR-048 §D9`) : 404 d'abord (tenant / existence),
+   * 403 ensuite (propriété). L'inverser ferait du 403 un oracle d'existence sur
+   * les ids de séance d'un AUTRE tenant.
+   */
   @Get('class-sessions/:id')
   @RequiresPermission('class_sessions.read')
   async sessionDetail(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
+    const guard = await this.prisma.classSession.findUnique({
+      where: { id },
+      select: { id: true, tenantId: true, teacherProfileId: true },
+    });
+    if (!guard || guard.tenantId !== me.tenantId) throw new NotFoundException();
+    await this.assertSessionOwnership(guard.teacherProfileId, me, jwt);
+
     const s = await this.prisma.classSession.findUnique({
       where: { id },
       include: {
@@ -261,6 +467,9 @@ export class AttendanceController {
         attendanceRecords: { include: { student: true } },
       },
     });
+    // CONSERVÉE DÉLIBÉRÉMENT : la garde ci-dessus rend cette ligne inatteignable
+    // en pratique. Elle coûte une comparaison et retire tout argument sur une
+    // fenêtre TOCTOU entre les deux lectures. Ne pas la « nettoyer ».
     if (!s || s.tenantId !== me.tenantId) throw new NotFoundException();
     return s;
   }
@@ -312,7 +521,23 @@ export class AttendanceController {
     return { ok: true, count: ops.length };
   }
 
-  /** Mark an absence as justified — admin or teacher of the class. */
+  /**
+   * Mark an absence as justified.
+   *
+   * ⚠️ S-E05-5 / `PF-267` — CE DOCBLOC DISAIT « admin OR TEACHER OF THE CLASS ».
+   * Il PROMETTAIT une règle de propriété que l'exécution n'implémente PAS : ce
+   * handler ne porte qu'un contrôle de tenant (:328) et n'appelle
+   * `assertOwnership` nulle part. C'est la forme `DNC-06` — un guide plus
+   * profond que le runtime — à l'intérieur du fichier que cette tranche
+   * modifie, donc la phrase est corrigée pour décrire ce qui S'EXÉCUTE.
+   *
+   * La règle RÉELLE aujourd'hui : tout détenteur de `attendance.justify`, dans
+   * son tenant, sur n'importe quel enregistrement. La permission n'est accordée
+   * qu'à `school_admin` (`permissions.constants.ts:188`) et jamais à `teacher`,
+   * donc l'exposition vivante se limite au chemin des rôles personnalisés.
+   * AJOUTER le contrôle manquant est une modification d'un handler d'ÉCRITURE
+   * et reste HORS de cette tranche de lecture — c'est `PF-267`, ouvert.
+   */
   @Post('attendance/:id/justify')
   @RequiresPermission('attendance.justify')
   async justify(
@@ -340,7 +565,27 @@ export class AttendanceController {
     });
   }
 
-  /** Per-student attendance feed. Used by parent portal + student profile. */
+  /**
+   * Per-student attendance feed. Used by parent portal + student profile.
+   *
+   * S-E05-5 / `AC-3` + `AC-4` — L'ORDRE DES PUBLICS EST DÉLIBÉRÉ :
+   * `parent` → privilégié → professeur → refus.
+   *
+   * Le bloc `parent` reste PREMIER et TERMINAL, gelé à l'octet (`AC-4`) : mêmes
+   * rôles lus, même `findFirst`, même objet `where`, même `ForbiddenException`
+   * NUE, même position — avant la requête des enregistrements. Trois pages du
+   * portail parent en dépendent ; la manière la moins chère de ne pas les
+   * casser est de ne pas y toucher.
+   *
+   * CONSÉQUENCE NOMMÉE PLUTÔT QUE DÉCOUVERTE (`PF-266`, P3) : un appelant
+   * portant À LA FOIS `parent` et `teacher` — un professeur dont l'enfant est
+   * scolarisé ici — emprunte la branche parent et se voit refuser un élève
+   * qu'il enseigne. C'est le comportement d'AUJOURD'HUI, inchangé. Placer le
+   * court-circuit privilégié AVANT le bloc parent aurait ÉLARGI l'accès d'un
+   * `school_admin` également parent — aujourd'hui borné à ses propres enfants —
+   * à l'intérieur d'une tranche qui RESSERRE. Une tranche qui resserre quatre
+   * handlers n'en élargit pas un cinquième au passage.
+   */
   @Get('attendance/students/:studentId')
   @RequiresPermission('attendance.read')
   async studentAttendance(
@@ -359,6 +604,48 @@ export class AttendanceController {
         where: { tenantId: me.tenantId, studentId, status: 'active', guardian: { userProfileId: me.id } },
       });
       if (!gship) throw new ForbiddenException();
+    } else {
+      // ── S-E05-5 / AC-3 — la branche PROFESSEUR, nouvelle. ──────────────────
+      // `isGuardian: false` n'est pas un raccourci : sur cette branche
+      // l'appelant n'est pas parent, donc la tutelle n'a JAMAIS été consultée.
+      // Le paramètre existe pour que la fonction pure énonce la règle COMPLÈTE
+      // en un seul endroit et se teste sur les huit triplets.
+      const isPrivileged = isPrivilegedAttendanceCaller(roles);
+      let teachesStudent = false;
+      if (!isPrivileged) {
+        // JAMAIS `ensureForUser` (AC-6 / ADR-051 §D1) : un REFUS ne doit rien
+        // provisionner. `findForUser` est en lecture seule et porte son
+        // `tenantId`.
+        const tp = await this.teachers.findForUser(me);
+        if (tp) {
+          const enrollment = await this.prisma.enrollment.findFirst({
+            where: teacherOfStudentWhere({
+              tenantId: me.tenantId,
+              studentId,
+              teacherProfileId: tp.id,
+            }),
+            orderBy: { enrolledAt: 'desc' },
+            select: { classSectionId: true, academicYearId: true },
+          });
+          if (enrollment) {
+            // ADR-061 §D1 — le couple (classSectionId, academicYearId) ferme
+            // l'ANNÉE : `TeachingAssignment` n'a pas `academicYearId` dans sa
+            // clé d'unicité, donc les affectations survivent au changement
+            // d'année scolaire.
+            const assignment = await this.prisma.teachingAssignment.findFirst({
+              where: teacherOfStudentAssignmentWhere({
+                tenantId: me.tenantId,
+                classSectionId: enrollment.classSectionId,
+                academicYearId: enrollment.academicYearId,
+                teacherProfileId: tp.id,
+              }),
+              select: { id: true },
+            });
+            teachesStudent = assignment !== null;
+          }
+        }
+      }
+      assertStudentAttendanceReadable({ isPrivileged, isGuardian: false, teachesStudent });
     }
 
     const records = await this.prisma.attendanceRecord.findMany({
@@ -404,11 +691,31 @@ export class AttendanceController {
     return { records, summary };
   }
 
-  /** Per-class roster + their attendance for a given date (teacher's view when taking attendance). */
+  /**
+   * Per-class roster + their attendance for a given date (teacher's view when taking attendance).
+   *
+   * S-E05-5 / `AC-2` — MÊME forme en deux temps que `sessionDetail`, MÊME
+   * helper, MÊME message. La charge rend une ligne `Student` COMPLÈTE par
+   * inscription active : elle n'est émise qu'après le verdict.
+   *
+   * AUCUN appelant de première partie n'est cassé :
+   * `teacher/classes/[id]/attendance/actions.ts:28` n'obtient son `sessionId`
+   * que de `class-sessions/open` (`actions.ts:19`) ou de
+   * `class-sessions?teachingAssignmentId=` (`page.tsx:74`), tous deux déjà
+   * derrière `assertOwnership`. Et la propriété se lit sur la MÊME colonne que
+   * l'écriture (`ADR-061 §D3`), donc la paire ouvrir → appel ne peut pas 403.
+   */
   @Get('class-sessions/:id/roster')
   @RequiresPermission('attendance.read')
   async roster(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
+    const guard = await this.prisma.classSession.findUnique({
+      where: { id },
+      select: { id: true, tenantId: true, teacherProfileId: true },
+    });
+    if (!guard || guard.tenantId !== me.tenantId) throw new NotFoundException();
+    await this.assertSessionOwnership(guard.teacherProfileId, me, jwt);
+
     const session = await this.prisma.classSession.findUnique({
       where: { id },
       include: {
@@ -428,6 +735,7 @@ export class AttendanceController {
         attendanceRecords: true,
       },
     });
+    // Voir `sessionDetail` : conservée délibérément, inatteignable en pratique.
     if (!session || session.tenantId !== me.tenantId) throw new NotFoundException();
 
     const recordByStudent = new Map(session.attendanceRecords.map((r) => [r.studentId, r]));
@@ -448,6 +756,35 @@ export class AttendanceController {
     };
   }
 
+  /**
+   * S-E05-5 — la RÉSOLUTION d'identité pour les chemins de LECTURE.
+   *
+   * Lecture seule (`findForUser`), JAMAIS `ensureForUser` : un refus ne doit
+   * PROVISIONNER rien (`ADR-051 §D1`). Non fusionnée avec `assertOwnership`
+   * (ci-dessous) délibérément — ce dernier reste sur `ensureForUser` et ses
+   * trois sites d'appel d'ÉCRITURE sont hors de la portée de cette tranche
+   * (`PF-265`).
+   *
+   * `sessionTeacherProfileId` vient de `classSession.teacherProfileId`, la
+   * colonne DÉNORMALISÉE — la MÊME que `batch` (:282) utilise déjà pour
+   * autoriser l'écriture (`ADR-061 §D3`). Lire et écrire doivent refuser sur le
+   * même bit, sinon une ligne dérivée 403 la liste d'appel d'une séance que le
+   * même professeur peut légalement écrire.
+   *
+   * Le court-circuit privilégié saute la requête ENTIÈREMENT : un administrateur
+   * n'a jamais besoin d'un profil professeur, et ne pas le demander est une
+   * instruction de moins sur le chemin admin.
+   */
+  private async assertSessionOwnership(
+    sessionTeacherProfileId: string,
+    me: { id: string; tenantId: string },
+    jwt: KeycloakJwtPayload,
+  ): Promise<void> {
+    const isPrivileged = isPrivilegedAttendanceCaller(jwt.realm_access?.roles ?? []);
+    const tp = isPrivileged ? null : await this.teachers.findForUser(me);
+    assertSessionReadable({ isPrivileged, teacherProfileId: tp?.id ?? null }, sessionTeacherProfileId);
+  }
+
   private async assertOwnership(
     teacherProfileId: string,
     me: { id: string; tenantId: string },
@@ -465,10 +802,26 @@ export class AttendanceController {
    * Admin attendance overview — aggregates today + recent records for the
    * `/admin/attendance` page (KPI strip + recent records table).
    * Returns at most 50 most-recent records.
+   *
+   * S-E05-5 / `AC-5` — LE REFUS PASSE AVANT `ensureUser`, ET C'EST DÉLIBÉRÉ.
+   *
+   * La décision ne dépend QUE du jeton, donc elle est prenable avant tout
+   * contact avec la base. La placer en premier fait qu'un appelant refusé
+   * n'atteint plus `ensureUser`, dont la branche d'adoption peut ÉCRIRE
+   * (`user-sync.service.ts`) — une réduction gratuite de la même classe
+   * « écriture sur un chemin de refus » que `PF-265` enregistre. Ne pas la
+   * « ranger » sous `ensureUser`.
+   *
+   * Ce handler rendait l'ÉTABLISSEMENT entier — les 50 enregistrements les plus
+   * récents, nom et prénom de l'élève attachés — à tout détenteur de
+   * `attendance.read`, c'est-à-dire aussi à `parent` (`PF-264`).
    */
   @Get('attendance/overview')
   @RequiresPermission('attendance.read')
   async overview(@CurrentJwt() jwt: KeycloakJwtPayload) {
+    assertEstablishmentOverviewReadable({
+      isPrivileged: isPrivilegedAttendanceCaller(jwt.realm_access?.roles ?? []),
+    });
     const me = await this.users.ensureUser(jwt);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
