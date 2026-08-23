@@ -8,10 +8,20 @@ import { MeetingRequestDto, MeetingRequestStatus } from './alerts.types';
 /**
  * The caller's effective scope, derived from their realm roles. Admins see every
  * request in their tenant/school; teachers see only requests assigned to them OR
- * unassigned within their school (they must NOT see another teacher's queue —
- * `StudentAccessService.scopeForUser` still returns `studentIds:null` for
- * teachers, so we cannot lean on student-scope here; we filter on
- * `assignedToId = me` ∪ `assignedToId IS NULL`, pre-morterm PM-2).
+ * unassigned within their school (they must NOT see another teacher's queue — we
+ * filter on `assignedToId = me` ∪ `assignedToId IS NULL`, pre-mortem PM-2).
+ *
+ * S-E05-16 / `PF-300` / `DNC-06` — THE STATED REASON WAS CORRECTED, THE
+ * WORKAROUND WAS KEPT. This docblock used to justify the local filter by
+ * "`StudentAccessService.scopeForUser` still returns `studentIds:null` for
+ * teachers, so we cannot lean on student-scope here". That is no longer true:
+ * since `S-E05-16` the teacher branch returns a bounded, tenant-scoped array
+ * (`PF-288`). The filter STAYS anyway, and now for a stronger reason — a
+ * teacher's STUDENT scope and a teacher's meeting-request QUEUE are different
+ * questions: two teachers of the same class share students but must not share
+ * queues, so student-scope would be too WIDE here, not too narrow. Converging
+ * this onto the shared `TeachingWall` seam is `PF-270`, still open, and out of
+ * this slice's declared perimeter.
  */
 type MeetingRequestScope =
   | { kind: 'admin' }

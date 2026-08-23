@@ -2284,6 +2284,23 @@ const ENUMERATED_OUTSIDE_SCOPE = Object.freeze([
           'the single-student check on the same pre-scope path; converting it alone would split one ' +
           'ABAC decision across two connections',
       }),
+      Object.freeze({
+        model: 'teachingAssignment',
+        verb: 'findMany',
+        reason:
+          'S-E05-16 / PF-288 — the TEACHER half of the same ABAC scope: which class sections the ' +
+          'caller is assigned to. Same pre-scope path as the parent half above; it resolves the ' +
+          'boundary, so it cannot be a consumer of the boundary being opened',
+      }),
+      Object.freeze({
+        model: 'enrollment',
+        verb: 'findMany',
+        reason:
+          'S-E05-16 / PF-288 — the second hop of the teacher scope: the students holding an ACTIVE ' +
+          'enrollment in those sections. Declared separately because the unit here is the STATEMENT, ' +
+          'not the model (PF-299 — this list is statement-exhaustive, and a new statement turns the ' +
+          'gate RED with no logic error anywhere until it is declared)',
+      }),
     ]),
   }),
   Object.freeze({

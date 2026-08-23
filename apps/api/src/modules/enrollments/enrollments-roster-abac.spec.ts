@@ -9,12 +9,12 @@ import type { PrismaService } from '../../shared/prisma/prisma.service';
 import type { NotificationsService } from '../notifications/notifications.service';
 import type { StudentAccessService } from '../students/student-access.service';
 import type { TeacherProfileService } from '../teaching/teacher-profile.service';
+import { teacherOfSectionWhere } from '../teaching/teaching-wall.where';
 
 import {
   EnrollmentsController,
   assertClassRosterReadable,
   isPrivilegedEnrollmentsCaller,
-  teacherOfSectionWhere,
 } from './enrollments.controller';
 
 /**

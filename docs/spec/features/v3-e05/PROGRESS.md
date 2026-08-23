@@ -2,7 +2,8 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-23)** `in-progress` — **eleven slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+**Status (2026-08-23)** `in-progress` — **twelve slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, #268 — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)** and **`S-E05-16` (2026-08-23, this PR — `PF-288` closed **at the service, not as a class**, `PF-51` clause 3 advanced on one route, `ADR-066`)**. **Twelve landed rows against a twelve-row backlog is an arithmetic coincidence, not a completion:** four of the twelve (`S-E05-2c`, `S-E05-14`, `S-E05-15`, `S-E05-16`) came from *outside* the backlog, and six backlog rows are still unenumerated. Each was authored and implemented in the same
 `S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, this PR — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
 remaining four (`S-E05-1`, `S-E05-4`, `S-E05-8` … `S-E05-10`) still exist as **rows in
@@ -69,6 +70,26 @@ one change, in the service — not a sixth hand-rolled wall. Ranking after this 
 `GET /api/v1/classes/:id`, `classes.controller.ts:130`, `classes.read` held by `teacher`, returns any class's full
 active roster with `gender`, `birthDate` and `email`, i.e. a **wider** projection than either enrollments door),
 `PF-289`, `PF-290`, `PF-291`, `PF-292`, `PF-293`.)*
+*(Annotated a SIXTH time 2026-08-23, `S-E05-16` land pass — **not** deleted, for the ninth time and the same
+reason: `S-E05-16` was scheduled over this pointer by operator override, and an override **schedules over** a
+recommendation without refuting it. `S-E05-2b` is still open, still unclaimed, still the epic's only live
+escalation path. **This run is the second of the nine that discharges the item the previous annotation ranked
+first**: `PF-288` — the head of the queue since run 75 — is **closed by this PR at the SERVICE**, and the
+qualifier is load-bearing rather than modest. `scopeForUser`'s teacher branch now returns a bounded array instead
+of the `studentIds: null` unrestricted sentinel, and `students.controller.ts` consumes it with `=== null` and an
+`AND` member instead of the absent-key spread; but `calendar.controller.ts:265` still folds `teacher` into
+`isPrivileged` **before** `scopeForUser` is ever reached, so the calendar remains a live teacher fail-open that
+this slice does **not** close (`ADR-066 §D5`, declared, out of `AC-9`'s perimeter). Do not let the row read as a
+class closure. **What takes the head of the queue is `PF-294`, unchanged from the previous ranking and now
+cheaper than it was**: `GET /api/v1/classes/:id` (`classes.controller.ts:130`) is the third and widest door of
+the peer-enumeration class, and it can now *consume* the wall this slice built (`teaching/teaching-wall.where.ts`
++ a real `canAccessStudent`) instead of hand-rolling a sixth. Ranking after this run: **`PF-294` → `PF-310` →
+`PF-309` → `PF-305` → `PF-287` → `PF-284` → `PF-267` → `PF-277` → `PF-279` → `S-E05-2b`**. `PF-310` ranks
+second and is the one a reader should not file as hygiene: **nothing in this codebase transitions an
+`Enrollment` out of `active` at year rollover and nothing ever expires a `TeachingAssignment`**, so the wall
+this slice just built is monotonically accumulating and converges back toward the whole school on a multi-year
+deployment — i.e. it re-opens `PF-288` by ageing, silently, with every test still green. Also joining:
+`PF-296`…`PF-308` and `PF-311`…`PF-313`.)*
 Still open, still unclaimed: `S-E05-7` was scheduled over it by operator override, not instead of it. See "Next run"
 below, and § `S-E05-7` → "Next run" for the ranking as it stands after this slice.
 
@@ -136,6 +157,70 @@ below, and § `S-E05-7` → "Next run" for the ranking as it stands after this s
 > `email`, `status` plus an active-guardianship count — a **wider** child projection than either enrollments door.
 > `parent` does **not** hold `classes.read` (`:257`), so the parent axis this slice closed is genuinely closed;
 > the teacher axis is not.
+>
+> **DISCHARGED 2026-08-23 by `S-E05-16` (this PR).** The slice this block named was authored
+> ([`stories/S-E05-16.md`](./stories/S-E05-16.md)) and implemented in the same run, the `S-E05-2` posture. Four of
+> the block's five instructions were obeyed and the fifth was **refused with a measurement**. Obeyed: the fix
+> landed **in the service** and not in a sixth hand-rolled wall; `students.controller.ts`'s absent-key fold is
+> gone; `_schoolId` was decided *explicitly* rather than silently (it is **still not read** — recorded as
+> `PF-298`, with the reason restated at land, see the correction in the evidence section below); and the slice was
+> scoped as a service slice that knowingly retightens already-landed handlers. **Refused: the read-only detector
+> first.** The `S-E05-2c` sequencing this block prescribed was not run — no query was issued against any database
+> asking how many teachers currently receive `null` on how many routes — and the slice shipped the tightening in
+> one pass instead. That is a deviation from a written recommendation, and it is recorded here rather than
+> smoothed over: what stands in its place is a **static** blast-radius census (`ADR-066 §D5`, ~17 call sites
+> enumerated by hand) plus a re-measured `G-PORTAL` grep proving no `apps/web/src/app/teacher/**` surface consumes
+> any retightened route. A static census is evidence about the *code*; the detector would have been evidence about
+> the *deployment*. **`PF-281` was priced, not fixed**, exactly as the block anticipated the two would have to be
+> priced together — and the price rose: a deactivated teacher's retained scope reached one handler before this
+> slice and reaches ~17 after it (`ADR-066 §D7`).
+
+> **OPERATIVE NEXT SLICE (2026-08-23, `S-E05-16` land pass) → `S-E05-17` — `PF-294`: the THIRD door of the
+> peer-enumeration class, `GET /api/v1/classes/:id`, and it is now a CONSUMPTION slice rather than an invention.**
+> The `Next slice →` line at the top of this file remains the *standing pointer* preserved by convention (eight
+> overrides have now scheduled over it without refuting it); **this** line is the *ranking*, and where the two
+> disagree this is the one the next run should read.
+>
+> **Why this and why now.** `classes.controller.ts:130` is guarded by `classes.read`, which `teacher` holds
+> (`permissions.constants.ts:222`), and its only wall is `cls.tenantId !== me.tenantId → 404`. It returns the full
+> active roster of **any** class in the tenant with `firstName`, `lastName`, `externalRef`, `gender`, `birthDate`,
+> `email`, `status` plus an active-guardianship count — a **wider** child projection than either enrollments door,
+> and the last one of the class still open on the teacher axis. `parent` does not hold `classes.read` (`:257`), so
+> the parent axis genuinely is closed. What changed this run is the *cost*: `S-E05-14` and `S-E05-15` each had to
+> hand-roll a teaching wall because the service could not be trusted; after `S-E05-16` the wall exists in one
+> place (`apps/api/src/modules/teaching/teaching-wall.where.ts`) and `canAccessStudent` is real, so this slice is a
+> `TeachingModule` import plus a guard, not a fourth copy of a predicate. **`PF-270` — "the predicate has three
+> copies" — should be closed by that same pass, or explicitly re-declared.**
+>
+> **Ranked immediately behind it, and read this one before deciding: `PF-310` — the wall `S-E05-16` just built
+> has no expiry.** The assignment read carries no academic-year clause (deliberate, `ADR-063 §D1`) and the
+> enrollment read filters `status: 'active'` — but **nothing in this codebase transitions an `Enrollment` out of
+> `active` at year rollover** (`academic-years.controller.ts:130-190` only flips `AcademicYear.status`; the sole
+> non-manual transition anywhere is the per-student `transferred_out` at `enrollments.controller.ts:935`), and no
+> `TeachingAssignment` is ever expired. A teacher's scope therefore accumulates every student they have ever
+> taught, and after three or four years converges back toward the whole school — **`PF-288` re-opening by ageing,
+> with every test still green**. `student-access.service.ts:162-168` currently asserts the opposite (it justifies
+> `status: 'active'` as the narrowing mechanism and never mentions the widening direction), which makes this both
+> a correctness finding and a `DNC-06` one. Cheap probe first: `select count(*) from enrollment where status =
+> 'active' group by academic year` on a deployment older than one year.
+>
+> **Then `PF-309`** — the asymmetry *this* slice created: `PATCH`/`DELETE /students/:id`
+> (`students.controller.ts:334`, `:375`) still gate on `students.write`/`students.delete` and a `tenantId`
+> comparison alone, so the Student aggregate's **read** is now walled and its **write** is not. Base `teacher`
+> does not hold `students.write`, so the stock role cannot reach it; `ADR-013`/`ADR-015` custom roles can mint a
+> teacher-shaped role that does, and that principal would be refused *reading* a child it may still overwrite
+> (`medicalNotes`, `status`, `email`, `address`). Three lines mirroring `:286` — treat it as a merge condition
+> before treating it as a slice.
+>
+> **Then `PF-305`** (the enrollments-list classifier still resolves roles first-match while `scopeForUser` unions,
+> under a docblock saying the two must not diverge), **then `PF-287`, `PF-284`, `PF-267`, `PF-277`, `PF-279`.**
+>
+> **Id-allocation note.** This run took **`ADR-066`** and **`PF-296`** through **`PF-313`**. `PF-296`…`PF-304`
+> were allocated **twice, differently**, by the implementer and by `ADR-066`'s own finding table; they are
+> arbitrated here **by meaning, in favour of the allocation cited from shipped source**, per the `PF-185`/`PF-186`
+> rule — see "Id arbitration" in the evidence section below. **`ADR-066`'s table is NOT rewritten by this pass and
+> still disagrees**; that is merge condition 4. **The next run allocates from `PF-314` and `ADR-067`**, after
+> re-checking open PRs.
 
 *(Corrected 2026-08-11, `S-E05-2` land pass. Lines 5-12 used to read "`S-E05-12` … is the only one with a written
 story" and "**Next slice → not in this epic** … nothing in this epic is enumerated". Both were falsified by the diff
@@ -212,6 +297,7 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | **S-E05-6** | **The attendance roster payload stops being MAXIMAL** (`PF-269`, `PF-274`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-6.md`](./stories/S-E05-6.md) · **`PF-269` closed** — the three `include: { student: true }` sites in `attendance.controller.ts` (`sessionDetail` ×2, `roster`) become one module-local `ATTENDANCE_ROSTER_STUDENT_SELECT = { id, firstName, lastName, externalRef }` · **`PF-274` closed** (`role="alert"` on the teacher error banner — a `V3-E06` row deliberately folded into this `V3-E05` slice, because the banner is the surface `S-E05-5`'s new 403 lands on) · **`PF-07` loses its `AC-21` qualifier and reads closed on BOTH axes** for the first time · new **`ADR-062`** (§D1 `photoUrl` REFUSED against two standing written recommendations, on measurement — the list composes an initials avatar; §D1.1 the design-system durability clause — a future `AvatarNameCell` adoption must pass no `src`; §D2 `externalRef` RETAINED, asymmetry deliberate; §D3 the first-of-kind `*_SELECT` constant is sanctioned as module-local **only**, the cross-module `StudentSummary` extraction refused) · also records **`PF-275`**…**`PF-278`** · test: `apps/api/src/modules/attendance/attendance-read-abac.spec.ts` — **74/74 executed green, and the ratchet proven by TWO mutations** (revert the three sites → 5 red; add `photoUrl` → closure assertion red) |
 | **S-E05-13** | **The two `Partial<T>` request bodies stop erasing to `Object`, and the grade-level PATCH stops mass-assigning into Prisma** (`PF-51`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-13.md`](./stories/S-E05-13.md) · **`PF-51` `in-progress`, explicitly NOT closed** — the row covers three clauses (PATCH bodies / query params / enum) and this slice closes the **first** only; the three unvalidated query params of `GET /enrollments` (`enrollments.controller.ts:122`) and the notification-kind clause both stay open *(**corrected 2026-08-23 at the `S-E05-15` land pass: the three query params are now CLOSED — clause (b) — and the cited line `:122` was already stale when written; the handler is at `:324` pre-slice. Only the notification-kind clause survives, which is why `PF-51` is still `in-progress` rather than `closed`.**)*, and `OPEN.md:73`’s standing instruction *“Do NOT flip this row on the strength of one parameter”* still holds · new **`ADR-064`** (§D1 a `@Body()` is a **class** — the metatype rule, ratchet-enforced across all 41 controllers; §D1a the derived Zod exemption as the single sanctioned second style, `MANUAL_ALLOWLIST` empty; §D1b the accepted negative — a controller may **not** annotate `@Body()` with a DTO imported from `@pilotage/contracts` or any non-relative module, because the classifier cannot prove it is a class; §D2 a privileged write **picks its fields**, never `data: body`, with the per-field blast-radius table; §D2a why both defences ship and why no test asserts a status code) · also records **`PF-284`**…**`PF-287`** · tests: `apps/api/src/modules/school-structure/grade-level-mass-assignment.spec.ts` (574 l) + `apps/api/src/shared/quality/body-metatype-gate.spec.ts` (849 l) — **written un-executed by their author, then EXECUTED at the land pass** — `npx jest --runInBand` gives **38/38** and **33/33** (71 green). A green run only proves half, so both defences were also proven **RED BY MUTATION** and the mutations reverted: deleting `forbidNonWhitelisted` from `main.ts` fails exactly the 6 hostile-key refusals, and restoring `data: body` fails exactly the 2 AC-4 assertions that read `Object.keys()` of the Prisma argument. The land pass also **fixed a twin-list defect the sprint raised against itself**: `GLOBAL_PIPE_OPTIONS` was a hand-transcribed copy of `main.ts:141-145`, so the first mutation above would have stayed green — it now DERIVES the options by reading `main.ts` and throws rather than defaulting if it cannot. The ratchet’s census (41 controllers / 77 `@Body()` / 4 sanctioned / 0 offenders) is now carried by an executed jest run, not only by a standalone classifier · evidence below |
 | **S-E05-15** | **The enrollments LIST path gets the wall its sibling got — and a SCOPE where the sibling got a refusal** (`PF-283`, `PF-51` clause (b)) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-15.md`](./stories/S-E05-15.md) · **`PF-283` closed on BOTH axes of this handler** (`?classSectionId=` and `?studentId=`) **and on the payload** — and explicitly **not** as an exposure class: the successor door is measured and recorded as **`PF-294`** (`classes.controller.ts:130`, wider projection, `teacher` audience) · **`PF-51` clause (b) closed**, the enum clause stays open so the row stays `in-progress` for the second run running · new **`ADR-065`** (§D1 `list` **scopes** where `roster` **refuses**, and the asymmetry is the decision — a parent has standing over their own child's *rows* but none over a *section*; §D2 the **parent** wall goes through `StudentAccessService` per GUARDRAILS §2 / `ADR-015`, the **teacher** wall deliberately does **not**, because `scopeForUser` returns the *unrestricted* sentinel for `teacher` and routing through it would be a fail-open dressed as compliance; §D3 a third module-local `*_SELECT`, `ADR-062 §D3` shape; §D4 the pipes are validated against the pinned `@nestjs/common@10.4.22` source and the `?status=` **pre-state is NOT claimed** (`DNC-06`); §D5 **the empty array is the DENY and the ABSENT key is the fail-open** — caller filters and scope clause are two distinct `AND` members, never a fifth spread, so no `?classSectionId=` can overwrite or be overwritten by the scope; §D6 three corrections to `ADR-063 §D6`, including the retraction of "this path is consumed") · also records **`PF-288`**…**`PF-294`** · tests: `apps/api/src/modules/enrollments/enrollments-list-abac.spec.ts` (922 l, 55 cases) — **written and NEVER executed by its author**, and every case constructs `new EnrollmentsController(...)` directly, so the DI container, `PermissionsGuard` and the pipes are **absent from all 55**; `enrollments-roster-abac.spec.ts` lost its `PF-283 (OUVERT)` characterization block, which `S-E05-14` planted deliberately to go **RED the day `PF-283` closed** — the blocker the verify panel raised, fixed by **removing** the expired block (its inverse already lives, more completely, in the new spec) and by correcting the story's own §3 file set from **four declared files to six** · evidence below |
+| **S-E05-16** | **`StudentAccessService.scopeForUser` stops returning the UNRESTRICTED sentinel for `teacher`, and role resolution becomes a UNION** (`PF-288`, `PF-51` clause 3 on one route) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-16.md`](./stories/S-E05-16.md) · **`PF-288` closed AT THE SERVICE — explicitly NOT as a class**: the teacher branch returns a bounded array (three tenant-scoped statements: `findForUser` → `teachingAssignment.findMany` → `enrollment.findMany`) and `[]` — never `null` — for a caller with no profile or no teaching, and `students.controller.ts` folds it in with `=== null` and an `AND` member instead of the absent-key spread `ADR-065 §D5` forbids; but **`calendar.controller.ts:265` still folds `teacher` into `isPrivileged` before `scopeForUser` is reached and remains a live teacher fail-open** (`ADR-066 §D5`, declared, out of `AC-9`) · **`PF-51` clause 3 advanced on `GET /api/v1/students` only** — three `ParseUUIDPipe` + one `ParseEnumPipe` land here while `getOne`/`update`/`remove` in the same file keep raw `@Param('id')`, so the row stays `in-progress` for the third run running · new **`ADR-066`** (§D2 role resolution becomes a **UNION**, argued as a *precondition* of the wall and not scope creep — the moment `teacher` stops being unrestricted, a teacher whose own child attends the school would have **lost that child** on every parent surface, delivered by a fix labelled "teacher"; §D3 the shared predicates move to the **leaf** module `teaching/teaching-wall.where.ts`, `type Prisma` import only, because `enrollments.controller.ts:37` already imports `StudentAccessService` and importing them back would close a **CJS require cycle across a decorated controller**; §D5 the ~17-call-site blast radius, and the calendar exclusion stated rather than hidden; §D6 the DI consequence is a **BOOT FAILURE**, not a test failure; §D7 `PF-281`'s price rises from 1 handler to ~17; §D8 `_schoolId` stays accepted-and-never-read, so **the school dimension of this scope is not enforced**) · also records **`PF-296`…`PF-313`** · tests: `apps/api/src/modules/students/student-access.service.spec.ts` (+372 l) and `students-list-teacher-scope.spec.ts` (359 l, new) — **EXECUTED, 48/48 green**, and the two suites the predicate move could have broken (`enrollments-list-abac`, `enrollments-roster-abac`) re-run **119/119 green**; `node scripts/tenant-adversarial-check.js` exit 0 · **the one thing with ZERO automated coverage is the only total-outage failure mode in the slice** — the service gains a second constructor dependency and three modules provide it directly on a premise this diff falsifies; miss one and Nest fails at **bootstrap**, four portals down, **no test red** · evidence below |
 | **S-E05-7** | **The public registration funnel gains an admission bound: two tiers, one fixed window, in process** (`PF-46`, throttling third) | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E05-7.md`](./stories/S-E05-7.md) · **`PF-46` NARROWED, not closed** — the `emailVerified` third (R-3) stays open · new **`ADR-038`** (in-process admission bounds on pre-auth endpoints) — shipped *against* the story's own §5 "no new ADR", on Winston's ruling · raises **R-1** (the global ceiling is itself a DoS lever, real fix `infra/nginx/`) and **R-2** (per-process counters, `ADR-038` D2) · **the shipped constants diverge from the story's §1.4 and a human must ratify the numbers** · evidence below |
 | S-E05-8 | Wrong password reported as "MFA required" (`PF-25`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
@@ -1185,3 +1271,234 @@ arbitration"). **`PF-294`** is allocated at this land pass for the `classes.cont
 security reviewer measured during verify and which had no id. **The next run allocates from `PF-295` and
 `ADR-066`**, after re-checking open PRs — the `PF-282` lesson: a held PR does not update `main`, so re-measure
 every raised finding after the rebase, not only the one being closed.
+
+---
+
+## S-E05-16 — evidence (this PR, 2026-08-23)
+
+**Closes `PF-288` (P1) at the SERVICE — not as an exposure class. Advances `PF-51` clause 3 on one route.**
+Decision record: `ADR-066`. Story: [`stories/S-E05-16.md`](./stories/S-E05-16.md).
+
+### What was actually wrong
+
+`apps/api/src/modules/students/student-access.service.ts:36-38`, verbatim on the pre-diff tree:
+
+```ts
+if (roles.includes('teacher')) {
+  // TODO Phase 4: when teaching assignments exist, filter by the teacher's class sections.
+  return { studentIds: null, reason: 'teacher (unrestricted until teaching assignments land)' };
+}
+```
+
+`studentIds: null` is **this service's own documented UNRESTRICTED sentinel** — its docblock says so at `:21`.
+The `TeachingAssignment` rows the TODO waits for shipped long ago (`schema.prisma:1006`, with
+`@@unique([teacherProfileId, classSectionId, subjectId])`), which is exactly why `S-E05-14` and `S-E05-15` each
+walked them **directly** rather than delegating: `ADR-065 §D2` states that routing the teacher axis through this
+service would have been *"a fail-open dressed as compliance"*.
+
+The live consumer made it reachable. `students.controller.ts:107` folded the sentinel in as
+`...(scope.studentIds ? { id: { in: scope.studentIds } } : {})` — **verbatim the absent-key fail-open
+`ADR-065 §D5` names and forbids** — on a handler that accepts `?classSectionId=` and returns **full `Student`
+rows**. So the door `S-E05-15` had just closed on `/enrollments` (four-column projection, scoped) was *narrower*
+than the one still open on `/students`, for the same audience.
+
+### What the fix is, and why it has the shape it has
+
+Five things worth carrying forward.
+
+1. **The teacher branch is three statements, each carrying an EXPLICIT `tenantId`.** `findForUser` — never the
+   upserting `ensureForUser`, because provisioning a `TeacherProfile` on a refusal path is a sink on a list route
+   (`PF-265` / `ADR-051 §D1`). On `degraded_no_app_url` — every deployment today — the app connects as table
+   **owner** and escapes its own RLS policies, so that clause is the only thing working (`ADR-032 §D5`). A
+   foreign-tenant section id therefore falls on an **empty intersection**, not on an authorisation.
+2. **The fail-open is made UNREPRESENTABLE, not merely unwritten.** Prisma **drops `undefined` keys from a
+   `where`**, so `{ tenantId, teacherProfileId: tp?.id }` with a null profile would have matched *every assignment
+   in the tenant* and **granted** the caller — a silent HTTP-200 fail-open, strictly worse than the bug being
+   fixed. `teacherSectionsWhere` types `teacherProfileId` as non-optional `string` and a null profile returns `[]`
+   before any `where` is built. Same mechanism as `ADR-063 §D2`, kept deliberately.
+3. **The predicates move to a LEAF module for a load-bearing reason, not an aesthetic one.**
+   `apps/api/src/modules/teaching/teaching-wall.where.ts` imports `type Prisma` and nothing else, so it adds zero
+   module edges. It exists there because `enrollments.controller.ts:37` **already imports
+   `StudentAccessService`**; importing the predicates back from the enrollments module would have closed a hard
+   **CJS require cycle across a decorated controller** (`ADR-066 §D3`). `PF-270` (the predicate has copies) is
+   correctly left open — no fourth copy was added, but the existing ones were not consolidated either.
+4. **Role resolution becomes a UNION, and this is the decision no acceptance criterion asked for.** The chain used
+   to short-circuit `admin → teacher → parent → student`. That was sound *only while the teacher branch was
+   unrestricted*: a teacher whose own child attends the school fell into the teacher branch and got their child
+   **by accident**. The moment that branch became bounded, `teacher` and `parent` stopped being comparable, and
+   that principal — the single most ordinary multi-role case a school has — would have **lost their own child**
+   across the parent dashboard, alerts, remediation, messaging and parent-exports, delivered by a fix labelled
+   "teacher". Branches resolve **lazily per role held**, so a `parent`-only caller issues exactly the one
+   `guardianship.findMany` it issued before and the latency-sensitive calendar read (`calendar.controller.ts:273`,
+   `PF-199`) pays nothing new.
+5. **Consumption is hardened at the same time, and typecheck is re-armed as a security control.** `=== null`
+   explicitly instead of truthiness (`[]` and `null` used to collapse to the same `{}`); the scope folded in as an
+   `AND` member instead of a `where.enrollments =` assignment; and `Prisma.StudentWhereInput` instead of
+   `Record<string, unknown>`, which is what makes `tsc` able to see a malformed ABAC clause at all (`PF-301`).
+   The list's query string gains three `ParseUUIDPipe`s and a `ParseEnumPipe`, asserted **through the route
+   metadata and by invoking the route-registered pipe instance** — the `S-E05-15` vacuity trap avoided by
+   construction.
+
+### `PF-288` closes on the SERVICE — read what that excludes
+
+`calendar.controller.ts:264-265` short-circuits `isPrivileged` (which **includes `teacher`**) to `null` *before*
+`scopeForUser` is called. The calendar therefore remains a live teacher fail-open that this slice does **not**
+close. `ADR-066 §D5` declares it and puts it out of `AC-9`'s perimeter; this row must not be read as a class
+closure. Two further residues are named rather than smuggled: `_schoolId` is still accepted and never read
+(`PF-298` — **the school dimension of this scope is not enforced**), and `PF-281` (`findForUser` ignores
+`TeacherProfile.active`) is **priced, not fixed** — a deactivated teacher's retained scope reached one handler
+before this slice and reaches ~17 after it.
+
+### Evidence, executed
+
+- `pnpm typecheck` → **13/13 tasks successful, exit 0**. The gate's first pass returned **14 TS errors, all 14
+  inside the two spec files and ZERO in production code**, every one a `noUncheckedIndexedAccess` indexed read
+  (`getQueryPipes(k)[0]` ×13, `mock.calls[0][0]` ×1). Fixed by **pinning the element through a throwing helper**
+  (`soleQueryPipe()`, the `stmtAt()` precedent from `S-E05-14`) and **not** by an `?.` sweep, which would have
+  made the pipe assertions pass vacuously. **`noUncheckedIndexedAccess` was not relaxed and no production file was
+  edited to satisfy a test.**
+- `git diff --check` → exit 0 (only the pre-existing informational CRLF→LF notices).
+- `npx jest --runTestsByPath student-access.service.spec.ts students-list-teacher-scope.spec.ts` → **48 passed**,
+  2 suites: the teacher wall AC-1/2/3, the union for `teacher × parent` and `teacher × student`, `[]`-is-deny, the
+  lazy per-role resolution, and the list handler's fold.
+- `npx jest --runTestsByPath enrollments-list-abac.spec.ts enrollments-roster-abac.spec.ts` → **119 passed** — the
+  predicate move to `teaching-wall.where.ts` broke neither `S-E05-14` nor `S-E05-15`.
+- `node scripts/tenant-adversarial-check.js` → **exit 0, 0 `[FAIL]`**; both new statements declared in
+  `ENUMERATED_OUTSIDE_SCOPE`.
+- `G-PORTAL` re-measured, not inherited: no `apps/web/src/app/teacher/**` surface calls `/v1/students`,
+  `analytics/parent-*`, `remediation/plans` or `alerts/parent`. The ~17-site tightening is invisible to
+  first-party UI.
+
+### NOT executed — and the gap is the slice's biggest risk
+
+**The DI graph has zero automated coverage, and it is the only total-outage failure mode here.**
+`StudentAccessService` goes from **one** constructor dependency to **two** (`PrismaService`,
+`TeacherProfileService`). Three modules provide it *directly* rather than importing `StudentsModule` —
+`students.module.ts`, `calendar.module.ts` (both gain `TeachingModule` in this diff) and `enrollments.module.ts`
+(already had it) — on a comment that read *"ne dépend que de `PrismaService`"*, a premise this diff **falsifies**
+(`PF-296`). Miss one and Nest fails at **bootstrap**: `Nest can't resolve dependencies of the
+StudentAccessService (PrismaService, ?)`, all four portals down — and **no test goes red**, because every spec
+constructs the service with `as never` doubles and never touches the DI container. The wiring is correct today
+**by reading**, verified independently by two reviewers; nothing stops the fourth module or the third dependency.
+`Test.createTestingModule({ imports: [StudentsModule] })` was attempted and is **not viable**:
+`AuthModule → jwt.strategy → jwks-rsa → jose@6` is ESM and dies on `SyntaxError: Unexpected token 'export'` under
+the pinned jest transform — do not send the next run down that path without budgeting `transformIgnorePatterns`.
+
+Also not executed: **no HTTP request was issued, no browser was driven, and no `where` built by this slice has
+ever reached the PostgreSQL query engine** (`DNC-06`).
+
+### Merge conditions — none of them fixed here
+
+1. **The derived DI-wiring spec.** `Reflect.getMetadata('design:paramtypes', StudentAccessService)` for the real
+   dependency list × a walk of every `*.module.ts` `providers:`/`exports:`/`imports:` array for the real injector
+   set — **both sides derived, neither hand-listed** (the paired-lists rule this repo has already paid for). The
+   `expect(deps).toContain('TeacherProfileService')` line is what makes it red on the pre-diff tree; the wiring
+   assertions alone would be vacuously green there, and the file's docblock must say so.
+2. **`PATCH`/`DELETE /students/:id` have no `canAccessStudent`** (`students.controller.ts:334`, `:375`) — the read
+   is now walled and the write is not, an asymmetry **this slice creates**. `PF-309`.
+3. **`classifyEnrollmentListCaller` was left first-match while `scopeForUser` unions**, in a file this diff edits,
+   under a docblock stating that diverging *"créerait deux réponses pour un même jeton"*. `PF-305`, a `DNC-06`
+   instance in the perimeter.
+4. **`ADR-066`'s finding table is not rewritten and still disagrees with the shipped source** — see "Id
+   arbitration" below.
+5. **The read-only detector prescribed by the previous land pass was not run.** No deployment measurement exists
+   for how many teachers currently receive `null` on how many routes.
+
+### Id arbitration — the code wins, by MEANING
+
+`PF-296`…`PF-300` were allocated **twice, differently**: once by the implementer (cited from shipped `apps/api`
+source and matching the story's `AC-11`) and once by `ADR-066`'s own "New findings" table, which additionally
+never allocates `PF-301`…`PF-304` although production code cites all four. `ADR-066` also contradicts itself
+internally (§D8 says `_schoolId` is `PF-299`; its table says `PF-299` is the gate finding). Per the
+`PF-185`/`PF-186` rule — *renumber the allocation that is **not** cited from production code* — **the code's
+allocation is authoritative from this pass onward**, in `OPEN.md`, here, and in `sprints/`:
+
+| Id | Subject (authoritative) | Cited at |
+|---|---|---|
+| `PF-296` | The falsified DI premise — *"ne dépend que de `PrismaService`"* on three local providers | `students.module.ts:11`, `calendar.module.ts:14`, `enrollments.module.ts:26` |
+| `PF-297` | Role precedence shadowed a multi-role principal's own scope → the UNION | `student-access.service.ts:28`, `student-access.service.spec.ts:446` |
+| `PF-298` | `_schoolId` accepted and never read — the school dimension is unenforced | `student-access.service.ts:50` |
+| `PF-299` | `ENUMERATED_OUTSIDE_SCOPE` is statement-exhaustive per glob | `scripts/tenant-adversarial-check.js:2301` |
+| `PF-300` | Shipped docblocks asserting the retired UNRESTRICTED sentinel | `alerts.controller.ts:186`, `meeting-requests.service.ts:14` |
+| `PF-301` | `where` typed `Record<string, unknown>`, disabling Prisma typecheck on the ABAC object | `students.controller.ts:143`, `:170` |
+| `PF-302` | A teacher still **sees** alerts they can no longer act on — a 403 dead-end | `alerts.controller.ts:197` |
+| `PF-303` | `?unenrolled=` is a dead parameter — zero web callers | `students.controller.ts:123` |
+| `PF-304` | Present-but-empty query values now 400 where they were silently ignored | `students.controller.ts:115` |
+
+`PF-305`…`PF-313` are allocated **at this land pass** for findings the verify panel measured and that had no id;
+they are listed in `OPEN.md`. **`ADR-066`'s table is left as shipped** — rewriting an architect's decision record
+in a writer's land pass would be the wrong repair — and the divergence is merge condition 4.
+
+### Behaviour changes, declared
+
+- **~17 `canAccessStudent` / `scopeForUser` call sites retighten**, several of them WRITE paths on an
+  append-only-audited surface (alerts acknowledge/resolve/dismiss, remediation plan mutations). Before this slice a
+  `teacher` could act on **any** child's alert in the tenant; after it, only on children they teach. `G-PORTAL`
+  says no first-party page notices; API consumers may.
+- **A `teacher` + `parent` principal now gets `taught ∪ own children` from `GET /students` and taught sections
+  only from `GET /enrollments`** — the two routes disagree for the same token (`PF-305`).
+- **A `parent` + `student` principal's scope WIDENS by their own student id.** The service docblock asserts *"The
+  union NEVER widens relative to the pre-diff behaviour"*, and for that one pair it does: pre-diff the parent
+  branch short-circuited and the self id was absent. Benign — self-data, `ADR-021`-sanctioned — but it is the one
+  combination the new spec does **not** cover, and an unverified absolute in a `G-AUTHZ` docblock is precisely
+  what `DNC-06` exists to stop. `PF-306`.
+- **`?status=`, `?classSectionId=` and `?academicYearId=` present-but-empty now 400** instead of being ignored.
+  `apps/web/src/app/admin/students/page.tsx:147` calls this endpoint **without** the `safe()` wrapper its sibling
+  aggregate call uses on `:149`, so a bookmarked or hand-edited admin URL takes the whole `/admin/students` page to
+  its error boundary rather than resetting a filter. `PF-304` records the pre-state as **unmeasured** for the two
+  uuid params.
+
+### Land pass (the routine, 2026-08-23) — what the sprint left, and the boot that had no test
+
+The sprint returned `landed: true` and left **three documentation defects it had recorded against itself**, one of
+them labelled *"merge condition of `S-E05-16`"*. They were discharged here rather than merged, because each is a
+false statement in an artefact a later reader follows:
+
+| Id | What was wrong | Fixed how |
+|---|---|---|
+| `PF-308` | `ADR-066`'s allocation table named a **different permutation** of subjects than shipped source cites for `PF-296`…`PF-300`, and never allocated `PF-301`…`PF-304`. It also contradicted itself (§D8 called `_schoolId` `PF-299`; the source calls it `PF-298`) | Table rewritten to match the **nine citations in `apps/api/src` and `scripts/`**, arbitrated **by meaning** (the `PF-185`/`PF-186` rule): ids quoted from shipped code win, because a reader follows them *from* the code. The `§D2` heading, which cited `PF-296` for the union, is corrected to `PF-297`. An arbitration note now sits above the table |
+| `PF-307` | Four `ADR-066 §Dn` cross-references in **shipped source** resolved to the wrong section | Each corrected against the ADR's actual headings, re-read this pass: `student-access.service.ts:50` §D6→**§D8**; `:63` §D7→**§D6** (the `PF-281` price is at ADR line 248); `:168` §D5→**§D1** (the `status: 'active'` decision is at ADR line 49); `students.module.ts:11` §D4→**§D6** |
+| `PF-306` | The service docblock asserted *"The union NEVER widens relative to the pre-diff behaviour"* — an **absolute that is false** for `parent`+`student`, and therefore a `DNC-06` instance in the very slice that exists to retire a `DNC-10` one | Replaced by a paragraph stating **where** the union narrows (every pair involving `teacher`) and naming `parent`+`student` as the one genuine widening, with its justification (`ADR-021` — the data subject may read themselves) and the open admission that it is the pair the new spec does not cover |
+
+The sprint had also marked `PF-288`, `PF-297` and `PF-301` `closed` **in place** in `OPEN.md`. That file's own rule
+is *"when you close a finding, move its row out of this file and append it to the matching `CLOSED-<layer>.md`"*.
+All six closed rows were moved to `CLOSED-L0.md`.
+
+### Executed evidence — every line below was run, none is asserted
+
+| Check | Command | Result |
+|---|---|---|
+| Build (the **one** `pnpm build` this run) | `pnpm --filter @pilotage/api build` | **exit 0** |
+| Typecheck, **after** the land-pass edits | `pnpm --filter @pilotage/api exec tsc --noEmit -p tsconfig.json` | **zero diagnostics emitted** |
+| The four suites the diff and the predicate move could break | `npx jest --runInBand --runTestsByPath student-access.service.spec.ts students-list-teacher-scope.spec.ts enrollments-list-abac.spec.ts enrollments-roster-abac.spec.ts` | **4 suites, 167/167 green** |
+| Tenant-scope adversarial gate (the two new statements are declared) | `node scripts/tenant-adversarial-check.js` | **exit 0**, read as a direct exit code, not through a pipe |
+| Release gate | `bash scripts/ci-gate.sh` (no flags — the fast tier every PR runs) | verdict line read from output, see below |
+
+### The boot — the one failure mode in this slice with ZERO automated coverage
+
+`StudentAccessService` gains a **second constructor dependency**, and **three** modules (`students`, `calendar`,
+`enrollments`) provide that service *locally*, each on a docblock premise this diff falsifies. Miss one `imports`
+entry and Nest fails at **bootstrap**: four portals down, and **no test goes red** — a unit spec constructs the
+service with `new`, so it can never see a module-graph defect. Reading the three modules is not proof. So the
+artefact was rebuilt and the container recreated:
+
+```
+docker compose --env-file .env -f infra/docker-compose.yml build api          # Image pilotage-scolaire-api Built
+docker compose --env-file .env -f infra/docker-compose.yml up -d --force-recreate api
+```
+
+- Image rebuilt from this diff — `pilotage-scolaire-api` aged **8 hours → 44 seconds**, so the running container is
+  demonstrably this code and not the previous one (the `R-05` trap).
+- `docker logs pilotage_api` — **no** `Nest can't resolve dependencies`, no circular-dependency warning, no error
+  of any kind. Bootstrap reached `ConfigPreflight`.
+- `docker inspect -f '{{.State.Health.Status}}'` → **`healthy`**, `{{.State.Running}}` → **`true`**.
+- `curl -o /dev/null -w '%{http_code}' http://localhost:3001/api/v1/students` → **401**, i.e. the reworked handler
+  with its three new pipes is **mounted and guarded** — a 404 would have meant the controller failed to register.
+
+**The stack was left running and healthy**, all 12 containers up. `--env-file .env` was passed on both commands
+(`PF-86`).
+
+**What this boot does NOT prove, stated so nobody reads it as more than it is:** it proves the module graph
+*resolves* and the route *registers*. It does not exercise the teacher wall against seeded data — no principal was
+authenticated, and the 401 is the guard, not the ABAC. The wall's correctness rests on the 167 unit assertions
+above, not on this probe.
