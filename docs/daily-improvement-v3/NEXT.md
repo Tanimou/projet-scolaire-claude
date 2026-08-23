@@ -1,5 +1,48 @@
 # Next story
 
+> **Allocation note (run 75, at land — supersedes both notes below).** This run took **`ADR-065`** and
+> **`PF-288`** … **`PF-293`**, plus **`PF-294`** allocated at the land pass for the `classes.controller.ts` third
+> door the security reviewer measured during verify and which had no id. **The next run allocates from `PF-295`
+> and `ADR-066`**, after re-checking open PRs.
+>
+> *Arbitration:* four agents allocated four ids three different ways in the same planning pass; arbitrated **by
+> meaning** (the `PF-185`/`PF-186` rule), table in `ADR-065` under "Id arbitration".
+>
+> *Correction:* the run-74 note below says this run allocates from `PF-288` and `ADR-065` — it did, and that
+> line is now discharged rather than pending.
+
+# NEXT — written by run 75 (`S-E05-15`), 2026-08-23 — **this section supersedes every section below**
+
+## ✅ `PF-283` is closed — the first time in eight runs that the item ranked first was the item shipped
+
+`GET /api/v1/enrollments` carried `where: { tenantId }` and nothing else, on a handler whose permission `parent`
+holds. It now runs pipes → classification → scope resolution (403 before any enrollment is read) →
+`buildEnrollmentListWhere`, with a module-local `ClassSection` projection. **`PF-51` clause (b) closes with it**;
+the enum clause survives, so `PF-51` stays `in-progress`. `ADR-065`. Full evidence and its named limits:
+`docs/spec/features/v3-e05/PROGRESS.md` § `S-E05-15`.
+
+The one sentence worth carrying: **`list` SCOPES where `roster` REFUSES.** Same permission code, same audience,
+two different verdicts, because a parent has genuine standing over their own child's *rows* and none over a
+*section*. `ADR-065 §D1` writes the divergence down precisely so the next reader does not "harmonise" it away.
+
+## ➡️ Next: `PF-288` — fix `StudentAccessService.scopeForUser`'s TEACHER branch, in the SERVICE
+
+**`PF-288` → `PF-294` → `PF-287` → `PF-284` → `PF-267` → `PF-277` → `PF-279` → `S-E05-2b`.**
+
+`PF-288` leads because it is **not a paper finding — it is the hole just closed, live, one module over, on a wider
+payload.** `student-access.service.ts:36-38` returns `studentIds: null` (the *unrestricted* sentinel) for
+`teacher` behind a TODO waiting on assignments that shipped long ago; `students.controller.ts:107` consumes it as
+`...(scope.studentIds ? { id: { in: scope.studentIds } } : {})` — **verbatim the absent-key fail-open
+`ADR-065 §D5` names and forbids** — and that handler takes `?classSectionId=` at `:120`, returning **full
+`Student` rows**. `calendar.controller.ts:273` inherits the same sentinel; `alerts/meeting-requests.service.ts:7-13`
+already works *around* the service. Five consumers, **one change, in the service** — not a sixth hand-rolled wall.
+Price it with `PF-281` (same seam) and run a read-only detector first, the `S-E05-2c` posture.
+
+`PF-294` ranks second: `GET /api/v1/classes/:id` (`classes.controller.ts:130`) returns the full active roster of
+**any** class in the tenant, with `gender`, `birthDate` and `email` — a **wider** child projection than either
+enrollments door — to any holder of `classes.read`, which includes `teacher`. `parent` does not hold it, so the
+parent axis really is closed; the teacher axis is not.
+
 > **Allocation note (run 74, at land — supersedes the run-73 note below).** This run took **`ADR-064`** and
 > **`PF-284`** … **`PF-287`**. **The next run allocates from `PF-288` and `ADR-065`**, after re-checking open PRs.
 >

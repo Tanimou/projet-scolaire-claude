@@ -7,6 +7,7 @@ import { PERMISSIONS_META_KEY } from '../../shared/auth/requires-permission.deco
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
 import type { PrismaService } from '../../shared/prisma/prisma.service';
 import type { NotificationsService } from '../notifications/notifications.service';
+import type { StudentAccessService } from '../students/student-access.service';
 import type { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import {
@@ -290,7 +291,26 @@ function makeHarness(options: { teacherProfileId?: string | null; db?: ReturnTyp
 
   const notifications = { createMany: async () => undefined } as unknown as NotificationsService;
 
-  const controller = new EnrollmentsController(db.client, users, notifications, teachers);
+  /**
+   * S-E05-15 — 5e argument du constructeur. `roster` ne l'appelle JAMAIS ; le
+   * talon LÈVE pour que ce fichier échoue bruyamment si une tranche ultérieure
+   * faisait passer le mur de `roster` par `StudentAccessService` sans le dire
+   * (`student-access.service.ts:38-40` rend `studentIds: null` — NON RESTREINT —
+   * pour `teacher`, donc ce serait un fail-open silencieux).
+   */
+  const studentAccess = {
+    scopeForUser: async () => {
+      throw new Error('`roster` ne doit PAS consulter StudentAccessService (S-E05-15)');
+    },
+  } as unknown as StudentAccessService;
+
+  const controller = new EnrollmentsController(
+    db.client,
+    users,
+    notifications,
+    teachers,
+    studentAccess,
+  );
   return { controller, db, findForUserCalls, ensureForUserCalls };
 }
 
@@ -708,48 +728,31 @@ describe('S-E05-14 — validation de paramètre et métadonnées (AC-6, AC-11)',
 });
 
 // ===========================================================================
-// COUCHE 5 — CE QUE CETTE TRANCHE NE FERME PAS, ÉPINGLÉ PLUTÔT QUE DÉCRIT
-// (`PF-283`, `ADR-063 §D6`)
+// COUCHE 5 (SUPPRIMÉE) — `PF-283` EST CLOS, DONC SA CARACTÉRISATION EST PARTIE
 //
-// `roster` gagne l'ABAC ci-dessus. `list` (:322) porte la MÊME permission
-// `enrollments.read` — détenue par `parent` (`permissions.constants.ts:257`) —
-// dans le MÊME contrôleur, accepte le MÊME `classSectionId` en filtre, et n'a
-// AUCUN mur de propriété. L'énumération de pairs SURVIT à cette tranche.
+// Ce fichier portait une COUCHE 5 de tests de CARACTÉRISATION qui ÉPINGLAIENT
+// le trou laissé ouvert par `S-E05-14` : `list` (`enrollments.controller.ts:636`) portait la MÊME
+// permission `enrollments.read` que `roster`, acceptait le MÊME
+// `classSectionId`, n'avait AUCUN mur de propriété, et renvoyait la ligne
+// `ClassSection` ENTIÈRE (`internalNotes` compris) au même appelant `parent`.
+// Leur en-tête annonçait sa propre péremption : « le jour où `PF-283` est clos
+// ils passent au ROUGE, nommément, et doivent être RÉÉCRITS ».
 //
-// Pire pour la thèse de `PF-280` : `roster` restreint son `classSection` à
-// `{ id, name, maxStudents }` au motif qu'`internalNotes` est un champ ADMIN —
-// pendant que `list`, dix-huit lignes plus haut, renvoie `classSection:
-// { include: { gradeLevel: true } }`, c'est-à-dire la ligne ENTIÈRE,
-// `internalNotes` et `options` compris, au même appelant `parent`.
+// `S-E05-15` (`ADR-065`) clôt `PF-283` sur les DEUX axes. Les deux cas ont donc
+// été retirés plutôt que réécrits ici, parce que leur INVERSE existe déjà,
+// nommément et plus complètement, dans le fichier qui appartient à ce handler —
+// `enrollments-list-abac.spec.ts` :
 //
-// Ces cas sont des tests de CARACTÉRISATION : ils affirment le comportement
-// ACTUEL, pas le comportement voulu. Le jour où `PF-283` est clos ils passent
-// au ROUGE, nommément, et doivent être RÉÉCRITS — c'est le seul mécanisme qui
-// empêche « PF-278 clos » d'être lu comme « la classe d'exposition est close ».
+//  • parent + `?classSectionId=<section d'un pair>` → l'intersection est VIDE
+//    et la portée ÉLÈVE survit au filtre de l'appelant (« G-AUTHZ, les
+//    négatives » : `parent + ?classSectionId=`, `parent + ?studentId=<pair>`) ;
+//  • `classSection` est un `select` EXPLICITE dont `internalNotes` et `options`
+//    sont absents, prouvé CLÉ PAR CLÉ (« projection `classSection` »).
+//
+// Rien n'est perdu ; la preuve a simplement rejoint le handler qu'elle décrit.
+// Conséquence à ne pas défaire : le talon `studentAccess` de `makeHarness`
+// (:301) LÈVE, et son docblock affirme que ce fichier n'atteint JAMAIS
+// `scopeForUser`. C'est vrai de `roster`, et ce ne redevient vrai de CE FICHIER
+// que parce que les deux appels à `list` qui vivaient ICI ont disparu. Toute
+// réintroduction d'un appel à `list` ici doit d'abord traiter ce talon.
 // ===========================================================================
-
-describe('PF-283 (OUVERT) — `GET /enrollments` reste sans ABAC : caractérisation', () => {
-  it('un parent SANS lien avec la classe énumère quand même ses pairs par `classSectionId`', async () => {
-    const h = makeHarness({ teacherProfileId: null });
-    const res = await h.controller.list(jwt(PARENT), undefined, CS_MINE);
-    // AUCUN 403. C'est le trou, et il est ici pour être vu.
-    expect(res.data).toHaveLength(1);
-    // Aucune résolution de profil professeur n'a même été tentée : `list` ne
-    // possède pas de mur à franchir.
-    expect(h.findForUserCalls).toHaveLength(0);
-    expect(h.db.of('teachingAssignment')).toHaveLength(0);
-  });
-
-  it('et sa requête livre la ligne `ClassSection` ENTIÈRE — `internalNotes` que `roster` vient d’exclure', async () => {
-    const h = makeHarness({ teacherProfileId: null });
-    await h.controller.list(jwt(PARENT), undefined, CS_MINE);
-    const call = stmtAt(h.db.of('enrollment'));
-    const section = call.include?.classSection as Row;
-    // `include` sans `select` = toutes les colonnes scalaires, par définition.
-    expect(section).toBeDefined();
-    expect(section.select).toBeUndefined();
-    // Le filtre de classe est honoré sans qu'aucune clause de propriété
-    // l'accompagne : `tenantId` est la SEULE restriction.
-    expect(Object.keys(call.where ?? {}).sort()).toEqual(['classSectionId', 'tenantId']);
-  });
-});
