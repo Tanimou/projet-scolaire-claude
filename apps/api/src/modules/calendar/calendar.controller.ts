@@ -6,6 +6,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  ParseEnumPipe,
   Patch,
   Post,
   Query,
@@ -233,7 +234,20 @@ export class CalendarController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Query('type') type?: CalendarEventType,
+    // S-E05-17 / ADR-067 §D2 — le type d'evenement etait annote `CalendarEventType`
+    // mais ce type est EFFACE a l'execution : la chaine brute atteignait
+    // `where.type` et Prisma repondait 500 (mesure). Ici l'allowlist est l'objet
+    // enum Prisma LUI-MEME (7 valeurs, deja importe en VALEUR plus haut) : la
+    // route accepte exactement l'enum, et aucun consommateur inter-paquet
+    // n'existe, donc creer un `CALENDAR_EVENT_TYPE` dans les contrats ne serait
+    // qu'une liste jumelle de plus (ADR-067 §D0).
+    //
+    // `{ optional: true }` ne saute que `undefined`/`null` : `?type=` (present
+    // mais VIDE) devient donc 400 la ou il rendait 200. C'est DELIBERE et
+    // documente en ADR-067 §D2 — aucune couche de normalisation n'est ajoutee
+    // pour preserver l'ancien comportement.
+    @Query('type', new ParseEnumPipe(CalendarEventType, { optional: true }))
+    type?: CalendarEventType,
     @Query('academicYearId') academicYearId?: string,
   ) {
     const me = await this.users.ensureUser(jwt);

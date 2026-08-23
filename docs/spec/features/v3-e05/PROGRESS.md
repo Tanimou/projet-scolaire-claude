@@ -2,8 +2,8 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-23)** `in-progress` — **twelve slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, #268 — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)** and **`S-E05-16` (2026-08-23, this PR — `PF-288` closed **at the service, not as a class**, `PF-51` clause 3 advanced on one route, `ADR-066`)**. **Twelve landed rows against a twelve-row backlog is an arithmetic coincidence, not a completion:** four of the twelve (`S-E05-2c`, `S-E05-14`, `S-E05-15`, `S-E05-16`) came from *outside* the backlog, and six backlog rows are still unenumerated. Each was authored and implemented in the same
+**Status (2026-08-23)** `in-progress` — **thirteen slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, #268 — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)** and **`S-E05-16` (2026-08-23, this PR — `PF-288` closed **at the service, not as a class**, `PF-51` clause 3 advanced on one route, `ADR-066`)** and **`S-E05-17` (2026-08-23, this PR — `PF-314` + `PF-315` closed, **`PF-51` closed: clause 3 of 3**, `ADR-067`)**. **Thirteen landed rows against a twelve-row backlog is not a completion, and "12 of 12" in the roadmap table is numerically true and semantically false:** five of the thirteen (`S-E05-2c`, `S-E05-14`, `S-E05-15`, `S-E05-16`, `S-E05-17`) came from *outside* the backlog, and six backlog rows (`S-E05-1`, `S-E05-4`, `S-E05-8`, `S-E05-9`, `S-E05-10`, `S-E05-2b`) are still unenumerated — plus `S-E05-18`, the `PF-294` placeholder renumbered by run 77. Each was authored and implemented in the same
 `S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, this PR — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
 remaining four (`S-E05-1`, `S-E05-4`, `S-E05-8` … `S-E05-10`) still exist as **rows in
@@ -175,7 +175,15 @@ below, and § `S-E05-7` → "Next run" for the ranking as it stands after this s
 > priced together — and the price rose: a deactivated teacher's retained scope reached one handler before this
 > slice and reaches ~17 after it (`ADR-066 §D7`).
 
-> **OPERATIVE NEXT SLICE (2026-08-23, `S-E05-16` land pass) → `S-E05-17` — `PF-294`: the THIRD door of the
+> **ID COLLISION, RESOLVED 2026-08-23 (run 77) — the block below reserved `S-E05-17` for `PF-294`, and a different
+> story shipped under that id. Arbitrated BY MEANING, per the `S-E05-6 → S-E05-13` precedent** (`OPEN.md:73`,
+> `project_parallel_runs_collide_on_ids`): this block is a matrix-row-only placeholder cited from no source file, and
+> `stories/S-E05-17.md` did not exist on disk when run 77 began — the id was unclaimed. The enum-input slice **keeps**
+> `S-E05-17` (it is now cited from `ADR-067`, a gate spec header, a probe script and three controllers), and
+> **`PF-294` renumbers to `S-E05-18`**. Subject unchanged, label moved; nothing below is deleted. Two live
+> `S-E05-17`s are not left behind.
+
+> **OPERATIVE NEXT SLICE (2026-08-23, `S-E05-16` land pass; **renumbered to `S-E05-18` by run 77**) → `PF-294`: the THIRD door of the
 > peer-enumeration class, `GET /api/v1/classes/:id`, and it is now a CONSUMPTION slice rather than an invention.**
 > The `Next slice →` line at the top of this file remains the *standing pointer* preserved by convention (eight
 > overrides have now scheduled over it without refuting it); **this** line is the *ranking*, and where the two
@@ -221,6 +229,48 @@ below, and § `S-E05-7` → "Next run" for the ranking as it stands after this s
 > rule — see "Id arbitration" in the evidence section below. **`ADR-066`'s table is NOT rewritten by this pass and
 > still disagrees**; that is merge condition 4. **The next run allocates from `PF-314` and `ADR-067`**, after
 > re-checking open PRs.
+
+> **OPERATIVE NEXT SLICE (2026-08-23, `S-E05-17` land pass) → `S-E05-18` / `PF-294`: the THIRD door of the
+> peer-enumeration class, `GET /api/v1/classes/:id`.** **Subject unchanged from the block immediately above** —
+> run 77 moved only its LABEL. The `Next slice →` line at the top of this file remains the *standing pointer*
+> preserved by convention (**nine** overrides have now scheduled over it without refuting it); **this** line is the
+> *ranking*, and where the two disagree this is the one the next run should read.
+>
+> **The one thing run 77 changes about the ranking.** `PF-51` is no longer a reason to schedule another DTO / query
+> param / enum slice: clause 3 of 3 closed here, so the whole three-clause row leaves `OPEN.md`. The queue behind
+> `S-E05-18` is therefore **`PF-310`** (the teacher wall `S-E05-16` built has no expiry — read that block above
+> before deciding), then `PF-309`, `PF-305`, `PF-287`, `PF-284`, `PF-267`, `PF-277`, `PF-279`. Nothing was re-ranked.
+>
+> **Three residuals this run adds to that queue, none of them a slice on its own.**
+>
+> **(1) `R-1` — the new ratchet holds two thirds of its own class shut, not three.** Its GUARD arm
+> (`enum-route-input-gate.spec.ts:292`) accepts any `X.includes(…)` naming a bound allowlist **without requiring
+> the negative branch to refuse**, so the exact `PF-315` idiom this slice deleted (`raw && LIST.includes(raw) ? raw :
+> undefined`) would classify as GUARDED and pass green. Its pipe arm (`:338`) sets `pipeAllowlist` from the first
+> enum identifier appearing anywhere in the decorator arguments and never checks WHICH pipe class received it, so
+> `@Query('status', new DefaultValuePipe(AlertStatus.open))` — which validates nothing — reads as compliant.
+> Fix by requiring a throwing (or allowlist-member-returning) negative branch and a validating pipe class, with a
+> fourth red-before fixture for each shape. Fold into whichever slice next touches the gate; do not ship a second
+> hardcoded list to compensate.
+>
+> **(2) `PF-317`, with its wording CORRECTED here.** `remediation` notifications emit from six sites in
+> `remediation.controller.ts` plus the worker sweep cron, and no user setting has ever existed for them; the 400 this
+> slice adds stops *pretending* one does. The `OPEN.md` sentence « after `S-E05-17` the channel is permanently on
+> with no opt-out » is the **inverse** of the truth for a row already written through the pre-fix 200: the
+> dispatch path resolves preferences generically by `(userProfileId, kind)`, so a `remediation` row with
+> `inAppEnabled:false` keeps suppressing the channel forever, while `listForUser` never returns it and the PATCH now
+> 400s — permanently OFF, with no opt-IN, unobservable and uncorrectable through the API. **No detection was
+> run.** Cheap probe, and the in-scope closure given `AC-12` forbids a migration here: count
+> `notificationPreference` rows whose `kind` is not in `NOTIFICATION_KINDS` and report non-zero loudly.
+>
+> **(3) `PF-318`** — `apps/web/src/app/admin/calendar/page.tsx:80` fetches **bare**, with no `safe()` wrapper, so
+> the new calendar `?type` 400 would surface as an unhandled error rather than the empty tab its alerts sibling
+> renders. Unreachable today (no caller sends `?type`), which is exactly why it is a finding and not a fix.
+>
+> **Id-allocation note.** This run took **`ADR-067`** and **`PF-314`** through **`PF-318`**. **The next run allocates
+> from `PF-319` and `ADR-068`**, after re-checking open PRs — the allocation reads `main`, not open PRs, and that
+> is how `PF-185`/`PF-186` collided. **`docs/daily-improvement-v3/NEXT.md` was NOT updated by this pass** and still
+> carries the run-75 note (« the next run allocates from `PF-288` and `ADR-065` »), now stale by three runs.
 
 *(Corrected 2026-08-11, `S-E05-2` land pass. Lines 5-12 used to read "`S-E05-12` … is the only one with a written
 story" and "**Next slice → not in this epic** … nothing in this epic is enumerated". Both were falsified by the diff
@@ -298,6 +348,7 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | **S-E05-13** | **The two `Partial<T>` request bodies stop erasing to `Object`, and the grade-level PATCH stops mass-assigning into Prisma** (`PF-51`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-13.md`](./stories/S-E05-13.md) · **`PF-51` `in-progress`, explicitly NOT closed** — the row covers three clauses (PATCH bodies / query params / enum) and this slice closes the **first** only; the three unvalidated query params of `GET /enrollments` (`enrollments.controller.ts:122`) and the notification-kind clause both stay open *(**corrected 2026-08-23 at the `S-E05-15` land pass: the three query params are now CLOSED — clause (b) — and the cited line `:122` was already stale when written; the handler is at `:324` pre-slice. Only the notification-kind clause survives, which is why `PF-51` is still `in-progress` rather than `closed`.**)*, and `OPEN.md:73`’s standing instruction *“Do NOT flip this row on the strength of one parameter”* still holds · new **`ADR-064`** (§D1 a `@Body()` is a **class** — the metatype rule, ratchet-enforced across all 41 controllers; §D1a the derived Zod exemption as the single sanctioned second style, `MANUAL_ALLOWLIST` empty; §D1b the accepted negative — a controller may **not** annotate `@Body()` with a DTO imported from `@pilotage/contracts` or any non-relative module, because the classifier cannot prove it is a class; §D2 a privileged write **picks its fields**, never `data: body`, with the per-field blast-radius table; §D2a why both defences ship and why no test asserts a status code) · also records **`PF-284`**…**`PF-287`** · tests: `apps/api/src/modules/school-structure/grade-level-mass-assignment.spec.ts` (574 l) + `apps/api/src/shared/quality/body-metatype-gate.spec.ts` (849 l) — **written un-executed by their author, then EXECUTED at the land pass** — `npx jest --runInBand` gives **38/38** and **33/33** (71 green). A green run only proves half, so both defences were also proven **RED BY MUTATION** and the mutations reverted: deleting `forbidNonWhitelisted` from `main.ts` fails exactly the 6 hostile-key refusals, and restoring `data: body` fails exactly the 2 AC-4 assertions that read `Object.keys()` of the Prisma argument. The land pass also **fixed a twin-list defect the sprint raised against itself**: `GLOBAL_PIPE_OPTIONS` was a hand-transcribed copy of `main.ts:141-145`, so the first mutation above would have stayed green — it now DERIVES the options by reading `main.ts` and throws rather than defaulting if it cannot. The ratchet’s census (41 controllers / 77 `@Body()` / 4 sanctioned / 0 offenders) is now carried by an executed jest run, not only by a standalone classifier · evidence below |
 | **S-E05-15** | **The enrollments LIST path gets the wall its sibling got — and a SCOPE where the sibling got a refusal** (`PF-283`, `PF-51` clause (b)) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-15.md`](./stories/S-E05-15.md) · **`PF-283` closed on BOTH axes of this handler** (`?classSectionId=` and `?studentId=`) **and on the payload** — and explicitly **not** as an exposure class: the successor door is measured and recorded as **`PF-294`** (`classes.controller.ts:130`, wider projection, `teacher` audience) · **`PF-51` clause (b) closed**, the enum clause stays open so the row stays `in-progress` for the second run running · new **`ADR-065`** (§D1 `list` **scopes** where `roster` **refuses**, and the asymmetry is the decision — a parent has standing over their own child's *rows* but none over a *section*; §D2 the **parent** wall goes through `StudentAccessService` per GUARDRAILS §2 / `ADR-015`, the **teacher** wall deliberately does **not**, because `scopeForUser` returns the *unrestricted* sentinel for `teacher` and routing through it would be a fail-open dressed as compliance; §D3 a third module-local `*_SELECT`, `ADR-062 §D3` shape; §D4 the pipes are validated against the pinned `@nestjs/common@10.4.22` source and the `?status=` **pre-state is NOT claimed** (`DNC-06`); §D5 **the empty array is the DENY and the ABSENT key is the fail-open** — caller filters and scope clause are two distinct `AND` members, never a fifth spread, so no `?classSectionId=` can overwrite or be overwritten by the scope; §D6 three corrections to `ADR-063 §D6`, including the retraction of "this path is consumed") · also records **`PF-288`**…**`PF-294`** · tests: `apps/api/src/modules/enrollments/enrollments-list-abac.spec.ts` (922 l, 55 cases) — **written and NEVER executed by its author**, and every case constructs `new EnrollmentsController(...)` directly, so the DI container, `PermissionsGuard` and the pipes are **absent from all 55**; `enrollments-roster-abac.spec.ts` lost its `PF-283 (OUVERT)` characterization block, which `S-E05-14` planted deliberately to go **RED the day `PF-283` closed** — the blocker the verify panel raised, fixed by **removing** the expired block (its inverse already lives, more completely, in the new spec) and by correcting the story's own §3 file set from **four declared files to six** · evidence below |
 | **S-E05-16** | **`StudentAccessService.scopeForUser` stops returning the UNRESTRICTED sentinel for `teacher`, and role resolution becomes a UNION** (`PF-288`, `PF-51` clause 3 on one route) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-16.md`](./stories/S-E05-16.md) · **`PF-288` closed AT THE SERVICE — explicitly NOT as a class**: the teacher branch returns a bounded array (three tenant-scoped statements: `findForUser` → `teachingAssignment.findMany` → `enrollment.findMany`) and `[]` — never `null` — for a caller with no profile or no teaching, and `students.controller.ts` folds it in with `=== null` and an `AND` member instead of the absent-key spread `ADR-065 §D5` forbids; but **`calendar.controller.ts:265` still folds `teacher` into `isPrivileged` before `scopeForUser` is reached and remains a live teacher fail-open** (`ADR-066 §D5`, declared, out of `AC-9`) · **`PF-51` clause 3 advanced on `GET /api/v1/students` only** — three `ParseUUIDPipe` + one `ParseEnumPipe` land here while `getOne`/`update`/`remove` in the same file keep raw `@Param('id')`, so the row stays `in-progress` for the third run running · new **`ADR-066`** (§D2 role resolution becomes a **UNION**, argued as a *precondition* of the wall and not scope creep — the moment `teacher` stops being unrestricted, a teacher whose own child attends the school would have **lost that child** on every parent surface, delivered by a fix labelled "teacher"; §D3 the shared predicates move to the **leaf** module `teaching/teaching-wall.where.ts`, `type Prisma` import only, because `enrollments.controller.ts:37` already imports `StudentAccessService` and importing them back would close a **CJS require cycle across a decorated controller**; §D5 the ~17-call-site blast radius, and the calendar exclusion stated rather than hidden; §D6 the DI consequence is a **BOOT FAILURE**, not a test failure; §D7 `PF-281`'s price rises from 1 handler to ~17; §D8 `_schoolId` stays accepted-and-never-read, so **the school dimension of this scope is not enforced**) · also records **`PF-296`…`PF-313`** · tests: `apps/api/src/modules/students/student-access.service.spec.ts` (+372 l) and `students-list-teacher-scope.spec.ts` (359 l, new) — **EXECUTED, 48/48 green**, and the two suites the predicate move could have broken (`enrollments-list-abac`, `enrollments-roster-abac`) re-run **119/119 green**; `node scripts/tenant-adversarial-check.js` exit 0 · **the one thing with ZERO automated coverage is the only total-outage failure mode in the slice** — the service gains a second constructor dependency and three modules provide it directly on a premise this diff falsifies; miss one and Nest fails at **bootstrap**, four portals down, **no test red** · evidence below |
+| **S-E05-17** | **Enum-typed route inputs stop reaching Prisma unvalidated — and a DERIVED repo-wide ratchet holds the class shut** (`PF-314`, `PF-315`, **`PF-51` clause 3 of 3**) | ⚠️ done — **needs human review** | 2026-08-23 (run 77) | spec: [`stories/S-E05-17.md`](./stories/S-E05-17.md) · ADR: [`ADR-067`](../../../adr/ADR-067-enum-route-input-validation.md) · **`PF-314` + `PF-315` closed**; **`PF-51` flips `in-progress` → `closed`, CONDITIONALLY** — the flip is earned by `apps/api/src/shared/quality/enum-route-input-gate.spec.ts` (enum inventory DERIVED from `schema.prisma` + `packages/contracts/src/enums/index.ts`, `MANUAL_ALLOWLIST` empty, anti-vacuity floors, negative control shaped like the two already-correct siblings), **not** by the three pipes; the four new jest specs and `scripts/enum-route-input-probe.js` were **written un-executed by their author**, so if `node scripts/test-ratchet.js api` is not green at land, this row returns to `OPEN.md` · **BLOCKING land prerequisite: `pnpm --filter @pilotage/contracts build` (via `exec`) before any API start** — `NOTIFICATION_KIND` is a new VALUE export, `dist/` is gitignored, `types → src` but `default → dist`, and a stale `dist` makes `new ParseEnumPipe(undefined)` throw at decorator-evaluation time (four portals down, with typecheck AND jest both green because both read `src`) · residual **`R-1`**: the ratchet’s GUARD arm does not require a refusing negative branch and its pipe arm does not check the pipe CLASS, so the **widening** variant of the class is not held shut · raises `PF-316` (record-only), `PF-317`, `PF-318` |
 | **S-E05-7** | **The public registration funnel gains an admission bound: two tiers, one fixed window, in process** (`PF-46`, throttling third) | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E05-7.md`](./stories/S-E05-7.md) · **`PF-46` NARROWED, not closed** — the `emailVerified` third (R-3) stays open · new **`ADR-038`** (in-process admission bounds on pre-auth endpoints) — shipped *against* the story's own §5 "no new ADR", on Winston's ruling · raises **R-1** (the global ceiling is itself a DoS lever, real fix `infra/nginx/`) and **R-2** (per-process counters, `ADR-038` D2) · **the shipped constants diverge from the story's §1.4 and a human must ratify the numbers** · evidence below |
 | S-E05-8 | Wrong password reported as "MFA required" (`PF-25`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
@@ -1502,3 +1553,105 @@ docker compose --env-file .env -f infra/docker-compose.yml up -d --force-recreat
 *resolves* and the route *registers*. It does not exercise the teacher wall against seeded data — no principal was
 authenticated, and the 401 is the guard, not the ABAC. The wall's correctness rests on the 167 unit assertions
 above, not on this probe.
+
+---
+
+## `S-E05-17` (2026-08-23, run 77) — the LAST clause of `PF-51`: enum-typed route inputs stop reaching Prisma unvalidated
+
+Story: [`stories/S-E05-17.md`](./stories/S-E05-17.md) · ADR: [`ADR-067`](../../../adr/ADR-067-enum-route-input-validation.md)
+
+**Closes `PF-314`, `PF-315`, and `PF-51` — clause 3 of 3, so the row flips `in-progress` → `closed`.** Clause 1
+closed run 74 (`ADR-064`), clause 2 run 75 (`ADR-065`). **Advances `PF-291` without closing it.** Raises `PF-316`
+(record-only), `PF-317`, `PF-318`, and residual `R-1`.
+
+### The flip is earned by the RATCHET, not by the three pipes
+
+`OPEN.md`’s standing instruction — *“Do NOT flip this row on the strength of one parameter”* — held for three runs
+running. It is discharged by `apps/api/src/shared/quality/enum-route-input-gate.spec.ts` and by nothing else: three
+pipes close three sites, only a derived repo-wide gate closes a class.
+
+**The rule is ANNOTATION-FIRST, and that correction is load-bearing.** The first draft keyed on the cast
+(`x as SomeEnum`). Measured, the three sites do not share that shape — `calendar.controller.ts` has **no cast
+anywhere**, only an erased `CalendarEventType` annotation. A cast-keyed ratchet would therefore have been GREEN on
+one third of the very defect it exists for, and the row would have had to stay `in-progress`.
+
+**The enum inventory is DERIVED** from `schema.prisma` (49 `enum` declarations) and
+`packages/contracts/src/enums/index.ts` (13 `(typeof X)[number]` aliases) — never the three type names, which would
+be the twin list this repository has already paid for three times.
+
+**Corpus evidence, printed rather than narrated** (41 controllers, 10 enum-bound parameters):
+
+```
+BEFORE                                                        AFTER
+OFFEND alerts/alerts.controller.ts:76        listInstances    CLEAN (pipe)
+OFFEND calendar/calendar.controller.ts:236   list             CLEAN (pipe)
+OFFEND notifications/preferences.ctrl.ts:46  update           CLEAN (pipe)
+CLEAN  alerts/meeting-requests.controller.ts:52   (guard)     CLEAN (guard)
+CLEAN  child-claims/admin-child-claims.ctrl.ts:63 (guard)     CLEAN (guard)
+CLEAN  alerts/alerts.controller.ts:60             (pipe)      CLEAN (pipe)
+CLEAN  enrollments/enrollments.controller.ts:572  (pipe)      CLEAN (pipe)
+CLEAN  imports/imports.controller.ts:64, :90      (pipe)      CLEAN (pipe)
+CLEAN  students/students.controller.ts:153        (pipe)      CLEAN (pipe)
+```
+
+`MANUAL_ALLOWLIST` ships EMPTY. The two already-correct siblings pass **by construction** through the guard arm, and
+their shape IS the negative-control fixture — without a case that must PASS, an always-fail comparator satisfies
+every red case (run 45 / `TOOL-13`).
+
+### A measured correction to both the brief and the architecture ruling
+
+Both stated that `meeting-requests.controller.ts` *“already derives from `MEETING_REQUEST_STATUSES”*. It does not
+derive from a shared constant: line 25 declares `const MEETING_REQUEST_STATUSES: MeetingRequestStatus[] = [...]`, a
+**file-local hand-written literal**. It qualifies under the ratchet because it is **type-bound** to the Prisma enum,
+which is the property that actually matters — not because it is shared. The rule was written to that measured fact
+rather than to the brief.
+
+### Ledger disagreements, reported as instructed
+
+1. **There is no `spec.md` and no `tasks.md` in this epic directory** — only `PROGRESS.md` and `stories/`. The
+   routine prompt names both.
+2. **`PROGRESS.md:15`** still reads `Next slice → S-E05-2b` (the standing pointer, preserved by convention).
+3. **`PROGRESS.md:178` reserved `S-E05-17` for a different story.** Resolved above by MEANING; `PF-294` is now
+   `S-E05-18`.
+
+### G-PORTAL — the real numbers, and one of them CORRECTS the planning premise
+
+| Surface | Portals | Note |
+|---|---|---|
+| Notification preferences | **3/4** | `apps/web/src/app/student/` has no `settings/` route (`PF-57`, pre-existing, out of scope) |
+| Calendar | **3/4, not 4/4** | the brief says *“calendar IS on all four”* — **stale**. No `student/calendar/` route and no `calendar/events` fetch under the student portal; its nearest surface, `upcoming/`, calls `/api/v1/student/upcoming` |
+| Alerts instances | **1/1** | `admin/alerts/page.tsx` is the sole consumer |
+
+"No student surface exists" is the honest statement. "Student unaffected" is not.
+
+### EVIDENCE STATUS AT THE IMPLEMENTATION PASS — read this before quoting anything green
+
+- **`scripts/enum-route-input-probe.js` is committed and NOT YET EXECUTED GREEN.** `pilotage_api` runs a **built
+  image** with no source bind-mount (`infra/docker-compose.yml`), and agents never build. Run against that image the
+  probe faithfully reports the **pre-change** matrix and exits non-zero — which is its own negative control, proving
+  it MEASURES rather than passing by tautology. **A green matrix is never to be printed as evidence before the
+  rebuild.**
+- **Two landing prerequisites, in order** (`ADR-067 §D5`): (1) `pnpm --filter @pilotage/contracts build` — the
+  package resolves `types → src` but `default → dist`, so a stale `dist` makes `NOTIFICATION_KIND` `undefined` and
+  `new ParseEnumPipe(undefined)` throws **at route construction**: a bootstrap failure across four portals with a
+  green typecheck. (2) the API image must be re-created. Record the **image age** beside the matrix.
+- **The four new jest specs were written un-executed by their author** (only the test-architect runs the toolchain).
+  The gate’s classifier logic WAS executed standalone over the real corpus — that is the table above.
+- **Expect the expensive gate path**: this diff touches `apps/api/src/shared/quality/`, which matches
+  `GATE_MACHINERY` at `ci-gate.sh:396`, so the FULL `test-ratchet.js api` runs (2400 s) instead of the
+  `--skip src/shared/quality/` variant — that is exactly what makes the new ratchet execute on this PR. Touching
+  `apps/api/src/modules/` also fires the Postgres-bearing tenant stages. Budget for it; do not read a flake as a
+  diff break.
+- **`docs/daily-improvement-v3/traceability/RUN-LOG.md` is deliberately UNTOUCHED by the implementation pass** and
+  is the only one of this story’s 16 deliverable files left at its previous commit. It is **land-pass-owned**: the
+  entry it needs is the gate outcome (`bash scripts/ci-gate.sh`, `build` + `boot` stages) and the probe matrix with
+  the API image age beside it, none of which exists yet. Stated here so the omission is not read as a miss — as
+  shipped, this commit closes three findings and flips `PF-51` with no run-log entry recording run 77 at all, and
+  the ledger and the run log therefore disagree about whether the run happened until the land pass reconciles them.
+
+### Explicitly out of scope, said so the omission is not read as an oversight
+
+`calendar.controller.ts`’s live teacher fail-open (`ADR-066 §D5` — `teacher` folded into `isPrivileged` before
+`scopeForUser`) sits ~20 lines from an edit this slice makes and is **not touched**. Neither are
+`meeting-requests.controller.ts`, `admin-child-claims.controller.ts`, `schema.prisma`, `prisma/migrations/`,
+`apps/web`, `apps/worker` or `.claude/`.

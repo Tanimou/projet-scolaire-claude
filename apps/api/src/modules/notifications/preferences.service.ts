@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { NOTIFICATION_KIND } from '@pilotage/contracts';
 import type {
   NotificationCadence,
   NotificationKind,
@@ -7,20 +8,22 @@ import type {
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
-export const NOTIFICATION_KINDS: ReadonlyArray<NotificationKind> = [
-  'announcement',
-  'alert',
-  'grade_published',
-  'enrollment_status',
-  'lesson_published',
-  'system',
-  // E2-S1 — parent ↔ teacher messaging. A per-event kind (new message in a
-  // thread), so it sits with the other per-event kinds, before the digest.
-  'message',
-  // E1-S4 — keep last so the digest reads as a distinct "summary" concept,
-  // after the per-event kinds. Email-only opt-in (emailEnabled default false).
-  'weekly_digest',
-];
+/**
+ * S-E05-17 / ADR-067 §D1 — la liste EXPOSÉE, désormais DÉRIVÉE.
+ *
+ * Une seule liste existe : `NOTIFICATION_KIND` dans `@pilotage/contracts`. Ce
+ * binding n'en fabrique pas une deuxième — il la RÉ-EXPORTE en la contraignant.
+ * L'annotation `ReadonlyArray<NotificationKind>` est une preuve de SOUS-ENSEMBLE
+ * gratuite à la compilation : une valeur du contrat absente de l'enum Prisma ne
+ * compile pas. (Elle ne prouve RIEN dans l'autre sens — c'est le rôle de
+ * `WITHHELD_NOTIFICATION_KINDS` juste dessous.)
+ *
+ * C'est aussi la liste que le pipe du contrôleur consomme, donc l'ensemble
+ * accepté en ÉCRITURE est par construction l'ensemble rendu en LECTURE : le trou
+ * exact de PF-314. Les commentaires d'ORDRE (E1-S4 / E2-S1) ont suivi la liste
+ * vers le contrat, là où l'ordre est désormais décidé.
+ */
+export const NOTIFICATION_KINDS: ReadonlyArray<NotificationKind> = NOTIFICATION_KIND;
 
 /** Display labels for the settings UI. */
 export const NOTIFICATION_KIND_LABEL: Record<NotificationKind, string> = {
@@ -32,10 +35,24 @@ export const NOTIFICATION_KIND_LABEL: Record<NotificationKind, string> = {
   system: 'Messages système',
   message: 'Messagerie (parent ↔ enseignant)',
   weekly_digest: 'Récapitulatif hebdomadaire',
-  // E7-S1 — remediation & tutoring. The enum value exists now; the booking
-  // notifications (and thus a visible prefs channel) arrive in S2, so this kind
-  // is intentionally NOT in NOTIFICATION_KINDS yet — only the label map (which is
-  // exhaustive over NotificationKind) carries it.
+  // E7-S1 / S-E05-17 — remediation & tutoring. CORRECTION MESURÉE : le
+  // commentaire précédent affirmait que « les notifications de réservation
+  // arrivent en S2, donc ce kind n'est intentionnellement PAS encore dans
+  // NOTIFICATION_KINDS ». C'est FAUX depuis E7-S2 : `remediation.controller.ts`
+  // crée déjà des notifications `kind: 'remediation'` (6 sites) et
+  // `remediation-sweep-cron.service.ts` en déclare le kind côté worker. Le canal
+  // ÉMET donc réellement, sans aucun réglage utilisateur pour le couper.
+  //
+  // Ce qui reste vrai, et qui est la décision d'ADR-067 §D1 : le kind n'est pas
+  // EXPOSÉ (`listForUser` ne le rend pas), donc l'accepter en PATCH écrivait une
+  // ligne invisible et non annulable (PF-314). Fermer ce 200 ne rend pas le
+  // canal réglable — cela cesse seulement de faire SEMBLANT. L'absence de
+  // réglage utilisateur sur un canal actif est enregistrée comme finding séparé
+  // (PF-317), pas corrigée ici.
+  //
+  // La carte de libellés reste EXHAUSTIVE sur `NotificationKind` : c'est elle,
+  // et pas la liste exposée, qui est l'inventaire de référence pour
+  // `WITHHELD_NOTIFICATION_KINDS`.
   remediation: 'Soutien scolaire',
 };
 
@@ -53,6 +70,25 @@ export const NOTIFICATION_KIND_DESCRIPTION: Record<NotificationKind, string> = {
   remediation:
     'Quand un créneau de soutien est réservé ou confirmé pour votre enfant.',
 };
+
+/**
+ * S-E05-17 / ADR-067 §D1 — le CONTRE-SENS de `NOTIFICATION_KINDS`, DÉRIVÉ.
+ *
+ * `ReadonlyArray<NotificationKind>` ne prouve qu'une direction : le contrat est
+ * inclus dans l'enum Prisma. Il ne dit rien d'une valeur Prisma AJOUTÉE puis
+ * oubliée — c'est très exactement par là que `remediation` est arrivé, et
+ * PF-314 avec lui.
+ *
+ * L'inventaire de référence est donc la carte de libellés, que TypeScript rend
+ * exhaustive sur `NotificationKind` : une nouvelle valeur Prisma force une clé
+ * ici, la soustraction ci-dessous la fait apparaître, et l'assertion épinglée du
+ * spec (`preferences-kind-pipe.spec.ts`) passe au ROUGE. Quelqu'un doit alors
+ * DÉCIDER : exposer le kind (l'ajouter au contrat + à l'UI) ou le retenir
+ * sciemment. Le silence n'est plus une option.
+ */
+export const WITHHELD_NOTIFICATION_KINDS: ReadonlyArray<NotificationKind> = (
+  Object.keys(NOTIFICATION_KIND_LABEL) as NotificationKind[]
+).filter((kind) => !(NOTIFICATION_KINDS as ReadonlyArray<string>).includes(kind));
 
 export interface PreferenceDto {
   kind: NotificationKind;

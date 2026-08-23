@@ -63,6 +63,48 @@ export const NOTIFICATION_FREQUENCY = ['instant', 'daily', 'weekly', 'never'] as
 export const NOTIFICATION_CADENCE = ['instant', 'daily_digest', 'off'] as const;
 export type NotificationCadence = (typeof NOTIFICATION_CADENCE)[number];
 
+// S-E05-17 / ADR-067 §D1 — LE SEUL DE CE FICHIER QUI N'EST **PAS** UN MIROIR 1:1.
+//
+// ATTENTION, LIRE AVANT D'AJOUTER UNE VALEUR ICI. Tous ses voisins mirroitent
+// leur enum Prisma à l'identique ; celui-ci est délibérément un SOUS-ENSEMBLE :
+// 8 des 9 valeurs de l'enum Prisma `NotificationKind`. La 9e, `remediation`, est
+// RETENUE — `NotificationPreferencesService.listForUser` ne rend que cette
+// liste, donc `GET /api/v1/notifications/preferences` ne renvoie JAMAIS
+// `remediation` : accepter un PATCH dessus ecrit une ligne que l'utilisateur ne
+// peut ni voir ni annuler (PF-314, mesure en 200 sur la pile locale).
+//
+// Ajouter `remediation` ici pour « faire coller a Prisma » ROUVRE PF-314. La
+// bonne correction, le jour ou le canal soutien scolaire merite un reglage, est
+// d'exposer AUSSI la ligne dans l'UI de preferences — pas d'elargir cette liste
+// seule. Le cote API reprouve le sous-ensemble a la compilation via
+// `NOTIFICATION_KINDS: ReadonlyArray<NotificationKind>`, et
+// `WITHHELD_NOTIFICATION_KINDS` (derive de la carte de libelles, exhaustive sur
+// l'enum) force une decision explicite des qu'une valeur Prisma s'ajoute.
+//
+// ORDRE SIGNIFIANT — c'est l'ordre de rendu de la page Reglages (`listForUser`
+// mappe sur cette liste), pas un ensemble :
+//   - E2-S1 — messagerie parent <-> enseignant : un kind PAR EVENEMENT (nouveau
+//     message dans un fil), donc il se range avec les autres kinds par
+//     evenement, AVANT le digest.
+//   - E1-S4 — `weekly_digest` reste EN DERNIER pour que le digest se lise comme
+//     un concept « recapitulatif » distinct, apres les kinds par evenement.
+//     Opt-in email uniquement (`emailEnabled` par defaut `false`).
+export const NOTIFICATION_KIND = [
+  'announcement',
+  'alert',
+  'grade_published',
+  'enrollment_status',
+  'lesson_published',
+  'system',
+  'message',
+  'weekly_digest',
+] as const;
+// Nomme `NotificationKindCode` et NON `NotificationKind` : les deux sites qui le
+// consomment importent deja le type Prisma `NotificationKind`, et ce nom est
+// celui que la copie web emploie deja (PF-316), pour que la deduplication future
+// soit un simple echange d'import.
+export type NotificationKindCode = (typeof NOTIFICATION_KIND)[number];
+
 // E6 — Analytics Snapshots & pre-computation. Mirrors the Prisma
 // `SnapshotTriggerReason` / `SnapshotTriggerStatus` enums 1:1 (same pattern as
 // NOTIFICATION_CADENCE above) so client + server share one source of truth for the
