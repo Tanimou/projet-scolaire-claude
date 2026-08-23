@@ -2,14 +2,30 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-22)** `in-progress` — **six slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
-`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)** and **`S-E05-3` (2026-08-22, this PR)**. Each was authored and implemented in the same
+**Status (2026-08-23)** `in-progress` — **eight slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+`S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)** and **`S-E05-6` (2026-08-23, this PR)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
-remaining seven (`S-E05-1`, `S-E05-4` … `S-E05-6`, `S-E05-8` … `S-E05-10`) still exist as **rows in
+remaining four (`S-E05-1`, `S-E05-4`, `S-E05-8` … `S-E05-10`) — plus **`S-E05-13`**, the renumbered
+`PF-51` placeholder, see the note below — still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
 `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
 without an authoring pass of its own.
 **Next slice → `S-E05-2b` — the `realmRole` invite channel, the fifth grant path `S-E05-2` deliberately left open.**
+*(Annotated 2026-08-23, `S-E05-5` land pass — **not** deleted. `S-E05-5` was scheduled over this pointer by operator
+override, exactly as `S-E05-7` and `S-E05-3` were before it. An override **schedules over** a recommendation without
+refuting it: `S-E05-2b` is still open, still unclaimed, and still the standing recommendation of the `S-E05-2` land
+pass. The queue behind it now also carries **`PF-269`** — the attendance roster payload, the WHAT axis `S-E05-5`
+deliberately did not narrow — and **`PF-267`**, the ownership check `justify` still lacks.)*
+*(Annotated again 2026-08-23, `S-E05-6` land pass — **not** deleted, for the fifth time and the same reason:
+`S-E05-6` was scheduled over this pointer by operator override, and an override schedules over a recommendation
+without refuting it. `S-E05-2b` is still open, still unclaimed, still the epic's only **live escalation path**.
+**One item leaves the queue and a bigger one joins it.** `PF-269` — named in the annotation directly above as the
+WHAT axis `S-E05-5` did not narrow — is **closed by this PR**; note that the same annotation's `photoUrl`
+prescription is **refuted** by `ADR-062 §D1`, on measurement. What joins the queue is **`PF-278`**, and it ranks
+ahead of `PF-267`: `GET /api/v1/enrollments/roster/:classSectionId` (`enrollments.controller.ts:540`) is the same
+defect this slice just closed — `include: { student: true }` on a class roster — but guarded only by
+`enrollments.read`, **which `parent` holds**, with a tenant check and no ABAC at all. Wider audience, no 403, same
+handler name, one module over. Ranking after this run: **`PF-278` → `PF-267` → `PF-277` → `S-E05-2b`**.)*
 Still open, still unclaimed: `S-E05-7` was scheduled over it by operator override, not instead of it. See "Next run"
 below, and § `S-E05-7` → "Next run" for the ranking as it stands after this slice.
 
@@ -32,6 +48,32 @@ slice-status row below moves from `⬜ unenumerated` to `⚠️ done`. The `Next
 `S-E05-3` ran on an operator override, which schedules over a recommendation without refuting it — and the queue behind
 it gains **`PF-240`**, the remediation sweep for the rows `PF-10` already wrote.)*
 
+*(Corrected a fourth time 2026-08-23, `S-E05-5` land pass. Three things above were falsified by the diff that carries
+this edit: the count read **six**; line 8 listed `S-E05-5` among the rows that "still exist as rows in
+`traceability-matrix.md` only"; and the slice-status row below read `⬜ unenumerated · matrix row only`. `S-E05-5.md`
+§0.1 named the first in advance — it argued that the brief undercounted at "5 of 12" and that **this file was right**
+about the count — and this pass discharges that instruction by moving it to seven. The `Next slice` pointer is
+annotated rather than deleted, on the same terms as the three corrections above it.)*
+
+*(Corrected a fifth time 2026-08-23, `S-E05-6` land pass. Two things above were falsified by the diff that carries
+this edit: the count read **seven**, and line 8 listed `S-E05-6` among the rows that "still exist as rows in
+`traceability-matrix.md` only" — it is the slice this PR ships. The slice-status row below moves from
+`⬜ unenumerated` to `⚠️ done`.)*
+
+*(**ID COLLISION, ARBITRATED 2026-08-23 by the `S-E05-6` land pass — read this before citing `S-E05-6` or
+`S-E05-13`.** The id `S-E05-6` had **two** allocations. The older one is a *matrix-row-only* placeholder for
+"unvalidated PATCH / query params / enum (`PF-51`)": it has no story file, is enumerated in no sprint, and is cited
+from **no** source file. The newer one is the attendance-roster-payload slice shipped by this PR, and it is already
+written into **four sites of shipped source** — `apps/api/src/modules/attendance/attendance.controller.ts:41`,
+`attendance-read-abac.spec.ts` (×3), the story filename `stories/S-E05-6.md`, and `ADR-062`'s header. The rule from
+the `PF-185`/`PF-186` collision of runs 53/54 applies: **renumber by MEANING, and renumber the allocation that is not
+quoted from production code.** The `PF-51` placeholder therefore becomes **`S-E05-13`** — the next free id — in this
+file, in `docs/daily-improvement-v3/traceability/OPEN.md` and in `docs/daily-improvement-v3/sprints/sprint-plan.md`.
+Its subject is unchanged; only its label moved. **The escalation panel of this run recommended the opposite
+direction** (renumber the new slice to `S-E05-13` and leave `PF-51` alone); it is recorded here rather than
+silently overridden, and the reason it was not followed is that the alternative renames four citations inside
+`apps/api` on a P1 diff whose typecheck gate has already run — churn in shipped source to protect a placeholder.
+A human may reverse this call; if they do, the four source citations move with it.)*
 > **Why there is no `spec.md` here.** Same posture as
 > [`docs/spec/features/v3-e02/PROGRESS.md`](../v3-e02/PROGRESS.md) and
 > [`docs/spec/features/v3-e06/PROGRESS.md`](../v3-e06/PROGRESS.md): V3 stories are authored **pre-sliced**, carrying
@@ -58,13 +100,102 @@ is either proven by an executed test or recorded, with an owner, as not proven.
 | **S-E05-2c** | **The detection sweep for pre-ceiling escalated grants** (`PF-175`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as **#229** · spec: [`stories/S-E05-2c.md`](./stories/S-E05-2c.md) · **`PF-175` NARROWED, not closed** — the detector exists and is proven, but has **never been executed against a database** · evidence below |
 | **S-E05-3** | **The coefficient matrix stops accepting foreign-tenant identifiers** (`PF-10`) | ⚠️ done — **needs human review** | 2026-08-22 | spec: [`stories/S-E05-3.md`](./stories/S-E05-3.md) · **`PF-10` closed on its REACHABLE write path** — the composite key stays tenant-blind (`PF-239`) and the rows the defect already wrote are neither detected nor repaired (`PF-240`) · new **`ADR-055`** (scope-FK ownership over a COLLECTION) · also records **`PF-238`** (no cap on `entries[]`) · evidence below |
 | S-E05-4 | Notification dedup is not tenant-scoped (`PF-11`) | ⬜ unenumerated | — | matrix row only |
-| S-E05-5 | Attendance reads without ABAC (`PF-07`) | ⬜ unenumerated | — | matrix row only |
-| S-E05-6 | Unvalidated PATCH / query params / enum (`PF-51`) | ⬜ unenumerated | — | matrix row only; `S-E06-6` fixed **one DTO** of this family |
+| **S-E05-5** | **The attendance READ paths gain the ABAC their WRITE paths already have** (`PF-07`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-5.md`](./stories/S-E05-5.md) · **`PF-07` closed on the WHO axis ONLY** — four handlers (not the audit’s two) gain teacher/privileged ABAC via exported pure decision functions; the **WHAT** axis (`include: { student: true }` still returning `medicalNotes`/`address`/`notes`/`customFields`) is carried forward as **`PF-269`**, and the row may not read `closed` without that sentence · new **`ADR-061`** (§D0 supersedes the audit sentence — the exposed audience included **`parent`**, not only `teacher`; §D1 the teaching wall constrains the **active academic year** on both halves; §D3 ownership reads the denormalised `classSession.teacherProfileId`, the same bit the WRITE trusts; §D4 404 before 403; §D7 the parent branch stays byte-identical and `parent` deliberately precedes `privileged`) · also records **`PF-264`…`PF-274`** · test: `apps/api/src/modules/attendance/attendance-read-abac.spec.ts` — **written, not executed by its author** |
+| **S-E05-6** | **The attendance roster payload stops being MAXIMAL** (`PF-269`, `PF-274`) | ⚠️ done — **needs human review** | 2026-08-23 | spec: [`stories/S-E05-6.md`](./stories/S-E05-6.md) · **`PF-269` closed** — the three `include: { student: true }` sites in `attendance.controller.ts` (`sessionDetail` ×2, `roster`) become one module-local `ATTENDANCE_ROSTER_STUDENT_SELECT = { id, firstName, lastName, externalRef }` · **`PF-274` closed** (`role="alert"` on the teacher error banner — a `V3-E06` row deliberately folded into this `V3-E05` slice, because the banner is the surface `S-E05-5`'s new 403 lands on) · **`PF-07` loses its `AC-21` qualifier and reads closed on BOTH axes** for the first time · new **`ADR-062`** (§D1 `photoUrl` REFUSED against two standing written recommendations, on measurement — the list composes an initials avatar; §D1.1 the design-system durability clause — a future `AvatarNameCell` adoption must pass no `src`; §D2 `externalRef` RETAINED, asymmetry deliberate; §D3 the first-of-kind `*_SELECT` constant is sanctioned as module-local **only**, the cross-module `StudentSummary` extraction refused) · also records **`PF-275`**…**`PF-278`** · test: `apps/api/src/modules/attendance/attendance-read-abac.spec.ts` — **74/74 executed green, and the ratchet proven by TWO mutations** (revert the three sites → 5 red; add `photoUrl` → closure assertion red) |
+| S-E05-13 | Unvalidated PATCH / query params / enum (`PF-51`) | ⬜ unenumerated | — | matrix row only; `S-E06-6` fixed **one DTO** of this family. **Renumbered from `S-E05-6` on 2026-08-23** — see the ID-collision note above |
 | **S-E05-7** | **The public registration funnel gains an admission bound: two tiers, one fixed window, in process** (`PF-46`, throttling third) | ⚠️ done — **needs human review** | 2026-08-12 | spec: [`stories/S-E05-7.md`](./stories/S-E05-7.md) · **`PF-46` NARROWED, not closed** — the `emailVerified` third (R-3) stays open · new **`ADR-038`** (in-process admission bounds on pre-auth endpoints) — shipped *against* the story's own §5 "no new ADR", on Winston's ruling · raises **R-1** (the global ceiling is itself a DoS lever, real fix `infra/nginx/`) and **R-2** (per-process counters, `ADR-038` D2) · **the shipped constants diverge from the story's §1.4 and a human must ratify the numbers** · evidence below |
 | S-E05-8 | Wrong password reported as "MFA required" (`PF-25`) | ⬜ unenumerated | — | matrix row only |
 | S-E05-9 | Logout / `session.error` / nine phantom auth routes (`PF-26`, `PF-91`) | ⬜ unenumerated | — | matrix row only; `PF-91` is inventoried in `scripts/link-integrity-baseline.json` by `S-E06-3` |
 | S-E05-10 | Unused `hasPermission`, `users.suspend` unimplemented (`PF-52`) | ⬜ unenumerated | — | matrix row only |
 | **S-E05-11** | **The public registration path becomes atomic, compensated and audited** (`PF-166`) | ⚠️ done — **needs human review** | 2026-08-12 | landed as commit `db2473b` (#222). **`PF-166` closed.** *(Row corrected by the `S-E05-7` land pass: it read `⬜ unenumerated · matrix row only` while the code was already on `main`. Note the **subject changed**: the matrix row this line inherited names "non-atomic invite/permission rewrite, catalogue drift (`PF-53`)", which is a **different finding** — `PF-53` is still open and still unenumerated.)* |
+
+---
+
+## S-E05-6 — evidence (this PR, 2026-08-23)
+
+### What was actually wrong
+
+`S-E05-5` (#264) closed `PF-07` on the **WHO** axis and said so in its own row: the payload was untouched and carried
+forward as `PF-269`. Three deep reads in `apps/api/src/modules/attendance/attendance.controller.ts` still asked for
+`include: { student: true }` — the **whole `Student` row** as declared in `schema.prisma`: `medicalNotes`, `address`
+(Json), `notes`, `customFields` (Json), `birthDate`, `email`, `phone`, `gender`, `nationality`, `photoUrl`, plus
+`tenantId`/`schoolId`/`userProfileId` — for **every actively enrolled child of the class**, on every attendance-taking
+page load.
+
+What makes this a slice and not a residual is the *change of character* `S-E05-5` produced. Before it, the maximal
+payload was one symptom of an unauthorised read. After it, the read is correctly authorised and the payload is a
+**sanctioned capability that exceeds the relation authorising it** — a teacher legitimately entitled to mark this
+class receives every child's medical notes and home address as a side effect. `GUARDRAILS.md` §1 calls minimal access
+non-negotiable and `medicalNotes` is special-category data about a minor.
+
+### What the fix is, and why it has the shape it has
+
+One module-local, **non-exported** `ATTENDANCE_ROSTER_STUDENT_SELECT = { id, firstName, lastName, externalRef }`,
+applied at all three sites. Three decisions carry the slice, all recorded in **`ADR-062`**:
+
+1. **`photoUrl` is REFUSED, against two standing written recommendations.** `NEXT.md` (run 71) and `PF-269`'s own
+   remediation sentence both prescribed `{ id, firstName, lastName, externalRef, photoUrl }`. The teacher list
+   composes an **initials** avatar (`AttendanceManager.tsx:220`) and `photoUrl` appears in no teacher attendance file,
+   so shipping a URL that resolves to a photograph of every child in the class — inside the slice whose whole thesis
+   is payload minimisation — would contradict the slice on its own terms. A written recommendation is not an
+   instruction, and a measurement outranks it. **`ADR-062 §D1.1`** makes the refusal durable against the one path
+   that would reopen it silently: `packages/ui`'s `AvatarNameCell` takes `src?: string | null`, so a future adoption
+   in `AttendanceManager` compiles perfectly with `src={row.student.photoUrl}` and matches every other adoption site.
+   The rule is *adopt the component, not the prop*.
+2. **`externalRef` is RETAINED** — establishment-issued matricule, not a personal attribute; the only homonym
+   disambiguator in a class list; already declared non-optionally by the consumer's own type
+   (`AttendanceManager.tsx:12`); and the exact four-field shape the gradebook roster already returns
+   (`grades/assessments.controller.ts:157`). The asymmetry with the `photoUrl` refusal **is the point**: minimality is
+   judged per field on sensitivity × use, never by field count. Recorded honestly — no JSX renders it today.
+3. **No cross-module projection is extracted.** `ATTENDANCE_ROSTER_STUDENT_SELECT` is the first named `*_SELECT`
+   constant anywhere in `apps/api`, which is exactly why `ADR-062 §D3` had to sanction it explicitly rather than let
+   it arrive as an unannounced convention. What §D3 sanctions is narrow: a module-local, non-exported constant for a
+   projection reused by more than one read **in one file**. What it refuses is a shared exported `StudentSummary` —
+   the 20+ existing declarations *disagree* on whether `id` and `externalRef` are present, so consolidating them is a
+   decision about what a student summary **is**, not a rename. Recorded as `PF-276`.
+
+The contract neither widened nor narrowed: `AttendanceManager.tsx:12` already declared exactly these four fields, so
+the backend had been over-delivering against a contract the frontend never asked for. That is why the FE half of the
+slice is a single attribute — `role="alert"` on the error banner, closing `PF-274` — and not a refactor.
+
+### Evidence
+
+- `pnpm typecheck` — **13/13 successful**, with `@pilotage/api` **and** `@pilotage/web` both genuine cache **misses**
+  (recompiled, not replayed). `git diff --check` exit 0.
+- `npx jest attendance-read-abac.spec.ts` — **74/74 green, 75 s**. The 66 pre-existing `S-E05-5` assertions are
+  **unedited** and still green, which is what freezes the ABAC this slice sits behind.
+- **The ratchet is proven by mutation, not by a green run.** Reverting all three sites to `student: true` fails
+  exactly the 5 projection tests; adding `photoUrl: true` to the constant fails the closure assertion. So `ADR-062
+  §D1` is enforced by a test and not only by a comment, and the tree was byte-restored after both mutations.
+- A **read-only SQL probe against the live engine**: the narrow select emits **exactly 4 columns** where the wide one
+  emitted **20**; `medical_notes`, `photo_url`, `address`, `notes`, `custom_fields` are never read from disk.
+
+### Merge conditions, none fixed here
+
+1. **The payload assertion is on the REQUESTED projection, not the returned body** (`PF-275`). `makeDb()` records
+   `select`/`include` without applying them, so every current assertion would stay green if Prisma silently ignored
+   the `select`. The spec file says so in its own header, which is the honest posture — but `AC-4` as written asked
+   for payload evidence and the implementation redefined the gate in a comment. The SQL probe above closes the gap at
+   a **strictly stronger** layer, as a one-off, **not** as a standing guard.
+2. **The SQL probe ran against a database holding 0 `student` rows.** Stack up ≠ data present. It discharges the
+   *mechanism*, never the *deployment* — the standing project rule that a proof executed against a scratch base is
+   not a proof about the target.
+3. **`AC-8` is enforced only inside the two handlers the new tests call.** Adding `include: { student: true }` to
+   `justify` or `batch` — same file — reopens `PF-269` at the exact spot it was just closed, with the suite fully
+   green. The defect is source-level, so the ratchet must be too; the file-level source assertion is prescribed in
+   the PR body and is the single highest-value follow-up test.
+
+### Next run
+
+**`PF-278` outranks everything else this epic carries.** `GET /api/v1/enrollments/roster/:classSectionId`
+(`enrollments.controller.ts:540`) is guarded by `enrollments.read`, **which `parent` holds**
+(`permissions.constants.ts:259`), carries **only** a tenant check — no ABAC, no ownership — takes `classSectionId` as
+a free parameter, and returns `include: { student: true }`. It is the defect this slice just closed, with a **wider**
+audience and **without** the 403 that protects the attendance version, on a handler with the same NAME one module
+over. Then `PF-267` (`justify` still has no ownership check on a WRITE), then `PF-277` (the three residual
+`student: true` sites: `grades.service.ts:196`, `guardians.controller.ts:133`, and the worker's
+`grades-xlsx`/`report-card-pdf`). `S-E05-2b` remains the epic's standing pointer, scheduled over a fourth time and
+not refuted.
 
 ---
 
