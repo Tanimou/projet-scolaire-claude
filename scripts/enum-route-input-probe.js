@@ -60,7 +60,12 @@
  * USAGE
  * -----
  *   PROBE_USERNAME=admin@pilotage.local PROBE_PASSWORD=... \
+ *     PROBE_CLIENT_SECRET="$KEYCLOAK_ADMIN_CLIENT_SECRET" \
  *     node scripts/enum-route-input-probe.js
+ *
+ * `PROBE_CLIENT_SECRET` est REQUIS contre le realm local : ses cinq clients sont
+ * tous confidentiels. Il reste facultatif dans le code pour qu'un realm à client
+ * public soit servi sans branche supplémentaire.
  *
  * Exit 0 = les sept lignes observées. Exit 1 = au moins une ligne diverge, ou la
  * sonde n'a pas pu s'exécuter ; la raison est imprimée et va telle quelle dans le
@@ -75,6 +80,25 @@ const CLIENT_ID = process.env.PROBE_CLIENT_ID || 'portal-admin';
 /** AUCUN DÉFAUT, volontairement : une sonde ne devine jamais une identité. */
 const USERNAME = process.env.PROBE_USERNAME;
 const PASSWORD = process.env.PROBE_PASSWORD;
+
+/**
+ * CORRECTION AU LAND (run 77) — la sonde était INEXÉCUTABLE telle qu'écrite.
+ *
+ * Elle postait `grant_type=password` SANS `client_secret`, ce qui suppose un
+ * client PUBLIC. Or les cinq clients de `infra/keycloak/realm-export.json`
+ * (`portal-admin`, `portal-teacher`, `portal-parent`, `portal-student`,
+ * `api-backend`) sont TOUS confidentiels (`publicClient: false`, `secret`
+ * présent) : le realm ne contient aucun client public, donc la sonde répondait
+ * `HTTP 401 — Invalid client or Invalid client credentials` quelle que soit la
+ * configuration. Défaut STRUCTUREL, pas défaut de paramétrage — et preuve
+ * directe qu'elle n'avait jamais été exécutée par son auteur (PF-319).
+ *
+ * Le secret est OPTIONNEL et sans défaut : un realm à client public reste servi
+ * (le champ est simplement omis), et rien n'est codé en dur. C'est la
+ * convention déjà en place chez son frère `keycloak-live-probe.js`, qui envoie
+ * `client_secret: secretOf(clientId) || ''`. Le secret n'est jamais imprimé.
+ */
+const CLIENT_SECRET = process.env.PROBE_CLIENT_SECRET;
 
 /** Le kind EXPOSÉ servant de contrôle 200. Ré-écrit à l'identique. */
 const CONTROL_KIND = 'alert';
@@ -135,6 +159,7 @@ async function mintToken() {
       body: new URLSearchParams({
         grant_type: 'password',
         client_id: CLIENT_ID,
+        ...(CLIENT_SECRET ? { client_secret: CLIENT_SECRET } : {}),
         username: USERNAME,
         password: PASSWORD,
       }),
