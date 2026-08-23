@@ -1,5 +1,72 @@
 # Next story
 
+# NEXT — written by run 72 (`S-E05-6`), 2026-08-23 — **this section supersedes every section below**
+
+## ✅ The attendance roster payload stops being MAXIMAL — and the recommendation that produced the slice was half wrong
+
+Run 71 closed `PF-07` on the **WHO** axis and said so. This run closes the **WHAT** axis. The three deep reads in
+`apps/api/src/modules/attendance/attendance.controller.ts` — `sessionDetail` (`:490`, `:494`) and `roster` (`:755`)
+— asked for `include: { student: true }`, i.e. the **whole `Student` row** (`medicalNotes`, `address`, `notes`,
+`customFields`, `birthDate`, `email`, `phone`, `gender`, `nationality`, `photoUrl`) for **every actively enrolled
+child of the class**, on every attendance-taking page load. They now read one module-local, non-exported
+`ATTENDANCE_ROSTER_STUDENT_SELECT = { id, firstName, lastName, externalRef }`. A read-only SQL probe against the
+live engine: **4 columns emitted where 20 were**; `medical_notes`, `photo_url`, `address`, `notes`,
+`custom_fields` are never read from disk.
+
+**`PF-07` reads `closed` on both axes for the first time, and the `AC-21` qualifier is retired.** `PF-269` and
+`PF-274` (`role="alert"` on the teacher error banner, a `V3-E06` row folded in and declared) are closed too.
+
+### ⚠️ Read this before re-implementing anything from the run-71 section below
+
+**The `photoUrl` half of run 71's recommendation is REFUSED, on measurement — `ADR-062 §D1`.** The section below,
+and `PF-269`'s own remediation sentence, both prescribed `select: { id, firstName, lastName, externalRef,
+photoUrl }`. The teacher list composes an **initials** avatar (`AttendanceManager.tsx:220`) and `photoUrl` appears
+in **no** teacher attendance file. Shipping a URL that resolves to a photograph of every child in the class, inside
+the slice whose entire thesis is payload minimisation, would contradict the slice on its own terms. A written
+recommendation is not an instruction, and a measurement outranks it. **`ADR-062 §D1.1`** blocks the one path that
+would reopen it silently: `packages/ui`'s `AvatarNameCell` takes `src?: string | null`, so a future adoption in
+`AttendanceManager` compiles perfectly with `src={row.student.photoUrl}` and matches every other adoption site —
+*adopt the component, not the prop*.
+
+## ⛔ CLAIMED IDS — do not re-select, do not re-allocate
+
+- **`S-E05-6` was allocated TWICE and has been arbitrated.** The roster-payload slice **keeps** `S-E05-6` (it is
+  cited from four sites of shipped `apps/api` source). The older matrix-row-only placeholder for `PF-51`
+  ("unvalidated PATCH / query params / enum") is renumbered **`S-E05-13`** in `OPEN.md`, `PROGRESS.md` and
+  `sprints/sprint-plan.md`. Renumbered by **meaning**, not by date — the `PF-185`/`PF-186` rule from runs 53/54.
+  The escalation panel recommended the opposite direction; the disagreement is recorded in `PROGRESS.md`.
+- **This run allocated `PF-275`…`PF-278` and took `ADR-062`.** The next run allocates from **`PF-279`** and
+  **`ADR-063`**, after re-checking open PRs — id allocation reads `main`, not the open PRs.
+
+## ▶ Recommended next story
+
+1. **`PF-278` — `GET /enrollments/roster/:classSectionId` is the same defect, one module over, with a wider
+   audience and no 403 (P1).** `apps/api/src/modules/enrollments/enrollments.controller.ts:540` is guarded by
+   `enrollments.read`, **which the `parent` realm role holds** (`permissions.constants.ts:259`), carries **only** a
+   tenant comparison, has **no ABAC and no ownership check**, takes `classSectionId` as a free path parameter, and
+   returns `include: { student: true }`. Any authenticated parent can enumerate any class of the establishment and
+   read `medicalNotes`, `address`, `phone`, `email`, `birthDate` for every child in it. This is exactly what
+   `S-E05-5` + `S-E05-6` together just fixed in `attendance`, and the handler is even called `roster`. It needs
+   **both** halves: the `S-E05-5` ABAC shape and the `S-E05-6` projection. **Do this first.**
+2. **`PF-275` — make a payload assertion POSSIBLE in this module (P2), and read the trap before writing one.**
+   `makeDb()` records `select`/`include` without applying them, so every projection assertion is about the
+   *request*. A naive body assertion written against the current harness goes **RED against correct code**, because
+   `studentRow()` seeds `medicalNotes` deliberately as a negative witness — and then invites someone to "fix" the
+   controller. Fix the harness (apply the recorded projection) or write an integration spec against a real engine.
+   Leave `studentRow()` and its pinning `it` intact.
+3. **`PF-267` — give `justify` the ownership check its docblock used to promise.** Unchanged from run 71: a WRITE
+   handler, small, reuses `assertSessionReadable` which is already exported, and it removes the attendance file's
+   last unguarded mutation.
+4. **`PF-277` — the three surviving `include: { student: true }` sites outside attendance**
+   (`grades.service.ts:196`, `guardians.controller.ts:133`, plus the worker's `grades-xlsx`/`report-card-pdf`).
+   A queue, not a sweep: each needs its own consumer census. `PF-276` (twenty-plus divergent inline projections, no
+   shared summary type) sits underneath them and must **not** be attempted as a side effect — `ADR-062 §D3` refuses
+   it for a reason.
+5. **`S-E05-2b`** remains the epic's standing recommendation from the `S-E05-2` land pass — unclaimed, not refuted,
+   merely scheduled over a **fourth** time (`S-E05-7`, `S-E05-3`, `S-E05-5`, `S-E05-6`).
+
+---
+
 # NEXT — written by run 71 (`S-E05-5`), 2026-08-23 — **this section supersedes every section below**
 
 ## ✅ The attendance READ paths gain the ABAC their WRITE paths already had — and the finding was bigger than the audit said

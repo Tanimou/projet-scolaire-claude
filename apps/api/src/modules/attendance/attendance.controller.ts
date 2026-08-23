@@ -37,6 +37,33 @@ import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { TeacherProfileService } from '../teaching/teacher-profile.service';
 
+/**
+ * S-E05-6 / `PF-269` — la PROJECTION d'une ligne de liste d'appel.
+ *
+ * `student: true` rendait la ligne `Student` ENTIÈRE — `medicalNotes`,
+ * `address`, `notes`, `customFields`, `birthDate`, `email`, `phone` — pour
+ * chaque enfant de la classe, à chaque chargement. `S-E05-5` a restreint QUI
+ * lit ; cette constante restreint CE QUI est rendu (`GUARDRAILS` §1).
+ *
+ * `externalRef` est retenu : c'est le matricule de l'établissement, et le type
+ * du consommateur le déclare déjà (`AttendanceManager.tsx:12`) ; c'est
+ * l'identifiant qui désambiguïserait des homonymes SI la liste le rendait —
+ * aujourd'hui elle ne l'affiche pas (`AttendanceManager.tsx` ne le lit qu'au
+ * niveau du type, jamais du JSX).
+ *
+ * `photoUrl` est EXCLU délibérément : rien dans l'espace enseignant ne
+ * l'affiche (l'avatar est composé des initiales, `AttendanceManager.tsx:220`).
+ *
+ * Module-local et NON exportée : cette tranche n'introduit AUCUNE projection
+ * partagée entre modules (`ADR-062 §D3`).
+ */
+const ATTENDANCE_ROSTER_STUDENT_SELECT = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  externalRef: true,
+} as const;
+
 class OpenSessionDto {
   @IsUUID() teachingAssignmentId!: string;
   @IsDateString() date!: string;
@@ -433,12 +460,18 @@ export class AttendanceController {
   /**
    * S-E05-5 / `AC-1` — SCINDÉ EN REQUÊTE DE GARDE PUIS REQUÊTE DE CHARGE.
    *
-   * L'`include` profond ci-dessous EST la donnée sensible : il rend la classe
-   * entière en lignes `Student` COMPLÈTES (`medicalNotes`, `address`, `notes`,
-   * `customFields`…). La matérialiser dans le processus pour un appelant qu'on
-   * s'apprête à refuser est le défaut, pas un détail d'ordonnancement. La garde
-   * ne lit donc que TROIS colonnes scalaires, et la charge n'est émise qu'après
-   * le verdict.
+   * L'`include` profond ci-dessous EST la lecture coûteuse : il matérialise la
+   * classe ENTIÈRE — une ligne par inscription active, plus tous les
+   * `AttendanceRecord`, la `ClassSection` et la `TeachingAssignment`. La
+   * matérialiser dans le processus pour un appelant qu'on s'apprête à refuser
+   * est le défaut, pas un détail d'ordonnancement. La garde ne lit donc que
+   * TROIS colonnes scalaires, et la charge n'est émise qu'après le verdict.
+   *
+   * S-E05-6 / `PF-269` — la LARGEUR de cette charge a changé depuis S-E05-5 :
+   * les lignes `Student` ne sont plus COMPLÈTES. Elles sont projetées sur
+   * `ATTENDANCE_ROSTER_STUDENT_SELECT` (quatre champs), donc `medicalNotes`,
+   * `address`, `notes` et `customFields` ne sont plus émis du tout. Le NOMBRE
+   * de lignes, lui, est inchangé : c'est lui qui justifie encore la scission.
    *
    * ORDRE DE REFUS (`AC-10`, `ADR-048 §D9`) : 404 d'abord (tenant / existence),
    * 403 ensuite (propriété). L'inverser ferait du 403 un oracle d'existence sur
@@ -460,11 +493,11 @@ export class AttendanceController {
       include: {
         teachingAssignment: {
           include: {
-            classSection: { include: { enrollments: { where: { status: 'active' }, include: { student: true } } } },
+            classSection: { include: { enrollments: { where: { status: 'active' }, include: { student: { select: ATTENDANCE_ROSTER_STUDENT_SELECT } } } } },
             subject: { select: { id: true, name: true, color: true } },
           },
         },
-        attendanceRecords: { include: { student: true } },
+        attendanceRecords: { include: { student: { select: ATTENDANCE_ROSTER_STUDENT_SELECT } } },
       },
     });
     // CONSERVÉE DÉLIBÉRÉMENT : la garde ci-dessus rend cette ligne inatteignable
@@ -695,8 +728,13 @@ export class AttendanceController {
    * Per-class roster + their attendance for a given date (teacher's view when taking attendance).
    *
    * S-E05-5 / `AC-2` — MÊME forme en deux temps que `sessionDetail`, MÊME
-   * helper, MÊME message. La charge rend une ligne `Student` COMPLÈTE par
-   * inscription active : elle n'est émise qu'après le verdict.
+   * helper, MÊME message. La charge rend une ligne `Student` par inscription
+   * active : elle n'est émise qu'après le verdict.
+   *
+   * S-E05-6 / `PF-269` — cette ligne est PROJETÉE, plus complète : quatre
+   * champs, voir `ATTENDANCE_ROSTER_STUDENT_SELECT`. Les `AttendanceRecord`
+   * joints, eux, restent des lignes ENTIÈRES (`comment`, `justification`,
+   * `recordedBy`) — gelé délibérément par la tranche, suivi en `PF-277`.
    *
    * AUCUN appelant de première partie n'est cassé :
    * `teacher/classes/[id]/attendance/actions.ts:28` n'obtient son `sessionId`
@@ -725,7 +763,7 @@ export class AttendanceController {
               include: {
                 enrollments: {
                   where: { status: 'active' },
-                  include: { student: true },
+                  include: { student: { select: ATTENDANCE_ROSTER_STUDENT_SELECT } },
                   orderBy: { student: { lastName: 'asc' } },
                 },
               },

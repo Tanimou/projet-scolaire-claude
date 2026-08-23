@@ -32,7 +32,7 @@ for every tenant-B id; adversarial suite fails-before/passes-after and runs on e
 ## Sprint 03 — Authorisation integrity · `V3-E05` (remainder)
 
 S-E05-2 grant-subset · S-E05-3 foreign-tenant bulk writes · S-E05-4 tenant-scoped dedup · S-E05-5 attendance ABAC ·
-S-E05-6 validation on unvalidated paths · S-E05-7 registration rate-limit/verify · S-E05-8 auth error semantics ·
+S-E05-13 validation on unvalidated paths *(renumbered from `S-E05-6` 2026-08-23 — id collision)* · S-E05-7 registration rate-limit/verify · S-E05-8 auth error semantics ·
 S-E05-9 session lifecycle · S-E05-10 client gating / `users.suspend` · S-E05-11 atomic invite + catalogue reconciliation.
 
 **Exit:** every row of the A2 Appendix E threat table has a negative test.

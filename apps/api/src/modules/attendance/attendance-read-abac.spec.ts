@@ -779,3 +779,184 @@ describe('S-E05-5 — overview (AC-5)', () => {
     }
   });
 });
+
+// ===========================================================================
+// S-E05-6 — la PROJECTION de la liste d'appel (`PF-269`)
+// ===========================================================================
+
+/**
+ * S-E05-6 / `PF-269` — CE QUE CE BLOC PROUVE, ET CE QU'IL NE PROUVE PAS.
+ *
+ * Il prouve la projection **DEMANDÉE** : les arguments `select`/`include` que
+ * les deux handlers ÉMETTENT vers Prisma. Le pont entre cette demande et la
+ * charge qui part sur le fil est la sémantique documentée de `select` chez
+ * Prisma — le moteur de requêtes n'est PAS testé ici (voir l'en-tête du
+ * fichier : « ce fichier prouve l'ORDRE, la PORTÉE et le REFUS, pas le moteur
+ * de requêtes de Prisma »).
+ *
+ * Il ne prouve PAS la charge retournée, et il ne peut pas : `makeDb()`
+ * ENREGISTRE `select`/`include` sans jamais les APPLIQUER — `findUnique` rend
+ * la ligne semée telle quelle — et la fixture partagée `studentRow()` sème
+ * délibérément `medicalNotes`/`address`/`notes`/`customFields`. Une assertion
+ * de la forme `expect(out.roster[0].student.medicalNotes).toBeUndefined()`
+ * serait donc ROUGE contre une implémentation PARFAITEMENT correcte, et
+ * inviterait à « corriger » le contrôleur ou à rétrécir la fixture. Les deux
+ * seraient des erreurs (`PF-275`). `studentRow()` reste intacte, et le dernier
+ * `it` la ÉPINGLE comme témoin négatif : un témoin non épinglé se dégrade en
+ * silence.
+ */
+describe('S-E05-6 — la PROJECTION de la liste d’appel (PF-269)', () => {
+  /**
+   * Les 16 colonnes que `student: true` rendait et que la projection retire.
+   * Les 10 premières sont celles qu'`AC-4` nomme ; les 6 dernières ont été
+   * MESURÉES sur la base cible (`student.findFirst()` rend 20 clés).
+   */
+  const FORBIDDEN = [
+    'medicalNotes',
+    'address',
+    'notes',
+    'customFields',
+    'birthDate',
+    'email',
+    'phone',
+    'gender',
+    'nationality',
+    'photoUrl',
+    'status',
+    'userProfileId',
+    'schoolId',
+    'tenantId',
+    'createdAt',
+    'updatedAt',
+  ] as const;
+
+  const NARROW = ['externalRef', 'firstName', 'id', 'lastName'];
+
+  /** Descend d'un cran dans un arbre `include`/`select` enregistré. */
+  const step = (node: Row | undefined, key: string): Row | undefined =>
+    node?.[key] as Row | undefined;
+
+  /**
+   * Collecte RÉCURSIVE de chaque nœud `student` d'un arbre de PROJECTION.
+   * `orderBy`/`where` sont sautés : `orderBy: { student: { lastName: 'asc' } }`
+   * est un tri, pas une projection — `AC-5` l'assert séparément.
+   */
+  const collectStudentNodes = (tree: unknown, out: unknown[] = []): unknown[] => {
+    if (tree === null || typeof tree !== 'object') return out;
+    for (const [key, value] of Object.entries(tree as Row)) {
+      if (key === 'orderBy' || key === 'where') continue;
+      if (key === 'student') out.push(value);
+      if (value !== null && typeof value === 'object') collectStudentNodes(value, out);
+    }
+    return out;
+  };
+
+  /** `AC-1`…`AC-4` sur UN nœud `student` : fermeture + absence clé par clé. */
+  const expectNarrow = (node: unknown) => {
+    expect(node).toBeDefined();
+    expect(node).not.toBe(true);
+    const sel = (node as Row).select as Row | undefined;
+    expect(sel).toBeDefined();
+    expect(sel!.id).toBe(true);
+    expect(sel!.firstName).toBe(true);
+    expect(sel!.lastName).toBe(true);
+    expect(sel!.externalRef).toBe(true);
+    // ABSENTE, pas `null` ni `false` : une clé présente à `false` resterait une
+    // décision explicite qu'un futur diff pourrait basculer.
+    for (const key of FORBIDDEN) {
+      expect(Object.prototype.hasOwnProperty.call(sel!, key)).toBe(false);
+    }
+    expect(Object.keys(sel!).sort()).toEqual(NARROW);
+  };
+
+  /** La SECONDE instruction `classSession` : la charge, jamais la garde. */
+  const deepInclude = (h: ReturnType<typeof makeHarness>): Row | undefined => {
+    const probes = h.db.of('classSession');
+    expect(probes).toHaveLength(2);
+    expect(probes[0]?.include).toBeUndefined();
+    return probes[1]?.include;
+  };
+
+  it('AC-1 — sessionDetail : les inscriptions actives ne demandent que les 4 champs', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    await h.controller.sessionDetail(MY_SESSION, jwt(TEACHER));
+    const deep = deepInclude(h);
+    const enrollments = step(
+      step(step(step(step(deep, 'teachingAssignment'), 'include'), 'classSection'), 'include'),
+      'enrollments',
+    );
+    expectNarrow(step(step(enrollments, 'include'), 'student'));
+  });
+
+  it('AC-2 — sessionDetail : attendanceRecords[].student demande les 4 mêmes champs', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    await h.controller.sessionDetail(MY_SESSION, jwt(TEACHER));
+    const deep = deepInclude(h);
+    expectNarrow(step(step(step(deep, 'attendanceRecords'), 'include'), 'student'));
+  });
+
+  it('AC-3 — roster : les inscriptions actives demandent les 4 mêmes champs', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    await h.controller.roster(MY_SESSION, jwt(TEACHER));
+    const deep = deepInclude(h);
+    const enrollments = step(
+      step(step(step(step(deep, 'teachingAssignment'), 'include'), 'classSection'), 'include'),
+      'enrollments',
+    );
+    expectNarrow(step(step(enrollments, 'include'), 'student'));
+  });
+
+  /**
+   * `AC-4` + `AC-8` : la CARDINALITÉ d'abord. Un `forEach` sur un arbre vide
+   * passerait avec `student: true` encore en place — c'est le piège que la
+   * fixture `attendanceRecords: []` tend au niveau de la charge retournée.
+   */
+  it('AC-4/AC-8 — sessionDetail : EXACTEMENT 2 nœuds student, tous deux étroits', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    await h.controller.sessionDetail(MY_SESSION, jwt(TEACHER));
+    const nodes = collectStudentNodes(deepInclude(h));
+    expect(nodes).toHaveLength(2);
+    for (const node of nodes) expectNarrow(node);
+  });
+
+  it('AC-4/AC-8 — roster : EXACTEMENT 1 nœud student, et il est étroit', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    await h.controller.roster(MY_SESSION, jwt(TEACHER));
+    const nodes = collectStudentNodes(deepInclude(h));
+    expect(nodes).toHaveLength(1);
+    for (const node of nodes) expectNarrow(node);
+  });
+
+  it('AC-5 — roster : le tri par student.lastName SURVIT au select imbriqué', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    await h.controller.roster(MY_SESSION, jwt(TEACHER));
+    const deep = deepInclude(h);
+    const enrollments = step(
+      step(step(step(step(deep, 'teachingAssignment'), 'include'), 'classSection'), 'include'),
+      'enrollments',
+    );
+    expect(enrollments?.orderBy).toEqual({ student: { lastName: 'asc' } });
+    expect(enrollments?.where).toEqual({ status: 'active' });
+  });
+
+  it('AC-6 — la garde SCALAIRE de S-E05-5 est intacte : 3 colonnes, aucun include', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    await h.controller.roster(MY_SESSION, jwt(TEACHER));
+    const probes = h.db.of('classSession');
+    expect(probes[0]?.select).toEqual({ id: true, tenantId: true, teacherProfileId: true });
+    expect(probes[0]?.include).toBeUndefined();
+  });
+
+  /**
+   * TÉMOIN NÉGATIF. `studentRow()` doit CONTINUER de semer la charge que
+   * `PF-07` exposait : c'est elle qui rend significatives les assertions
+   * existantes de `S-E05-5`, et la rétrécir rendrait ce bloc vert avec le diff
+   * REVERTÉ (`AC-10` / `PF-275`).
+   */
+  it('le harnais reste NON projetant — la fixture large est le témoin, pas un oubli', async () => {
+    const h = makeHarness({ teacherProfileId: MY_TP });
+    const out = await h.controller.roster(MY_SESSION, jwt(TEACHER));
+    expect(out.roster).toHaveLength(1);
+    expect(out.roster[0]?.student).toHaveProperty('medicalNotes', 'ALLERGIE ARACHIDE');
+  });
+});
