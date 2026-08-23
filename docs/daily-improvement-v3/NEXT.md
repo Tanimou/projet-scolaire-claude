@@ -20,7 +20,7 @@ joins `guardian` and raises `42501` without the privilege. Measured **held** on 
 (`app_user`, RLS active, 1 policy) *before* being declared — a declared-but-absent pair refuses the
 application's whole second connection at boot.
 
-## ⚠️ THE REVIEW PANEL TURNED THE SLICE'S OWN THESIS AGAINST IT — `PF-255`, fixed at land
+## ⚠️ THE REVIEW PANEL TURNED THE SLICE'S OWN THESIS AGAINST IT — `PF-252`, fixed at land
 
 `parseDerivedChildParents` BUILDS a `problems` array and its docblock states the parse *"is refused rather
 than returned empty"* (DNC-08). **Its only caller destructured `.parents` and dropped `.problems`**, so the
@@ -73,7 +73,7 @@ Nothing here is claimed for `pilotage.srv861861.hstgr.cloud`, which was not cont
 4. **`PF-253` (P2) — raw SQL inside a scope carries an obligation the derivation cannot see.** A
    `tx.$queryRaw` inside a scope reads real tables as `app_user`; today it lands in a global `[LIMIT]`
    counter nobody fails on. Latent, not live (two raw sites, both outside scopes). Its second half arrived
-   with `PF-255`: the derived-child migration is still located by a hard-coded directory literal instead of
+   with `PF-252`: the derived-child migration is still located by a hard-coded directory literal instead of
    a glob.
 5. **`PF-224` (P1) — enforce `azp`/`aud` at the API.** Unchanged and still open: `jwt.strategy.ts`
    `validate()` checks `sub` and nothing else.

@@ -3821,7 +3821,7 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
     declared: declaredRead.pairs,
     declaredProblems: declaredRead.problems,
     derived: closure.derived,
-    // S-E01-1k review / PF-255 — `parseDerivedChildParents` BUILDS a `problems`
+    // S-E01-1k review / PF-252 — `parseDerivedChildParents` BUILDS a `problems`
     // array and its own docblock says the parse "is refused rather than returned
     // empty" (DNC-08), but until this line only `.parents` was ever read. The
     // refusal was therefore UNREACHABLE: feeding the parser an empty string —
@@ -3847,7 +3847,7 @@ function cutoverReadiness(ungrantedTables, { knownTables = [], grants = new Map(
     derivedScopedSites: closure.scopedSites,
     derivedSitesWalked: closure.sitesWalked,
     derivedChildParents: childPolicies.parents,
-    /** PF-255 — returned so the refusal is INSPECTABLE, not merely consumed above. */
+    /** PF-252 — returned so the refusal is INSPECTABLE, not merely consumed above. */
     derivedChildParentProblems: childPolicies.problems,
     schemaModels: schema.models.size,
     schemaProblems: schema.problems,
