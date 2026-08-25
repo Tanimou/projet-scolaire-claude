@@ -90,6 +90,18 @@ export {
   type StatusBadgeProps,
   type StatusTone,
 } from './components/StatusBadge';
+// The canonical enrolment-activity rendering. Four states, ONE mapping — see the
+// component's docblock for why it accepts a verdict and never enrolment rows.
+export {
+  EnrollmentStatusBadge,
+  enrollmentAccentColor,
+  enrollmentScopeLabel,
+  enrollmentStateLabel,
+  ENROLLMENT_UNKNOWN_ACCENT,
+  type EnrollmentActivityState,
+  type EnrollmentScopeInput,
+  type EnrollmentStatusBadgeProps,
+} from './components/EnrollmentStatusBadge';
 export { DateCard, type DateCardProps, type DateCardTone } from './components/DateCard';
 export { Tabs, TabsList, TabsTrigger, TabsContent, type TabsProps } from './components/Tabs';
 export { SectionHeader, type SectionHeaderProps } from './components/SectionHeader';

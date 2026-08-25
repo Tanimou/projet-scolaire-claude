@@ -1,6 +1,7 @@
 import {
   Avatar,
   EmptyState,
+  EnrollmentStatusBadge,
   PageHeader,
   Tabs,
   TabsContent,
@@ -37,32 +38,37 @@ import {
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
+import {
+  enrollmentDecor,
+  resolveEnrollmentActivity,
+  type CarriesEnrollmentActivity,
+  type EnrollmentDecorRow,
+} from '@/lib/enrollment-activity';
 import { fetchMe, type MeResponse } from '@/lib/me';
 
 
 export const metadata: Metadata = { title: 'Paramètres' };
 export const dynamic = 'force-dynamic';
 
-interface ChildEnrollment {
-  classSection: {
-    id: string;
-    name: string;
-    gradeLevel?: {
-      name: string;
-      cycle?: { name: string; color: string | null };
-    };
-  };
-  academicYear: { name: string; status: string };
-}
-
-interface Child {
+/**
+ * S-E03-3 / `PF-12` — même défaut et même correctif que
+ * `parent/children/page.tsx` : `academicYear.status` était déclaré mais jamais
+ * projeté par `GET /students`, donc la ligne « Ma famille » niait
+ * l'inscription de **tous** les enfants, en permanence.
+ *
+ * Les lignes sont maintenant typées `EnrollmentDecorRow`, qui ne porte **ni
+ * `status`, ni `academicYear.status`** — la re-dérivation est inexprimable —
+ * et ne sert plus qu'à la couleur de cycle. Le verdict arrive dans
+ * `enrollmentActivity` (`ADR-072`, `AC-2`).
+ */
+interface Child extends CarriesEnrollmentActivity {
   id: string;
   firstName: string;
   lastName: string;
   photoUrl: string | null;
   birthDate: string | null;
   externalRef: string | null;
-  enrollments: ChildEnrollment[];
+  enrollments: EnrollmentDecorRow[];
 }
 
 async function safe<T>(p: Promise<T>): Promise<T | null> {
@@ -374,9 +380,9 @@ function FamilyPanel({ items }: { items: Child[] }) {
 
       <ul className="divide-y divide-slate-100">
         {items.map((c) => {
-          const active = c.enrollments.find((e) => e.academicYear.status === 'active');
+          const enrolment = resolveEnrollmentActivity(c);
           const age = computeAge(c.birthDate);
-          const cycleColor = active?.classSection.gradeLevel?.cycle?.color ?? '#3b82f6';
+          const cycleColor = enrollmentDecor(c, c.enrollments).accentColor;
           return (
             <li key={c.id} className="flex flex-wrap items-center gap-4 px-6 py-5">
               <Avatar
@@ -397,21 +403,40 @@ function FamilyPanel({ items }: { items: Child[] }) {
                   )}
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
-                  {active ? (
+                  {/*
+                    S-E03-3 : le `<span className="italic text-slate-400">` qui
+                    niait l'inscription a disparu. C'était le porteur le plus
+                    faible possible (gris `slate-400` = 3,1:1, sous le plancher
+                    AA de 4,5:1) ET une TROISIÈME formulation française pour un
+                    seul et même état — la liste, le détail et cette ligne en
+                    avaient chacun la leur. Trois libellés pour un fait, c'est
+                    `PF-12` à la couche copy ; il n'en reste qu'un, celui du
+                    badge. Le badge est dans le MÊME groupe `flex-wrap` que la
+                    classe et l'année, donc il ne s'orpheline pas sur sa propre
+                    ligne à 375 px.
+                  */}
+                  {enrolment.state === 'active' && (
                     <>
                       <span className="inline-flex items-center gap-1 font-semibold text-slate-700">
                         <GraduationCap className="h-3.5 w-3.5" style={{ color: cycleColor }} />
-                        {active.classSection.gradeLevel?.name ?? active.classSection.name} ·{' '}
-                        {active.classSection.name}
+                        {enrolment.gradeLevelName ?? enrolment.classLabel} ·{' '}
+                        {enrolment.classLabel}
                       </span>
                       <span className="text-slate-400">·</span>
-                      <span>{active.academicYear.name}</span>
+                      <span>{enrolment.academicYearLabel}</span>
                     </>
-                  ) : (
-                    <span className="italic text-slate-400">
-                      Pas d&apos;inscription active
-                    </span>
                   )}
+                  <EnrollmentStatusBadge
+                    state={enrolment.state}
+                    classLabel={enrolment.classLabel}
+                    academicYearLabel={enrolment.academicYearLabel}
+                    lastStatus={enrolment.lastStatus}
+                    size="sm"
+                    // La classe et l'année sont déjà imprimées juste à gauche
+                    // sur l'état `active` ; ailleurs la portée EST la seule
+                    // information et elle est rendue.
+                    showScope={enrolment.state !== 'active'}
+                  />
                   {age !== null && (
                     <>
                       <span className="text-slate-400">·</span>

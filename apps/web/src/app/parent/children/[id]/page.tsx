@@ -3,11 +3,11 @@ import {
   ChildProfileHero,
   DonutChart,
   EmptyState,
+  EnrollmentStatusBadge,
   KpiCard,
   LineChart,
   PageHeader,
   SectionHeader,
-  StatusBadge,
   SubjectPerfCard,
   formatGrade,
   formatPercent,
@@ -42,29 +42,43 @@ import {
 } from '../../dashboard/_components/RecentGradesTable';
 import { UpcomingPanel, type UpcomingItem } from '../../dashboard/_components/UpcomingPanel';
 
+import {
+  SchoolPathSection,
+  type EnrollmentHistoryRow,
+} from './_components/SchoolPathSection';
+
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
+import {
+  resolveEnrollmentActivity,
+  type CarriesEnrollmentActivity,
+} from '@/lib/enrollment-activity';
 
 
 export const metadata: Metadata = { title: 'Profil de mon enfant' };
 export const dynamic = 'force-dynamic';
 
-interface StudentSummary {
+/**
+ * S-E03-3 / `PF-12` — `enrollments` **reste** ici, et c'est délibéré.
+ *
+ * `GET /students/:id` continue de renvoyer l'historique **complet et non
+ * filtré** (`AC-2`) : c'est un consommateur légitime, rendu par la section
+ * « Parcours scolaire » plus bas. Ce qui disparaît, c'est sa **double
+ * fonction** — il ne répond plus à « cet enfant est-il inscrit ? ». Cette
+ * réponse-là vient du champ canonique `enrollmentActivity` (`ADR-072`).
+ *
+ * La dérivation supprimée était `.find(e => e.status === 'active') ?? enrollments[0]`,
+ * au-dessus d'une charge utile **sans filtre de statut** : le `??` rendait une
+ * inscription `graduated` derrière un badge vert « Inscription active ». Le
+ * repli sur une ligne arbitraire n'était pas une précaution, c'était le bug.
+ */
+interface StudentSummary extends CarriesEnrollmentActivity {
   id: string;
   firstName: string;
   lastName: string;
   birthDate: string | null;
   externalRef: string | null;
-  enrollments: Array<{
-    id: string;
-    status: string;
-    classSection: {
-      id: string;
-      name: string;
-      gradeLevel?: { name: string; cycle?: { name: string; color: string | null } };
-    };
-    academicYear: { id: string; name: string; status: string };
-  }>;
+  enrollments: EnrollmentHistoryRow[];
 }
 
 interface ParentDashboardResponse {
@@ -181,8 +195,7 @@ export default async function ChildDetailPage({
     ),
   ]);
 
-  const active =
-    student.enrollments.find((e) => e.status === 'active') ?? student.enrollments[0];
+  const enrolment = resolveEnrollmentActivity(student);
 
   const perf = dashboard?.globalPerformance;
   const subjectPerf = dashboard?.subjectPerf ?? [];
@@ -290,13 +303,10 @@ export default async function ChildDetailPage({
           { label: fullName },
         ]}
         title={fullName}
-        subtitle={
-          active
-            ? `${active.classSection.gradeLevel?.cycle?.name ?? ''}${
-                active.classSection.gradeLevel?.cycle?.name ? ' · ' : ''
-              }${active.classSection.gradeLevel?.name ?? ''} · ${active.classSection.name} · ${active.academicYear.name}`
-            : 'Aucune inscription active'
-        }
+        // La portée canonique remplace les quatre concaténations locales — et
+        // remplace surtout la phrase de repli, qui était le troisième libellé
+        // français pour un même état.
+        subtitle={enrolment.scopeLabel}
         actions={
           <div className="flex items-center gap-2">
             <Link
@@ -328,25 +338,37 @@ export default async function ChildDetailPage({
         <ChildProfileHero
           firstName={dashboard?.student.firstName ?? student.firstName}
           lastName={dashboard?.student.lastName ?? student.lastName}
+          // `undefined` hors `active` : « Classe de 3ème B » sur un enfant sorti
+          // de l'année en cours est exactement le mensonge que la tranche
+          // supprime. `enrolment.classLabel` est `null` sauf sur `active`.
           classLabel={
-            dashboard?.student.classSectionName
-              ? `Classe de ${dashboard.student.classSectionName}`
-              : active
-                ? `Classe de ${active.classSection.name}`
-                : undefined
+            enrolment.classLabel ? `Classe de ${enrolment.classLabel}` : undefined
           }
           schoolLabel={dashboard?.student.schoolName ?? undefined}
-          meta={heroMeta}
           rightSlot={
-            <div className="flex items-center gap-2">
-              <StatusBadge
-                label={active ? 'Inscription active' : 'Aucune inscription active'}
-                tone={active ? 'success' : 'warning'}
-                size="sm"
-                withDot
-              />
-            </div>
+            <EnrollmentStatusBadge
+              state={enrolment.state}
+              classLabel={enrolment.classLabel}
+              academicYearLabel={enrolment.academicYearLabel}
+              lastStatus={enrolment.lastStatus}
+              size="md"
+              // La portée mène quelque part : « Voir le parcours » descend vers
+              // la section d'historique, qui est ce qui EXPLIQUE l'état. Une
+              // information sans pas suivant manque la promesse du produit.
+              action={
+                enrolment.state === 'active' ? undefined : (
+                  <a
+                    href="#parcours"
+                    className="inline-flex min-h-11 items-center text-[11px] font-bold text-blue-700 underline underline-offset-2 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  >
+                    Voir le parcours
+                  </a>
+                )
+              }
+              className="max-w-[16rem]"
+            />
           }
+          meta={heroMeta}
           className="lg:col-span-8"
         />
 
@@ -477,6 +499,32 @@ export default async function ChildDetailPage({
           ))}
         </ul>
       </nav>
+
+      {/*
+        « Parcours scolaire » — la CONTREPARTIE du badge canonique.
+
+        En retirant `?? enrollments[0]`, la page cesse d'affirmer une classe
+        qu'elle ne peut pas justifier ; sans cette section, elle cesserait aussi
+        de *montrer* l'inscription passée, et « Hors année en cours » serait une
+        impasse. L'historique complet (non filtré, `AC-2`) est donc rendu ici,
+        sans interaction requise, cible de l'ancre « Voir le parcours » du badge.
+      */}
+      <SchoolPathSection
+        rows={student.enrollments}
+        childFirstName={student.firstName}
+        // La ligne canonique est désignée par la CLÉ que le serveur publie
+        // (année canonique + nom de classe), jamais par un test de statut ni
+        // par un index — la section met en avant le choix du serveur, elle ne
+        // le refait pas.
+        canonicalKey={
+          enrolment.state === 'active'
+            ? {
+                academicYearId: student.enrollmentActivity?.academicYearId ?? null,
+                classSectionName: enrolment.classLabel,
+              }
+            : null
+        }
+      />
 
       {/* Row : Subject perf + Upcoming + Alerts */}
       <div className="mt-6 grid gap-4 lg:grid-cols-12">

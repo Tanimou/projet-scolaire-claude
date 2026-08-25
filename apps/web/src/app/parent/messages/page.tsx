@@ -13,13 +13,19 @@ import { api, ApiError } from '@/lib/api-client';
 export const metadata: Metadata = { title: 'Messages' };
 export const dynamic = 'force-dynamic';
 
-interface ChildEnrollment {
-  academicYear: { status: string };
-}
-
+/**
+ * S-E03-3 / `PF-12` — `enrollments: ChildEnrollment[]` supprimé.
+ *
+ * Cette page ne lisait le champ **nulle part** (elle ne teste que la longueur
+ * de la liste d'enfants), mais elle en déclarait la forme — et c'était la même
+ * forme fausse que sur les cinq autres surfaces parent :
+ * `academicYear: { status }`, alors que `GET /students` ne projette que
+ * `{ id, name }`. Une septième déclaration d'un champ que le runtime ne livre
+ * pas est `DNC-06` en dormance : elle attend le premier `.find()` qui la lira.
+ * On la retire pendant qu'elle est encore inoffensive.
+ */
 interface Child {
   id: string;
-  enrollments: ChildEnrollment[];
 }
 
 async function safe<T>(p: Promise<T>): Promise<T | null> {

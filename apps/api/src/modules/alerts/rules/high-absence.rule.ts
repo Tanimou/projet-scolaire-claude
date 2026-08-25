@@ -1,3 +1,10 @@
+import {
+  candidateEnrollmentWhere,
+  enrollmentTotalOrder,
+  selectActiveEnrollment,
+  selectReportingWindowEnrollment,
+} from '@pilotage/contracts';
+
 import type { DetectedAlert, RuleContext } from './rule-context';
 
 /**
@@ -48,19 +55,38 @@ export async function evaluateHighAbsence(ctx: RuleContext): Promise<DetectedAle
   if (rows.length === 0) return [];
 
   // Resolve current class section per student for richer alert context.
+  //
+  // S-E03-3 / PF-12 / ADR-072 — le `where` littéral, le `take: 1` et l'index
+  // `enrollments[0]` sont partis. `ctx.academicYearId` est DÉJÀ l'année
+  // canonique, résolue une seule fois par l'évaluateur à travers
+  // `resolveActiveAcademicYear` (ADR-070) et passée ici : la canonicalisation ne
+  // coûte donc AUCUNE requête de plus, et surtout aucun N+1 — la sélection est
+  // purement en mémoire, sur des lignes déjà lues.
   const students = await ctx.prisma.student.findMany({
     where: { id: { in: rows.map((r) => r.studentId) } },
     include: {
       enrollments: {
-        where: { status: 'active' },
+        where: candidateEnrollmentWhere({ tenantId: ctx.tenantId }),
+        orderBy: enrollmentTotalOrder(),
         include: { classSection: { select: { id: true, name: true } } },
-        take: 1,
-        orderBy: { enrolledAt: 'desc' },
       },
     },
   });
+  const referenceDate = new Date();
   const enrollmentByStudent = new Map(
-    students.map((s) => [s.id, s.enrollments[0]?.classSection ?? null]),
+    students.map((s) => {
+      const activity = selectActiveEnrollment(s.enrollments, {
+        tenantId: ctx.tenantId,
+        academicYearId: ctx.academicYearId,
+        referenceDate,
+      });
+      // Le repli reste la FENÊTRE de reporting (la ligne active la plus récente,
+      // toutes années confondues) — la précédence exacte d'avant cette tranche.
+      // Ce n'est PAS une affirmation d'activité : c'est le contexte de classe
+      // affiché dans le corps de l'alerte, et le vider serait une régression.
+      const shown = activity.enrollment ?? selectReportingWindowEnrollment(s.enrollments);
+      return [s.id, shown?.classSection ?? null] as const;
+    }),
   );
 
   return rows.map((r) => {

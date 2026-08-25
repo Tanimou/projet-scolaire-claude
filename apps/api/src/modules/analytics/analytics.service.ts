@@ -10,11 +10,20 @@ import {
   UnknownTimezoneError,
   assertKnownTimezone,
   auditWindowCreatedAtFilter,
+  candidateEnrollmentWhere,
+  enrollmentTotalOrder,
   isAuditPortalNone,
+  projectEnrollmentActivity,
   resolveActiveAcademicYear,
   resolveAuditWindow,
+  selectActiveEnrollment,
+  selectReportingWindowEnrollment,
 } from '@pilotage/contracts';
-import type { RemediationProgressDto, SnapshotFreshness } from '@pilotage/contracts';
+import type {
+  EnrollmentActivityProjection,
+  RemediationProgressDto,
+  SnapshotFreshness,
+} from '@pilotage/contracts';
 
 import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -557,6 +566,18 @@ export interface ParentDashboardResponse {
     attendanceRate: number | null;
     percentageOnTwenty: number | null;
   };
+  /**
+   * S-E03-3 / PF-12 / ADR-072 — LA réponse canonique à « cet enfant est-il
+   * activement inscrit ? », dérivée CÔTÉ SERVEUR à travers
+   * `selectActiveEnrollment` (`@pilotage/contracts`, module `enrollment/`), avec
+   * son label de portée (ADR-041 §D3). La surface ne choisit plus : elle lit.
+   *
+   * ⚠ Ce champ NE FENÊTRE RIEN. `student.classSectionName` reste la classe de
+   * la FENÊTRE de reporting (précédence historique) ; c'est `enrollmentActivity
+   * .state` qui dit si cette classe est une inscription EN COURS ou la
+   * dernière connue. Confondre les deux est exactement PF-12.
+   */
+  enrollmentActivity: EnrollmentActivityProjection;
   subjectPerf: StudentSubjectPerf[];
   termEvolution: Array<{
     label: string;
@@ -774,13 +795,18 @@ export class AnalyticsService {
   async parentUpcoming(opts: { tenantId: string; studentId: string }) {
     const { tenantId, studentId } = opts;
 
-    // Resolve active enrollment → classSectionId + gradeLevelId for coef resolution.
+    // B2 — S-E03-3 / ADR-072. Le `where` littéral `{ status: 'active' }`, le
+    // `take: 1` et l'index `enrollments[0]` ont disparu : le jeu CANDIDAT est
+    // décrit par le contrat, l'ordre total vient du contrat, et la sélection est
+    // faite par le contrat. `take: 1` ne pouvait de toute façon pas répondre à la
+    // question — il rendait UNE ligne active, sans savoir si elle appartenait à
+    // l'année canonique.
     const student = await this.prisma.student.findFirst({
       where: { id: studentId, tenantId },
       include: {
         enrollments: {
-          where: { status: 'active' },
-          orderBy: { enrolledAt: 'desc' },
+          where: candidateEnrollmentWhere({ tenantId }),
+          orderBy: enrollmentTotalOrder(),
           include: {
             classSection: {
               select: {
@@ -790,19 +816,53 @@ export class AnalyticsService {
                 gradeLevel: { select: { name: true } },
               },
             },
-            academicYear: { select: { id: true } },
+            academicYear: { select: { id: true, name: true } },
           },
-          take: 1,
         },
+        // Le jeu candidat est FILTRÉ ; sans le total, un enfant diplômé serait
+        // classé « aucune inscription » au lieu de « hors année en cours ».
+        _count: { select: { enrollments: true } },
       },
     });
 
-    const activeEnrollment = student?.enrollments[0];
-    const classSectionId = activeEnrollment?.classSectionId;
-    const gradeLevelId = activeEnrollment?.classSection.gradeLevelId;
+    // L'année canonique est résolue UNE fois, keyée sur l'école QUI PORTE LES
+    // LIGNES (`student.schoolId`) et jamais sur `SchoolContextService.forUser`
+    // (« l'école qui a le plus d'élèves ») — axe 4 / PF-356.
+    const canonicalYear = student
+      ? await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+          tenantId,
+          schoolId: student.schoolId,
+          referenceDate: new Date(),
+          onAbsent: 'nullWhenNoActiveYear',
+        })
+      : null;
+
+    const enrollmentActivity = projectEnrollmentActivity(
+      selectActiveEnrollment(student?.enrollments ?? [], {
+        tenantId,
+        academicYearId: canonicalYear?.id ?? null,
+        academicYearName: canonicalYear?.name ?? null,
+        totalEnrollmentCount: student?._count.enrollments ?? 0,
+        referenceDate: new Date(),
+      }),
+      (row) => ({
+        academicYearId: row.academicYearId,
+        academicYearName: row.academicYear.name,
+        classSectionName: row.classSection.name,
+        gradeLevelName: row.classSection.gradeLevel?.name ?? null,
+      }),
+    );
+
+    // ⚠ La FENÊTRE de reporting garde sa précédence historique — la
+    // canonicalisation change ce qui est AFFIRMÉ, jamais ce qui est FENÊTRÉ.
+    // Sinon un enfant dont l'inscription active vit dans une année non canonique
+    // verrait sa liste d'évaluations se vider (ADR-072, §« fenêtre de reporting »).
+    const windowEnrollment = selectReportingWindowEnrollment(student?.enrollments ?? []);
+    const classSectionId = windowEnrollment?.classSectionId;
+    const gradeLevelId = windowEnrollment?.classSection.gradeLevelId;
 
     if (!student || !classSectionId) {
-      return { data: [], classSectionName: null, gradeLevelName: null };
+      return { data: [], classSectionName: null, gradeLevelName: null, enrollmentActivity };
     }
 
     const now = new Date();
@@ -849,8 +909,9 @@ export class AnalyticsService {
     const coefMap = new Map(subjectCoefs.map((c) => [c.subjectId, Number(c.coefficient)]));
 
     return {
-      classSectionName: activeEnrollment?.classSection.name ?? null,
-      gradeLevelName: activeEnrollment?.classSection.gradeLevel?.name ?? null,
+      classSectionName: windowEnrollment?.classSection.name ?? null,
+      gradeLevelName: windowEnrollment?.classSection.gradeLevel?.name ?? null,
+      enrollmentActivity,
       data: upcoming.map((a) => {
         const subj = a.teachingAssignment.subject;
         const overrideCoef = a.coefficientOverride;
@@ -885,14 +946,16 @@ export class AnalyticsService {
   }): Promise<ParentDashboardResponse> {
     const { tenantId, studentId } = opts;
 
-    // Resolve student + active enrollment + school
+    // B1 — S-E03-3 / ADR-072. Le `where` littéral, le `take: 1` et
+    // `student.enrollments[0]` ont disparu. Le jeu CANDIDAT, l'ordre total et la
+    // sélection viennent tous du contrat `@pilotage/contracts` (`enrollment/`).
     const student = await this.prisma.student.findFirst({
       where: { id: studentId, tenantId },
       include: {
         school: { select: { name: true } },
         enrollments: {
-          where: { status: 'active' },
-          orderBy: { enrolledAt: 'desc' },
+          where: candidateEnrollmentWhere({ tenantId }),
+          orderBy: enrollmentTotalOrder(),
           include: {
             classSection: {
               include: {
@@ -909,8 +972,10 @@ export class AnalyticsService {
               },
             },
           },
-          take: 1,
         },
+        // Le jeu candidat est FILTRÉ sur le statut : sans le total, un enfant
+        // diplômé serait rendu « aucune inscription » au lieu de « hors année ».
+        _count: { select: { enrollments: true } },
       },
     });
 
@@ -918,11 +983,50 @@ export class AnalyticsService {
       throw new Error('Student not found in tenant');
     }
 
-    const activeEnrollment = student.enrollments[0];
-    const academicYearId =
-      opts.academicYearId ?? activeEnrollment?.academicYearId;
-    const classSectionId = activeEnrollment?.classSectionId;
-    const gradeLevelId = activeEnrollment?.classSection.gradeLevelId;
+    // ============ L'AFFIRMATION D'ACTIVITÉ (ADR-072) ============
+    // UNE résolution d'année par requête, HISSÉE, keyée sur l'école qui porte
+    // les lignes (`student.schoolId`) — jamais sur `SchoolContextService.forUser`,
+    // qui rend « l'école du tenant qui a le plus d'élèves » et ferait diverger
+    // B1 de B3 dans un tenant multi-écoles (axe 4 / PF-356).
+    const canonicalYear = await resolveActiveAcademicYear(
+      prismaAcademicYearReader(this.prisma),
+      {
+        tenantId,
+        schoolId: student.schoolId,
+        referenceDate: new Date(),
+        onAbsent: 'nullWhenNoActiveYear',
+      },
+    );
+
+    const enrollmentActivity = projectEnrollmentActivity(
+      selectActiveEnrollment(student.enrollments, {
+        tenantId,
+        academicYearId: canonicalYear?.id ?? null,
+        academicYearName: canonicalYear?.name ?? null,
+        totalEnrollmentCount: student._count.enrollments,
+        referenceDate: new Date(),
+      }),
+      (row) => ({
+        academicYearId: row.academicYearId,
+        academicYearName: row.academicYear.name,
+        classSectionName: row.classSection.name,
+        gradeLevelName: row.classSection.gradeLevel?.name ?? null,
+      }),
+    );
+
+    // ============ LA FENÊTRE DE REPORTING (inchangée, exprès) ============
+    // ⚠ NE PAS remplacer par `enrollmentActivity` : `academicYearId` est la clé
+    // qui fenêtre notes, alertes, assiduité, évolution et comparaison N-1. Sur
+    // les données mesurées, l'année `active` des DEUX tenants est TERMINÉE — si
+    // la clé devenait canonique, la page qui porte « cinq questions en moins de
+    // 2 s » (GUARDRAILS §1) deviendrait blanche pour exactement les enfants que
+    // cette tranche existe pour servir. Ce qui change est CE QUI EST AFFIRMÉ,
+    // jamais ce qui est FENÊTRÉ. Inverser cette dépendance est PF-329, hors
+    // périmètre (story §8).
+    const windowEnrollment = selectReportingWindowEnrollment(student.enrollments);
+    const academicYearId = opts.academicYearId ?? windowEnrollment?.academicYearId;
+    const classSectionId = windowEnrollment?.classSectionId;
+    const gradeLevelId = windowEnrollment?.classSection.gradeLevelId;
 
     // Fetch all published/revised grades for this student in this year
     const grades = academicYearId
@@ -1191,7 +1295,7 @@ export class AnalyticsService {
     const previousYearComparison = await this.previousYearComparison(
       tenantId,
       studentId,
-      activeEnrollment?.academicYear ?? null,
+      windowEnrollment?.academicYear ?? null,
       overallAvg,
     );
 
@@ -1215,13 +1319,14 @@ export class AnalyticsService {
     }
 
     return {
+      enrollmentActivity,
       student: {
         id: student.id,
         firstName: student.firstName,
         lastName: student.lastName,
         photoUrl: student.photoUrl ?? null,
-        classSectionName: activeEnrollment?.classSection.name ?? null,
-        gradeLevelName: activeEnrollment?.classSection.gradeLevel?.name ?? null,
+        classSectionName: windowEnrollment?.classSection.name ?? null,
+        gradeLevelName: windowEnrollment?.classSection.gradeLevel?.name ?? null,
         schoolName: student.school?.name ?? null,
         externalRef: student.externalRef,
         birthDate: student.birthDate?.toISOString() ?? null,

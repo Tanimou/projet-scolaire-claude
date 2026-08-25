@@ -10,6 +10,7 @@ import {
 import {
   AlertTriangle,
   CheckCircle2,
+  History,
   MessageSquare,
   MessageSquarePlus,
   ShieldAlert,
@@ -288,6 +289,17 @@ function AlertContext({ request }: { request: MeetingRequest }) {
   );
 }
 
+/**
+ * S-E03-3 / `PF-12` / `ADR-072 §5` — la pastille de classe et sa PORTÉE.
+ *
+ * `classSectionName` n'est renseigné que pour une inscription de l'année
+ * canonique (le serveur ne replie plus sur la dernière connue). Une pastille
+ * absente n'est donc pas une donnée manquante : c'est un fait, et il est dit.
+ * `ADR-041 §D3` : « the label is what makes a changed number legible rather than
+ * alarming » — la phrase de portée est un `<p>` frère dans le DOM, jamais un
+ * `title` ni un `aria-label` (WCAG 4.1.2), et le texte porte le sens sans la
+ * couleur (WCAG 1.4.1).
+ */
 function StudentCell({ request }: { request: MeetingRequest }) {
   return (
     <div className="min-w-0">
@@ -299,6 +311,12 @@ function StudentCell({ request }: { request: MeetingRequest }) {
           </span>
         )}
       </div>
+      {request.enrollmentActivityState !== 'active' && (
+        <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-slate-600">
+          <History className="h-3 w-3 text-slate-400" aria-hidden />
+          {request.enrollmentScopeLabel}
+        </p>
+      )}
       {request.requestedByName && (
         <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-slate-600">
           <UserRound className="h-3 w-3 text-slate-400" aria-hidden />

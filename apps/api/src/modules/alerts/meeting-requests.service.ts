@@ -1,6 +1,13 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import {
+  candidateEnrollmentWhere,
+  enrollmentTotalOrder,
+  resolveActiveAcademicYear,
+  selectActiveEnrollment,
+} from '@pilotage/contracts';
+import type { Prisma, PrismaClient } from '@prisma/client';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 
 import { MeetingRequestDto, MeetingRequestStatus } from './alerts.types';
@@ -28,28 +35,72 @@ type MeetingRequestScope =
   | { kind: 'teacher'; userProfileId: string }
   | { kind: 'none' };
 
-const MEETING_REQUEST_INCLUDE = {
-  alert: { select: { title: true, severity: true } },
-  student: {
-    select: {
-      firstName: true,
-      lastName: true,
-      enrollments: {
-        where: { status: 'active' as const, academicYear: { status: 'active' as const } },
-        orderBy: { enrolledAt: 'desc' as const },
-        take: 1,
-        select: { classSection: { select: { name: true } } },
+/**
+ * B5 — S-E03-3 / PF-12 / ADR-072.
+ *
+ * TROIS choses ont changé, et chacune fermait une manière de mentir :
+ *
+ * 1. Le `where` relationnel `academicYear: { status: 'active' }` est parti. Il
+ *    répondait à la question par une COLONNE INDÉPENDANTE de l'année canonique
+ *    (`AcademicYear.status` et `Enrollment.status` sont deux colonnes,
+ *    `schema.prisma:319` / `:652`) — précisément l'axe 1 de PF-12. L'année
+ *    canonique arrive maintenant de `resolveActiveAcademicYear` (ADR-070), et la
+ *    sélection est faite par le contrat.
+ *
+ * 2. Le `take: 1` est parti : une seule ligne ne permet pas de distinguer
+ *    « diplômé » (`out_of_scope`) de « aucun dossier » (`none`).
+ *
+ * 3. Le `select` s'élargit à `id` / `status` / `enrolledAt` / `academicYearId`.
+ *    Sans eux, le contrat recevrait des lignes AMPUTÉES des champs que son type
+ *    déclare — le motif `DNC-06` exact mesuré sur `children/page.tsx:38`, où
+ *    `academicYear.status` était typé non-optionnel et n'était JAMAIS envoyé, si
+ *    bien que le prédicat client valait `false` pour TOUS les enfants.
+ *
+ * Fonction plutôt que constante : `tenantId` est requis PAR LE TYPE du prédicat
+ * (ADR-070 §D3). La forme rendue est fixe, donc le type de charge utile se
+ * dérive d'une instance canonique (`MEETING_REQUEST_INCLUDE_SHAPE`).
+ */
+function meetingRequestInclude(tenantId: string) {
+  return {
+    alert: { select: { title: true, severity: true } },
+    student: {
+      select: {
+        firstName: true,
+        lastName: true,
+        enrollments: {
+          where: candidateEnrollmentWhere({ tenantId }),
+          orderBy: enrollmentTotalOrder(),
+          select: {
+            id: true,
+            status: true,
+            enrolledAt: true,
+            endedAt: true,
+            academicYearId: true,
+            classSection: { select: { name: true } },
+          },
+        },
+        _count: { select: { enrollments: true } },
       },
     },
-  },
-  subject: { select: { code: true, name: true } },
-  requester: { select: { firstName: true, lastName: true } },
-  assignedTo: { select: { firstName: true, lastName: true } },
-} satisfies Prisma.MeetingRequestInclude;
+    subject: { select: { code: true, name: true } },
+    requester: { select: { firstName: true, lastName: true } },
+    assignedTo: { select: { firstName: true, lastName: true } },
+  } satisfies Prisma.MeetingRequestInclude;
+}
+
+/** Instance canonique — sert UNIQUEMENT à dériver le type de charge utile. */
+const MEETING_REQUEST_INCLUDE_SHAPE = meetingRequestInclude('00000000-0000-0000-0000-000000000000');
 
 type MeetingRequestFull = Prisma.MeetingRequestGetPayload<{
-  include: typeof MEETING_REQUEST_INCLUDE;
+  include: typeof MEETING_REQUEST_INCLUDE_SHAPE;
 }>;
+
+/**
+ * L'année canonique résolue UNE FOIS par appel, HISSÉE hors de tout `map` :
+ * `toDto` est appelé une fois par ligne et une résolution par ligne serait un
+ * N+1 sur la file d'action (GUARDRAILS §2).
+ */
+type CanonicalYear = { id: string; name: string } | null;
 
 /**
  * Teacher/admin meeting-request action center (E1-S3). All reads/writes are
@@ -139,18 +190,44 @@ export class MeetingRequestsService {
     // Le `Promise.all` d'origine est SÉQUENTIALISÉ : une transaction interactive
     // est UNE connexion, et deux `await` concurrents sur le même `tx` ne sont
     // pas un ordonnancement supporté. Le résultat rendu est identique.
-    const { rows, total } = await this.scope.run(args.tenantId, async (tx) => {
+    const { rows, total, canonicalYear } = await this.scope.run(args.tenantId, async (tx) => {
       const found = await tx.meetingRequest.findMany({
         where,
-        include: MEETING_REQUEST_INCLUDE,
+        include: meetingRequestInclude(args.tenantId),
         orderBy: { createdAt: 'desc' },
         skip: args.offset,
         take: args.limit,
       });
       const count = await tx.meetingRequest.count({ where });
-      return { rows: found, total: count };
+      // HISSÉE : une résolution par page, jamais par ligne (ADR-072).
+      const year = await this.canonicalYear(tx, args.tenantId, args.schoolId);
+      return { rows: found, total: count, canonicalYear: year };
     });
-    return { data: rows.map((r) => this.toDto(r)), total };
+    return { data: rows.map((r) => this.toDto(r, canonicalYear, args.tenantId)), total };
+  }
+
+  /**
+   * S-E03-3 / ADR-072 — l'année canonique, résolue THROUGH
+   * `resolveActiveAcademicYear` (ADR-070) et jamais AUTOUR : écrire
+   * `academicYear: { status: 'active' }` dans un `where` d'inscription
+   * collisionne avec le cliquet d'ADR-070 et est une condition d'ARRÊT.
+   *
+   * `schoolId` peut être `null` (portée tenant) : le résolveur l'accepte et
+   * applique alors le MÊME ordre total à travers les écoles — déterministe, et
+   * PF-328 est hérité tel quel.
+   */
+  private async canonicalYear(
+    tx: Pick<PrismaClient, 'academicYear'>,
+    tenantId: string,
+    schoolId: string | null,
+  ): Promise<CanonicalYear> {
+    const year = await resolveActiveAcademicYear(prismaAcademicYearReader(tx), {
+      tenantId,
+      ...(schoolId === null ? {} : { schoolId }),
+      referenceDate: new Date(),
+      onAbsent: 'nullWhenNoActiveYear',
+    });
+    return year === null ? null : { id: year.id, name: year.name };
   }
 
   /**
@@ -186,10 +263,16 @@ export class MeetingRequestsService {
     // de la faire dépendre d'une branche silencieuse.
     const where: Prisma.MeetingRequestWhereInput = { ...scopeWhere, id: args.id };
 
+    // Résolue AVANT, dans sa propre portée : la portée ci-dessous porte la garde
+    // de rôle et l'écriture, et rien d'autre ne doit s'y glisser (ADR-058 §D1).
+    const canonicalYear = await this.scope.run(args.tenantId, (tx) =>
+      this.canonicalYear(tx, args.tenantId, args.schoolId),
+    );
+
     const outcome = await this.scope.run(args.tenantId, async (tx) => {
       const row = await tx.meetingRequest.findFirst({
         where,
-        include: MEETING_REQUEST_INCLUDE,
+        include: meetingRequestInclude(args.tenantId),
       });
       if (!row) return null;
 
@@ -204,12 +287,12 @@ export class MeetingRequestsService {
           resolvedAt: new Date(),
           resolvedBy: args.userProfileId,
         },
-        include: MEETING_REQUEST_INCLUDE,
+        include: meetingRequestInclude(args.tenantId),
       });
       return { transitioned: true as const, row: updated };
     });
     if (!outcome) throw new NotFoundException('Meeting request not found');
-    if (!outcome.transitioned) return this.toDto(outcome.row);
+    if (!outcome.transitioned) return this.toDto(outcome.row, canonicalYear, args.tenantId);
     const updated = outcome.row;
 
     // G-AUDIT — SA PROPRE portée, ouverte après la fermeture de celle de
@@ -236,16 +319,48 @@ export class MeetingRequestsService {
       );
     }
 
-    return this.toDto(updated);
+    return this.toDto(updated, canonicalYear, args.tenantId);
   }
 
-  private toDto(row: MeetingRequestFull): MeetingRequestDto {
+  private toDto(
+    row: MeetingRequestFull,
+    canonicalYear: CanonicalYear,
+    tenantId: string,
+  ): MeetingRequestDto {
     const requesterName =
       `${row.requester.firstName} ${row.requester.lastName}`.trim() || null;
     const assigneeName = row.assignedTo
       ? `${row.assignedTo.firstName} ${row.assignedTo.lastName}`.trim() || null
       : null;
+
+    // S-E03-3 / ADR-072 — le verdict vient du contrat. `row.student.enrollments[0]`
+    // a disparu : un index `[0]` sur un tableau d'inscriptions AFFIRMAIT une
+    // activité que rien dans la requête ne garantissait.
+    const activity = selectActiveEnrollment(row.student.enrollments, {
+      tenantId,
+      academicYearId: canonicalYear?.id ?? null,
+      academicYearName: canonicalYear?.name ?? null,
+      totalEnrollmentCount: row.student._count.enrollments,
+      referenceDate: new Date(),
+    });
+    // ⚠ AUCUN REPLI, ET C'EST LE CŒUR DE LA CORRECTION.
+    // `activity.enrollment ?? activity.lastKnown` a été écrit ici puis retiré au
+    // land : c'est LITTÉRALEMENT la forme `?? enrollments[0]` que le docblock du
+    // contrat qualifie de « pas une précaution : c'ÉTAIT le défaut » (axe 2 de
+    // PF-12). Elle aurait rendu « 3ème B » — une classe vieille de deux ans — en
+    // pastille nue sur la ligne teacher/admin d'un enfant diplômé, donc PF-12
+    // rouvert à l'intérieur de son propre correctif, sur une surface que la
+    // tranche venait de convertir. Le portail web tranche déjà exactement pareil
+    // sur ce même verdict (`apps/web/src/lib/enrollment-activity.ts` :
+    // `classLabel: null` VOLONTAIRE sur `out_of_scope`).
+    // La classe n'est donc rendue QUE lorsqu'elle est une inscription EN COURS ;
+    // `enrollmentScopeLabel` porte ce qui est affirmé quand elle ne l'est pas, et
+    // `MeetingRequestList.tsx` le rend à côté du nom de l'enfant.
+    const shownEnrollment = activity.enrollment;
+
     return {
+      enrollmentActivityState: activity.state,
+      enrollmentScopeLabel: activity.scopeLabel,
       id: row.id,
       status: row.status,
       alertId: row.alertId,
@@ -254,7 +369,7 @@ export class MeetingRequestsService {
       alertTitle: row.alert.title,
       studentId: row.studentId,
       studentName: `${row.student.firstName} ${row.student.lastName}`.trim(),
-      classSectionName: row.student.enrollments[0]?.classSection.name ?? null,
+      classSectionName: shownEnrollment?.classSection.name ?? null,
       subjectId: row.subjectId,
       subjectCode: row.subject?.code ?? null,
       subjectName: row.subject?.name ?? null,
