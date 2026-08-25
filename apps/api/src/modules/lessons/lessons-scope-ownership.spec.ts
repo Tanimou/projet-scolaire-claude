@@ -16,6 +16,7 @@ import {
 } from '../../shared/prisma/tenant-scope';
 import type { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import type { NotificationsService } from '../notifications/notifications.service';
+import { StudentAccessService } from '../students/student-access.service';
 import type { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { assertOwnedByTeacher, LessonsController } from './lessons.controller';
@@ -237,6 +238,16 @@ function makeHarness(options: { roles: string[]; teacherProfileId?: string | nul
   } as unknown as TeacherProfileService;
 
   const notifyCalls: unknown[] = [];
+  /**
+   * S-E03-2 / `ADR-071 §D2` — la portée vue par CHAQUE lecture ABAC élève.
+   *
+   * `StudentAccessService` lit sur la connexion du PROPRIÉTAIRE (`this.prisma`),
+   * et `list` l'appelle désormais AU-DESSUS de `this.scope.run`. Ce journal est
+   * ce qui rend ce hissage mesurable au lieu de déclaratif : il doit être
+   * `[undefined]` — aucune portée active — là où `db.scopeAtStatement` (le
+   * journal de `tx`) est plein de `TENANT`.
+   */
+  const scopeAtOwnerAbacRead: (string | undefined)[] = [];
   const prisma = {
     teachingAssignment: {
       findFirst: async (args: unknown) => {
@@ -244,7 +255,34 @@ function makeHarness(options: { roles: string[]; teacherProfileId?: string | nul
         return null; // le fan-out sort tôt : ce fichier prouve OÙ il tourne, pas ce qu'il envoie
       },
     },
+    /**
+     * Le MÊME jeu de lignes que `db.tx` (`db.tables.guardianship`), lu par la
+     * connexion du PROPRIÉTAIRE : c'est exactement ce que « hors portée, sur le
+     * client propriétaire » signifie. Il n'écrit RIEN dans `db.statements`, ce
+     * qui est précisément pourquoi le budget de la portée redevient mesurable.
+     *
+     * `guardian: { userProfileId }` est une condition RELATIONNELLE : comme le
+     * double de `tx`, on l'ENREGISTRE comme satisfaite et on filtre sur les
+     * colonnes scalaires — ce fichier prouve l'ORDRE, la PORTÉE et le REFUS,
+     * pas le moteur de requêtes de Prisma.
+     */
+    guardianship: {
+      findMany: async ({ where }: { where: Row }) => {
+        scopeAtOwnerAbacRead.push(currentTenantScopeFrame()?.tenantId);
+        return (db.tables['guardianship'] ?? [])
+          .filter((row) => row['tenantId'] === where['tenantId'] && row['status'] === where['status'])
+          .map((row) => ({ studentId: row['studentId'] as string }));
+      },
+    },
   } as unknown as PrismaService;
+
+  /**
+   * L'ABAC élève CANONIQUE, pas un double permissif : un `canAccessStudent`
+   * factice rendant `true` viderait de son sens le cas « sans tutelle active,
+   * 403 » plus bas, qui est le contrôle négatif de tout ce fichier sur la
+   * branche parent.
+   */
+  const studentAccess = new StudentAccessService(prisma, teachers);
 
   const notifications = { createMany: async () => undefined } as unknown as NotificationsService;
 
@@ -253,9 +291,10 @@ function makeHarness(options: { roles: string[]; teacherProfileId?: string | nul
     runs,
     scopeAtCallbackEntry,
     scopeAtIdentityCall,
+    scopeAtOwnerAbacRead,
     ensureForUserCalls,
     notifyCalls,
-    controller: new LessonsController(prisma, scope, users, teachers, notifications),
+    controller: new LessonsController(prisma, scope, users, teachers, notifications, studentAccess),
     jwt: jwt(options.roles),
   };
 }
@@ -516,7 +555,7 @@ describe('AC-6 / PF-217 — la séance fournie est prouvée POSSÉDÉE, avant l�
     expect(best.db.statements).toHaveLength(2);
   });
 
-  it('BUDGET — `getOne` 1, `update` 2, `remove` 2, `list` 1 (admin) / 3 (parent + studentId)', async () => {
+  it('BUDGET — `getOne` 1, `update` 2, `remove` 2, `list` 1 (admin) / 2 (parent + studentId)', async () => {
     const one = makeHarness({ roles: ['school_admin'] });
     await one.controller.getOne(OWN_LESSON, one.jwt);
     expect(one.db.statements).toHaveLength(1);
@@ -535,8 +574,13 @@ describe('AC-6 / PF-217 — la séance fournie est prouvée POSSÉDÉE, avant l�
 
     const parent = makeHarness({ roles: ['parent'] });
     await parent.controller.list(parent.jwt, undefined, undefined, 's1');
+    // S-E03-2 / `ADR-071 §D2` — le budget de la portée BAISSE de 3 à 2, et ce
+    // n'est pas une optimisation : la garde de tutelle n'est plus un
+    // `guardianship.findFirst` privé émis DANS la transaction interactive, elle
+    // est passée à l'ABAC élève canonique, qui tourne sur la connexion du
+    // PROPRIÉTAIRE au-dessus de `scope.run`. Ce qui reste dans la portée est de
+    // la DONNÉE (l'inscription → sections) et la lecture elle-même.
     expect(parent.db.statements.map((s) => `${s.model}.${s.verb}`)).toEqual([
-      'guardianship.findFirst',
       'enrollment.findMany',
       'lessonEntry.findMany',
     ]);
@@ -546,11 +590,18 @@ describe('AC-6 / PF-217 — la séance fournie est prouvée POSSÉDÉE, avant l�
 // ---------------------------------------------------------------------------
 
 describe('AC-11 / G-PORTAL — les trois portails qui LISENT, et l’ABAC parent DANS la portée', () => {
-  it('PARENT — le filtre `status=published`, la garde de tutelle et la jointure d’inscription sont tous DANS la portée', async () => {
+  it('PARENT — le filtre `status=published` et la jointure d’inscription sont DANS la portée ; la garde de tutelle, elle, est HISSÉE DEHORS', async () => {
     const h = makeHarness({ roles: ['parent'] });
     const result = (await h.controller.list(h.jwt, undefined, undefined, 's1')) as { data: Row[] };
-    // Les trois instructions ont vu le GUC.
-    expect(h.db.scopeAtStatement).toEqual([TENANT, TENANT, TENANT]);
+    // Les deux instructions restantes ont vu le GUC.
+    expect(h.db.scopeAtStatement).toEqual([TENANT, TENANT]);
+    // L'INVARIANT QUE LE HISSAGE ACHÈTE, et que rien n'épinglait jusqu'ici : la
+    // résolution de tutelle a bien eu lieu (non-vacuité), sur la connexion du
+    // PROPRIÉTAIRE, avec ZÉRO cadre de portée actif. C'est la moitié qui
+    // interdit de la re-glisser dans la transaction interactive au prochain
+    // refactor — un budget « ≤ 2 instructions » (`tenant-scope.service.ts:133`)
+    // ne se défend pas par un commentaire.
+    expect(h.scopeAtOwnerAbacRead).toEqual([undefined]);
     // …et le filtre de publication est bien posé (le parent n'est pas `isStaff`).
     const listWhere = h.db.statements.find((s) => s.model === 'lessonEntry')?.where as Row;
     expect(listWhere.status).toBe('published');
@@ -800,7 +851,20 @@ describe('AC-9 — les sites d’appel Prisma de lessons ⊆ la clôture déclar
   it('le corpus de sites d’appel est NON VIDE et n’utilise que des verbes connus', () => {
     // Une regex qui ne matche plus rien rendrait le test ci-dessous vert à vide :
     // c'est le mode de défaillance normal d'une assertion dérivée.
-    expect(sites.length).toBeGreaterThanOrEqual(11);
+    //
+    // PLANCHER RE-DÉRIVÉ 11 -> 10 PAR `S-E03-2`, ET CE N'EST PAS UN CLIQUET
+    // RELÂCHÉ. Mesuré sur les deux arbres :
+    //   HEAD~ : 11 sites `tx.<modèle>.<verbe>(` ; ici : 10.
+    //   Le delta est EXACTEMENT UN site, `tx.guardianship.findFirst(`, que
+    //   `AC-2` a HISSÉ hors de `this.scope.run` vers la connexion du
+    //   PROPRIÉTAIRE (`StudentAccessService`, cf. `ADR-071 §D2`). Le site n'a
+    //   pas été masqué : il a été SUPPRIMÉ de la portée, ce que le journal
+    //   `scopeAtOwnerAbacRead` de ce même fichier prouve indépendamment.
+    // La propriété À SENS UNIQUE de ce fichier — « chaque (table, privilège)
+    // émis DANS une portée est DÉCLARÉ » — est INCHANGÉE. Seul bouge le
+    // plancher anti-vacuité, et il bouge parce qu'une instruction réelle a
+    // disparu de la portée, pas parce qu'une assertion gênait.
+    expect(sites.length).toBeGreaterThanOrEqual(10);
     const unknown = sites.filter((s) => VERB_PRIVILEGE[s.verb] === undefined);
     expect(unknown.map((s) => `${s.model}.${s.verb}`)).toEqual([]);
   });

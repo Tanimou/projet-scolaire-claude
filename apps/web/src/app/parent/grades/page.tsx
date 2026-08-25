@@ -7,10 +7,11 @@ import {
   formatGrade,
   gradeBucket,
 } from '@pilotage/ui';
-import { Award, GraduationCap, Sparkles, TrendingUp } from 'lucide-react';
+import { Award, FilterX, GraduationCap, Sparkles, TrendingUp, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { ChildSelector } from '../_components/ChildSelector';
+import { ReadErrorState } from '../_components/ReadErrorState';
 
 import { GradeRow } from './GradeRow';
 import { GradesExport, type GradeExportRow } from './GradesExport';
@@ -27,7 +28,8 @@ import type {
 } from './types';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { api } from '@/lib/api-client';
+import { isAccessDenied, read } from '@/lib/read-result';
 
 export const metadata: Metadata = { title: 'Notes' };
 export const dynamic = 'force-dynamic';
@@ -38,14 +40,10 @@ interface StudentSummary {
   lastName: string;
 }
 
-async function safe<T>(p: Promise<T>): Promise<T | null> {
-  try {
-    return await p;
-  } catch (err) {
-    if (err instanceof ApiError) return null;
-    throw err;
-  }
-}
+const BREADCRUMB: { label: string; href?: string }[] = [
+  { label: 'Tableau de bord', href: '/parent/dashboard' },
+  { label: 'Notes' },
+];
 
 const PAGE_SIZE = 12;
 const VALID_PERIODS: GradesPeriod[] = ['all', 'month', 'term'];
@@ -104,23 +102,70 @@ export default async function ParentGradesPage({
       : '';
   const search = (sp.q ?? '').trim().toLowerCase();
 
-  const studentsResp = await safe(
+  // ─────────────────────────────────────────────────────────────────────────
+  // Lecture 1 — la liste des enfants.
+  //
+  // S-E03-2 / PF-05 : `read()` remplace l'ancien `safe()` de ce fichier, qui
+  // renvoyait `null` sur toute `ApiError` et laissait la page rendre l'échec
+  // comme le fait « Aucun enfant rattaché ». Un échec et un compte réellement
+  // sans enfant rattaché sont désormais deux états distincts, et le premier
+  // n'affirme plus rien sur l'établissement.
+  // ─────────────────────────────────────────────────────────────────────────
+  const childrenRead = await read(
+    'parent-grades/children',
     api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' }),
   );
-  const children = studentsResp?.data ?? [];
+
+  if (!childrenRead.ok) {
+    // `PF-346`, corrigé au land pass de `S-E03-2` — c'était `PF-05` À POLARITÉ
+    // INVERSÉE, sur la page dont c'est justement le correctif.
+    //
+    // Cette branche affirmait « Vos enfants sont bien rattachés à votre compte —
+    // c'est l'affichage qui a échoué. » La page n'en sait RIEN : elle vient
+    // d'échouer à lire la tutelle. Sur un **403** — tutelle révoquée, le cas
+    // exact qu'`isAccessDenied` route ici — la phrase est affirmativement
+    // FAUSSE, et elle est montrée à un parent. `ADR-071 §D5` pose la règle
+    // « un portail ne rend jamais une lecture échouée comme un fait sur
+    // l'établissement » : rassurer à tort la viole autant qu'alarmer à tort.
+    //
+    // Second défaut, sur les mêmes lignes : seul `retryable` branchait sur le
+    // refus, donc un parent refusé lisait « Réessayez dans un instant » SANS
+    // bouton pour réessayer. La branche « notes », 60 lignes plus bas, branche
+    // ses quatre propriétés. Deux surfaces d'échec d'une même page ne peuvent
+    // pas être en désaccord sur ce à quoi ressemble un refus — celle-ci est
+    // alignée sur celle-là.
+    const denied = isAccessDenied(childrenRead);
+    return (
+      <PortalShell portal="parent">
+        <PageHeader breadcrumb={BREADCRUMB} title="Notes" />
+        <ReadErrorState
+          className="mt-6"
+          variant={denied ? 'denied' : 'failure'}
+          title={
+            denied
+              ? "La liste de vos enfants n'est pas accessible depuis votre compte."
+              : "Nous n'avons pas pu charger la liste de vos enfants."
+          }
+          description={
+            denied
+              ? "Cela vient d'un droit d'accès, pas d'un compte sans enfant. L'établissement peut rétablir l'accès."
+              : "Ceci ne veut pas dire qu'aucun enfant n'est rattaché à votre compte : c'est l'affichage qui a échoué. Réessayez dans un instant."
+          }
+          retryable={!denied}
+          secondaryAction={{ label: 'Retour au tableau de bord', href: '/parent/dashboard' }}
+        />
+      </PortalShell>
+    );
+  }
+
+  const children = childrenRead.data.data;
 
   if (children.length === 0) {
     return (
       <PortalShell portal="parent">
-        <PageHeader
-          breadcrumb={[
-            { label: 'Tableau de bord', href: '/parent/dashboard' },
-            { label: 'Notes' },
-          ]}
-          title="Notes"
-        />
+        <PageHeader breadcrumb={BREADCRUMB} title="Notes" />
         <EmptyState
-          icon={GraduationCap}
+          icon={Users}
           title="Aucun enfant rattaché"
           description="Les notes apparaîtront ici dès qu'un enfant sera lié à votre compte."
           tone="amber"
@@ -135,12 +180,69 @@ export default async function ParentGradesPage({
       ? sp.studentId
       : children[0]!.id;
 
-  const gradesResp = await safe(
+  const activeChild = children.find((c) => c.id === activeStudentId);
+  const activeChildName = activeChild
+    ? `${activeChild.firstName} ${activeChild.lastName}`.trim()
+    : 'enfant';
+  // Le prénom seul dans les états d'erreur et de vide : avec plusieurs enfants,
+  // le parent doit savoir *de qui* on parle (PF-335 — la page ne montre qu'un
+  // enfant à la fois, le tableau de bord les montre tous).
+  const activeChildFirstName = activeChild?.firstName.trim() || 'votre enfant';
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Lecture 2 — les notes de l'enfant actif.
+  //
+  // S-E03-2 / PF-05 : un échec ici affichait « Aucune note publiée », c'est-à-dire
+  // l'affirmation que les enseignants n'ont rien publié. Il rend maintenant un
+  // état d'erreur distinct, et TOUTE la zone qui porte des affirmations
+  // chiffrées (les 4 KPI, l'aperçu, les filtres, l'export CSV) est retirée :
+  // corriger la phrase en laissant « Sur 0 note publiée » et « À RENFORCER 0 »
+  // à côté n'aurait déplacé le mensonge que d'une ligne — et l'export aurait
+  // produit un FICHIER, durable et partageable, affirmant zéro note.
+  // ─────────────────────────────────────────────────────────────────────────
+  const gradesRead = await read(
+    'parent-grades/grades',
     api<{ data: GradeRowType[] }>(`/api/v1/grades/students/${activeStudentId}/grades`, {
       cache: 'no-store',
     }),
   );
-  const allGrades = gradesResp?.data ?? [];
+
+  if (!gradesRead.ok) {
+    const denied = isAccessDenied(gradesRead);
+    return (
+      <PortalShell portal="parent">
+        <PageHeader breadcrumb={BREADCRUMB} title="Notes" />
+        <div className="mt-4">
+          <ChildSelector items={children} activeStudentId={activeStudentId} />
+        </div>
+        <ReadErrorState
+          className="mt-6"
+          variant={denied ? 'denied' : 'failure'}
+          title={
+            denied
+              ? `Les notes de ${activeChildFirstName} ne sont pas accessibles depuis votre compte.`
+              : `Nous n'avons pas pu charger les notes de ${activeChildFirstName}.`
+          }
+          description={
+            denied
+              ? "Cela vient d'un droit d'accès, pas d'un bulletin vide. L'établissement peut rétablir l'accès."
+              : `Ceci n'est pas un bulletin vide : l'affichage a échoué. Les notes de ${activeChildFirstName} ne sont pas perdues. Réessayez dans un instant.`
+          }
+          retryable={!denied}
+          secondaryAction={
+            denied
+              ? {
+                  label: "Contacter l'établissement",
+                  href: `/parent/messages/new?studentId=${activeStudentId}`,
+                }
+              : { label: 'Voir le tableau de bord', href: '/parent/dashboard' }
+          }
+        />
+      </PortalShell>
+    );
+  }
+
+  const allGrades = gradesRead.data.data;
 
   // Derive subjects + terms from the loaded set so the filters always match
   // what the parent can actually see.
@@ -259,10 +361,6 @@ export default async function ParentGradesPage({
 
   // CSV export rows — the full *filtered* set (not just the current page) so the
   // download mirrors exactly what the parent is currently looking at.
-  const activeChild = children.find((c) => c.id === activeStudentId);
-  const activeChildName = activeChild
-    ? `${activeChild.firstName} ${activeChild.lastName}`.trim()
-    : 'enfant';
   const exportRows: GradeExportRow[] = filtered.map((g) => {
     const max = Number(g.assessment.maxScore);
     const rawValue = g.value != null ? Number(g.value) : null;
@@ -296,10 +394,7 @@ export default async function ParentGradesPage({
   return (
     <PortalShell portal="parent">
       <PageHeader
-        breadcrumb={[
-          { label: 'Tableau de bord', href: '/parent/dashboard' },
-          { label: 'Notes' },
-        ]}
+        breadcrumb={BREADCRUMB}
         title="Notes"
         subtitle="Toutes les notes publiées par les enseignants, par matière et période"
         actions={
@@ -358,17 +453,32 @@ export default async function ParentGradesPage({
       <section className="mt-6">
         {pageRows.length === 0 ? (
           <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/60">
+            {/*
+              Ces deux états sont désormais TOUS LES DEUX gagnés : on ne les
+              atteint qu'après une réponse 200 de l'API. Un échec de lecture
+              sort plus haut, sur `ReadErrorState`. Le prénom de l'enfant est
+              nommé parce qu'un parent de plusieurs enfants ne voit ici qu'un
+              seul d'entre eux (PF-335).
+            */}
             <EmptyState
-              icon={GraduationCap}
+              icon={allGrades.length === 0 ? GraduationCap : FilterX}
               title={
                 allGrades.length === 0
-                  ? 'Aucune note publiée'
+                  ? `Aucune note publiée pour ${activeChildFirstName}`
                   : 'Aucune note avec ces filtres'
               }
               description={
                 allGrades.length === 0
                   ? 'Les enseignants publieront ici les notes des évaluations dès qu’elles seront validées.'
                   : 'Élargissez la période, retirez un filtre, ou videz la recherche pour voir plus de notes.'
+              }
+              action={
+                allGrades.length === 0
+                  ? undefined
+                  : {
+                      label: 'Réinitialiser les filtres',
+                      href: `/parent/grades?studentId=${activeStudentId}`,
+                    }
               }
               tone="slate"
             />
