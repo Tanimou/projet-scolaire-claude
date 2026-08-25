@@ -36,6 +36,7 @@ import { isSuppliedScopeId } from '../../shared/prisma/scope-fk';
 import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import { mapWriteRefusal } from '../../shared/prisma/write-refusal';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StudentAccessService } from '../students/student-access.service';
 import { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 class CreateLessonDto {
@@ -156,6 +157,13 @@ export class LessonsController {
     private readonly users: UserSyncService,
     private readonly teachers: TeacherProfileService,
     private readonly notifications: NotificationsService,
+    /**
+     * S-E03-2 / `AC-2` / `ADR-071 §D1` — l’ABAC élève canonique, atteint par
+     * `LessonsModule imports: [StudentsModule]`. Il tourne sur la connexion du
+     * PROPRIÉTAIRE (`this.prisma`), pas sur `tx` : c’est précisément pourquoi
+     * il est appelé HORS de `this.scope.run` (voir `list`).
+     */
+    private readonly studentAccess: StudentAccessService,
   ) {}
 
   /**
@@ -357,17 +365,54 @@ export class LessonsController {
     // PUR, donc DEHORS : borner la pagination ne lit pas la base.
     const take = Math.min(parseInt(limit ?? '100', 10) || 100, 500);
 
+    // ── S-E03-2 / `AC-2` / `ADR-071 §D1`+`§D2` — LE MUR ABAC ÉLÈVE, HISSÉ ──────
+    //
+    // CE QUI VIVAIT DANS LA PORTÉE, ET POURQUOI C’ÉTAIT DEUX DÉFAUTS.
+    //  (1) Le garde ne s’armait que `if (roles.includes('parent'))`. TOUT AUTRE
+    //      appelant porteur de `lessons.read` — un enseignant, un rôle
+    //      personnalisé (ADR-013/015 permet d’accorder `lessons.read` à
+    //      n’importe quel rôle) — traversait SANS AUCUNE vérification d’élève et
+    //      lisait le fil de leçons d’un élève arbitraire. C’était la QUATRIÈME
+    //      copie privée de l’ABAC élève, et la plus faible des quatre.
+    //  (2) Il tournait DANS `this.scope.run`, une transaction interactive dont
+    //      le docblock (`tenant-scope.service.ts:133`) budgète « ≤ 2
+    //      instructions ». `StudentAccessService` lit sur la connexion du
+    //      PROPRIÉTAIRE et émet jusqu’à quatre requêtes : l’y appeler tiendrait
+    //      DEUX connexions par requête et pousserait la transaction au-delà de
+    //      son délai sous charge — un 500 intermittent sur la liste des leçons
+    //      POUR TOUS LES APPELANTS, invisible sur une sonde à une requête. La
+    //      maison a déjà tranché ce point, textuellement, à `alerts.service.ts:348`
+    //      et `student-portal.service.ts:188`. Un `ForbiddenException` levé dans
+    //      `scope.run` avorterait de surcroît une transaction dont il n’a pas
+    //      besoin.
+    //
+    // `schoolId` = `''` : le paramètre est ACCEPTÉ ET JAMAIS LU (`PF-298` /
+    // `ADR-066 §D8`), exactement comme `enrollments.controller.ts`. Le résoudre
+    // coûterait une requête de plus sur un chemin chaud pour nourrir un
+    // argument ignoré.
+    //
+    // Aucune branche de rôle ici : `canAccessStudent` rend `true` pour
+    // `super_admin`/`school_admin` SANS émettre une seule requête (le sentinelle
+    // `studentIds: null`), donc l’appel inconditionnel ne coûte rien à
+    // l’administration et supprime la possibilité même d’un appelant oublié.
+    if (studentId) {
+      const allowed = await this.studentAccess.canAccessStudent(me, jwt, studentId, '');
+      if (!allowed) throw new ForbiddenException("Vous n'avez pas accès à cet élève.");
+    }
+
     // PORTÉE TARDIVE : tout ce qui précède est terminé.
     return this.scope.run(tenantId, async (tx) => {
       if (studentId) {
-        // Restrict to lessons of classes the student is enrolled in (any year).
-        // ABAC: parent must be guardian of that student.
-        if (roles.includes('parent')) {
-          const gship = await tx.guardianship.findFirst({
-            where: { tenantId, studentId, status: 'active', guardian: { userProfileId: me.id } },
-          });
-          if (!gship) throw new ForbiddenException("Vous n'avez pas accès à cet élève.");
-        }
+        // DONNÉE, PAS AUTORISATION — et c’est pour cela que ce bloc RESTE dans
+        // la portée : il traduit un élève AUTORISÉ (le mur est passé plus haut)
+        // en sections de classe. Une seule instruction, dans le budget.
+        //
+        // RÉSIDU PRÉEXISTANT, ENREGISTRÉ ET NON CORRIGÉ (`PF-340`) : cette
+        // AFFECTATION écrase silencieusement le `where.teachingAssignment` posé
+        // par `?classSectionId=` plus haut, donc les deux filtres combinés ne
+        // s’intersectent pas — le dernier gagne. Le corriger change le jeu de
+        // lignes rendu à trois portails ; cette tranche resserre une
+        // AUTORISATION et ne touche pas à la sémantique de filtrage.
         const enrollments = await tx.enrollment.findMany({
           where: { studentId, tenantId },
           select: { classSectionId: true },

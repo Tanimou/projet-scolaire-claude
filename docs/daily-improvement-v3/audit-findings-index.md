@@ -288,6 +288,23 @@ It is a Step-6 *credential/decision-required* stop condition for any story whose
 > was `PF-255`; this run therefore allocated from **`PF-264`** upward and took **`ADR-061`**. Nothing in the claimed
 > range is reused.
 
+> **Amended by `S-E03-2` (run 81, 2026-08-25): `PF-335` … `PF-353` are declared here in the same commit that raised
+> them — nineteen ids, and `ADR-071`.** Same `TOOL-01` reasoning as the amendment above, applied to a slice that was
+> **about** the cost of unrecorded ids: `S-E03-4` (run 80) shipped `PF-327`…`PF-330` in production comments and in no
+> ledger file, and those rows had to be back-filled at land. This run wrote its own at land instead of inheriting the
+> same debt. Of the nineteen, five were declared by `ADR-071` at planning (`PF-335`…`PF-339`), three are cited from
+> production source (`PF-340` at `lessons.controller.ts:410`, `PF-342` at `grades.controller.ts:414`, `PF-344` at
+> `student-authz-locality-gate.spec.ts:117,548`), and **eleven were allocated at the land pass by MEANING** from the
+> escalation panel and the six review lenses (`PF-341`, `PF-343`, `PF-345`…`PF-353`). §7's counting summary is again
+> **deliberately left as it stands** and is therefore stale by a further 19, knowingly, on the terms the amendments
+> above set. **Id-collision note — one occurred INSIDE this run, which is the useful part:** `ADR-071:17` allocated
+> `PF-337` to *three permissions for one datum* while the DS review lane independently allocated `PF-337` to the
+> `ErrorState`/`EmptyState` heading skip. Two agents, one run, one id — the `PF-185`/`PF-186` pattern of runs 53/54,
+> reproduced **without** parallel runs. It was separated at land **by MEANING**, never by pattern-replace (ids are
+> cited from production source, so a blind replace edits the wrong file): the heading skip became **`PF-345`**.
+> Allocation was checked against `main`'s maximum (**`PF-334`**, `ADR-070`) **and** against open PRs; nothing in
+> `PF-335`…`PF-353` is reused.
+
 > **PF-58 is the class of failure the routine is least able to see.** The planning work was done well and lost anyway,
 > because "produced" was conflated with "committed". Same conflation as A2 App. A's *UI exists ≠ feature delivered*.
 > Mitigation now in force: the in-repo `routine/` copies must be byte-identical to the installed artefacts, so drift is

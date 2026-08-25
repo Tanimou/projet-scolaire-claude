@@ -618,6 +618,14 @@ function makeGrades(teacherProfileId: string) {
     usersMock() as unknown as UserSyncService,
     teachers as unknown as TeacherProfileService,
     {} as unknown as GradesService,
+    // S-E03-2 / ADR-071 §D1 — `GradesController` a gagné l'ABAC élève canonique
+    // en 5e argument. Un double VIDE, et non permissif, est le bon choix ici :
+    // `flag` (le seul handler exercé par ce fichier) ne l'atteint jamais, donc
+    // un `canAccessStudent` factice qui rendrait `true` déclarerait une
+    // autorisation que ce test n'observe pas. S'il devenait atteignable, le
+    // `TypeError` serait la bonne panne — visible plutôt que silencieusement
+    // permissive.
+    {} as unknown as StudentAccessService,
   );
   return { controller, auditCreate };
 }

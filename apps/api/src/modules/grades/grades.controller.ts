@@ -40,6 +40,7 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { StudentAccessService } from '../students/student-access.service';
 import { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { GradesService } from './grades.service';
@@ -84,6 +85,15 @@ export class GradesController {
     private readonly users: UserSyncService,
     private readonly teachers: TeacherProfileService,
     private readonly gradesSvc: GradesService,
+    /**
+     * S-E03-2 / `AC-1` / `ADR-071 §D1` — l'ABAC élève CANONIQUE, atteint par un
+     * import de module (`GradesModule` importe `StudentsModule`), jamais par une
+     * copie locale dans `providers:`. `students.module.ts` enregistre pourquoi :
+     * une copie locale a fait échouer Nest AU BOOTSTRAP le jour où le service a
+     * gagné un second argument de constructeur — une panne TOTALE, pas un test
+     * rouge.
+     */
+    private readonly studentAccess: StudentAccessService,
   ) {}
 
   /**
@@ -373,9 +383,13 @@ export class GradesController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
   ) {
     const me = await this.users.ensureUser(jwt);
+    // ORDRE GELÉ (`AC-1` / `FR3`) : la pré-vérification d'appartenance au tenant
+    // reste AVANT le mur ABAC, et elle rend 404 — jamais 403. Hisser
+    // l'autorisation ici ferait répondre 403 à un `studentId` d'un AUTRE tenant,
+    // c'est-à-dire un oracle d'existence inter-tenant.
     const student = await this.prisma.student.findUnique({ where: { id: studentId } });
     if (!student || student.tenantId !== me.tenantId) throw new NotFoundException();
-    await this.assertCanReadStudent(studentId, me, jwt);
+    await this.assertCanReadStudent(studentId, me, jwt, student.schoolId);
     return this.gradesSvc.statsForStudent(studentId, me.tenantId, { termId, academicYearId });
   }
 
@@ -388,10 +402,21 @@ export class GradesController {
     @Query('termId') termId?: string,
   ) {
     const me = await this.users.ensureUser(jwt);
+    // ORDRE GELÉ (`AC-1` / `FR3`) — voir `studentStats` : 404 sur tenant
+    // étranger, AVANT toute décision d'autorisation.
     const student = await this.prisma.student.findUnique({ where: { id: studentId } });
     if (!student || student.tenantId !== me.tenantId) throw new NotFoundException();
-    await this.assertCanReadStudent(studentId, me, jwt);
+    await this.assertCanReadStudent(studentId, me, jwt, student.schoolId);
 
+    // `seePrivate` répond « QUELS STATUTS », jamais « AS-TU LE DROIT » (`FR4`) :
+    // les deux questions sont désormais portées par deux mécanismes distincts et
+    // ce bloc est CONSERVÉ TEL QUEL. Résidu ENREGISTRÉ, NON corrigé ici
+    // (`PF-342`) : il est dérivé des rôles BRUTS du realm et non de la BRANCHE
+    // qui a accordé l’élève, donc un principal `teacher`+`parent` — le double
+    // rôle qu'`ADR-066 §D2` nomme le plus courant — lit les notes `draft` de son
+    // propre enfant sur le portail parent. Le corriger exige de faire remonter
+    // la RAISON de l’accès depuis `StudentAccessService`, donc de changer la
+    // signature du service canonique : sa propre tranche.
     const roles = jwt.realm_access?.roles ?? [];
     const seePrivate = roles.includes('super_admin') || roles.includes('school_admin') || roles.includes('teacher');
 
@@ -446,30 +471,51 @@ export class GradesController {
     throw new ForbiddenException('Accès refusé.');
   }
 
+  /**
+   * S-E03-2 / `AC-1` / `PF-288` / `ADR-071` — LA COPIE PRIVÉE EST SUPPRIMÉE.
+   *
+   * CE QUI VIVAIT ICI. Une chaîne PREMIER-QUI-MATCHE `admin → teacher → parent
+   * → refus` dont la branche enseignante était un `return;` NU, commenté
+   * « teachers can read any student in their school ». C’était, à l’octet près,
+   * le fail-open que `S-E05-16` / `ADR-066` avait fermé AU SERVICE : un
+   * enseignant portant `grades.read` lisait le relevé de notes ET les
+   * statistiques de N’IMPORTE QUEL élève du tenant, y compris un élève qu’il
+   * n’enseigne pas. Fermer le service sans fermer cette copie n’avait fermé
+   * qu’un site sur quatre — d’où le CLIQUET
+   * (`shared/quality/student-authz-locality-gate.spec.ts`), qui interdit
+   * désormais la reconstitution d’une cinquième copie.
+   *
+   * CE QUI RESTE : une DÉLÉGATION, pas une règle. Une méthode plutôt qu’un
+   * appel direct dupliqué sur deux handlers, parce qu’elle porte la conversion
+   * `false → ForbiddenException` (le service rend un booléen) et le message
+   * français exact que les deux surfaces parent affichaient déjà.
+   *
+   * POURQUOI CE DÉLÉGUÉ N’EST PAS UNE CINQUIÈME COPIE, et pourquoi le cliquet
+   * ne le signale pas : il n’ouvre AUCUNE lecture Prisma, ne lit AUCUN
+   * `realm_access.roles`, et ne connaît ni `guardianship` ni
+   * `TeachingAssignment`. Il ne peut pas DIVERGER de la règle canonique — il
+   * n’en porte aucune.
+   *
+   * CE QUE CE CHANGEMENT RESSERRE, DIT PLUTÔT QUE DÉCOUVERT (`ADR-071 §D1`) :
+   * un enseignant est désormais BORNÉ aux élèves inscrits (`status: 'active'`)
+   * dans une section qu’il enseigne. C’est un changement de comportement
+   * VISIBLE en production, pas une correction invisible. Et `PF-281` est
+   * HÉRITÉ, pas corrigé : `findForUser` ignore `TeacherProfile.active`, donc un
+   * enseignant DÉSACTIVÉ conserve la portée de ses élèves — ce défaut atteint
+   * désormais deux handlers de plus (`ADR-066 §D6`).
+   *
+   * `schoolId` est TRANSMIS et JAMAIS LU par le service (`PF-298` /
+   * `ADR-066 §D8`). Il est passé ici parce que la ligne `student` est déjà en
+   * main — coût zéro — et non parce qu’il porterait une propriété.
+   */
   private async assertCanReadStudent(
     studentId: string,
     me: { id: string; tenantId: string },
     jwt: KeycloakJwtPayload,
+    schoolId: string,
   ) {
-    const roles = jwt.realm_access?.roles ?? [];
-    if (roles.includes('super_admin') || roles.includes('school_admin')) return;
-    if (roles.includes('teacher')) {
-      // teachers can read any student in their school (Phase 4 simplification)
-      return;
-    }
-    if (roles.includes('parent')) {
-      const gship = await this.prisma.guardianship.findFirst({
-        where: {
-          tenantId: me.tenantId,
-          studentId,
-          status: 'active',
-          guardian: { userProfileId: me.id },
-        },
-      });
-      if (!gship) throw new ForbiddenException("Vous n'avez pas accès à cet élève.");
-      return;
-    }
-    throw new ForbiddenException();
+    const allowed = await this.studentAccess.canAccessStudent(me, jwt, studentId, schoolId);
+    if (!allowed) throw new ForbiddenException("Vous n'avez pas accès à cet élève.");
   }
 
   /**
