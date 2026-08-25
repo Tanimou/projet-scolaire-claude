@@ -127,6 +127,22 @@ function makeService(overrides?: {
   const activeYear = overrides?.activeYear === undefined ? { id: ACTIVE_YEAR } : overrides.activeYear;
   const classSections = overrides?.classSections ?? CLASS_SECTIONS;
 
+  // Les lignes que LE RÉSOLVEUR lit : colonnes complètes (`schoolId`,
+  // `startDate`, `endDate`), contrairement aux lignes de listing d'`ACADEMIC_YEARS`.
+  const resolverYearRows =
+    activeYear === null
+      ? []
+      : [
+          {
+            id: activeYear.id,
+            schoolId: SCHOOL,
+            name: '2025-2026',
+            startDate: new Date('2025-09-01T00:00:00.000Z'),
+            endDate: new Date('2026-07-05T00:00:00.000Z'),
+            status: 'active',
+          },
+        ];
+
   const prisma = {
     student: {
       // First call: active count (returns 63 = 25+20+18); second call: last-month.
@@ -147,12 +163,34 @@ function makeService(overrides?: {
       count: jest.fn().mockResolvedValue(0),
       findMany: jest.fn().mockResolvedValue([]),
     },
+    // S-E03-4 / ADR-070 — DEUX requêtes différentes atterrissent sur ce délégué,
+    // et elles n'attendent pas les mêmes colonnes :
+    //   • le résolveur canonique (`resolveActiveAcademicYear`, appelé par
+    //     `adminDashboard` puis par `schoolPerformance`) émet
+    //     `{ where: { tenantId, schoolId, status: 'active' }, orderBy: [...] }`,
+    //     puis — sous `mostRecentOfAnyStatus` — une SECONDE requête sans
+    //     `status`. `decorate()` lit `schoolId`/`startDate`/`endDate` : les
+    //     lignes `{ id, name, status }` de `ACADEMIC_YEARS` le font planter sur
+    //     `row.startDate.getTime()`.
+    //   • la liste de la structure d'école (`analytics.service.ts:2404`) émet
+    //     `{ where: { tenantId, schoolId }, select: { id, name, status } }` —
+    //     c'est elle, et elle SEULE, que `ACADEMIC_YEARS` sert.
+    // On discrimine sur la FORME de l'argument, jamais sur un compteur d'appels.
+    // `findFirst` n'est plus mocké ici : aucun chemin de `adminDashboard` ne
+    // l'appelle plus, et le garder rendait l'override `{ activeYear: null }`
+    // INERTE — le test « no active year » aurait continué à voir une année.
     academicYear: {
-      // adminDashboard calls findFirst twice (active, then fallback). schoolPerformance
-      // calls it once more (active). We return the active year each time, except when
-      // the test forces `activeYear: null`.
-      findFirst: jest.fn().mockResolvedValue(activeYear),
-      findMany: jest.fn().mockResolvedValue(ACADEMIC_YEARS),
+      findMany: jest.fn().mockImplementation((args: Record<string, unknown> = {}) => {
+        const where = (args.where ?? {}) as Record<string, unknown>;
+        // Requête primaire du résolveur.
+        if (where.status === 'active') return Promise.resolve(resolverYearRows);
+        // Repli `mostRecentOfAnyStatus` : ni `status`, ni `select`. Avec
+        // `activeYear: null` l'école n'a AUCUNE année — exactement ce que
+        // produisait l'ancienne paire de `findFirst` rendant `null` deux fois.
+        if (args.select === undefined) return Promise.resolve(resolverYearRows);
+        // Liste de la structure d'école.
+        return Promise.resolve(ACADEMIC_YEARS);
+      }),
     },
     cycle: {
       count: jest.fn().mockResolvedValue(2),
@@ -472,7 +510,30 @@ function makeParentDashboardService(opts: PdOpts = {}) {
     assessment: { findMany: jest.fn().mockResolvedValue([]) },
     attendanceRecord: { findMany: jest.fn().mockResolvedValue([]) },
     teachingAssignment: { findMany: jest.fn().mockResolvedValue([]) },
-    academicYear: { findFirst: jest.fn().mockResolvedValue(null) },
+    // S-E03-4 / ADR-070 — LES DEUX délégués coexistent sur ce chemin, et ce n'est
+    // pas une transition inachevée mal rangée :
+    //   • `findMany` sert le résolveur canonique (ordre TOTAL `[startDate desc,
+    //     id desc]`, `tenantId` obligatoire). Le dashboard parent ne l'appelle
+    //     PAS aujourd'hui — il tient son année de l'inscription de l'élève — mais
+    //     le mock existe pour que la conversion d'un site voisin ne fasse pas
+    //     exploser cette suite sur un délégué manquant.
+    //   • `findFirst` sert `previousYearComparison` (analytics.service.ts:1549),
+    //     qui cherche « l'année précédente » (`endDate <= currentYear.startDate`,
+    //     `orderBy endDate desc`). Ce n'est PAS une résolution d'année active :
+    //     aucun `status: 'active'`, donc hors du cliquet, et le résolveur
+    //     canonique ne répond pas à cette question. La convergence de ce site est
+    //     enregistrée (PF-331) et délibérément hors de cette tranche.
+    //     NB — `PF-331` et NON `PF-329` : `PF-329` est l'axe ENRÔLEMENT du
+    //     tableau de bord parent (`analytics.service.ts:1189`), qui est une AUTRE
+    //     question. Les deux ont porté le même id au sortir du sprint et ont été
+    //     séparés PAR LE SENS au land du run 80 (cf. `TOOL-30`).
+    // `PD_STUDENT_ROW.enrollments[0].academicYear` étant non nul, la garde
+    // `if (!currentYear) return null` ne tire pas et `findFirst` EST appelé :
+    // le retirer casse tous les tests `parentDashboard`.
+    academicYear: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
     // Snapshot point-reads (tenant-scoped). Empty unless `withSnapshots`.
     studentGlobalSnapshot: {
       findFirst: jest.fn().mockResolvedValue(opts.withSnapshots ? PD_GLOBAL_SNAPSHOT : null),

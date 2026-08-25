@@ -1,4 +1,7 @@
+import { resolveActiveAcademicYear } from '@pilotage/contracts';
 import ExcelJS from 'exceljs';
+
+import { prismaAcademicYearReader } from '../../../shared/academic-year/prisma-academic-year-reader';
 
 import type { GenerateArgs, GenerateResult } from './types';
 
@@ -14,14 +17,15 @@ export async function generateEnrollmentXlsx(args: GenerateArgs): Promise<Genera
   let academicYearId = (parameters.academicYearId as string | undefined) ?? null;
 
   if (!academicYearId) {
-    const active = await prisma.academicYear.findFirst({
-      where: {
-        tenantId,
-        status: 'active',
-        ...(schoolId ? { schoolId } : {}),
-      },
-      orderBy: { startDate: 'desc' },
-      select: { id: true },
+    // S-E03-4 / ADR-070 — résolution CANONIQUE. Ce site n'a AUCUN contexte
+    // d'injection Nest (fonction nue recevant `args.prisma`) : c'est la preuve
+    // que le résolveur devait être une fonction pure sur un port structurel, et
+    // non un `@Injectable`. Sémantique préservée : absence ⇒ export à zéro ligne.
+    const active = await resolveActiveAcademicYear(prismaAcademicYearReader(prisma), {
+      tenantId,
+      ...(schoolId ? { schoolId } : {}),
+      referenceDate: new Date(),
+      onAbsent: 'nullWhenNoActiveYear',
     });
     academicYearId = active?.id ?? null;
   }

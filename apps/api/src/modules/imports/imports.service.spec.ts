@@ -112,7 +112,10 @@ function makeService(opts: {
     classSection: { findMany: jest.fn().mockResolvedValue([]) },
     student: { findMany: jest.fn().mockResolvedValue([]) },
     guardian: { findMany: jest.fn().mockResolvedValue([]) },
-    academicYear: { findFirst: jest.fn().mockResolvedValue(null) },
+    // S-E03-4 / ADR-070 — la résolution de l'année active passe par le résolveur
+    // canonique, qui interroge `findMany` (ordre TOTAL `[startDate desc, id desc]`)
+    // et non plus `findFirst`. Ici : aucune année active, exactement comme avant.
+    academicYear: { findMany: jest.fn().mockResolvedValue([]) },
     $transaction: jest.fn().mockImplementation(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
   };
 

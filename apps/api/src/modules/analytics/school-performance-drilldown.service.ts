@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { resolveActiveAcademicYear } from '@pilotage/contracts';
 import type { SnapshotFreshness } from '@pilotage/contracts';
 import { Prisma } from '@prisma/client';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 /**
@@ -132,12 +134,16 @@ export class SchoolPerformanceDrilldownService {
   }): Promise<DrilldownResponse> {
     const { tenantId, schoolId, termId, cycleId, classSectionId, subjectId } = opts;
 
+    // S-E03-4 / ADR-070 — résolution CANONIQUE. Sémantique préservée : `null`
+    // en l'absence d'année active (le drill-down rend alors zéro trimestre).
     const academicYearId =
       opts.academicYearId ??
       (
-        await this.prisma.academicYear.findFirst({
-          where: { tenantId, schoolId, status: 'active' },
-          select: { id: true },
+        await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+          tenantId,
+          schoolId,
+          referenceDate: new Date(),
+          onAbsent: 'nullWhenNoActiveYear',
         })
       )?.id ??
       null;

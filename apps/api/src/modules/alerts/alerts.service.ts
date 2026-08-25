@@ -5,6 +5,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { resolveActiveAcademicYear } from '@pilotage/contracts';
 // `Prisma` is imported as a runtime value (used for `instanceof
 // Prisma.PrismaClientKnownRequestError` in the P2002 idempotency catch) as well
 // as for its `Prisma.*` type helpers.
@@ -18,6 +19,7 @@ import type {
   NotificationSeverity,
 } from '@prisma/client';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { TenantScopeError } from '../../shared/prisma/tenant-scope';
 import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
@@ -903,16 +905,29 @@ export class AlertsService {
       return { rulesRun: 0, detected: 0, createdInstances: 0 };
     }
 
-    // Resolve active academic year once.
-    const activeYear = await this.prisma.academicYear.findFirst({
-      where: {
-        tenantId: args.tenantId,
-        status: 'active',
-        ...(args.schoolId ? { schoolId: args.schoolId } : {}),
-      },
-      orderBy: { startDate: 'desc' },
-      select: { id: true },
+    // S-E03-4 / ADR-070 — résolution CANONIQUE, hissée une seule fois hors de
+    // la boucle de règles (inchangé : une requête par évaluation, jamais N+1).
+    // La date de référence est injectée par l'appelant, jamais lue dans le résolveur.
+    const referenceDate = new Date();
+    const activeYear = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+      tenantId: args.tenantId,
+      ...(args.schoolId ? { schoolId: args.schoolId } : {}),
+      referenceDate,
+      // Sémantique préservée : ce site rendait déjà `null` en l'absence d'année active.
+      onAbsent: 'nullWhenNoActiveYear',
     });
+
+    // PF-15 — la vétusté est REMONTÉE, pas masquée. Site à basse fréquence (une
+    // évaluation d'alertes), donc un avertissement structuré y est gratuit ;
+    // `SchoolContextService` n'en émet aucun, il tourne à chaque requête.
+    if (activeYear?.isStale) {
+      this.logger.warn(
+        `[PF-15] Année scolaire active vétuste — tenantId=${args.tenantId} ` +
+          `schoolId=${activeYear.schoolId} academicYearId=${activeYear.id} ` +
+          `endDate=${activeYear.endDate.toISOString()} referenceDate=${referenceDate.toISOString()} ` +
+          `staleByDays=${activeYear.staleByDays} activeCount=${activeYear.activeCount}`,
+      );
+    }
 
     let totalDetected = 0;
     let totalCreated = 0;

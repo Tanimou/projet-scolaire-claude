@@ -96,6 +96,17 @@ function makePrisma(initial: DbRow, claimSnapshots: DbRow[]) {
 
   const prisma = {
     importBatch,
+    // S-E03-4 / ADR-070 — `processApply` résout désormais l'année active par le
+    // résolveur canonique (`imports.processor.ts`), qui lit le délégué
+    // `academicYear` via l'adaptateur Prisma. Sans ce délégué, l'adaptateur
+    // déréférence `undefined.findMany` et `process()` — qui n'a pas de
+    // try/catch — rejette avant même d'atteindre `engine.applyBatchRows`,
+    // faisant tomber toutes les suites de course au lease.
+    // Liste vide ⇒ `activeYear === null` ⇒ `activeAcademicYearId: null`,
+    // exactement le comportement que ces tests observaient avant la conversion.
+    academicYear: {
+      findMany: jest.fn(async () => []),
+    },
     $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn({})),
   } as unknown as PrismaService;
 
