@@ -193,7 +193,52 @@ export class MeetingRequestsService {
     const { rows, total, canonicalYear } = await this.scope.run(args.tenantId, async (tx) => {
       const found = await tx.meetingRequest.findMany({
         where,
-        include: meetingRequestInclude(args.tenantId),
+        // INLINE ET NON PAS `meetingRequestInclude(args.tenantId)` : le marcheur de
+        // `scripts/tenant-adversarial-check.js` (`resolveObject`) ne résout QUE deux
+        // formes — un littéral `{ … }` écrit sur place, ou un `const NAME = { … }`
+        // hissé (PF-250, 20 sites). Un APPEL DE FONCTION ne tient aucun littéral
+        // qu'il puisse lire : il est refusé par DNC-08, et la clôture de la sonde
+        // de démarrage (PF-246) perd alors les relations que cet `include` traverse.
+        // La factorisation était donc muette pour la porte : elle a fait passer le
+        // `tenant adversarial` de vert à rouge sans changer une seule requête.
+        // Ce qui est dupliqué ici est une PROJECTION, pas une décision — la seule
+        // décision, le prédicat tenant et l'ordre total, reste dans le module de
+        // contrat (ADR-072), appelée ci-dessous. `candidateEnrollmentWhere({ … })`
+        // CONTIENT un littéral, donc le marcheur la résout ; `enrollmentTotalOrder()`
+        // est déjà employée telle quelle et acceptée à quatre sites de ce même diff
+        // (analytics.service.ts:809/:958, students.controller.ts:239/:370).
+        include: {
+          alert: { select: { title: true, severity: true } },
+          student: {
+            select: {
+              firstName: true,
+              lastName: true,
+              enrollments: {
+                where: candidateEnrollmentWhere({ tenantId: args.tenantId }),
+                // PAS d'`orderBy` ici, et ce n'est pas un oubli : `enrollmentTotalOrder()`
+                // est un APPEL, donc DNC-08 pour le marcheur, exactement comme l'`include`
+                // au-dessus. Il serait de toute façon REDONDANT — le contrat retrie en
+                // mémoire avec `compareEnrollmentsByTotalOrder`
+                // (select-active-enrollment.ts:403/:475/:488), et son docblock dit pourquoi :
+                // « deux ordres écrits séparément DIVERGENT, c'est le défaut que cette
+                // tranche ferme ». Aucun `take` ne dépend de cet ordre, donc rien ne se
+                // tronque. L'ordre total reste énoncé UNE fois, dans le module de contrat.
+                select: {
+                  id: true,
+                  status: true,
+                  enrolledAt: true,
+                  endedAt: true,
+                  academicYearId: true,
+                  classSection: { select: { name: true } },
+                },
+              },
+              _count: { select: { enrollments: true } },
+            },
+          },
+          subject: { select: { code: true, name: true } },
+          requester: { select: { firstName: true, lastName: true } },
+          assignedTo: { select: { firstName: true, lastName: true } },
+        },
         orderBy: { createdAt: 'desc' },
         skip: args.offset,
         take: args.limit,
@@ -272,7 +317,52 @@ export class MeetingRequestsService {
     const outcome = await this.scope.run(args.tenantId, async (tx) => {
       const row = await tx.meetingRequest.findFirst({
         where,
-        include: meetingRequestInclude(args.tenantId),
+        // INLINE ET NON PAS `meetingRequestInclude(args.tenantId)` : le marcheur de
+        // `scripts/tenant-adversarial-check.js` (`resolveObject`) ne résout QUE deux
+        // formes — un littéral `{ … }` écrit sur place, ou un `const NAME = { … }`
+        // hissé (PF-250, 20 sites). Un APPEL DE FONCTION ne tient aucun littéral
+        // qu'il puisse lire : il est refusé par DNC-08, et la clôture de la sonde
+        // de démarrage (PF-246) perd alors les relations que cet `include` traverse.
+        // La factorisation était donc muette pour la porte : elle a fait passer le
+        // `tenant adversarial` de vert à rouge sans changer une seule requête.
+        // Ce qui est dupliqué ici est une PROJECTION, pas une décision — la seule
+        // décision, le prédicat tenant et l'ordre total, reste dans le module de
+        // contrat (ADR-072), appelée ci-dessous. `candidateEnrollmentWhere({ … })`
+        // CONTIENT un littéral, donc le marcheur la résout ; `enrollmentTotalOrder()`
+        // est déjà employée telle quelle et acceptée à quatre sites de ce même diff
+        // (analytics.service.ts:809/:958, students.controller.ts:239/:370).
+        include: {
+          alert: { select: { title: true, severity: true } },
+          student: {
+            select: {
+              firstName: true,
+              lastName: true,
+              enrollments: {
+                where: candidateEnrollmentWhere({ tenantId: args.tenantId }),
+                // PAS d'`orderBy` ici, et ce n'est pas un oubli : `enrollmentTotalOrder()`
+                // est un APPEL, donc DNC-08 pour le marcheur, exactement comme l'`include`
+                // au-dessus. Il serait de toute façon REDONDANT — le contrat retrie en
+                // mémoire avec `compareEnrollmentsByTotalOrder`
+                // (select-active-enrollment.ts:403/:475/:488), et son docblock dit pourquoi :
+                // « deux ordres écrits séparément DIVERGENT, c'est le défaut que cette
+                // tranche ferme ». Aucun `take` ne dépend de cet ordre, donc rien ne se
+                // tronque. L'ordre total reste énoncé UNE fois, dans le module de contrat.
+                select: {
+                  id: true,
+                  status: true,
+                  enrolledAt: true,
+                  endedAt: true,
+                  academicYearId: true,
+                  classSection: { select: { name: true } },
+                },
+              },
+              _count: { select: { enrollments: true } },
+            },
+          },
+          subject: { select: { code: true, name: true } },
+          requester: { select: { firstName: true, lastName: true } },
+          assignedTo: { select: { firstName: true, lastName: true } },
+        },
       });
       if (!row) return null;
 
@@ -287,7 +377,52 @@ export class MeetingRequestsService {
           resolvedAt: new Date(),
           resolvedBy: args.userProfileId,
         },
-        include: meetingRequestInclude(args.tenantId),
+        // INLINE ET NON PAS `meetingRequestInclude(args.tenantId)` : le marcheur de
+        // `scripts/tenant-adversarial-check.js` (`resolveObject`) ne résout QUE deux
+        // formes — un littéral `{ … }` écrit sur place, ou un `const NAME = { … }`
+        // hissé (PF-250, 20 sites). Un APPEL DE FONCTION ne tient aucun littéral
+        // qu'il puisse lire : il est refusé par DNC-08, et la clôture de la sonde
+        // de démarrage (PF-246) perd alors les relations que cet `include` traverse.
+        // La factorisation était donc muette pour la porte : elle a fait passer le
+        // `tenant adversarial` de vert à rouge sans changer une seule requête.
+        // Ce qui est dupliqué ici est une PROJECTION, pas une décision — la seule
+        // décision, le prédicat tenant et l'ordre total, reste dans le module de
+        // contrat (ADR-072), appelée ci-dessous. `candidateEnrollmentWhere({ … })`
+        // CONTIENT un littéral, donc le marcheur la résout ; `enrollmentTotalOrder()`
+        // est déjà employée telle quelle et acceptée à quatre sites de ce même diff
+        // (analytics.service.ts:809/:958, students.controller.ts:239/:370).
+        include: {
+          alert: { select: { title: true, severity: true } },
+          student: {
+            select: {
+              firstName: true,
+              lastName: true,
+              enrollments: {
+                where: candidateEnrollmentWhere({ tenantId: args.tenantId }),
+                // PAS d'`orderBy` ici, et ce n'est pas un oubli : `enrollmentTotalOrder()`
+                // est un APPEL, donc DNC-08 pour le marcheur, exactement comme l'`include`
+                // au-dessus. Il serait de toute façon REDONDANT — le contrat retrie en
+                // mémoire avec `compareEnrollmentsByTotalOrder`
+                // (select-active-enrollment.ts:403/:475/:488), et son docblock dit pourquoi :
+                // « deux ordres écrits séparément DIVERGENT, c'est le défaut que cette
+                // tranche ferme ». Aucun `take` ne dépend de cet ordre, donc rien ne se
+                // tronque. L'ordre total reste énoncé UNE fois, dans le module de contrat.
+                select: {
+                  id: true,
+                  status: true,
+                  enrolledAt: true,
+                  endedAt: true,
+                  academicYearId: true,
+                  classSection: { select: { name: true } },
+                },
+              },
+              _count: { select: { enrollments: true } },
+            },
+          },
+          subject: { select: { code: true, name: true } },
+          requester: { select: { firstName: true, lastName: true } },
+          assignedTo: { select: { firstName: true, lastName: true } },
+        },
       });
       return { transitioned: true as const, row: updated };
     });
