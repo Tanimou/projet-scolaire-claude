@@ -921,6 +921,19 @@ describe('AC-9 — les sites d’appel Prisma de lessons ⊆ la clôture déclar
   it('les tables NOUVELLES de cette tranche sont bien présentes, verbe par verbe (garde anti-vacuité)', () => {
     // Sans ce cas, une régression qui viderait `sites` rendrait les deux tests
     // ci-dessus verts. Ici la liste est nommée : elle ne peut pas se vider.
+    //
+    // `guardianship.SELECT` RETIRÉE par `S-E03-2`, et c'est la liste qui avait
+    // tort, pas la déclaration. Cette garde nomme les tables que la clôture de
+    // portée de CE module exerce ; depuis qu'`AC-2` a hissé l'ABAC parent hors
+    // de `this.scope.run` vers `StudentAccessService` — qui lit sur la connexion
+    // du PROPRIÉTAIRE (`ADR-071 §D2`) — plus aucune instruction `tx.*` de
+    // `lessons` ne touche `guardianship`, ni `guardian` par relation. La garder
+    // ici aurait affirmé une clôture que ce module n'a plus, c'est-à-dire
+    // exactement le mensonge que la garde existe pour empêcher, à l'envers.
+    // La suppression de l'entrée elle-même repose sur un négatif EXÉCUTÉ, pas
+    // sur le `dead-entry-advisory` seul (voir `tenant-scope.ts`, au bloc des
+    // deux entrées supprimées). Dix clés restent nommées : la garde ne peut
+    // toujours pas se vider.
     const declared = new Set(APP_ROLE_REQUIRED_PRIVILEGES.map((r) => privilegeKey(r.table, r.privilege)));
     for (const key of [
       'lesson_entry.SELECT',
@@ -929,7 +942,6 @@ describe('AC-9 — les sites d’appel Prisma de lessons ⊆ la clôture déclar
       'lesson_entry.DELETE',
       'teaching_assignment.SELECT',
       'class_session.SELECT',
-      'guardianship.SELECT',
       'subject.SELECT',
       'teacher_profile.SELECT',
       'user_profile.SELECT',

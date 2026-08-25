@@ -691,7 +691,29 @@ describe('AC-5 — les sites d’appel Prisma de remediation ⊆ la clôture dé
     // module, et c'est ce que PF-251 demande. Les NEUF ajouts sont ceux que la
     // dérivation a NOMMÉS (`alert_rule` ×3, `alert_instance.UPDATE`,
     // `meeting_request` ×3, `audit_log` ×2), jamais des ajouts « par symétrie ».
-    expect(APP_ROLE_REQUIRED_PRIVILEGES).toHaveLength(47);
+    //
+    // S-E03-2 — 47 -> 45, ET `PF-251` VIENT DE SE PRODUIRE UNE TROISIÈME FOIS.
+    // Une tranche du portail PARENT (`grades`/`lessons`), qui ne touche pas une
+    // ligne de `remediation`, fait de nouveau virer au ROUGE la suite de CE
+    // module par ce littéral GLOBAL. Le diagnostic écrit ci-dessus n'a pas
+    // bougé d'un mot : la ligne appartient à `apps/api/src/shared/quality/`.
+    //
+    // LE DELTA EST UNE SUPPRESSION MESURÉE, PAS UN RELÂCHEMENT. `guardianship.
+    // SELECT` et `guardian.SELECT` sont retirées parce que leur unique
+    // consommateur de portée — le `tx.guardianship.findFirst` de l'ABAC parent
+    // de `lessons/list` — a été HISSÉ hors de `this.scope.run` vers
+    // `StudentAccessService`, qui lit sur la connexion du PROPRIÉTAIRE
+    // (`ADR-071 §D2`). Le cliquet `tenant adversarial` l'a signalé de lui-même
+    // (`dead-entry-advisory`), et la suppression n'a été faite qu'APRÈS le
+    // négatif exécuté qu'il exige : `REVOKE SELECT` sur les deux tables laisse
+    // la matrice de 12 appels IDENTIQUE, tandis qu'un `REVOKE` sur
+    // `lesson_entry` la fait rougir (contrôle positif). Détail complet en
+    // commentaire à l'emplacement des entrées supprimées, `tenant-scope.ts`.
+    //
+    // Le littéral reste un littéral EXACT et non une borne : une borne
+    // inférieure accepterait silencieusement une entrée de trop, dont la sonde
+    // de démarrage rendrait `refused_unusable`.
+    expect(APP_ROLE_REQUIRED_PRIVILEGES).toHaveLength(45);
     // …et chaque entrée porte SA raison, jamais une chaîne partagée ni le verbe
     // répété. La garde tourne sur la liste ENTIÈRE : une raison mince ajoutée
     // par un module futur vire au rouge ici aussi.

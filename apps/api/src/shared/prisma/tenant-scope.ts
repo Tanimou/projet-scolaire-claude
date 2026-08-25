@@ -252,24 +252,49 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
     why: 'S-E01-1e / PF-217 — sonde de propriété du `classSessionId` fourni : sans ce privilège, ' +
       'la sonde lève permission denied sur CHAQUE création de leçon rattachée à une séance',
   },
-  {
-    table: 'guardianship',
-    privilege: 'SELECT',
-    why: 'ABAC parent de lessons/list (branche `studentId`) : sans elle, le portail PARENT — le ' +
-      'cœur du produit — refuse chaque consultation du cahier de texte d’un enfant',
-  },
-  {
-    table: 'guardian',
-    privilege: 'SELECT',
-    why: 'S-E01-1k / PF-246 — la garde ABAC parent de lessons/list ne filtre pas sur une colonne ' +
-      'mais sur une RELATION : le `findFirst` sur `guardianship` porte un `where` dont le membre ' +
-      '`guardian` est lui-même un objet `userProfileId` (lessons.controller.ts:366). Sous RLS un filtre relationnel ' +
-      'est une LECTURE de la table cible — Postgres joint `guardian` et lève 42501 sans ce ' +
-      'privilège. La table N’EST PAS un délégué racine : aucun `tx.guardian.<verbe>(` n’existe ' +
-      'dans l’arbre, et c’est exactement pourquoi TROIS relectures humaines de cette liste ne ' +
-      'l’ont pas vue. C’est la DÉRIVATION de cette tranche qui l’a nommée, mesurée détenue ' +
-      '(app_user : SELECT sur `guardian`, RLS active, 1 policy) AVANT d’être déclarée',
-  },
+  // ── `guardianship.SELECT` et `guardian.SELECT` : SUPPRIMÉES par `S-E03-2`, sur
+  //    un négatif MESURÉ — jamais sur le seul `dead-entry-advisory` (`PF-355`).
+  //
+  // POURQUOI ELLES EXISTAIENT. Toutes deux servaient UN site : la garde ABAC
+  // parent de `lessons/list`, un `tx.guardianship.findFirst` DANS
+  // `this.scope.run`, dont le `where` portait `guardian: { userProfileId }` —
+  // un filtre RELATIONNEL, donc une LECTURE de `guardian`, invisible à trois
+  // relectures humaines parce qu'aucun `tx.guardian.<verbe>(` n'existe nulle
+  // part. `S-E03-2` / `AC-2` a HISSÉ cette garde hors de la portée vers
+  // `StudentAccessService`, qui lit sur la connexion du PROPRIÉTAIRE
+  // (`ADR-071 §D2`). Le dernier consommateur de portée a donc disparu, et le
+  // cliquet `tenant adversarial` l'a signalé au land — la dérivation a vu juste.
+  //
+  // POURQUOI LA SUPPRESSION EST LÉGITIME ICI ALORS QUE LE CLIQUET L'INTERDIT
+  // SUR LE SEUL AVIS. Son message est explicite : *« removal requires a MEASURED
+  // negative (REVOKE on a scratch database and the module's handler still
+  // 200) … either the pair is genuinely dead, or the walker is blind to the
+  // construct that needs it — and the second case is a 42501 on four portals »*.
+  // Ce négatif a été EXÉCUTÉ, le 2026-08-25, contre la pile locale, avec
+  // `DATABASE_URL_APP` ACTIVE (les sites convertis tournent bien en `app_user`
+  // sous RLS — sans quoi la mesure n'aurait rien mesuré) :
+  //
+  //   1. BASELINE, droits détenus — 12 appels, 3 principals, tous les modules
+  //      convertis (lessons ×4, calendar ×2, announcements ×2, alerts ×2,
+  //      meeting-requests ×2) : `200,200,200,200,200,200,200,200,200,404,403,200`.
+  //   2. NÉGATIF, `REVOKE SELECT ON guardianship, guardian FROM app_user` :
+  //      matrice **IDENTIQUE À L'OCTET**. Le consommateur NOMMÉ par l'ancienne
+  //      raison — `GET /lessons?studentId=` en parent — rend toujours 200.
+  //   3. CONTRÔLE POSITIF, parce qu'un négatif incapable de rougir ne prouve
+  //      rien : `REVOKE SELECT ON lesson_entry` (un privilège que la portée
+  //      exerce réellement) → `500,500,500,500,…`, les QUATRE cas `lessons` en
+  //      échec, sur l'endpoint même qui vient de survivre. L'instrument voit
+  //      donc bien un 42501 quand il y en a un.
+  //   4. Les trois GRANT ont été RESTAURÉS et la matrice re-vérifiée identique
+  //      à la baseline. Les droits SQL n'ont pas bougé — c'est la DÉCLARATION
+  //      qui change, pas la permission (`AC-2` compare la matrice réelle à un
+  //      ensemble CLOS, et cet ensemble est inchangé).
+  //
+  // CE QUI RESTE VRAI, ET QU'IL NE FAUT PAS PERDRE AVEC CES DEUX ENTRÉES : un
+  // filtre relationnel EST une lecture de la table cible. Le jour où une
+  // instruction de portée refiltre sur `guardian`/`guardianship`, il faudra
+  // les redéclarer — la dérivation le dira, comme elle l'a dit ici.
+
   {
     table: 'subject',
     privilege: 'SELECT',
@@ -492,12 +517,23 @@ export const APP_ROLE_REQUIRED_PRIVILEGES: readonly AppRolePrivilegeRequirement[
   },
   // ── alerts (S-E01-1l) ───────────────────────────────────────────────────
   // NEUF entrées, 38 -> 47, et pas une de plus. `AlertsService` convertit 26 de
-  // ses 32 instructions et `MeetingRequestsService` les CINQ siennes ; les onze
+  // ses 32 instructions et `MeetingRequestsService` les CINQ siennes ; les
   // tables que leur clôture relationnelle traverse déjà (`student`, `subject`,
   // `class_section`, `enrollment`, `academic_year`, `teaching_assignment`,
-  // `teacher_profile`, `user_profile`, `guardianship`, `alert_instance` en
-  // SELECT, `grade` — via aucune relation ici) sont DÉCLARÉES PLUS HAUT et ne
-  // sont pas dupliquées.
+  // `teacher_profile`, `user_profile`, `alert_instance` en SELECT, `grade` —
+  // via aucune relation ici) sont DÉCLARÉES PLUS HAUT et ne sont pas dupliquées.
+  //
+  // CORRECTION `S-E03-2` (`PF-355`) : cette liste citait aussi `guardianship`,
+  // et c'était FAUX — au sens où cette phrase a failli faire garder deux entrées
+  // mortes. Le seul accès d'`AlertsService` à `guardianship` est
+  // `alerts.service.ts:1029`, un `this.prisma.guardianship.findMany` sur la
+  // connexion du PROPRIÉTAIRE (le fan-out de notifications), pas une instruction
+  // de portée — et le chemin `evaluateAll` est de toute façon ÉNUMÉRÉ HORS
+  // PORTÉE, comme le dit déjà le bloc « délibérément absent » plus bas. Aucune
+  // instruction `tx.*` de ce module ne lit `guardianship`. Mesuré, pas relu :
+  // `REVOKE SELECT ON guardianship, guardian FROM app_user` laisse la matrice
+  // des 12 appels IDENTIQUE, tandis qu'un `REVOKE` sur `lesson_entry` la fait
+  // rougir — voir le négatif exécuté au bloc `guardianship`/`guardian` supprimé.
   //
   // CES NEUF PAIRES NE SONT PAS DEVINÉES : elles sont celles que
   // `scripts/tenant-adversarial-check.js` a DÉRIVÉES du corpus après la
