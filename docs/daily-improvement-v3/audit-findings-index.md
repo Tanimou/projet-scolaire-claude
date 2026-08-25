@@ -305,6 +305,31 @@ It is a Step-6 *credential/decision-required* stop condition for any story whose
 > Allocation was checked against `main`'s maximum (**`PF-334`**, `ADR-070`) **and** against open PRs; nothing in
 > `PF-335`…`PF-353` is reused.
 
+> **Amended by `S-E03-3` (run 82, 2026-08-25): `PF-356` … `PF-366` are declared here in the same commit that raised
+> them — ten ids, and `ADR-072`.** Eight come from the story's own §7 *RECORD, DON'T FIX* table (`PF-356`…`PF-363`),
+> written at planning against a measured high-water mark of `PF-355`. **Two were allocated at the land pass, by
+> MEANING, because production source cited an id for a meaning the table did not carry:** `PF-364` — `Enrollment.endedAt`
+> is *reported*, never *selected on*, so `ADR-041 §D2`'s effective-dating is discharged in intention only (`ADR-072 §R-7`)
+> — and `PF-365` — `ADR-041 §D4` asked for **one** registry in `packages/contracts` and what exists is a **family** of
+> sibling modules (`ADR-072 §A6`). Full rows live in `traceability/OPEN.md`, as for the two amendments above; §7's
+> counting summary is again **deliberately left as it stands** and is therefore stale by a further 10, knowingly, on the
+> same terms. **Id-collision note, and this one is the instructive part:** the implementation shipped **44 citations of
+> `ADR-072`** and six `PF-3xx` citations across `apps/api`, `apps/worker`, `apps/web` and `packages/contracts` while
+> `ADR-072` did not exist and none of the ten ids was declared anywhere — `TOOL-01` exactly. Worse, the code's implicit
+> allocation was **shifted by one** against the story's table (it read `PF-358` = the claim panel, `PF-359` = the
+> unfiltered guardianship `_count`, `PF-361` = `Student.status`) and reused `PF-363` for **two** distinct residuals.
+> Reconciled at land in one direction only — **the ledger's table is authoritative and the source was corrected to it**,
+> file by file and by MEANING, never by pattern-replace. Allocation was checked against `main`'s maximum (**`PF-355`**,
+> `ADR-071`) and against open PRs; nothing in `PF-356`…`PF-365` is reused.
+>
+> **The eleventh, `PF-366`, was allocated by the LAND PASS itself and is of a different kind from the other ten:**
+> it was found by *executing* the slice’s own ratchet against an injected violation rather than reading its 37/37
+> green. Both directions were measured. An aliased predicate in a **RULE A zero-tolerance** file left the gate green;
+> the same predicate written over a relation named `enrollments` failed two tests and named both sites by file, line
+> and rule. **Both halves are the finding**: the gate is decisively not vacuous, and it is name-scoped — so
+> `PF-12`’s class-closure claim is exactly true of re-derivations written through `enrollments`, and no wider.
+> Recorded, not fixed (`RULE 0` clause 6); it folds into `PF-362`’s slice, which already owns that file.
+
 > **PF-58 is the class of failure the routine is least able to see.** The planning work was done well and lost anyway,
 > because "produced" was conflated with "committed". Same conflation as A2 App. A's *UI exists ≠ feature delivered*.
 > Mitigation now in force: the in-repo `routine/` copies must be byte-identical to the installed artefacts, so drift is

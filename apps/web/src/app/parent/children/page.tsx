@@ -1,8 +1,8 @@
 import {
   EmptyState,
+  EnrollmentStatusBadge,
   KpiCard,
   PageHeader,
-  StatusBadge,
   formatDateShort,
 } from '@pilotage/ui';
 import {
@@ -22,24 +22,41 @@ import { PortalShell } from '@/components/PortalShell';
 import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
 import { ChildClaimsStatusStrip } from '@/components/parent/ChildClaimsStatusStrip';
 import { api, ApiError } from '@/lib/api-client';
+import {
+  enrollmentDecor,
+  isActivelyEnrolled,
+  resolveEnrollmentActivity,
+  type CarriesEnrollmentActivity,
+  type EnrollmentDecor,
+  type EnrollmentDecorRow,
+  type EnrollmentDisplay,
+} from '@/lib/enrollment-activity';
 
 
 export const metadata: Metadata = { title: 'Mes enfants' };
 export const dynamic = 'force-dynamic';
 
-interface ChildEnrollment {
-  classSection: {
-    id: string;
-    name: string;
-    gradeLevel?: {
-      name: string;
-      cycle?: { name: string; color: string | null };
-    };
-  };
-  academicYear: { name: string; status: string };
-}
-
-interface Child {
+/**
+ * S-E03-3 / `PF-12` — la forme de `enrollments` a changé, et c'est le
+ * changement porteur de charge.
+ *
+ * L'ancienne déclaration annonçait `academicYear: { name: string; status: string }`
+ * alors que `GET /students` ne projette que `{ id, name }` : `status` valait
+ * `undefined` au runtime, donc `e.academicYear.status === 'active'` était
+ * **toujours faux, pour tout enfant**. Les deux KPI ci-dessous étaient
+ * structurellement à `0` et chaque carte portait le libellé binaire
+ * stigmatisant supprimé par cette tranche. `DNC-06` (l'interface promet ce que
+ * le runtime ne livre pas) et `DNC-01` (le KPI en désaccord avec les badges de
+ * sa propre page) au même endroit.
+ *
+ * Les lignes sont désormais typées `EnrollmentDecorRow`, qui ne porte **ni
+ * `status`, ni `academicYear.status`** : la re-dérivation est *inexprimable*
+ * ici, pas seulement absente. Elles ne servent plus qu'à retrouver les
+ * attributs d'affichage (identifiant de classe, cycle, couleur) de la ligne que
+ * le serveur a déjà retenue. Le verdict, lui, arrive tout fait dans
+ * `enrollmentActivity` (`ADR-072`, `AC-2`).
+ */
+interface Child extends CarriesEnrollmentActivity {
   id: string;
   firstName: string;
   lastName: string;
@@ -47,7 +64,7 @@ interface Child {
   birthDate: string | null;
   externalRef: string | null;
   gender: string | null;
-  enrollments: ChildEnrollment[];
+  enrollments: EnrollmentDecorRow[];
 }
 
 async function safe<T>(p: Promise<T>): Promise<T | null> {
@@ -106,22 +123,47 @@ export default async function ParentChildrenPage() {
   const children = resp?.data ?? [];
 
   const total = children.length;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S-E03-3 / `PF-12` — un verdict, calculé UNE fois par enfant, partagé par
+  // les KPI et par les badges des cartes.
+  //
+  // Avant, les compteurs et les badges posaient la même question deux fois
+  // (`children.flatMap(...).filter(...)` ici, `c.enrollments.find(...)` plus
+  // bas). Deux copies d'un prédicat finissent toujours par diverger : c'est
+  // `DNC-01`, et c'est `PF-12` reproduit à l'intérieur de son propre correctif.
+  // Le prédicat est maintenant `isActivelyEnrolled`, énoncé une seule fois dans
+  // `@/lib/enrollment-activity`.
+  // ─────────────────────────────────────────────────────────────────────────
+  const enrollmentByChild = new Map<string, { display: EnrollmentDisplay; decor: EnrollmentDecor }>(
+    children.map((c) => [
+      c.id,
+      { display: resolveEnrollmentActivity(c), decor: enrollmentDecor(c, c.enrollments) },
+    ]),
+  );
+  const activeEntries = Array.from(enrollmentByChild.values()).filter((e) =>
+    isActivelyEnrolled(e.display),
+  );
+
   const activeClasses = new Set(
-    children
-      .flatMap((c) => c.enrollments)
-      .filter((e) => e.academicYear.status === 'active')
-      .map((e) => e.classSection.id),
+    activeEntries.map((e) => e.decor.classSectionId).filter((id): id is string => Boolean(id)),
   ).size;
 
   // Distinct cycles across all active enrollments — replaces the previous
   // "ÉTABLISSEMENT — —" placeholder KPI with something real.
   const activeCycles = new Set(
-    children
-      .flatMap((c) => c.enrollments)
-      .filter((e) => e.academicYear.status === 'active')
-      .map((e) => e.classSection.gradeLevel?.cycle?.name)
-      .filter((n): n is string => Boolean(n)),
+    activeEntries.map((e) => e.decor.cycleName).filter((n): n is string => Boolean(n)),
   );
+
+  // Le sous-titre des KPI NOMME l'année canonique au lieu de dire « Année en
+  // cours » : un compteur qui dit « en cours » alors que l'année canonique
+  // s'est terminée en juin est `DNC-01` reformulé (`ADR-041 §D3`).
+  const scopeYearName = activeEntries[0]?.display.academicYearLabel ?? null;
+  const kpiScopeCaption = scopeYearName
+    ? `Année ${scopeYearName}`
+    : total > 0
+      ? 'Hors année en cours'
+      : 'Aucun enfant rattaché';
 
   const avgAge =
     children.length > 0
@@ -146,7 +188,7 @@ export default async function ParentChildrenPage() {
           Rattachés à votre compte
         </KpiCard>
         <KpiCard icon={GraduationCap} tone="violet" label="CLASSES ACTIVES" value={activeClasses}>
-          {total > 0 ? 'Année en cours' : 'Aucune inscription'}
+          {kpiScopeCaption}
         </KpiCard>
         <KpiCard
           icon={Cake}
@@ -163,8 +205,8 @@ export default async function ParentChildrenPage() {
           value={activeCycles.size}
         >
           {activeCycles.size > 0
-            ? Array.from(activeCycles).slice(0, 2).join(', ')
-            : 'Pas de cycle actif'}
+            ? `${Array.from(activeCycles).slice(0, 2).join(', ')} · ${kpiScopeCaption}`
+            : kpiScopeCaption}
         </KpiCard>
       </div>
 
@@ -183,8 +225,10 @@ export default async function ParentChildrenPage() {
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {children.map((c) => {
-              const active = c.enrollments.find((e) => e.academicYear.status === 'active');
-              const cycleColor = active?.classSection.gradeLevel?.cycle?.color ?? '#3B82F6';
+              // Le verdict est LU, jamais recalculé — même objet que celui qui
+              // a alimenté les KPI ci-dessus, donc désaccord impossible.
+              const { display: enrolment, decor } = enrollmentByChild.get(c.id)!;
+              const cycleColor = decor.accentColor;
               const age = computeAge(c.birthDate);
               const detailHref = `/parent/children/${c.id}`;
               return (
@@ -224,19 +268,22 @@ export default async function ParentChildrenPage() {
                         <h3 className="truncate text-base font-bold text-slate-900">
                           {c.firstName} {c.lastName}
                         </h3>
-                        <p className="truncate text-xs text-slate-500">
-                          {active
-                            ? `${active.classSection.gradeLevel?.cycle?.name ?? ''}${
-                                active.classSection.gradeLevel?.cycle?.name ? ' · ' : ''
-                              }${active.classSection.name} · ${active.classSection.gradeLevel?.name ?? ''}`
-                            : 'Aucune inscription active'}
-                        </p>
+                        {/*
+                          Le libellé binaire précédent ne survit pas à cette
+                          tranche : appliqué à un enfant, il se lisait comme un
+                          jugement sur la *personne* et non sur une ligne de
+                          base — la violation la plus nette de la règle
+                          « non-stigmatisant » du portail parent. Le badge et sa
+                          ligne de portée nomment désormais l'année, et la
+                          portée est dans le DOM, jamais dans un `title`.
+                        */}
                         <div className="mt-1.5">
-                          <StatusBadge
-                            label={active ? 'Inscription active' : 'Inactif'}
-                            tone={active ? 'success' : 'warning'}
+                          <EnrollmentStatusBadge
+                            state={enrolment.state}
+                            classLabel={enrolment.classLabel}
+                            academicYearLabel={enrolment.academicYearLabel}
+                            lastStatus={enrolment.lastStatus}
                             size="sm"
-                            withDot
                           />
                         </div>
                       </div>

@@ -1,4 +1,5 @@
 import {
+  enrollmentStateLabel,
   formatGrade,
   formatPercent,
   gradeVerdict,
@@ -17,27 +18,30 @@ import { notFound } from 'next/navigation';
 import { ReportToolbar } from './ReportToolbar';
 
 import { api, ApiError } from '@/lib/api-client';
+import {
+  resolveEnrollmentActivity,
+  type CarriesEnrollmentActivity,
+} from '@/lib/enrollment-activity';
 
 
 export const metadata: Metadata = { title: 'Bilan de suivi' };
 export const dynamic = 'force-dynamic';
 
-interface StudentSummary {
+/**
+ * S-E03-3 / `PF-12` — `enrollments` retiré du type : ce bilan **imprimable**
+ * portait la copie exacte de la dérivation de la page de détail
+ * (`.find(e => e.status === 'active') ?? enrollments[0]`) au-dessus de la même
+ * charge utile non filtrée. Un document destiné à être imprimé, classé et
+ * transmis affirmait donc une classe et une année scolaire possiblement
+ * périmées — un mensonge durable, pas un pixel transitoire. Le verdict vient
+ * maintenant du champ canonique `enrollmentActivity` (`ADR-072`, `AC-2`).
+ */
+interface StudentSummary extends CarriesEnrollmentActivity {
   id: string;
   firstName: string;
   lastName: string;
   birthDate: string | null;
   externalRef: string | null;
-  enrollments: Array<{
-    id: string;
-    status: string;
-    classSection: {
-      id: string;
-      name: string;
-      gradeLevel?: { name: string; cycle?: { name: string; color: string | null } };
-    };
-    academicYear: { id: string; name: string; status: string };
-  }>;
 }
 
 interface ParentDashboardResponse {
@@ -162,8 +166,7 @@ export default async function ChildReportPage({
     ),
   ]);
 
-  const active =
-    student.enrollments.find((e) => e.status === 'active') ?? student.enrollments[0];
+  const enrolment = resolveEnrollmentActivity(student);
 
   const perf = dashboard?.globalPerformance;
   const subjectPerf = (dashboard?.subjectPerf ?? [])
@@ -187,12 +190,14 @@ export default async function ChildReportPage({
   const fullName = `${student.firstName} ${student.lastName}`.trim();
   const age = computeAge(dashboard?.student.birthDate ?? student.birthDate);
   const schoolName = dashboard?.student.schoolName ?? 'Établissement scolaire';
-  const classLabel =
-    dashboard?.student.classSectionName ?? active?.classSection.name ?? '—';
-  const levelLabel =
-    dashboard?.student.gradeLevelName ?? active?.classSection.gradeLevel?.name ?? '';
-  const yearLabel = active?.academicYear.name ?? '';
-  const cycleLabel = active?.classSection.gradeLevel?.cycle?.name ?? '';
+  // Un document imprimé ne peut pas se rattraper plus tard : hors `active`, il
+  // NOMME l'état (« Hors année en cours ») plutôt que d'imprimer une classe
+  // qu'il ne peut pas justifier. La portée canonique est imprimée telle quelle
+  // sous l'en-tête, pour que le lecteur du papier sache ce qu'il lit.
+  const classLabel = enrolment.classLabel ?? enrollmentStateLabel(enrolment.state);
+  const levelLabel = enrolment.gradeLevelName ?? '';
+  const yearLabel = enrolment.academicYearLabel ?? '';
+  const enrollmentScope = enrolment.scopeLabel;
   const rank = dashboard?.student.rank ?? null;
   const classSize = dashboard?.student.classSize ?? 0;
 
@@ -220,8 +225,14 @@ export default async function ChildReportPage({
               </p>
               <h1 className="text-2xl font-bold text-slate-900">Bilan de suivi scolaire</h1>
               <p className="text-xs text-slate-500">
-                {[cycleLabel, levelLabel, yearLabel].filter(Boolean).join(' · ')}
+                {[levelLabel, yearLabel].filter(Boolean).join(' · ') || enrollmentScope}
               </p>
+              {/*
+                Étiquette de portée (`ADR-041 §D3`) imprimée dans le document
+                lui-même : un bilan qui circule sur papier doit dire de quelle
+                inscription il parle, sinon le lecteur suppose « l'actuelle ».
+              */}
+              <p className="text-[11px] text-slate-500">{enrollmentScope}</p>
             </div>
           </div>
           <div className="text-right text-[11px] text-slate-500">

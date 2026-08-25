@@ -1,24 +1,58 @@
-import { Avatar, formatGrade, formatPercent, SectionHeader } from '@pilotage/ui';
 import {
+  Avatar,
+  enrollmentStateLabel,
+  formatGrade,
+  formatPercent,
+  SectionHeader,
+  type EnrollmentActivityState,
+} from '@pilotage/ui';
+import {
+  AlertOctagon,
   AlertTriangle,
   ArrowRight,
   ChevronRight,
   GraduationCap,
+  History,
   Sparkles,
   TrendingDown,
   TrendingUp,
+  UserPlus,
   UserX,
 } from 'lucide-react';
 import Link from 'next/link';
-import type { CSSProperties } from 'react';
+import type { ComponentType, CSSProperties } from 'react';
+
+/**
+ * Icônes des états NON actifs de la tuile famille. Mêmes icônes que
+ * `EnrollmentStatusBadge` (`@pilotage/ui`) : un seul vocabulaire visuel, deux
+ * rendus (le badge pleine largeur, la puce compacte de la swimlane). Le
+ * LIBELLÉ, lui, n'est pas recopié — il vient d'`enrollmentStateLabel`.
+ */
+const INACTIVE_STATE_ICON: Partial<
+  Record<EnrollmentActivityState, ComponentType<{ className?: string }>>
+> = {
+  out_of_scope: History,
+  none: UserPlus,
+  unavailable: AlertOctagon,
+};
 
 
 export interface FamilyChildOverview {
   id: string;
   firstName: string;
   lastName: string;
+  /**
+   * S-E03-3 / `PF-12` — non-`null` **uniquement** quand l'enfant est activement
+   * inscrit au sens canonique (`ADR-072`). Ce champ ne porte plus
+   * `enrollments[0].classSection.name`, c'est-à-dire une ligne arbitraire
+   * présentée comme la classe actuelle.
+   */
   classLabel: string | null;
   cycleColor: string | null;
+  /** Verdict canonique, décidé côté serveur — jamais recalculé ici. */
+  enrollmentState: EnrollmentActivityState;
+  /** Phrase de portée `ADR-041 §D3`, rendue dans le DOM sous le nom de l'enfant. */
+  enrollmentScopeLabel: string;
   studentAverage: number | null;
   classAverage: number | null;
   attendanceRate: number | null;
@@ -116,20 +150,54 @@ export function FamilyOverviewSwimlane({ overviews, activeStudentId }: FamilyOve
                   : 'ring-1 ring-slate-200/60 hover:-translate-y-0.5 hover:shadow-md hover:ring-slate-300'
               }`}
             >
-              {/* Cycle-color top stripe (subtle, falls back to brand gradient) */}
+              {/*
+                Bande de cycle. La couleur vient d'`enrollmentAccentColor`
+                (design-system) et vaut l'ardoise neutre hors inscription
+                canonique — plus jamais le bleu de marque, qui se lisait
+                « tout va bien, l'enfant est en classe ».
+              */}
               <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={stripeStyle} />
 
-              {/* Header — avatar + name + class */}
-              <div className="mt-1 flex items-center gap-3">
+              {/*
+                Header — avatar + name + class.
+
+                Le badge passe SOUS le nom (pas à côté) : la tuile vit dans un
+                défileur horizontal et, à 375 px, une mise côte à côte tronque
+                le nom de l'année scolaire.
+              */}
+              <div className="mt-1 flex items-start gap-3">
                 <Avatar firstName={c.firstName} lastName={c.lastName} size="md" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-bold text-slate-900">
                     {c.firstName} {c.lastName.toUpperCase()}
                   </div>
-                  <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-slate-500">
-                    <GraduationCap className="h-3 w-3 shrink-0" aria-hidden />
-                    <span className="truncate">{c.classLabel ?? 'Classe non assignée'}</span>
-                  </div>
+                  {c.classLabel ? (
+                    <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-slate-500">
+                      <GraduationCap className="h-3 w-3 shrink-0" aria-hidden />
+                      <span className="truncate">{c.classLabel}</span>
+                    </div>
+                  ) : (
+                    /*
+                      Hors inscription canonique : une puce MUETTE qui nomme
+                      l'état, jamais une chaîne vide ni le nom d'une classe
+                      périmée. « Classe non assignée » a disparu — ce n'était
+                      pas ce que la page savait : elle savait seulement qu'aucune
+                      inscription ne qualifiait pour l'année en cours.
+                    */
+                    <div className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                      {(() => {
+                        // Icône distincte par état (WCAG 1.4.1) : la même
+                        // grammaire visuelle que `EnrollmentStatusBadge`, pour
+                        // qu'une capture en niveaux de gris reste lisible.
+                        const Icon = INACTIVE_STATE_ICON[c.enrollmentState] ?? History;
+                        return <Icon className="h-3 w-3 shrink-0" aria-hidden />;
+                      })()}
+                      <span className="truncate">{enrollmentStateLabel(c.enrollmentState)}</span>
+                    </div>
+                  )}
+                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                    {c.enrollmentScopeLabel}
+                  </p>
                 </div>
                 {isActive && (
                   <span className="accent-soft-bg accent-text inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">

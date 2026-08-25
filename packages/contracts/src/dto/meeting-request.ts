@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { ENROLLMENT_ACTIVITY_STATE } from '../enrollment';
 import { ALERT_RULE_CODE, ALERT_SEVERITY } from '../enums';
 
 import { UuidSchema } from './common';
@@ -39,7 +40,22 @@ export const MeetingRequestDtoSchema = z.object({
   /** The child the request is about (the request was filed by one of its guardians). */
   studentId: UuidSchema,
   studentName: z.string(),
+  /**
+   * S-E03-3 / `PF-12` / `ADR-072 §3` — la classe **EN COURS**, ou `null`.
+   * Non-`null` si et seulement si `enrollmentActivityState === 'active'` : la
+   * projection ne replie plus sur la dernière inscription connue, sans quoi une
+   * classe de l'an dernier serait rendue comme si elle était actuelle.
+   */
   classSectionName: z.string().nullable(),
+
+  /**
+   * Le verdict canonique d'activité, décidé côté serveur par
+   * `selectActiveEnrollment`, et sa phrase de portée (`ADR-041 §D3`). Le
+   * consommateur lit un verdict ; il ne reçoit aucune ligne d'inscription et ne
+   * peut donc pas en re-dériver un.
+   */
+  enrollmentActivityState: z.enum(ENROLLMENT_ACTIVITY_STATE),
+  enrollmentScopeLabel: z.string(),
 
   /** Subject context inherited from the alert (null for non-subject alerts). */
   subjectId: UuidSchema.nullable(),

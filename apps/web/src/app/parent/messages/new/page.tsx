@@ -7,21 +7,29 @@ import { ComposeForm, type ComposeChild } from '../ComposeForm';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api, ApiError } from '@/lib/api-client';
+import {
+  resolveEnrollmentActivity,
+  type CarriesEnrollmentActivity,
+} from '@/lib/enrollment-activity';
 
 
 export const metadata: Metadata = { title: 'Nouveau message' };
 export const dynamic = 'force-dynamic';
 
-interface ChildEnrollment {
-  classSection: { name: string; gradeLevel?: { name: string } };
-  academicYear: { status: string };
-}
-
-interface Child {
+/**
+ * S-E03-3 / `PF-12` — `enrollments` retiré du type, et `classLabel()` avec.
+ *
+ * La dérivation locale `c.enrollments.find(e => e.academicYear.status === 'active')`
+ * lisait un champ (`academicYear.status`) que `GET /students` ne projette pas :
+ * `classLabel()` rendait donc `null` pour **tout** enfant, et le sélecteur du
+ * compose n'a jamais affiché la moindre classe. Le verdict canonique arrive
+ * maintenant dans `enrollmentActivity` (`ADR-072`, `AC-2`) et le libellé de
+ * classe est celui, unique, de `@/lib/enrollment-activity`.
+ */
+interface Child extends CarriesEnrollmentActivity {
   id: string;
   firstName: string;
   lastName: string;
-  enrollments: ChildEnrollment[];
 }
 
 async function safe<T>(p: Promise<T>): Promise<T | null> {
@@ -31,13 +39,6 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
     if (err instanceof ApiError) return null;
     throw err;
   }
-}
-
-function classLabel(c: Child): string | null {
-  const active = c.enrollments.find((e) => e.academicYear.status === 'active');
-  if (!active) return null;
-  const grade = active.classSection.gradeLevel?.name;
-  return grade ? `${active.classSection.name} · ${grade}` : active.classSection.name;
 }
 
 /**
@@ -66,11 +67,21 @@ export default async function ParentNewMessagePage({
   const sp = await searchParams;
 
   const resp = await safe(api<{ data: Child[] }>('/api/v1/students', { cache: 'no-store' }));
-  const children: ComposeChild[] = (resp?.data ?? []).map((c) => ({
-    id: c.id,
-    name: `${c.firstName} ${c.lastName}`.trim(),
-    classLabel: classLabel(c),
-  }));
+  const children: ComposeChild[] = (resp?.data ?? []).map((c) => {
+    const enrolment = resolveEnrollmentActivity(c);
+    // Hors `active`, le sélecteur ne montre PAS une classe périmée : il montre
+    // la portée (« Hors année en cours … »), ce qui reste une information utile
+    // au moment de choisir à qui écrire, sans affirmer une scolarité en cours.
+    const label =
+      enrolment.state === 'active'
+        ? [enrolment.classLabel, enrolment.gradeLevelName].filter(Boolean).join(' · ')
+        : enrolment.scopeLabel;
+    return {
+      id: c.id,
+      name: `${c.firstName} ${c.lastName}`.trim(),
+      classLabel: label || null,
+    };
+  });
 
   return (
     <PortalShell portal="parent">

@@ -1,4 +1,5 @@
 export * from './academic-year';
+export * from './enrollment';
 export * from './enums';
 export * from './audit';
 export * from './dto';

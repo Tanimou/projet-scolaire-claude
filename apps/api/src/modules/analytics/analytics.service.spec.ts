@@ -432,8 +432,17 @@ const PD_STUDENT_ROW = {
   externalRef: 'EXT-1',
   birthDate: new Date('2014-05-01'),
   school: { name: 'École Test' },
+  // S-E03-3 / ADR-072 — `schoolId`, `id`, `status`, `enrolledAt` et `_count`
+  // sont AJOUTÉS parce que la projection les lit désormais vraiment. Une fixture
+  // qui omet des champs que le code lit ne teste pas le code : elle teste le
+  // `undefined` (DNC-06, le motif exact que cette tranche ferme).
+  schoolId: 'school-pd-1',
   enrollments: [
     {
+      id: 'enr-pd-1',
+      status: 'active',
+      enrolledAt: new Date('2025-09-01'),
+      endedAt: null,
       academicYearId: PD_YEAR,
       classSectionId: PD_SECTION,
       classSection: {
@@ -450,6 +459,7 @@ const PD_STUDENT_ROW = {
       },
     },
   ],
+  _count: { enrollments: 1 },
 };
 
 // Pre-rounded snapshot rows (what S1's recompute would have written). The global

@@ -1,3 +1,4 @@
+import type { EnrollmentActivityState } from '@pilotage/contracts';
 import type { AlertRuleCode, AlertSeverity, AlertStatus } from '@prisma/client';
 import { IsEnum, IsObject, IsOptional, IsUUID } from 'class-validator';
 
@@ -149,6 +150,15 @@ export interface MeetingRequestDto {
   studentId: string;
   studentName: string;
   classSectionName: string | null;
+  /**
+   * S-E03-3 / PF-12 / ADR-072 — le verdict canonique d'activité, dérivé CÔTÉ
+   * SERVEUR par `selectActiveEnrollment`, et son label de portée (ADR-041 §D3).
+   * ADDITIFS : `classSectionName` reste la classe rendue par la projection ;
+   * `enrollmentActivityState` dit si cette classe est une inscription EN COURS
+   * ou la dernière connue. Le consommateur ne re-dérive plus.
+   */
+  enrollmentActivityState: EnrollmentActivityState;
+  enrollmentScopeLabel: string;
   subjectId: string | null;
   subjectCode: string | null;
   subjectName: string | null;

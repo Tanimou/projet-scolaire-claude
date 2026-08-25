@@ -5,6 +5,7 @@ import {
   CommentsFeed,
   DonutChart,
   EmptyState,
+  EnrollmentStatusBadge,
   GroupedBarChart,
   LineChart,
   SectionHeader,
@@ -47,6 +48,12 @@ import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarVi
 import { FreshnessChip } from '@/components/freshness/FreshnessChip';
 import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
 import { api, isNextNavigationSignal } from '@/lib/api-client';
+import {
+  enrollmentDecor,
+  resolveEnrollmentActivity,
+  type CarriesEnrollmentActivity,
+  type EnrollmentDecorRow,
+} from '@/lib/enrollment-activity';
 import { fetchMe } from '@/lib/me';
 
 const FAMILY_OVERVIEW_MAX = 8;
@@ -54,23 +61,26 @@ const FAMILY_OVERVIEW_MAX = 8;
 export const metadata: Metadata = { title: 'Tableau de bord famille' };
 export const dynamic = 'force-dynamic';
 
-interface StudentSummary {
+/**
+ * S-E03-3 / `PF-12` — la forme de `enrollments` a changé, et c'est le
+ * changement porteur de charge.
+ *
+ * La swimlane « Vue famille » prenait `student.enrollments[0]?.classSection`
+ * pour libellé de classe ET pour couleur de cycle. `GET /students` ne triait
+ * pas ces lignes : `[0]` était une ligne **arbitraire**, présentée comme la
+ * classe actuelle de l'enfant. Le verdict canonique (`enrollmentActivity`,
+ * `ADR-072`, `AC-2`) remplace le libellé.
+ *
+ * Les lignes restent, typées `EnrollmentDecorRow` — **ni `status`, ni
+ * `academicYear.status`**, donc plus aucun test d'activité n'y est
+ * exprimable — et ne servent plus qu'à retrouver la couleur de cycle de la
+ * ligne que le serveur a retenue.
+ */
+interface StudentSummary extends CarriesEnrollmentActivity {
   id: string;
   firstName: string;
   lastName: string;
-  enrollments: Array<{
-    classSection: {
-      id: string;
-      name: string;
-      gradeLevel?: {
-        id: string;
-        name: string;
-        code: string;
-        cycle?: { id: string; name: string; color: string | null };
-      };
-    };
-    academicYear: { name: string };
-  }>;
+  enrollments: EnrollmentDecorRow[];
 }
 
 interface ParentDashboardResponse {
@@ -264,16 +274,25 @@ export default async function ParentDashboardPage({
 
   // Build per-child overviews for the swimlane (only meaningful with 2+).
   const familyOverviews: FamilyChildOverview[] = familyData.map(({ student, dashboard: d, alerts: a }) => {
-    const firstEnrol = student.enrollments[0]?.classSection;
-    const classLabel =
-      d?.student.classSectionName ?? firstEnrol?.name ?? null;
-    const cycleColor = firstEnrol?.gradeLevel?.cycle?.color ?? null;
+    // `student.enrollments[0]` a disparu : la tuile lit le verdict canonique.
+    // Résolu ici, une fois par enfant, à partir de données déjà chargées —
+    // aucune requête supplémentaire, aucun N+1 (GUARDRAILS §2).
+    // Hors `active`, `classLabel` est `null` — la tuile rend alors une puce
+    // muette avec l'état, jamais un nom de classe périmé ni une chaîne vide.
+    const enrolment = resolveEnrollmentActivity(student);
     return {
       id: student.id,
       firstName: d?.student.firstName ?? student.firstName,
       lastName: d?.student.lastName ?? student.lastName,
-      classLabel,
-      cycleColor,
+      classLabel: enrolment.classLabel,
+      // La couleur vient de la ligne que le SERVEUR a retenue, via
+      // `enrollmentAccentColor` (design-system) : ardoise neutre hors
+      // inscription canonique. Le repli historique `#3B82F6` — du bleu de
+      // marque — se lisait « tout va bien, l'enfant est en classe », donc la
+      // couche couleur contredisait le badge posé juste à côté.
+      cycleColor: enrollmentDecor(student, student.enrollments).accentColor,
+      enrollmentState: enrolment.state,
+      enrollmentScopeLabel: enrolment.scopeLabel,
       studentAverage: d?.globalPerformance.studentAverage ?? null,
       classAverage: d?.globalPerformance.classAverage ?? null,
       attendanceRate: d?.globalPerformance.attendanceRate ?? null,
@@ -318,6 +337,9 @@ export default async function ParentDashboardPage({
       attendanceRate: d?.globalPerformance.attendanceRate ?? null,
     }));
   const actionItems = buildParentActionItems(actionChildren);
+
+  // Verdict canonique de l'enfant affiché en tête de page (`ADR-072`).
+  const activeEnrolment = resolveEnrollmentActivity(activeStudent);
 
   const perf = dashboard?.globalPerformance;
   const subjectPerf = dashboard?.subjectPerf ?? [];
@@ -439,12 +461,34 @@ export default async function ParentDashboardPage({
         <ChildProfileHero
           firstName={dashboard?.student.firstName ?? activeStudent.firstName}
           lastName={dashboard?.student.lastName ?? activeStudent.lastName}
+          /*
+            S-E03-3 : le libellé de classe du héros est conditionné au verdict
+            canonique, PAS au seul `classSectionName` de `parent-dashboard`.
+
+            Les deux ne répondent pas à la même question : `classSectionName`
+            suit la **fenêtre de reporting** (qui reste délibérément inchangée
+            — retirer les notes d'un enfant hors année en cours viderait la
+            page qui porte la promesse « 5 questions en moins de 2 s »), tandis
+            que le badge porte l'**affirmation d'activité**. Sans ce garde-fou,
+            un enfant « Hors année en cours » lirait quand même
+            « Classe de 3ème B » en tête de page.
+          */
           classLabel={
-            dashboard?.student.classSectionName
+            activeEnrolment.state === 'active' && dashboard?.student.classSectionName
               ? `Classe de ${dashboard.student.classSectionName}`
               : undefined
           }
           schoolLabel={dashboard?.student.schoolName ?? undefined}
+          rightSlot={
+            <EnrollmentStatusBadge
+              state={activeEnrolment.state}
+              classLabel={activeEnrolment.classLabel}
+              academicYearLabel={activeEnrolment.academicYearLabel}
+              lastStatus={activeEnrolment.lastStatus}
+              size="md"
+              className="max-w-[16rem]"
+            />
+          }
           meta={heroMeta}
           className="lg:col-span-6"
         />

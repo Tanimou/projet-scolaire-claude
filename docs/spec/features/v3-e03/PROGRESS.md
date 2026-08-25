@@ -4,10 +4,12 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-25)** `in-progress` — **two slices landed, both on 2026-08-25, and there was none before them.**
-`S-E03-4` (run 80 — `PF-15` closed on ONE AXIS OF TWO with `PF-328` as the named residual, `PF-04`/`PF-36`
+**Status (2026-08-25)** `in-progress` — **three slices landed, all three on 2026-08-25, and there was none before
+them.** `S-E03-4` (run 80 — `PF-15` closed on ONE AXIS OF TWO with `PF-328` as the named residual, `PF-04`/`PF-36`
 advanced not closed, `ADR-070`). `S-E03-2` (run 81 — **`PF-288` CLOSED as a class**, `PF-05` **advanced not
-closed**, `ADR-071`). Both landed ⚠️ **needing human review, neither auto-merged**.
+closed**, `ADR-071`). `S-E03-3` (run 82 — `PF-12` **advanced not closed**: three of nine measured axes removed,
+`PF-357` — the audit's own third clause — untouched, `ADR-072`). All three landed ⚠️ **needing human review, none
+auto-merged**.
 
 > *Numbering correction, run 81:* the entries below originally dated `S-E03-4` to "run 79". The selection log
 > (`scheduled-tasks/daily-improvement-v3/state/selection-log.jsonl`) records `S-ROUTINE-1` as run 79, `S-E03-4`
@@ -49,7 +51,8 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 |---|---|---|
 | **`S-E03-4`** — canonical academic-year resolution | `PF-15` (one axis of two), advances `PF-04` / `PF-36`; raises `PF-327`…`PF-330` | ⚠️ **2026-08-25, run 80 — landed needing human review (NOT auto-merged), P1 `[tenancy][truth]`** |
 | **`S-E03-2`** — the parent grades read becomes ONE guarded contract, and a failed read stops rendering as "no grades published" | **closes `PF-288`** (class, both remaining sites); **advances `PF-05`** — NOT closed; raises `PF-335`…`PF-353` | ⚠️ **2026-08-25, run 81 — landed needing human review (NOT auto-merged), P1 `[authz][truth]`** |
-| `S-E03-1`, `S-E03-3`, `S-E03-5`… | `PF-12`, `PF-20`, `PF-24`, `PF-40`, `PF-50` | **matrix rows only** — no story authored. `S-E03-3` is now the cheapest of them: `parent-grade-projection-agreement.spec.ts` (run 81) already captures both projections' `where` clauses out of production code |
+| **`S-E03-3`** — "is this child actively enrolled" becomes ONE derivation, and the parent surfaces stop each answering it differently | **advances `PF-12`** — NOT closed (3 of 9 measured axes); raises `PF-356`…`PF-365` | ⚠️ **2026-08-25, run 82 — landed needing human review (NOT auto-merged), P1 `[truth]`** |
+| `S-E03-1`, `S-E03-5`… | `PF-20`, `PF-24`, `PF-40`, `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82: it was authored and landed, and its story lives at `docs/spec/features/v3-e03/stories/S-E03-3.md`.) |
 
 ---
 
@@ -448,7 +451,18 @@ owes no entry (`PF-80` not armed).
 
 ---
 
-## Next slice → `PF-341` — the `?classSectionId=` sibling of the parameter `S-E03-2` just walled
+## ~~Next slice → `PF-341`~~ — SUPERSEDED at run 82, and **not on merit**. Read this box first
+
+> **Run 82 selected `S-E03-3` / `PF-12` instead, and the reason is procedural, not a re-ranking.**
+> `PF-341` is a **`PF-58+` id**, and under **`RULE 0` clause 5** (`ADR-069` — enforced at selection time by
+> `scripts/roadmap-selection-check.js` and written to `selection-log.jsonl` **before** the sprint) a `PF-58+` slice is
+> selectable only when it **blocks a named roadmap story**. `PF-341` blocks none. **It is therefore barred, not
+> outranked.** Everything written below about its severity still stands: it remains **open, unclaimed and correctly
+> ranked first among non-roadmap work**, and it is a live parent-facing read leak. Do not read its displacement as a
+> judgement about its merit. `PF-12`, by contrast, is a roadmap finding owned by `V3-E03`, and run 81 had already
+> ranked it *"next but one"* for the reason the `S-E03-3` bullet below gives.
+>
+> The current pointer is at the **end of this file**: `Next slice → PF-357`.
 
 `lessons.controller.ts` now refuses an unauthorised `?studentId=`. Three lines above it,
 `if (classSectionId) where.teachingAssignment = { classSectionId }` has **no ABAC at all**. A parent holding
@@ -510,3 +524,98 @@ migrate onto) is now a second reason.
 `spec.md`, a `tasks.md` and a denominator. Two slices have now landed against a backlog nobody has enumerated.
 
 *(Written 2026-08-25, `S-E03-2` land pass, run 81. Later slices: annotate, do not delete.)*
+
+---
+
+## S-E03-3 — evidence (run 82, 2026-08-25)
+
+Story: [`docs/spec/features/v3-e03/stories/S-E03-3.md`](./stories/S-E03-3.md) (planning copy under
+`docs/daily-improvement-v3/stories/`).
+ADR: [`docs/adr/ADR-072-canonical-active-enrollment.md`](../../../adr/ADR-072-canonical-active-enrollment.md).
+
+**What landed.** Nine hand-written derivations of *"is this child actively enrolled"* — six parent surfaces, three
+admin — reading five differently-filtered server projections, collapse to **one** contract module,
+`packages/contracts/src/enrollment/`. The server posts the verdict in an explicit field (`enrollmentActivity`, and
+the flat pair `enrollmentActivityState` / `enrollmentScopeLabel` on the meeting-request row); the portal consumes a
+verdict and is handed no rows to choose among. A one-way ratchet
+(`apps/api/src/shared/quality/enrollment-activity-derivation-gate.spec.ts`) makes a second re-derivation
+inexpressible on the parent portal (RULE A) and pins a decreasing ceiling everywhere else (RULE B) — the two-rule
+scope is `ADR-072 §A5`, and it exists because a single zero-tolerance rule would have forced one of the three exits
+`academic-year-resolution-gate.spec.ts:20-32` forbids.
+
+**Three of the removed derivations were false at all times, not merely divergent.** `children/page.tsx`,
+`settings/page.tsx` and `messages/new/page.tsx` each declared `academicYear: { status: string }` while the projection
+feeding them (`GET /students`) selected only `{ id, name }`. `e.academicYear.status === 'active'` therefore compared
+`undefined === 'active'` for **every** child, so the « CLASSES ACTIVES » / « CYCLES SUIVIS » counters were
+structurally `0` and the compose selector never listed a class. `DNC-06` doubled with `DNC-01`.
+
+### Three land-pass corrections, all three worth keeping
+
+1. **`ADR-072` did not exist, and 44 source sites already cited it.** The slice shipped a new
+   `packages/contracts` module, a new ratchet class and a new response field on five endpoints, with every
+   *"see `ADR-072 §3` / `§A2` / `§A6` / `§R-7`"* comment dangling. `GUARDRAILS §2` makes that a blocking finding, and
+   the story's own AC list made the ADR mandatory. Written at land, with the sections the source already cites.
+2. **None of `PF-356`…`PF-363` was declared**, while production source already cited six of them — `TOOL-01`
+   exactly. Worse, the code's implicit allocation was **shifted by one** against the story's §7 table and reused one
+   id for two residuals. Reconciled in one direction only — the ledger's table is authoritative, the source was
+   corrected to it, **by meaning, file by file**, never by pattern-replace. Two ids were allocated at land for
+   meanings the table did not carry: **`PF-364`** (`endedAt` reported, never selected on) and **`PF-365`**
+   (`ADR-041 §D4`'s single registry does not exist).
+3. **The fallback reappeared inside its own fix, on a surface the slice had just converted.** The meeting-request
+   projection shipped `shownEnrollment = activity.enrollment ?? activity.lastKnown` — literally the
+   `?? enrollments[0]` shape the contract's own docblock calls *"not a precaution: it WAS the bug"* — so a child who
+   graduated in 2023-2024 would have rendered `3ème B` as a bare chip on the teacher and admin action-centre rows.
+   The two fields that would have made it legible were on the DTO and **absent from the web mirror and from every
+   render**. Fixed both ways at land: the class is emitted only when it is a current enrolment (matching the web
+   adapter's deliberate `classLabel: null` on `out_of_scope`), and `MeetingRequestList.tsx` renders the scope line
+   beside the child's name whenever the state is not `active`. The contracts Zod DTO gained the same two fields, so
+   *"field names mirror the `MeetingRequestDto` schema"* is true again rather than aspirational.
+
+### `PF-12` is ADVANCED, never `closed`
+
+Axes 1, 2 and 3 are removed. **Axis 5 — `PF-357`, the claim panel answering from `GuardianshipClaim` — is the
+audit's own third clause and is untouched**, so the panel can still print *"Vous n'avez pas encore rattaché
+d'enfant"* beside a listed child, on the same page as the badge this slice made canonical. Also open: `PF-356`
+(axis 4), `PF-358` (axis 6), `PF-359` (axis 8), `PF-360` (axis 9), `PF-363` (axis 7). Inherited and not solved:
+`PF-328` and `PF-361`. Open by construction: `PF-362` and `PF-365`. A row marked `closed` here would be the
+`DNC-06` pattern the two preceding slices each caught themselves committing.
+
+`G-MIGRATION` was correctly **not** triggered — no `schema.prisma` edit — so `scripts/restore-drill-baseline.json`
+owes no entry (`PF-80` not armed).
+
+---
+
+## Next slice → `PF-357` — the claim panel, i.e. `PF-12`'s own third clause
+
+`S-E03-3` made the enrolment badge canonical and left, on the **same page**, a panel that answers a different
+question from a different table: `ChildClaimsStatusStrip.tsx:120-136` projects from `GuardianshipClaim`, so an
+admin-created link — which produces no claim row — prints *"Vous n'avez pas encore rattaché d'enfant"* (`:127`)
+next to a child the list has just rendered. The inverse holds too: an approved claim whose `Guardianship` was later
+revoked still reads *"Validé"*.
+
+Three reasons it ranks first:
+
+1. **It is the only remaining clause of the finding the epic owns.** `PF-12`'s row cannot close while it stands, and
+   this slice is what turns `advanced` into `closed` — the highest-value single move on this board.
+2. **This slice made it more visible, not less.** A canonical, correctly-scoped badge sitting beside a panel that
+   contradicts it is a sharper contradiction than the four mutually-inconsistent badges it replaced.
+3. **The shape is already decided.** `ADR-072`'s form applies directly: project from `Guardianship` (the fact) with
+   `GuardianshipClaim` as provenance, state the predicate once, and let the panel consume a verdict. `PF-358`
+   (`Guardianship.status` predicated three ways, `_count` unfiltered) is the same relation and should be folded in —
+   they are one guardianship predicate, not two.
+
+It ranks ahead of:
+
+- **`PF-356`** (axis 4, `schoolId` asymmetry) — **P1 and genuinely worse in a multi-school tenant**, where the list
+  is empty while the detail page renders fully and the worker still emails about the child. It ranks second only
+  because its seam is `SchoolContextService`, so it is a wider slice with a semantic decision inside it, not because
+  it is smaller.
+- **`PF-341`** — still barred by `RULE 0` clause 5, still first among non-roadmap work. See the superseded pointer
+  box above.
+- **`PF-328` / `PF-361`** — the expand/contract migration plus the product decision about what "active" means for
+  rows that already violate both candidate invariants. `G-MIGRATION` makes it a different class of slice.
+
+**Still owed for `V3-E03`, unchanged since `S-E03-4` and now three slices old:** an **`epic-spec` run**, so this epic
+finally has a `spec.md`, a `tasks.md` and a denominator.
+
+*(Written 2026-08-25, `S-E03-3` land pass, run 82. Later slices: annotate, do not delete.)*

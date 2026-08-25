@@ -23,7 +23,20 @@ function fullRow(overrides: Record<string, unknown> = {}) {
     student: {
       firstName: 'Léa',
       lastName: 'Martin',
-      enrollments: [{ classSection: { name: '6e B' } }],
+      // S-E03-3 / ADR-072 — la projection porte désormais les champs que le
+      // contrat canonique DÉCLARE lire. Les omettre pendant que le type les
+      // annonce est exactement le motif DNC-06 que cette tranche ferme.
+      enrollments: [
+        {
+          id: 'enr-1',
+          status: 'active',
+          academicYearId: 'ay-active',
+          enrolledAt: new Date('2025-09-01T00:00:00.000Z'),
+          endedAt: null,
+          classSection: { name: '6e B' },
+        },
+      ],
+      _count: { enrollments: 1 },
     },
     subject: { code: 'MATH', name: 'Maths' },
     requester: { firstName: 'Marie', lastName: 'Martin' },
@@ -41,6 +54,20 @@ function makeService(opts: { row?: unknown; rows?: unknown[] } = {}) {
       update: jest.fn().mockResolvedValue(fullRow({ status: 'resolved', resolvedAt: new Date() })),
     },
     auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+    // L'année canonique est résolue à travers `resolveActiveAcademicYear`
+    // (ADR-070) : le double doit donc porter le délégué `academicYear`.
+    academicYear: {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          id: 'ay-active',
+          schoolId: SCHOOL,
+          name: '2025-2026',
+          startDate: new Date('2025-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-07-05T00:00:00.000Z'),
+          status: 'active',
+        },
+      ]),
+    },
   };
   /**
    * S-E01-1l — LE FAUX `TenantScopeService` REMPLACE le faux `PrismaService`.

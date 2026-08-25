@@ -16,6 +16,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  candidateEnrollmentWhere,
+  enrollmentTotalOrder,
+  projectEnrollmentActivity,
+  resolveActiveAcademicYear,
+  selectActiveEnrollment,
+} from '@pilotage/contracts';
+import type { EnrollmentActivityProjection } from '@pilotage/contracts';
 import { Prisma, StudentStatus } from '@prisma/client';
 import {
   IsDateString,
@@ -29,6 +37,7 @@ import {
   MinLength,
 } from 'class-validator';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
@@ -221,8 +230,13 @@ export class StudentsController {
         take,
         skip,
         include: {
+          // B3 — S-E03-3 / ADR-072. Le jeu CANDIDAT vient du contrat, pas
+          // d'un littéral : mêmes lignes qu'avant (statut actif, toutes
+          // années), désormais ORDONNÉES par l'ordre total, et le verdict
+          // d'activité est dérivé plus bas par `selectActiveEnrollment`.
           enrollments: {
-            where: { status: 'active' },
+            where: candidateEnrollmentWhere({ tenantId: me.tenantId }),
+            orderBy: enrollmentTotalOrder(),
             include: {
               // The list UI surfaces the full breadcrumb Cycle → Niveau → Classe,
               // so we need to load the gradeLevel + cycle even on the list endpoint.
@@ -254,12 +268,87 @@ export class StudentsController {
               },
             },
           },
-          _count: { select: { guardianships: true } },
+          // `enrollments` AJOUTÉ (additif) : le jeu candidat est filtré sur le
+          // statut, donc sans le total un enfant diplômé serait rendu « aucune
+          // inscription » au lieu de « hors année en cours ».
+          // (`guardianships` compte aussi les liens RÉVOQUÉS — PF-358,
+          //  enregistré, hors périmètre de cette tranche.)
+          _count: { select: { guardianships: true, enrollments: true } },
         },
       }),
       this.prisma.student.count({ where }),
     ]);
-    return { data: items, total, limit: take, offset: skip };
+
+    // B3 — l'année canonique est résolue UNE FOIS PAR ÉCOLE DISTINCTE, jamais
+    // par élève : `take` monte à 200, et une résolution par ligne serait un N+1
+    // sur la liste la plus chaude de l'admin (GUARDRAILS §2). En pratique la
+    // liste est déjà scopée à une école, donc c'est UNE requête.
+    const canonicalYears = await this.canonicalYearBySchool(
+      me.tenantId,
+      items.map((s) => s.schoolId),
+    );
+
+    // UNE date de référence pour toute la page : deux `new Date()` dans la même
+    // boucle rendraient deux diagnostics `endedAtDisagreement` incomparables.
+    const now = new Date();
+
+    const data = items.map((student) => {
+      const year = canonicalYears.get(student.schoolId) ?? null;
+      return {
+        ...student,
+        enrollmentActivity: projectEnrollmentActivity(
+          selectActiveEnrollment(student.enrollments, {
+            tenantId: me.tenantId,
+            academicYearId: year?.id ?? null,
+            academicYearName: year?.name ?? null,
+            totalEnrollmentCount: student._count.enrollments,
+            referenceDate: now,
+          }),
+          (row) => ({
+            academicYearId: row.academicYearId,
+            academicYearName: row.academicYear.name,
+            classSectionName: row.classSection.name,
+            gradeLevelName: row.classSection.gradeLevel?.name ?? null,
+          }),
+        ) satisfies EnrollmentActivityProjection,
+      };
+    });
+
+    return { data, total, limit: take, offset: skip };
+  }
+
+  /**
+   * S-E03-3 / ADR-072 — l'année canonique, UNE résolution par école DISTINCTE.
+   *
+   * Deux propriétés, toutes deux porteuses de charge :
+   *
+   * 1. La clé est l'école QUI PORTE LES LIGNES (`student.schoolId`), jamais
+   *    `SchoolContextService.forUser`, qui rend « l'école du tenant qui a le
+   *    plus d'élèves » (`school-context.service.ts:108-129`). Dans un tenant
+   *    multi-écoles, keyer sur `forUser` ferait résoudre à `GET /students` et à
+   *    `parentDashboard` DEUX années canoniques différentes — PF-12 reproduit
+   *    dans son propre correctif, sur un axe neuf (axe 4 / PF-356).
+   *
+   * 2. La mémoïsation est PAR ÉCOLE, pas par élève : `take` plafonne à 200 et
+   *    une résolution par ligne serait un N+1 (GUARDRAILS §2).
+   */
+  private async canonicalYearBySchool(
+    tenantId: string,
+    schoolIds: readonly string[],
+  ): Promise<Map<string, { id: string; name: string } | null>> {
+    const out = new Map<string, { id: string; name: string } | null>();
+    const distinct = [...new Set(schoolIds)];
+    const referenceDate = new Date();
+    for (const schoolId of distinct) {
+      const year = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+        tenantId,
+        schoolId,
+        referenceDate,
+        onAbsent: 'nullWhenNoActiveYear',
+      });
+      out.set(schoolId, year === null ? null : { id: year.id, name: year.name });
+    }
+    return out;
   }
 
   @Get(':id')
@@ -269,8 +358,16 @@ export class StudentsController {
     const student = await this.prisma.student.findUnique({
       where: { id },
       include: {
+        // B4 — S-E03-3 / ADR-072. L'HISTORIQUE RESTE ENTIER ET NON FILTRÉ : la
+        // section « parcours scolaire » de la fiche en est un consommateur
+        // légitime, et le tronquer serait une régression (AC-2). Ce qui change
+        // est que l'historique cesse de faire DOUBLE EMPLOI comme réponse à
+        // « est-il activement inscrit ? » — cette réponse est désormais le champ
+        // explicite `enrollmentActivity`, dérivé côté serveur. Seul l'ORDRE
+        // devient total (`enrolledAt desc` seul ne départage pas deux lignes
+        // posées à la même milliseconde par un import en lot).
         enrollments: {
-          orderBy: { enrolledAt: 'desc' },
+          orderBy: enrollmentTotalOrder(),
           include: {
             classSection: { include: { gradeLevel: { include: { cycle: true } } } },
             academicYear: true,
@@ -286,7 +383,38 @@ export class StudentsController {
     if (!(await this.access.canAccessStudent(me, jwt, student.id, student.schoolId))) {
       throw new ForbiddenException("Vous n'avez pas accès à cet élève.");
     }
-    return student;
+
+    // L'année canonique, résolue à travers `resolveActiveAcademicYear` (ADR-070)
+    // et keyée sur l'école qui porte les lignes. UNE requête, hors de toute
+    // boucle. Le champ est ADDITIF : `student` garde exactement sa forme.
+    const canonicalYear = await resolveActiveAcademicYear(
+      prismaAcademicYearReader(this.prisma),
+      {
+        tenantId: me.tenantId,
+        schoolId: student.schoolId,
+        referenceDate: new Date(),
+        onAbsent: 'nullWhenNoActiveYear',
+      },
+    );
+
+    const enrollmentActivity = projectEnrollmentActivity(
+      // Ici `rows` est l'historique COMPLET : pas de `totalEnrollmentCount` à
+      // fournir, le tableau EST le total.
+      selectActiveEnrollment(student.enrollments, {
+        tenantId: me.tenantId,
+        academicYearId: canonicalYear?.id ?? null,
+        academicYearName: canonicalYear?.name ?? null,
+        referenceDate: new Date(),
+      }),
+      (row) => ({
+        academicYearId: row.academicYearId,
+        academicYearName: row.academicYear.name,
+        classSectionName: row.classSection.name,
+        gradeLevelName: row.classSection.gradeLevel?.name ?? null,
+      }),
+    ) satisfies EnrollmentActivityProjection;
+
+    return { ...student, enrollmentActivity };
   }
 
   @Post()
