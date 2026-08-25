@@ -11,10 +11,12 @@ import {
   assertKnownTimezone,
   auditWindowCreatedAtFilter,
   isAuditPortalNone,
+  resolveActiveAcademicYear,
   resolveAuditWindow,
 } from '@pilotage/contracts';
 import type { RemediationProgressDto, SnapshotFreshness } from '@pilotage/contracts';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { GradesService } from '../grades/grades.service';
 import { RemediationService } from '../remediation/remediation.service';
@@ -2382,16 +2384,19 @@ export class AnalyticsService {
     // ============ Active academic year ============
     // Cycles drill-down, teacher coverage and grading rate are all scoped to the
     // active year. If none is flagged active we fall back to the most recent one.
-    const activeYear =
-      (await this.prisma.academicYear.findFirst({
-        where: { tenantId, schoolId, status: 'active' },
-        select: { id: true },
-      })) ??
-      (await this.prisma.academicYear.findFirst({
-        where: { tenantId, schoolId },
-        orderBy: { startDate: 'desc' },
-        select: { id: true },
-      }));
+    //
+    // S-E03-4 / ADR-070 — résolution CANONIQUE. C'est le SEUL appelant de la
+    // politique `mostRecentOfAnyStatus` : la paire primaire/repli qui vivait ici
+    // (deux `findFirst`, dont le premier SANS `orderBy` et le second ordonné par
+    // `startDate desc` seul, donc non déterministe des DEUX côtés) est remplacée
+    // par une résolution unique, totalement ordonnée sur les deux branches. Le
+    // nombre de requêtes est inchangé : 1 quand une année active existe, 2 sinon.
+    const activeYear = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+      tenantId,
+      schoolId,
+      referenceDate: new Date(),
+      onAbsent: 'mostRecentOfAnyStatus',
+    });
     const activeYearId = activeYear?.id ?? null;
 
     // ============ School structure ============
@@ -3090,12 +3095,17 @@ export class AnalyticsService {
     academicYearId?: string;
   }): Promise<AdminDashboardResponse['performance']> {
     const { tenantId, schoolId } = opts;
+    // S-E03-4 / ADR-070 — résolution CANONIQUE (déterministe : la paire
+    // `findFirst` SANS `orderBy` rendait une ligne arbitraire dès qu'une école
+    // portait deux années actives). Sémantique préservée : absence ⇒ résultat vide.
     const academicYearId =
       opts.academicYearId ??
       (
-        await this.prisma.academicYear.findFirst({
-          where: { tenantId, schoolId, status: 'active' },
-          select: { id: true },
+        await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+          tenantId,
+          schoolId,
+          referenceDate: new Date(),
+          onAbsent: 'nullWhenNoActiveYear',
         })
       )?.id;
 
@@ -3262,9 +3272,14 @@ export class AnalyticsService {
       this.prisma.student.count({
         where: { tenantId, schoolId, status: 'active', createdAt: { lt: yearAgo } },
       }),
-      this.prisma.academicYear.findFirst({
-        where: { tenantId, schoolId, status: 'active' },
-        select: { id: true },
+      // S-E03-4 / ADR-070 — résolution CANONIQUE. Elle reste DANS le
+      // `Promise.all` : le site garde son parallélisme (une requête, en même
+      // temps que les trois `count`), il n'est pas sérialisé par la conversion.
+      resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+        tenantId,
+        schoolId,
+        referenceDate: now,
+        onAbsent: 'nullWhenNoActiveYear',
       }),
     ]);
 

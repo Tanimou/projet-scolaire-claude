@@ -1,5 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { resolveActiveAcademicYear } from '@pilotage/contracts';
 import {
   buildImportCaches,
   resolveRowConflict,
@@ -20,6 +21,7 @@ import {
 import { Queue } from 'bullmq';
 import { parse, type ParseResult } from 'papaparse';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { type AuditActorProvenance } from '../../shared/audit/provenance';
 import { writeAudit } from '../../shared/audit/write-audit';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -111,7 +113,7 @@ export class ImportsService {
     );
     // Only warn (not block) — some headers are optional. Hard fail comes via per-row validation.
 
-    const caches = await this.buildCaches(schoolId);
+    const caches = await this.buildCaches(actor.tenantId, schoolId);
 
     // Create the batch row first so we can attach validation results
     const batch = await this.prisma.importBatch.create({
@@ -394,7 +396,7 @@ export class ImportsService {
     }
 
     const conflictFields = (row.conflictFields ?? []) as unknown as Prisma.JsonArray;
-    const caches = await this.buildCaches(batch.schoolId);
+    const caches = await this.buildCaches(batch.tenantId, batch.schoolId);
 
     const resolution = await this.prisma.$transaction(async (tx) => {
       const res = await resolveRowConflict({
@@ -504,8 +506,19 @@ export class ImportsService {
    * builder (E11-S1) so the validate path (here) and the worker apply path use
    * ONE implementation. Thin delegation kept so existing call sites are unchanged.
    */
-  private buildCaches(schoolId: string): Promise<ImportCaches> {
-    return buildImportCaches(this.prisma, schoolId);
+  private async buildCaches(tenantId: string, schoolId: string): Promise<ImportCaches> {
+    // S-E03-4 / PF-15 / ADR-070 — la résolution de l'année active est HISSÉE
+    // hors de `@pilotage/imports-core`, qui la faisait par `schoolId` SEUL (sans
+    // `tenantId`, sans `orderBy`) et dont le résultat est ÉCRIT dans les lignes
+    // `class_section` / `enrollment` créées par l'import. Elle passe désormais
+    // par le résolveur canonique : tenant-clé et totalement ordonné.
+    const activeYear = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+      tenantId,
+      schoolId,
+      referenceDate: new Date(),
+      onAbsent: 'nullWhenNoActiveYear',
+    });
+    return buildImportCaches(this.prisma, schoolId, activeYear?.id ?? null);
   }
 }
 

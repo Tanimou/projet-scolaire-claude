@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { resolveActiveAcademicYear } from '@pilotage/contracts';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 /**
@@ -29,9 +31,36 @@ export class SchoolContextService {
       if (!s) throw new NotFoundException('School not found in tenant');
     }
 
-    const ay = await this.prisma.academicYear.findFirst({
-      where: { schoolId, status: 'active' },
-      orderBy: { startDate: 'desc' },
+    // S-E03-4 / PF-15 / ADR-070 — LE site de la fuite de tenancy. Avant cette
+    // tranche, ce `where` était `{ schoolId, status: 'active' }` : `schoolId`
+    // SEUL, sans `tenantId`, dans le service que traversent les QUATRE portails
+    // (admin, teacher, parent, student).
+    //
+    // Honnêteté sur la portée, mesurée et non supposée : la fuite n'était pas
+    // ATTEIGNABLE par cette méthode aujourd'hui, parce que les deux branches
+    // au-dessus produisent toujours une école du tenant — la branche explicite
+    // valide l'appartenance et lève 404, la branche par défaut ne choisit que
+    // parmi les écoles du tenant. La correction retire la DÉPENDANCE à cette
+    // garde amont : la requête était juste par accident de son appelant, elle
+    // est désormais juste par construction.
+    //
+    // La RLS ne couvrait pas le trou et ne pouvait pas le couvrir :
+    // `academic_year` figure bien dans les policies
+    // (`20260813120000_tenant_rls_policies`), mais tout ce chemin tourne sur
+    // `PrismaService`, la connexion PROPRIÉTAIRE, où la RLS est contournée
+    // (vérifié sur la pile : `current_user = pilotage`, le rôle propriétaire).
+    //
+    // `tenantId` est maintenant un paramètre REQUIS du résolveur : le trou n'est
+    // plus seulement bouché, il est devenu inexprimable.
+    //
+    // Aucun avertissement de vétusté ici, DÉLIBÉRÉMENT : ce service tourne sur
+    // quasiment chaque requête authentifiée, un WARN par requête serait du bruit
+    // (les deux sites d'alertes, à basse fréquence, portent le signal — AC-6).
+    const ay = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+      tenantId,
+      schoolId,
+      referenceDate: new Date(),
+      onAbsent: 'nullWhenNoActiveYear',
     });
 
     return {

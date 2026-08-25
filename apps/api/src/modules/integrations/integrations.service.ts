@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { type AuditActionCode } from '@pilotage/contracts';
+import { resolveActiveAcademicYear, type AuditActionCode } from '@pilotage/contracts';
 import {
   buildImportCaches,
   getHandler,
@@ -12,6 +12,7 @@ import {
 import { ImportOrigin, ImportRowStatus, ImportStatus, ImportType, Prisma, RosterSourceKind, RosterSyncStatus } from '@prisma/client';
 
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { type AuditActorProvenance } from '../../shared/audit/provenance';
 import { writeAudit, type AuditTransactionClient } from '../../shared/audit/write-audit';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -260,7 +261,19 @@ export class IntegrationsService {
       //       `_`-prefixed placeholder ids from the persisted enrollments payload
       //       (FR1), so a placeholder UUID can never reach the DB; only the
       //       durable `studentExternalRef`/`className` anchors are stored.
-      const caches = await buildImportCaches(this.prisma, schoolId);
+      // S-E03-4 / PF-15 / ADR-070 — l'année active est résolue ICI (tenant-clé,
+      // totalement ordonnée) puis passée au constructeur de caches, qui ne la
+      // résout plus lui-même par `schoolId` seul. C'est le même `schoolId` que
+      // celui validé ci-dessus par `ctx.forTenant`, donc la portée est
+      // inchangée ; ce qui change est que `tenantId` figure enfin dans le
+      // `where` d'une valeur qui finit ÉCRITE dans les lignes importées.
+      const activeYear = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+        tenantId: actor.tenantId,
+        schoolId,
+        referenceDate: new Date(),
+        onAbsent: 'nullWhenNoActiveYear',
+      });
+      const caches = await buildImportCaches(this.prisma, schoolId, activeYear?.id ?? null);
       const importCtx: ImportContext = { tenantId: actor.tenantId, schoolId, caches };
 
       const produced: SyncResult['batches'] = [];

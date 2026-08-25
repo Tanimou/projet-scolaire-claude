@@ -117,7 +117,30 @@ function makeService(
     subject: { findMany: jest.fn().mockResolvedValue([]) },
     classSection: { findMany: jest.fn().mockResolvedValue(opts.classSections ?? []) },
     guardian: { findMany: jest.fn().mockResolvedValue([]) },
-    academicYear: { findFirst: jest.fn().mockResolvedValue(opts.activeYear === undefined ? null : opts.activeYear) },
+    // S-E03-4 / ADR-070 — la résolution de l'année active passe désormais par le
+    // résolveur canonique : `findMany`, ordre TOTAL `[startDate desc, id desc]`,
+    // `tenantId` OBLIGATOIRE dans le `where`. Le fake rend donc une LIGNE
+    // COMPLÈTE — le résolveur calcule la vétusté et la couverture de la date de
+    // référence dessus, un `{ id }` nu le ferait planter.
+    academicYear: {
+      findMany: jest.fn().mockImplementation(() => {
+        const year = opts.activeYear === undefined ? null : opts.activeYear;
+        return Promise.resolve(
+          year
+            ? [
+                {
+                  id: year.id,
+                  schoolId: SCHOOL,
+                  name: '2025-2026',
+                  startDate: new Date('2025-09-01T00:00:00.000Z'),
+                  endDate: new Date('2026-07-05T00:00:00.000Z'),
+                  status: 'active',
+                },
+              ]
+            : [],
+        );
+      }),
+    },
     // E11-S4 (FR3/AC-3) — the SIS-delete divergence reads the school's
     // externalRef-carrying students. `buildImportCaches` also reads students
     // (no externalRef filter); we return the managed set for both — the

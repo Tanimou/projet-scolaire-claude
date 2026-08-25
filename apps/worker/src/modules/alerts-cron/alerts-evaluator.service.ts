@@ -1,8 +1,10 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { resolveActiveAcademicYear } from '@pilotage/contracts';
 import type { AlertRuleCode, AlertSeverity, NotificationSeverity, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { QUEUE_NOTIFICATIONS_EMAIL } from '../../shared/queue/queue.module';
 import { evaluateHighAbsence } from '../alerts-rules/high-absence.rule';
@@ -75,15 +77,28 @@ export class AlertsEvaluatorService {
     if (rules.length === 0)
       return { rulesRun: 0, detected: 0, createdInstances: 0, notified: 0 };
 
-    const activeYear = await this.prisma.academicYear.findFirst({
-      where: {
-        tenantId: args.tenantId,
-        status: 'active',
-        ...(args.schoolId ? { schoolId: args.schoolId } : {}),
-      },
-      orderBy: { startDate: 'desc' },
-      select: { id: true },
+    // S-E03-4 / ADR-070 — résolution CANONIQUE, hissée une seule fois hors de la
+    // boucle de règles (inchangé : une requête par évaluation, jamais N+1).
+    const referenceDate = new Date();
+    const activeYear = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+      tenantId: args.tenantId,
+      ...(args.schoolId ? { schoolId: args.schoolId } : {}),
+      referenceDate,
+      onAbsent: 'nullWhenNoActiveYear',
     });
+
+    // PF-15 — la vétusté est REMONTÉE, pas masquée (jumeau du site API
+    // `alerts.service.ts`). Le cron d'alertes est à basse fréquence : un
+    // avertissement structuré y est gratuit et c'est le seul endroit où une
+    // année active périmée devient visible sans changer une réponse d'API.
+    if (activeYear?.isStale) {
+      this.logger.warn(
+        `[PF-15] Année scolaire active vétuste — tenantId=${args.tenantId} ` +
+          `schoolId=${activeYear.schoolId} academicYearId=${activeYear.id} ` +
+          `endDate=${activeYear.endDate.toISOString()} referenceDate=${referenceDate.toISOString()} ` +
+          `staleByDays=${activeYear.staleByDays} activeCount=${activeYear.activeCount}`,
+      );
+    }
 
     let detected = 0;
     let created = 0;

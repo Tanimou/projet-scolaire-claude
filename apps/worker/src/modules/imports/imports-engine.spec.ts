@@ -1124,7 +1124,13 @@ describe('imports-core enrollments handler — grade-level disambiguation (E11 p
       },
       student: { findMany: jest.fn().mockResolvedValue([]) },
       guardian: { findMany: jest.fn().mockResolvedValue([]) },
-      academicYear: { findFirst: jest.fn().mockResolvedValue({ id: AY }) },
+      // S-E03-4 / PF-15 — plus AUCUN délégué `academicYear` ici : le constructeur
+      // de caches ne résout plus l'année active lui-même. Il la résolvait par
+      // `schoolId` SEUL (sans `tenantId`, sans `orderBy`) et son résultat est
+      // ÉCRIT dans les `class_section` / `enrollment` créés par l'import. La
+      // résolution est hissée chez les trois appelants, qui tiennent `tenantId`
+      // et passent par le résolveur canonique. Si le délégué revenait ici, ce
+      // fake redeviendrait un faux vert.
     } as never;
   }
 
@@ -1137,6 +1143,7 @@ describe('imports-core enrollments handler — grade-level disambiguation (E11 p
         { id: 'cls-5eB', name: '5eB', gradeLevelId: 'gl-5' },
       ]),
       'school-1',
+      AY,
     );
 
     expect(caches.classSectionsByNameAmbiguous.has(`${AY}:6ea`)).toBe(true);

@@ -2240,13 +2240,12 @@ const ENUMERATED_OUTSIDE_SCOPE = Object.freeze([
           '`forTenant` picks the school a request runs in; it is the input to the scope, so it cannot ' +
           'be issued from within one',
       }),
-      Object.freeze({
-        model: 'academicYear',
-        verb: 'findFirst',
-        reason:
-          'resolves the ACTIVE academic year for that school in the same pre-scope breath — the ' +
-          'callers of `forTenant` destructure both from one call',
-      }),
+      // S-E03-4 / PF-15 / ADR-070 — l'entrée `academicYear.findFirst` qui vivait
+      // ICI est SUPPRIMÉE, pas réécrite : `forTenant` ne résout plus l'année
+      // scolaire à la main, il appelle `resolveActiveAcademicYear`. Garder
+      // l'excuse aurait été une « entrée morte », et le contrôle AC-9 dit
+      // exactement pourquoi c'est la direction dangereuse — une dispense
+      // survivant au code qu'elle dispensait élargit la liste en silence.
       Object.freeze({
         model: 'school',
         verb: 'findFirst',
@@ -2424,14 +2423,13 @@ const ENUMERATED_OUTSIDE_SCOPE = Object.freeze([
           '`evaluateAll` reads the ENABLED rules that seed the batch. Opening a scope here would ' +
           'hold one app-pool connection for the whole cron fan-out, not for a request',
       }),
-      Object.freeze({
-        model: 'academicYear',
-        verb: 'findFirst',
-        reason:
-          'the active-year resolution `evaluateAll` hands DOWN to every rule evaluator — it is read ' +
-          'once outside the loop precisely so it is not re-read inside it, and it belongs to the ' +
-          'same unbounded unit of work as the rules it parameterises',
-      }),
+      // S-E03-4 / PF-15 / ADR-070 — entrée `academicYear.findFirst` SUPPRIMÉE.
+      // `evaluateAll` hisse toujours la résolution hors de la boucle — la raison
+      // qui figurait ici reste vraie de la FORME du code — mais elle passe
+      // désormais par `resolveActiveAcademicYear`, donc le scan n'observe plus
+      // aucun `academicYear.findFirst` dans ce fichier. Une dispense pour un
+      // statement qui n'existe plus est une ENTRÉE MORTE : AC-9 la refuse dans
+      // les deux sens, et c'est le sens qui élargit la liste en silence.
       Object.freeze({
         model: 'alertInstance',
         verb: 'findFirst',

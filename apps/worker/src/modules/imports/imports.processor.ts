@@ -1,5 +1,6 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
+import { resolveActiveAcademicYear } from '@pilotage/contracts';
 import {
   applyBatchRows,
   buildImportCaches,
@@ -11,6 +12,7 @@ import {
 import { ImportStatus, type ImportMode } from '@prisma/client';
 import type { Job } from 'bullmq';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import {
   observeJobCompleted,
   observeJobFailed,
@@ -196,7 +198,17 @@ export class ImportsProcessor extends WorkerHost {
       },
     });
 
-    const caches = await buildImportCaches(this.prisma, batch.schoolId);
+    // S-E03-4 / PF-15 / ADR-070 — l'APPLY est le chemin où la valeur est ÉCRITE :
+    // `activeAcademicYearId` finit dans les `class_section` / `enrollment` créés.
+    // Elle est donc résolue ici par le résolveur canonique — tenant-clé, ordre
+    // total — au lieu de l'être par `schoolId` seul dans `@pilotage/imports-core`.
+    const activeYear = await resolveActiveAcademicYear(prismaAcademicYearReader(this.prisma), {
+      tenantId,
+      schoolId: batch.schoolId,
+      referenceDate: new Date(),
+      onAbsent: 'nullWhenNoActiveYear',
+    });
+    const caches = await buildImportCaches(this.prisma, batch.schoolId, activeYear?.id ?? null);
     const engineRows: EngineRow[] = batch.rows.map((r) => ({
       id: r.id,
       rowIndex: r.rowIndex,

@@ -200,6 +200,24 @@ function matches(row: Row, where: Record<string, unknown> | undefined): boolean 
 
 type Statement = { model: string; verb: string; where: Record<string, unknown> };
 
+/**
+ * S-E03-4 / ADR-070 — `listActiveAcademicYears` calcule la vétusté et la
+ * couverture de la date de référence sur CHAQUE ligne rendue : un `{ id }` nu ne
+ * suffit plus, la ligne doit porter `schoolId` / `name` / `startDate` /
+ * `endDate` / `status`. Ce complément préserve les identifiants attendus par les
+ * assertions existantes.
+ */
+function academicYearRow(id: string) {
+  return {
+    id,
+    schoolId: SCHOOL_A,
+    name: '2025-2026',
+    startDate: new Date('2025-09-01T00:00:00.000Z'),
+    endDate: new Date('2026-07-05T00:00:00.000Z'),
+    status: 'active',
+  };
+}
+
 function makeHarness(options?: { activeYears?: { id: string }[] }) {
   const db = seed();
   const seen: Statement[] = [];
@@ -282,7 +300,7 @@ function makeHarness(options?: { activeYears?: { id: string }[] }) {
     subject: readModel('subject'),
     subjectCoefficient: { findMany: coefficientFindMany },
     academicYear: {
-      findMany: jest.fn(async () => options?.activeYears ?? []),
+      findMany: jest.fn(async () => (options?.activeYears ?? []).map((y) => academicYearRow(y.id))),
     },
     snapshotRecomputeTrigger: { upsert: triggerUpsert },
   };

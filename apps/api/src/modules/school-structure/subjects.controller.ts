@@ -15,7 +15,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { snapshotCoalesceKey } from '@pilotage/contracts';
+import { listActiveAcademicYears, snapshotCoalesceKey } from '@pilotage/contracts';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -30,6 +30,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import {
   type ClientHintsRequest,
   extractAuditClientHints,
@@ -378,11 +379,19 @@ export class SubjectsController {
     // (recompute is derived bookkeeping — the coefficient.upsert audit is untouched).
     try {
       const subjectIds = [...new Set(body.entries.map((e) => e.subjectId))];
-      const activeYears = await this.prisma.academicYear.findMany({
-        where: { tenantId: me.tenantId, status: 'active' },
-        select: { id: true },
-      });
       const now = new Date();
+      // S-E03-4 / ADR-070 — CONVERTI, pas exempté. C'est le seul site qui suppose
+      // la MULTIPLICITÉ des années actives, et il a raison : rien, ni au schéma
+      // ni au code, ne garantit « au plus une année active par école »
+      // (PF-328). L'écraser en une année unique arrêterait silencieusement le
+      // fan-out de recompute des autres années actives — les moyennes se
+      // périment SANS aucune erreur nulle part. `listActiveAcademicYears`
+      // applique le MÊME `tenantId` requis et le MÊME ordre total, donc le
+      // cliquet n'a besoin d'aucune allowlist.
+      const activeYears = await listActiveAcademicYears(prismaAcademicYearReader(this.prisma), {
+        tenantId: me.tenantId,
+        referenceDate: now,
+      });
       for (const subjectId of subjectIds) {
         for (const year of activeYears) {
           const scope = { subjectId, academicYearId: year.id };

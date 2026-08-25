@@ -9,16 +9,63 @@ import { type ImportCaches } from './handler.types';
  */
 type CachePrisma = Pick<
   PrismaClient,
-  'gradeLevel' | 'subject' | 'classSection' | 'student' | 'guardian' | 'academicYear'
+  'gradeLevel' | 'subject' | 'classSection' | 'student' | 'guardian'
 >;
 
 /**
  * Build the per-batch O(1) lookup caches. Relocated verbatim from
  * `ImportsService.buildCaches` so the validate path (API) and the async apply
  * path (worker) build identical caches from ONE implementation.
+ *
+ * S-E03-4 / PF-15 / ADR-070 — `activeAcademicYearId` IS NOW PASSED IN, and that
+ * is the whole point.
+ *
+ * This function used to resolve it itself:
+ *
+ *     prisma.academicYear.findFirst({ where: { schoolId, status: 'active' } })
+ *
+ * `schoolId` alone — **no `tenantId`, no `orderBy`** — i.e. byte-for-byte the
+ * same defect as `school-context.service.ts:32`, but WORSE, because the result
+ * is not merely reported: it becomes `ImportCaches.activeAcademicYearId`, which
+ * `handlers/classes.handler.ts` and `handlers/enrollments.handler.ts` write into
+ * new `class_section` and `enrollment` rows. A wrong resolution here does not
+ * misreport a count; it PERSISTS one. RLS did not cover it either — this path
+ * runs on `PrismaService`, the OWNER connection, where RLS is bypassed.
+ *
+ * It is hoisted rather than converted in place: `@pilotage/imports-core` would
+ * otherwise need `@pilotage/contracts` as a dependency, which means a
+ * `package.json` + `pnpm-lock.yaml` + two production Dockerfile edits that NO
+ * agent in this run is allowed to build and verify. Hoisting closes the
+ * ACADEMIC-YEAR tenancy defect at the three callers — all of which hold
+ * `tenantId` — costs this package NO new dependency, and leaves zero
+ * `academicYear` reads in `packages/**`, so the S-E03-4 ratchet needs no
+ * allowlist for it.
+ *
+ * READ THAT CLAIM NARROWLY — IT IS ONE QUERY, NOT THIS FUNCTION.
+ * -------------------------------------------------------------
+ * An earlier draft of this header said hoisting "closes the tenancy defect at
+ * the three callers", full stop. That was an overclaim, and the kind this
+ * repository has been burned by: the FIVE sibling reads immediately below —
+ * `gradeLevel`, `subject`, `classSection`, `student`, `guardian` — are still
+ * scoped by `schoolId` ALONE, on the same owner connection, and they feed the
+ * matching and dedup decisions of the import WRITE path. They are correct for
+ * the same reason the academic-year read was correct before this slice: their
+ * caller happens to pass a school of the right tenant. That is correctness by
+ * accident of the caller, which is exactly what `ADR-002` exists to remove.
+ * Applying `ADR-070`'s own standard to them is a separate slice with its own
+ * evidence; recorded as `PF-334`, deliberately NOT fixed here.
+ *
+ * @param activeAcademicYearId resolved by the CALLER through the canonical
+ *   `resolveActiveAcademicYear` (tenant-keyed, totally ordered). `null` when the
+ *   (tenant, school) has no active year — exactly what the old `ay?.id ?? null`
+ *   produced.
  */
-export async function buildImportCaches(prisma: CachePrisma, schoolId: string): Promise<ImportCaches> {
-  const [levels, subjects, classes, students, guardians, ay] = await Promise.all([
+export async function buildImportCaches(
+  prisma: CachePrisma,
+  schoolId: string,
+  activeAcademicYearId: string | null,
+): Promise<ImportCaches> {
+  const [levels, subjects, classes, students, guardians] = await Promise.all([
     prisma.gradeLevel.findMany({ where: { schoolId } }),
     prisma.subject.findMany({ where: { schoolId } }),
     prisma.classSection.findMany({
@@ -50,7 +97,6 @@ export async function buildImportCaches(prisma: CachePrisma, schoolId: string): 
       where: { schoolId, email: { not: null } },
       select: { id: true, firstName: true, lastName: true, email: true },
     }),
-    prisma.academicYear.findFirst({ where: { schoolId, status: 'active' } }),
   ]);
 
   const gradeLevelsByCode = new Map<string, { id: string; name: string }>();
@@ -125,6 +171,6 @@ export async function buildImportCaches(prisma: CachePrisma, schoolId: string): 
     studentExternalRefs,
     studentsByExternalRef,
     guardiansByEmail,
-    activeAcademicYearId: ay?.id ?? null,
+    activeAcademicYearId,
   };
 }

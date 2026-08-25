@@ -41,6 +41,20 @@ function grade(opts: {
  * `grade.findMany`, `terms` par `term.findMany`, `enrollments` par
  * `enrollment.findMany`. L'année active est toujours résolue ('ay1').
  */
+/**
+ * S-E03-4 / ADR-070 — le résolveur canonique interroge `findMany` (ordre TOTAL
+ * `[startDate desc, id desc]`, `tenantId` obligatoire) et non plus `findFirst`,
+ * et il calcule la vétusté sur la LIGNE : un `{ id }` nu ne suffit plus.
+ */
+const ACTIVE_YEAR_ROW = {
+  id: 'ay1',
+  schoolId: 's1',
+  name: '2025-2026',
+  startDate: new Date('2025-09-01T00:00:00.000Z'),
+  endDate: new Date('2026-07-05T00:00:00.000Z'),
+  status: 'active',
+};
+
 function makeService(opts: {
   grades?: unknown[];
   terms?: Array<{ id: string; name: string; orderIndex: number }>;
@@ -48,7 +62,7 @@ function makeService(opts: {
 }) {
   const prisma = {
     academicYear: {
-      findFirst: jest.fn().mockResolvedValue({ id: 'ay1' }),
+      findMany: jest.fn().mockResolvedValue([ACTIVE_YEAR_ROW]),
     },
     term: {
       findMany: jest.fn().mockResolvedValue(opts.terms ?? []),
@@ -108,7 +122,7 @@ describe('SchoolPerformanceDrilldownService — seuil de réussite (≥10/20 par
 
   it('renvoie un payload vide cohérent quand aucune année active', async () => {
     const { service, prisma } = makeService({ grades: [] });
-    prisma.academicYear.findFirst.mockResolvedValue(null);
+    prisma.academicYear.findMany.mockResolvedValue([]);
 
     const res = await service.drilldown({ tenantId: 't1', schoolId: 's1' });
     expect(res.level).toBe('cycle');
@@ -191,7 +205,7 @@ describe('SchoolPerformanceDrilldownService — niveau élève (L4)', () => {
     ];
 
     const prisma = {
-      academicYear: { findFirst: jest.fn().mockResolvedValue({ id: 'ay1' }) },
+      academicYear: { findMany: jest.fn().mockResolvedValue([ACTIVE_YEAR_ROW]) },
       term: { findMany: jest.fn().mockResolvedValue([]) },
       enrollment: { findMany: jest.fn().mockResolvedValue(enrollments) },
       grade: {
