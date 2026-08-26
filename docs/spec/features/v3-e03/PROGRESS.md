@@ -5,7 +5,7 @@
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
 **Status (2026-08-26)** `in-progress` — **SEVEN slices landed, and there was none before 2026-08-25.**
-`S-E03-6` (run 88 — `PF-24` **advanced and NOT closed**: the snapshot drain can now reach a terminal state on
+`S-E03-6` (run 89 — `PF-24` **advanced and NOT closed**: the snapshot drain can now reach a terminal state on
 the *second* recompute of a scope, so `recomputing` can stop pinning true — but **nothing has been executed
 against Postgres**, the slice ships **no story spec and no ADR** (`PF-386`), and the fix removes the table's
 only — accidental — retention bound (`PF-380`, the blocking merge condition the escalation panel named)).
@@ -67,8 +67,8 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-3b`** — the parent attachment panel projects from the FACT (`Guardianship`), with `GuardianshipClaim` as provenance only | **closes `PF-357`**; **advances `PF-12`** — still NOT closed (`ADR-073 §D11` re-check failed); raises `PF-367`…`PF-371` | ⚠️ **2026-08-26, run 84 — landed needing human review (NOT auto-merged), P1 `[truth][security]`** |
 | **`S-E03-3c`** — ONE guardianship liveness predicate, and a delete guard whose own remedy could never unblock it | **closes `PF-358`**; **advances `PF-12`** — still NOT closed; raises `PF-372`…`PF-376` | ⚠️ **2026-08-26, run 85 — landed needing human review, P1 `[truth]`** |
 | **`S-E03-5`** — « combien de demandes de rattachement attendent l’admin, et la page où j’atterris dit-elle la même chose » becomes ONE derivation | **closes `PF-373`**; **advances `PF-20`** — NOT closed (the « alertes » half is `PF-378`) and **advances `PF-371`**; raises `PF-377`…`PF-379` | ⚠️ **2026-08-26, run 86 — landed needing human review, P1 `[truth]`** |
-| **`S-E03-6`** — a snapshot recompute trigger can reach a terminal state on the **second** recompute of a scope | **advances `PF-24`** — NOT closed (no executed proof against Postgres); raises `PF-380`…`PF-388` | ⚠️ **2026-08-26, run 88 — needs human review, P1 `[truth][worker][schema-adjacent]`. NOT auto-merge: `PF-380` is a blocking merge condition and `PF-381` is a NO-GO from the test-architect (two NEW red tests).** |
-| `S-E03-1`, `S-E03-8`, `S-E03-9`… | `PF-40`, `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86 and `S-E03-6` at run 88: all three were implemented and landed — but only the first two were authored as stories, under `docs/spec/features/v3-e03/stories/`. **`S-E03-6` has no story file at all**, which is `PF-387`.) |
+| **`S-E03-6`** — a snapshot recompute trigger can reach a terminal state on the **second** recompute of a scope | **advances `PF-24`** — NOT closed (no executed proof against Postgres); raises `PF-380`…`PF-388` | ⚠️ **2026-08-26, run 89 — needs human review, P1 `[truth][worker][schema-adjacent]`. NOT auto-merge: `PF-380` is a blocking merge condition.** (`PF-381`, the test-architect's NO-GO, was raised AND closed inside the run: the mechanism evidence it prescribed was built at the land pass, a fourth conflict site — the claim — was found and fixed there, and the test excess is back to zero.) |
+| `S-E03-1`, `S-E03-8`, `S-E03-9`… | `PF-40`, `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86 and `S-E03-6` at run 89: all three were implemented and landed — but only the first two were authored as stories, under `docs/spec/features/v3-e03/stories/`. **`S-E03-6` has no story file at all**, which is `PF-387`.) |
 
 ---
 
@@ -917,7 +917,8 @@ couture d'autorisation, donc la sonde live n'est pas requise — mais l'absence 
 
 **Slice id** `S-E03-6` · **Finding** `PF-24` — **advanced, NOT closed** · **Gates** G-TRUTH
 **Diff** 5 files, +246 / −30 · **No migration, no `schema.prisma` change, no `apps/web` file, no new endpoint**
-**Read the four caveats below before quoting any of this as done.**
+**Read the four caveats below before quoting any of this as done — two of them were resolved at the land pass of
+this same run, and the annotations say which.**
 
 ### What was actually wrong
 
@@ -964,13 +965,29 @@ per-tenant catch, silently abandoning the rest of that tenant's batch for the ti
    `schema.prisma:1927` asserts these rows are *"routinely aged out"* — grepped: the only delete on this table in
    the entire repository is the new redundant-row drop. A per-child grading-activity ledger outside audit-log
    governance is a `GUARDRAILS §1` data-minimisation defect. **This is the blocking merge condition.**
-2. **`PF-381` — the test-architect returned NO-GO.** `npx jest snapshot-recompute.spec.ts` = **38 tests, 7 failed**:
-   5 are baselined in `scripts/known-test-failures.json`, **2 are new** and caused by stale harness mocks that
-   omit `coalesceKey`. Consequence: `reviveFailedTriggers` — which this diff rewrote — is now **entirely
-   unexercised**, and the new `catch (settleErr)` **masked a crash** the first time it ran in anger.
-3. **The five new tests are pure string algebra on the two helpers.** They pin the *derivation* and pin nothing
-   about the *mechanism*: they would stay green through a full re-introduction of `PF-24`. The derivation is
-   over-pinned; the fix is unpinned.
+2. ~~**`PF-381` — the test-architect returned NO-GO.**~~ **RESOLVED at the land pass of this same run.** Both new
+   reds were stale harness mocks omitting `coalesceKey`, which the production `select` reads — a harness artefact,
+   not a production NPE (`coalesceKey` is non-nullable). Both repaired; `npx jest snapshot` in `apps/worker` is now
+   **45 tests, 40 passed, 5 failed — all five the baselined `PF-65` rows, 0 excess**. `reviveFailedTriggers` is
+   exercised again, and its test now also asserts the canonical restore.
+3. ~~**The five new tests are pure string algebra on the two helpers.**~~ **RESOLVED at the land pass.**
+   `snapshot-trigger-conflict.spec.ts` supplies the missing mechanism evidence: an in-memory
+   `snapshot_recompute_trigger` that genuinely **enforces** `@@unique([tenantId, coalesceKey, status])` and raises
+   a Prisma-shaped `P2002`, validating every candidate row of an `updateMany` before mutating any so Prisma's
+   all-or-nothing statement semantics — the thing that made "one bad row aborts the sweep" possible — are
+   reproduced rather than assumed. **The positive control is the first test in the file**, so nothing after it can
+   be vacuous. Seven cases: `AC-1` (two successive recomputes of one scope both reach `done`), `AC-1b` (a legacy
+   canonical-keyed `done` row does not wedge the next recompute — nothing migrates those rows), `AC-2a/b/c` (one
+   conflicting row never aborts a pass), `AC-3` (a revived row returns under the canonical key). **Each was proven
+   RED against a re-introduced defect, and the reds DISCRIMINATE between sites:** removing the terminal-key
+   mangling reddens three of the seven; removing the claim guard reddens `AC-2a` and nothing else.
+   **A FOURTH conflict site was found here and fixed: the CLAIM `pending → processing`.** The sprint made the three
+   settles collision-safe and left the claim alone — but `processing` must keep the CANONICAL key (the row is still
+   the live one for its scope), so claiming a pending row while an EARLIER row for the same scope is still
+   `processing` raises P2002, in exactly the window the fix's own comments describe. That call sits *before* the
+   `try`, so its P2002 escaped `drainTenant` and abandoned the rest of the tenant's batch — the same blast radius
+   the settle fix had just closed. A colliding claim has by definition lost the race, so it is now treated exactly
+   as `claim.count === 0` already was.
 4. **No story spec, no ADR** (`PF-387`, `PF-386`). Every sibling slice shipped one (`ADR-070`…`075`); a
    canonical-vs-terminal key convention on a shared contracts key format consumed by both API and worker is
    exactly the cross-cutting decision `GUARDRAILS §2` makes blocking.
@@ -994,9 +1011,10 @@ because they are the same missing thing — an executed proof against a bounded 
    now() - TTL`), same shape as `FAILED_REVIVE_TAKE`; the `@@index([tenantId, status, enqueuedAt])` already
    supports it. Plus `settleTrigger(trigger, 'done', { lastError: null })` — today a 500-char exception message
    survives forever on a `done` row (`PF-383`).
-2. **`PF-381`** — one service-level test on `drainTenant` driving the **second** recompute of a scope against a
-   fake that actually **enforces** `@@unique([tenantId, coalesceKey, status])`, with the positive control
-   proving the fake bites. Repair the two stale harnesses in the same pass and re-run to **0 excess**.
+2. ~~**`PF-381`**~~ — **done at run 89's land pass, not deferred to `6b`**: `snapshot-trigger-conflict.spec.ts`,
+   the positive control, the two repaired harnesses, 0 excess. What `6b` still owes on this axis is the part a
+   fake cannot supply — **the same scenario executed against a real Postgres**, which is also the only thing
+   standing between `PF-24` and `closed`.
 
 Then `PF-382` (restore the status predicate `requeueCanonical` dropped) — a one-line `where` addition that can
 ride along. **`PF-378`** (the « alertes » half of `PF-20`) remains the ranked successor *after* that, unchanged
@@ -1005,4 +1023,4 @@ from run 86's pointer.
 **Still owed for `V3-E03`, unchanged and now seven slices old:** an **`epic-spec` run**. Two slices have now
 shipped without a story file at all (`PF-387`), which is the same gap widening.
 
-*(Written 2026-08-26, `S-E03-6` land pass, run 88. Later slices: annotate, do not delete.)*
+*(Written 2026-08-26, `S-E03-6` land pass, run 89. Later slices: annotate, do not delete.)*
