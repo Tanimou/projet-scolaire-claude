@@ -606,14 +606,35 @@ describe('R-C — aucune relation `guardianships` n’épelle le statut en litt�
  * ================================================================== */
 
 describe('ce que ce cliquet NE ferme PAS, assis explicitement', () => {
-  it('la famille `pending` de l’analytique existe toujours (PF-373, hors portée)', () => {
-    // Elle compte « ce qui attend une décision », pas « ce qui est vivant ».
-    // La rabattre ici changerait un KPI sans rien fermer. Ce test échouera le
-    // jour où elle disparaîtra — ce qui est le signal de mettre `PF-373` à jour,
-    // et non de supprimer ce test.
+  it('la famille `pending` de l’analytique est désormais DÉRIVÉE (PF-373 CLOSED)', () => {
+    // CE TEST A ÉTÉ INVERSÉ, PAS SUPPRIMÉ — S-E03-5 / ADR-075.
+    //
+    // Il assenait auparavant que `analytics.service.ts` PORTAIT ENCORE le
+    // littéral `status: 'pending'`, comme garde d'anti-vacuité sur un résidu
+    // que S-E03-3c avait délibérément laissé hors portée (`PF-373`). Son propre
+    // commentaire annonçait la suite : « ce test échouera le jour où elle
+    // disparaîtra — ce qui est le signal de mettre PF-373 à jour, et non de
+    // supprimer ce test ».
+    //
+    // Ce jour est arrivé. S-E03-5 convertit les trois sites (`:2472` le KPI,
+    // `:2932` l'aperçu du centre d'action, `:3028` son compte) plus la courbe
+    // `sparkline`, vers `guardianshipPendingRequestWhere()`. Le test est donc
+    // retourné en son INVERSE — la famille existe toujours, mais elle est
+    // dérivée — plutôt que retiré. Le retirer aurait été la sortie que sa
+    // propre note interdisait, et aurait rendu la conversion invisible au
+    // prochain lecteur de ce fichier.
+    //
+    // L'ENFORCEMENT vit désormais dans le cliquet frère
+    // `guardianship-pending-request-derivation-gate.spec.ts` (R-A / R-B / R-C,
+    // sur quatre racines dont `apps/web`). Ce test-ci en est l'écho local : il
+    // dit au lecteur de CE fichier que le résidu qu'il connaissait est fermé.
     const analytics = CLASSIFIED.get('apps/api/src/modules/analytics/analytics.service.ts');
     expect(analytics).toBeDefined();
-    expect(analytics!.source).toContain("status: 'pending'");
+    expect(analytics!.source).toContain('guardianshipPendingRequestWhere');
+    // Mesuré à zéro le 2026-08-26, après conversion. Les `status: { in:
+    // ['pending', 'processing'] }` des files d'export/import portent une AUTRE
+    // colonne, sur un AUTRE modèle, et ne satisfont pas ce littéral.
+    expect(analytics!.source).not.toContain("status: 'pending'");
   });
 
   it('le foyer du prédicat n’importe PAS Prisma (GUARDRAILS §2)', () => {

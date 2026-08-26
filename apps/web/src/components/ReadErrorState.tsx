@@ -7,7 +7,18 @@ import { useTransition, type ComponentType } from 'react';
 
 /**
  * ReadErrorState — le rendu honnête d'une **lecture qui a échoué** dans une
- * page serveur du portail parent (S-E03-2 / PF-05).
+ * page serveur, quel que soit le portail (S-E03-2 / PF-05).
+ *
+ * **Pourquoi il vit dans `@/components` et non dans `app/parent/_components`.**
+ * Il y est né (S-E03-2) parce que ses deux premiers appelants étaient des pages
+ * parent. Mais « une lecture échouée n'est jamais un fait du domaine » n'a rien
+ * de propre au portail parent : `/admin/enrollments` porte le même défaut, et
+ * l'importer depuis `app/parent/_components` aurait franchi une frontière de
+ * groupe de routes (GUARDRAILS §2, « keep a feature inside its portal route
+ * group ») ou forcé une seconde copie — donc une dérive. Le fichier est
+ * remonté d'un cran, sans qu'une ligne de markup ni une prop ne changent ; ce
+ * n'est PAS une primitive de `packages/ui` (qui appartient au DS Guardian),
+ * c'est du markup applicatif transverse, comme `@/components/meeting-requests`.
  *
  * **Pourquoi ce composant existe.** `ErrorState` (`@pilotage/ui`) expose
  * `onRetry: () => void`. Une fonction ne franchit pas la frontière

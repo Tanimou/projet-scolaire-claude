@@ -14,8 +14,8 @@ import { useState, useTransition, type ReactNode } from 'react';
 
 import { ChildClaimDrawer } from './ChildClaimDrawer';
 
-import { ReadErrorState } from '@/app/parent/_components/ReadErrorState';
 import { withdrawChildClaimAction } from '@/app/parent/children/claim-actions';
+import { ReadErrorState } from '@/components/ReadErrorState';
 import type {
   ChildLinksView,
   ParentChildLinkRow,

@@ -10,6 +10,7 @@ import {
   compareParentChildLinkRows,
   deriveParentChildLinkState,
   guardianshipLiveWhere,
+  isGuardianshipAwaitingDecision,
   isNameableForGuardian,
   mayProjectChildIdentity,
 } from '@pilotage/contracts';
@@ -237,7 +238,20 @@ export class ChildClaimsService {
     }
 
     // Already a pending link with an open claim → return the uniform response (no dup row).
-    if (existingLink && existingLink.status === 'pending') {
+    //
+    // S-E03-5 / ADR-075 §D6 / `link-liveness.ts` §2.7.5 — C'EST LA MÊME QUESTION QUE LE KPI ADMIN, POSÉE
+    // DEPUIS LE PORTAIL PARENT : « une demande de rattachement attend-elle déjà
+    // une décision ? ». Corriger le `where` côté base sans corriger le pendant
+    // en mémoire déplacerait la contradiction de Postgres vers le processus —
+    // la leçon de `dedupKey()` (ADR-068 §3). La conversion est un no-op de
+    // valeur : le prédicat rend `['pending'].includes(status)`.
+    //
+    // ⚠ La ligne juste au-dessus (`status === 'active'`) pose une question
+    // DIFFÉRENTE — la VIVACITÉ, §2.2 — dont le prédicat est `isLiveGuardianship`.
+    // Elle n'est pas convertie ici : elle appartient au résidu de S-E03-3c, et
+    // la mélanger à celle-ci ferait croire aux deux lecteurs suivants qu'il n'y
+    // a qu'une seule question.
+    if (existingLink && isGuardianshipAwaitingDecision(existingLink)) {
       const openClaim = await this.prisma.guardianshipClaim.findFirst({
         where: { guardianshipId: existingLink.id, status: 'submitted' },
       });
