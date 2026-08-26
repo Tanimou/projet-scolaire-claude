@@ -1,3 +1,4 @@
+import type { GuardianshipLinkStatus } from '@pilotage/contracts';
 import {
   AvatarNameCell,
   EmptyState,
@@ -33,7 +34,14 @@ interface GuardianItem {
     id: string;
     relationship: string;
     isPrimaryContact: boolean;
-    status: 'pending' | 'active' | 'revoked';
+    /**
+     * `GuardianshipLinkStatus` (`@pilotage/contracts`), et non plus une union
+     * des trois littéraux réécrite ici à la main (S-E03-5, classe `PF-371`).
+     * Le contrat tient cette liste byte-identique à l'énum de `schema.prisma`
+     * par un cliquet ; un miroir local, lui, ne le remarquerait pas — et il
+     * n'aurait de toute façon rien à comparer pour le remarquer.
+     */
+    status: GuardianshipLinkStatus;
     student: { id: string; firstName: string; lastName: string };
   }>;
 }

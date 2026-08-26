@@ -11,7 +11,6 @@ import { Award, FilterX, GraduationCap, Sparkles, TrendingUp, Users } from 'luci
 import type { Metadata } from 'next';
 
 import { ChildSelector } from '../_components/ChildSelector';
-import { ReadErrorState } from '../_components/ReadErrorState';
 
 import { GradeRow } from './GradeRow';
 import { GradesExport, type GradeExportRow } from './GradesExport';
@@ -28,6 +27,7 @@ import type {
 } from './types';
 
 import { PortalShell } from '@/components/PortalShell';
+import { ReadErrorState } from '@/components/ReadErrorState';
 import { api } from '@/lib/api-client';
 import { isAccessDenied, read } from '@/lib/read-result';
 

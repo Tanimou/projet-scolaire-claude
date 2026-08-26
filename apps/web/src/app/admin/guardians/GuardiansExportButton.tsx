@@ -1,5 +1,6 @@
 'use client';
 
+import type { GuardianshipLinkStatus } from '@pilotage/contracts';
 import { Download } from 'lucide-react';
 import { useCallback } from 'react';
 
@@ -15,7 +16,8 @@ export interface ExportGuardian {
   guardianships: Array<{
     relationship: string;
     isPrimaryContact: boolean;
-    status: 'pending' | 'active' | 'revoked';
+    /** Voir `GuardianItem` — la liste vient du contrat, pas d'un miroir local (PF-371). */
+    status: GuardianshipLinkStatus;
     student: { firstName: string; lastName: string };
   }>;
 }

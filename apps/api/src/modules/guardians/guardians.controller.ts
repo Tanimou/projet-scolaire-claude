@@ -15,8 +15,11 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   GUARDIANSHIP_ALL_STATES_ARE_DELIBERATE,
+  GUARDIANSHIP_LINK_STATUSES,
   GUARDIANSHIP_SCOPE_LABEL,
+  type GuardianshipLinkStatus,
   guardianshipOnTheBooksWhere,
+  guardianshipRequestQueueWhere,
 } from '@pilotage/contracts';
 import { GuardianRelationship, GuardianshipStatus } from '@prisma/client';
 import {
@@ -274,6 +277,162 @@ export class GuardiansController {
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
     });
     return { data, guardianshipScope: GUARDIANSHIP_SCOPE_LABEL.allStates };
+  }
+
+  /**
+   * S-E03-5 / PF-20 / ADR-075 §D1 — LA FILE DES DEMANDES DE RATTACHEMENT.
+   *
+   * POURQUOI UN ENDPOINT DÉDIÉ, ET NON LA RÉUTILISATION D'UN DES DEUX VOISINS
+   * -------------------------------------------------------------------------
+   * `/admin/enrollments` lisait `GET /guardians`, qui rend des lignes
+   * **Guardian** — un modèle qui n'a NI `status` NI `notes`. La page en
+   * déclarait pourtant à la main une forme de **Guardianship**, et `api<T>()`
+   * castant sans valider, ses cinq onglets comparaient `undefined` à un
+   * littéral. Toujours faux. Pour tout tenant. Depuis toujours. C'est la moitié
+   * « 28 pending vs file vide » de `PF-20`, et c'est structurel.
+   *
+   * Les deux voies rejetées, par MESURE et non par coût :
+   *
+   *   (a) APLATIR `guardianships[]` DE `GET /guardians`. Depuis ADR-074 cette
+   *       relation est filtrée par `guardianshipOnTheBooksWhere()` (`:127`),
+   *       donc les liens RÉVOQUÉS n'y sont plus : l'onglet « Rejetées »
+   *       resterait structurellement vide — `DNC-06` DÉPLACÉ au lieu d'être
+   *       retiré. Son `student` ne sélectionne pas `enrollments`, donc la
+   *       colonne « Classe souhaitée » resterait « — » sur toutes les lignes.
+   *       Et son plafond de 200 GUARDIANS laisserait le comptage au client,
+   *       rendant l'accord KPI↔file impossible PAR CONSTRUCTION.
+   *
+   *   (b) RÉUTILISER `GET guardianships/list` ci-dessus. Son `where` est
+   *       tenant-wide, SANS axe école : la file d'une école deviendrait celle
+   *       du tenant entier, une régression de portée dans une tranche qui n'y a
+   *       pas droit. Il n'a pas de `take`. Et il est gardé par
+   *       `guardianships.read`, que `permissions.constants.ts:226` accorde à
+   *       `teacher` et `:260` à `parent`.
+   *
+   * POURQUOI `parents.read` ET NON `guardianships.read` — L'ÉCART ASSUMÉ
+   * --------------------------------------------------------------------
+   * Le brief demandait `guardianships.read`. MESURÉ avant d'écrire :
+   * `permissions.constants.ts:226` et `:260` accordent ce code à `teacher` ET à
+   * `parent`. Cette file rend l'email et le téléphone de parents, plus les noms
+   * d'élèves — la poser sous ce code l'ouvrirait à deux audiences qui ne l'ont
+   * pas aujourd'hui, c'est-à-dire élargirait une autorisation dans une tranche
+   * Tier B qui n'a pas le droit d'en changer une.
+   *
+   * `parents.read` est le code que porte DÉJÀ l'endpoint que cette file lit
+   * aujourd'hui (`GET /guardians`, `:91`), il est admin-seul
+   * (`permissions.constants.ts:162`), et il gouverne déjà exactement ces
+   * données. La posture d'autorisation de la file est donc INCHANGÉE, à la
+   * ligne près : personne ne gagne ni ne perd l'accès.
+   *
+   * CE QU'IL REND, ET POURQUOI CHAQUE MORCEAU
+   * ------------------------------------------
+   * • des lignes **Guardianship** — la population que la page prétend lire ;
+   * • `student.enrollments` (take 1) — la colonne « Classe souhaitée » ;
+   * • une pagination SERVEUR (`page`/`pageSize`, défaut 10, plafond 100) ;
+   * • `total`, compté en base sur le MÊME `where` que `data` ;
+   * • `totalsByStatus`, un `groupBy` serveur sur la portée SANS filtre d'état,
+   *   pour que les badges d'onglets lisent des totaux et jamais un `.length` de
+   *   page. C'est la moitié de `PF-20` que la forme de ligne seule ne fermerait
+   *   pas : des badges comptant une page tronquée sous un KPI comptant la base
+   *   remplaceraient « 28 vs 0 » par « 28 vs 19 », ce qui est pire ;
+   * • `guardianshipScope`, pour que le nombre porte sa portée (ADR-041 §D3).
+   *
+   * PAS DE COLLISION DE ROUTAGE : `@Get(':id')` ne matche qu'UN segment, et
+   * `guardianships/list` coexiste déjà sous la même forme à deux segments.
+   */
+  @Get('guardianships/pending-requests')
+  @RequiresPermission('parents.read')
+  async listPendingRequests(
+    @CurrentJwt() jwt: KeycloakJwtPayload,
+    @Query('status') statusRaw?: string,
+    @Query('page') pageRaw?: string,
+    @Query('pageSize') pageSizeRaw?: string,
+  ) {
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forUser(me);
+    const scope = { tenantId: me.tenantId, schoolId };
+
+    // L'état demandé est DÉRIVÉ de la liste canonique, jamais comparé à un
+    // littéral et jamais casté : `filter` sur `GUARDIANSHIP_LINK_STATUSES` est
+    // à la fois la validation et le rétrécissement de type (ADR-067). Absent ⇒
+    // tous les états, ce qui est la portée de l'onglet « Toutes ».
+    const statuses =
+      statusRaw === undefined || statusRaw === ''
+        ? GUARDIANSHIP_LINK_STATUSES
+        : GUARDIANSHIP_LINK_STATUSES.filter((s) => s === statusRaw);
+    if (statuses.length === 0) {
+      throw new BadRequestException(
+        `Statut de rattachement inconnu : « ${statusRaw} ». Valeurs admises : ${GUARDIANSHIP_LINK_STATUSES.join(', ')}.`,
+      );
+    }
+
+    const pageSize = Math.min(Math.max(parseInt(pageSizeRaw ?? '10', 10) || 10, 1), 100);
+    const page = Math.max(parseInt(pageRaw ?? '1', 10) || 1, 1);
+
+    // UNE portée, construite UNE fois. Le `where` de la page, celui du `total`
+    // et celui du `groupBy` sortent tous du même constructeur : aucun des trois
+    // ne peut en épeler la moitié, ni oublier l'axe école.
+    const where = guardianshipRequestQueueWhere(scope, statuses);
+    const scopeWhere = guardianshipRequestQueueWhere(scope, GUARDIANSHIP_LINK_STATUSES);
+
+    const [rows, total, byStatus] = await Promise.all([
+      this.prisma.guardianship.findMany({
+        where,
+        orderBy: [{ createdAt: 'asc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          status: true,
+          relationship: true,
+          notes: true,
+          createdAt: true,
+          guardian: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+          student: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              enrollments: {
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: { classSection: { select: { name: true } } },
+              },
+            },
+          },
+        },
+      }),
+      this.prisma.guardianship.count({ where }),
+      this.prisma.guardianship.groupBy({
+        by: ['status'],
+        where: scopeWhere,
+        orderBy: { status: 'asc' },
+        _count: { _all: true },
+      }),
+    ]);
+
+    // Chaque état de l'énum est présent, à zéro s'il n'a aucune ligne : un
+    // badge absent et un badge à zéro ne disent pas la même chose, et le
+    // client ne doit pas avoir à deviner lequel il regarde.
+    const totalsByStatus = Object.fromEntries(
+      GUARDIANSHIP_LINK_STATUSES.map(
+        (s): [GuardianshipLinkStatus, number] => [
+          s,
+          byStatus.find((g) => g.status === s)?._count._all ?? 0,
+        ],
+      ),
+    ) as Record<GuardianshipLinkStatus, number>;
+
+    return {
+      data: rows,
+      page,
+      pageSize,
+      total,
+      totalsByStatus,
+      guardianshipScope: GUARDIANSHIP_SCOPE_LABEL.awaitingDecision,
+    };
   }
 
   @Post('guardianships')

@@ -5,6 +5,7 @@ import {
   AUDIT_LOGIN_ACTIONS,
   AUDIT_PORTAL_NONE,
   DEFAULT_AUDIT_TIMEZONE,
+  GUARDIANSHIP_SCOPE_LABEL,
   LEGACY_AUDIT_CRITICAL_ALIASES,
   LEGACY_AUDIT_EXPORT_ALIASES,
   UnknownTimezoneError,
@@ -12,6 +13,7 @@ import {
   auditWindowCreatedAtFilter,
   candidateEnrollmentWhere,
   enrollmentTotalOrder,
+  guardianshipPendingRequestWhere,
   isAuditPortalNone,
   projectEnrollmentActivity,
   resolveActiveAcademicYear,
@@ -253,6 +255,18 @@ export interface KpiData {
   formatted: string;
   delta?: { value: number; period: 'day' | 'week' | 'month'; sign: '+' | '-' | '=' };
   trend?: SparklinePoint[];
+  /**
+   * S-E03-5 / ADR-041 §D3 / ADR-075 §D2 — LA PORTÉE DU NOMBRE, PORTÉE PAR LE
+   * NOMBRE. Additif et optionnel : un KPI qui ne la déclare pas encore se rend
+   * exactement comme avant.
+   *
+   * `KpiCard` (`packages/ui`) porte déjà une rangée `scope` et n'avait AUCUN
+   * appelant. Sans elle, quatre cartes côte à côte se lisent comme
+   * comparables — et c'est précisément ce qui rendait invisible le fait que
+   * « Demandes en attente » était tenant-wide au milieu de six frères scopés à
+   * l'école.
+   */
+  scope?: string;
 }
 
 export interface AdminDashboardResponse {
@@ -2468,8 +2482,19 @@ export class AnalyticsService {
       this.prisma.classSection.count({
         where: { tenantId, academicYear: { schoolId }, createdAt: { lt: oneMonthAgo } },
       }),
-      // EnrollmentRequest doesn't exist yet — use Guardianship pending as proxy
-      this.prisma.guardianship.count({ where: { tenantId, status: 'pending' } }),
+      // S-E03-5 / PF-20 / PF-373 / ADR-075 — LE MÊME PRÉDICAT QUE LA FILE OÙ LE
+      // CTA « Examiner » ENVOIE. L'aveu « EnrollmentRequest n'existe pas encore,
+      // on prend les Guardianship en attente comme substitut » vivait ICI, au-
+      // dessus d'UN des trois sites qui le pratiquaient ; il est désormais
+      // énoncé une seule fois, là où le substitut est DÉFINI (§2.7).
+      //
+      // La portée passe de TENANT à ÉCOLE (ADR-075 §D2) : ce nombre était le
+      // seul des sept KPI de ce `Promise.all` à ne pas être scopé à l'école,
+      // donc un septième dénominateur sur la même grille de cartes. Il CHANGE
+      // de valeur pour tout tenant multi-écoles — plus petit, et plus vrai.
+      this.prisma.guardianship.count({
+        where: guardianshipPendingRequestWhere({ tenantId, schoolId }),
+      }),
     ]);
 
     // ============ Sparklines ============
@@ -2477,13 +2502,10 @@ export class AnalyticsService {
       this.sparkline({ tenantId, schoolId, model: 'student', sinceDays: 30 }),
       this.sparkline({ tenantId, schoolId, model: 'teacherProfile', sinceDays: 30 }),
       this.sparkline({ tenantId, schoolId, model: 'classSection', sinceDays: 30 }),
-      this.sparkline({
-        tenantId,
-        schoolId,
-        model: 'guardianship',
-        sinceDays: 30,
-        statusFilter: 'pending',
-      }),
+      // La courbe SOUS le nombre répond enfin à la même question que lui :
+      // `statusFilter` a disparu du paramétrage et la branche `guardianship`
+      // dérive du prédicat canonique, axe école compris.
+      this.sparkline({ tenantId, schoolId, model: 'guardianship', sinceDays: 30 }),
     ]);
 
     // ============ Active academic year ============
@@ -2866,6 +2888,11 @@ export class AnalyticsService {
           value: pendingRequests,
           formatted: pendingRequests.toLocaleString('fr-FR'),
           trend: requestSpark,
+          // La MÊME chaîne que celle rendue par la file (`guardianshipScope` de
+          // `GET guardianships/pending-requests`). Deux portées différentes
+          // affichées sous deux nombres censés s'accorder est la façon dont ce
+          // défaut se rouvrirait sans qu'on le voie.
+          scope: GUARDIANSHIP_SCOPE_LABEL.awaitingDecision,
         },
         configuredAlerts: {
           label: 'Alertes configurées',
@@ -2928,8 +2955,11 @@ export class AnalyticsService {
         },
         take: 5,
       }),
+      // S-E03-5 / ADR-075 — la LISTE d'aperçu et le COMPTE affiché au-dessus
+      // d'elle sortent du même constructeur : sans cela, l'aperçu montrerait
+      // des enfants d'une autre école que le nombre.
       this.prisma.guardianship.findMany({
-        where: { tenantId, status: 'pending' },
+        where: guardianshipPendingRequestWhere({ tenantId, schoolId }),
         orderBy: { createdAt: 'asc' },
         select: {
           id: true,
@@ -3025,7 +3055,7 @@ export class AnalyticsService {
 
     if (pendingRequests.length > 0) {
       const totalPending = await this.prisma.guardianship.count({
-        where: { tenantId, status: 'pending' },
+        where: guardianshipPendingRequestWhere({ tenantId, schoolId }),
       });
       const oldest = pendingRequests[0]!;
       items.push({
@@ -3279,15 +3309,40 @@ export class AnalyticsService {
   /**
    * Computes a cumulative-count sparkline for a given Prisma model over the last N days.
    * Buckets daily; pads to fixed length.
+   *
+   * S-E03-5 / PF-20 / ADR-075 §D3 — DEUX CHANGEMENTS DE SIGNATURE, ET POURQUOI
+   * --------------------------------------------------------------------------
+   * 1. schoolId EST DÉSORMAIS REQUIS. Il l'était déjà en fait : les neuf
+   *    appelants le passaient tous (:2477-:2480, :3463-:3465, :3508, :3885), et
+   *    le typecheck le prouve. Le rendre requis est donc un no-op PROUVÉ qui
+   *    retire quatre spreads conditionnels de portée — la forme fail-open
+   *    qu'ADR-065 §D5 interdit : Prisma laisse tomber une clé « undefined » en
+   *    silence, et la requête S'ÉLARGIT au tenant entier. Un paramètre de
+   *    portée optionnel n'est pas une commodité, c'est une requête plus large
+   *    en attente d'un appelant distrait.
+   *
+   * 2. statusFilter A DISPARU. Il n'avait qu'UN appelant — la courbe des
+   *    demandes en attente — qui bascule sur le prédicat canonique ; après
+   *    conversion il en avait zéro. Ses deux casts « as never » partent avec
+   *    lui : c'est par eux que la perte silencieuse de schoolId dans la branche
+   *    guardianship a survécu à la relecture.
+   *
+   * La branche guardianship HONORAIT SES TROIS SŒURS EN MOINS UNE CLÉ : elle
+   * jetait schoolId purement et simplement, alors que student, teacherProfile
+   * et classSection l'appliquaient. Le nombre affiché et la courbe dessinée
+   * sous lui répondaient donc à deux questions différentes — PF-20 en
+   * miniature, sous le nombre même que cette tranche répare. Elle dérive
+   * maintenant de guardianshipPendingRequestWhere(), qui porte l'axe école par
+   * la relation student (le modèle Guardianship n'a pas de schoolId propre,
+   * schema.prisma:567-593).
    */
   async sparkline(opts: {
     tenantId: string;
-    schoolId?: string;
+    schoolId: string;
     model: 'student' | 'teacherProfile' | 'classSection' | 'guardianship';
     sinceDays: number;
-    statusFilter?: string;
   }): Promise<SparklinePoint[]> {
-    const { tenantId, schoolId, model, sinceDays, statusFilter } = opts;
+    const { tenantId, schoolId, model, sinceDays } = opts;
     const now = new Date();
     now.setHours(23, 59, 59, 999);
     const since = new Date(now.getTime() - (sinceDays - 1) * 24 * 60 * 60 * 1000);
@@ -3298,36 +3353,39 @@ export class AnalyticsService {
     try {
       if (model === 'student') {
         items = await this.prisma.student.findMany({
-          where: {
-            tenantId,
-            ...(schoolId ? { schoolId } : {}),
-            ...(statusFilter ? { status: statusFilter as never } : {}),
-          },
+          where: { tenantId, schoolId },
           select: { createdAt: true },
         });
       } else if (model === 'teacherProfile') {
         items = await this.prisma.teacherProfile.findMany({
-          where: { tenantId, ...(schoolId ? { schoolId } : {}) },
+          where: { tenantId, schoolId },
           select: { createdAt: true },
         });
       } else if (model === 'classSection') {
         items = await this.prisma.classSection.findMany({
-          where: {
-            tenantId,
-            ...(schoolId ? { academicYear: { schoolId } } : {}),
-          },
+          where: { tenantId, academicYear: { schoolId } },
           select: { createdAt: true },
         });
       } else if (model === 'guardianship') {
         items = await this.prisma.guardianship.findMany({
-          where: {
-            tenantId,
-            ...(statusFilter ? { status: statusFilter as never } : {}),
-          },
+          where: guardianshipPendingRequestWhere({ tenantId, schoolId }),
           select: { createdAt: true },
         });
       }
-    } catch {
+    } catch (err) {
+      // CE « catch » REND UNE LECTURE ÉCHOUÉE COMME UNE AFFIRMATION DE
+      // DOMAINE : trente points à zéro, c'est-à-dire « il ne s'est rien passé
+      // en trente jours ». C'est la forme de PF-346, côté serveur, et elle
+      // survit à cette tranche — le remède (un état d'indisponibilité porté
+      // jusqu'à la carte) est une décision de contrat de réponse, hors portée
+      // ici. Ce qui change : elle cesse d'être SILENCIEUSE. Sans cette ligne,
+      // un « where » malformé rendrait une courbe plate au lieu de rougir, et
+      // le vert de cette tranche serait le faux vert du run 81 sous une autre
+      // forme.
+      this.logger.error(
+        `sparkline(${model}) a échoué — tenant=${tenantId} school=${schoolId} — courbe rendue à plat`,
+        err instanceof Error ? err.stack : String(err),
+      );
       items = [];
     }
 

@@ -4,7 +4,10 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-26)** `in-progress` — **FIVE slices landed, and there was none before 2026-08-25.**
+**Status (2026-08-26)** `in-progress` — **SIX slices landed, and there was none before 2026-08-25.**
+`S-E03-5` (run 86 — **`PF-373` CLOSED**, `PF-20` **advanced and NOT closed** because its « alertes » half is
+alive at two mechanisms (`PF-378`), `PF-371` advanced, `ADR-075`; the admin « Demandes » queue now reads the
+population it claims to read, and the KPI above it changed value on purpose — tenant-wide → school).
 `S-E03-3c` (run 85 — **`PF-358` CLOSED**, `PF-12` advanced a third time and still not closed, `ADR-074`; the
 guardianship predicate now has exactly ONE home). Roadmap findings owned by this epic: **1 closed of 9**
 (`PF-15`, on one axis of two), with `PF-04`, `PF-05`, `PF-12` and `PF-36` advanced-not-closed — so the standing
@@ -37,7 +40,7 @@ Three consequences a later run must not rediscover:
    *findings the epic owns*, not of slices, and the mapping is not 1:1 (`S-E03-4` alone touches three of them).
 2. **Slice ids come from `docs/daily-improvement-v3/traceability/OPEN.md`, not from a `tasks.md`.** `S-E03-4` is
    named there (`OPEN.md:117` — `PF-15 stale active academic year | V3-E03 | S-E03-4 | open`). The ids `S-E03-1`,
-   `S-E03-2`, `S-E03-3`, `S-E03-5`… exist as matrix rows only and are **not implementable without an authoring
+   `S-E03-2`, `S-E03-3`, `S-E03-5`… existed as matrix rows only *(all three have since been authored and landed — runs 81, 82 and 86; `S-E03-1`, `S-E03-6`… still have not)* and are **not implementable without an authoring
    pass of their own** — the same posture the `V3-E05` ledger records for its six unenumerated rows.
 3. **An `epic-spec` run for `V3-E03` is still owed and is still the highest-leverage thing available for this
    epic.** `S-E03-4` deliberately did not do it: writing a spec-kit is an `epic-spec` run, not a slice, and
@@ -58,7 +61,9 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-2`** — the parent grades read becomes ONE guarded contract, and a failed read stops rendering as "no grades published" | **closes `PF-288`** (class, both remaining sites); **advances `PF-05`** — NOT closed; raises `PF-335`…`PF-353` | ⚠️ **2026-08-25, run 81 — landed needing human review (NOT auto-merged), P1 `[authz][truth]`** |
 | **`S-E03-3`** — "is this child actively enrolled" becomes ONE derivation, and the parent surfaces stop each answering it differently | **advances `PF-12`** — NOT closed (3 of 9 measured axes); raises `PF-356`…`PF-365` | ⚠️ **2026-08-25, run 82 — landed needing human review (NOT auto-merged), P1 `[truth]`** |
 | **`S-E03-3b`** — the parent attachment panel projects from the FACT (`Guardianship`), with `GuardianshipClaim` as provenance only | **closes `PF-357`**; **advances `PF-12`** — still NOT closed (`ADR-073 §D11` re-check failed); raises `PF-367`…`PF-371` | ⚠️ **2026-08-26, run 84 — landed needing human review (NOT auto-merged), P1 `[truth][security]`** |
-| `S-E03-1`, `S-E03-5`… | `PF-20`, `PF-24`, `PF-40`, `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82: it was authored and landed, and its story lives at `docs/spec/features/v3-e03/stories/S-E03-3.md`.) |
+| **`S-E03-3c`** — ONE guardianship liveness predicate, and a delete guard whose own remedy could never unblock it | **closes `PF-358`**; **advances `PF-12`** — still NOT closed; raises `PF-372`…`PF-376` | ⚠️ **2026-08-26, run 85 — landed needing human review, P1 `[truth]`** |
+| **`S-E03-5`** — « combien de demandes de rattachement attendent l’admin, et la page où j’atterris dit-elle la même chose » becomes ONE derivation | **closes `PF-373`**; **advances `PF-20`** — NOT closed (the « alertes » half is `PF-378`) and **advances `PF-371`**; raises `PF-377`…`PF-379` | ⚠️ **2026-08-26, run 86 — landed needing human review, P1 `[truth]`** |
+| `S-E03-1`, `S-E03-6`… | `PF-24`, `PF-40`, `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82 and `S-E03-5` left it at run 86: both were authored and landed, and their stories live under `docs/spec/features/v3-e03/stories/`.) |
 
 ---
 
@@ -781,3 +786,80 @@ a `spec.md`, a `tasks.md` and a denominator. `PF-365`/`PF-370` (the registry con
 waiting on it, and `link-liveness.ts` makes the sibling family four modules wide.
 
 *(Written 2026-08-26, `S-E03-3c` land pass, run 85. Later slices: annotate, do not delete.)*
+
+---
+
+## `S-E03-5` — ONE derivation for « which attachment requests await a decision » (run 86, 2026-08-26)
+
+**`PF-373` CLOSED · `PF-20` advanced, NOT closed · `PF-371` advanced · `PF-377`..`PF-379` recorded · `ADR-075`**
+
+Story: [`stories/S-E03-5.md`](./stories/S-E03-5.md).
+ADR: [`docs/adr/ADR-075-canonical-pending-attachment-request.md`](../../../adr/ADR-075-canonical-pending-attachment-request.md).
+
+### What was actually wrong, measured 2026-08-26
+
+The admin read « Demandes en attente : 28 » on the dashboard, clicked « Examiner », and landed on
+*« Aucune demande dans cet onglet — les demandes apparaîtront ici dès que des parents les soumettront »* —
+not a zero, but an **explanation** of a zero. The mechanism was structural, not arithmetic:
+
+| Surface | What it asked the server for | What the server returned |
+|---|---|---|
+| KPI (`analytics.service.ts`) | `guardianship.count({ tenantId, status: 'pending' })` — **tenant-wide** | a number |
+| `/admin/enrollments` | `GET /api/v1/guardians` | **`Guardian`** rows — a model with neither `status` nor `notes` |
+
+The page hand-declared a `Guardianship` shape and `api<T>()` cast without validating, so its five tabs
+compared `undefined` to a status literal. **Always false, for every tenant, since the page was written.**
+Three defects rode the same path: `includePending=true` sent to an endpoint that never declares it
+(`guardians.controller.ts:93-99`, silently accepted, never read → `PF-379`); five tab badges derived from a
+truncated page’s `.length`; and a local `safe()` collapsing `null` and `[]`, so a 403/404/500 rendered as
+« Aucune demande ».
+
+### What landed
+
+- **`link-liveness.ts` §2.7** — a THIRD named scope on the same column (`GUARDIANSHIP_AWAITING_DECISION_STATUSES`,
+  `guardianshipRequestQueueWhere()`, `guardianshipPendingRequestWhere()`, `isGuardianshipAwaitingDecision()`),
+  in the existing module rather than a fifth sibling (`PF-365`/`PF-370`). Both scope keys are **required**, so
+  the `...(schoolId ? … : {})` fail-open of `ADR-065 §D5` is a `TS2345` rather than a convention.
+- **`GET /api/v1/guardians/guardianships/pending-requests`** (`ADR-075 §D1`) — `Guardianship` rows, server
+  pagination, a `total` counted on the same `where`, and a `totalsByStatus` `groupBy` so badges never count a
+  page. Guarded by `parents.read`, **not** the briefed `guardianships.read` (`ADR-075 §D4`: that code is granted
+  to `teacher` and `parent`, and this route returns parent email/phone — using it would have widened an
+  authorisation inside a TIER-B slice).
+- **Scope moved tenant-wide → school** on the `student` axis (`ADR-075 §D2`). **The KPI changes value for
+  multi-school tenants.** That is the point, not a side effect.
+- **`sparkline()`** lost `statusFilter` (zero callers after conversion) and gained a **required** `schoolId`
+  (all nine callers already passed it). Its `guardianship` branch had been throwing `schoolId` away behind two
+  `as never` casts while its three siblings applied it (`ADR-075 §D3`).
+- **`read()` + `ReadErrorState`** on the queue; three hand-written `'pending' | 'active' | 'revoked'` FE mirrors
+  replaced by the imported `GuardianshipLinkStatus` (`PF-371` advanced).
+
+### What the run learned by being wrong
+
+1. **The ADR was cited by nineteen production sites before it existed.** Every decision was argued — inside the
+   file that made it, therefore unreviewable from anywhere else. `GUARDRAILS §2` treats that as blocking, and it
+   was the right call: `ADR-075` was written at the land pass, from the code, not from the intent.
+2. **A scope string copied by hand is a verification that lies.** `§D5` makes the equality of three scope labels
+   the visual proof that the three surfaces count one population — and the page’s copy differed from the
+   contract by **one apostrophe** (`'` U+0027 vs `’` U+2019). The check was broken before it was ever used. The
+   page now **imports** `GUARDIANSHIP_SCOPE_LABEL.awaitingDecision`. This is `PF-371` occurring inside the slice
+   that claimed to push `PF-371` back.
+3. **A residual is inverted, not deleted.** Run 85’s anti-vacuity test asserted that `analytics.service.ts`
+   still carried `status: 'pending'`, with the note *« this test will fail the day it disappears — that is the
+   signal to update `PF-373`, not to delete this test »*. It was inverted in place
+   (`guardianship-liveness-derivation-gate.spec.ts:609`).
+
+### Why `PF-20` still is not `closed`
+
+It has a second half — « 4 alerts vs 0 rules » — and that half is alive at **two** mechanisms recorded as
+`PF-378`: the server KPI is `AnalyticsService.DEFAULT_ALERT_RULES.length` (`analytics.service.ts:2899-2900`), a
+constant’s length no database read can contradict; and `admin/alerts/page.tsx` renders a failed read as
+*« Aucune règle configurée »* while deriving two KPI from a `limit=100` page whose `total` is already served.
+A residual test in the new ratchet **asserts that half still exists**, so `PF-20` cannot be closed by
+inadvertence. **The remaining move is `PF-378` in one slice** — its remedy (`read()`, `ReadErrorState`, the
+served `total` values) is already in the repository and was applied to `/admin/enrollments` by this slice.
+
+**Still owed for `V3-E03`, unchanged and now six slices old:** an **`epic-spec` run**. `PF-365`/`PF-370` (the
+registry convergence) wait on it explicitly, and `link-liveness.ts` is now the widest of the four sibling
+modules.
+
+*(Written 2026-08-26, `S-E03-5` land pass, run 86. Later slices: annotate, do not delete.)*
