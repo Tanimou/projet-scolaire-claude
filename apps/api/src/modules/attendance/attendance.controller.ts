@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 import { AttendanceStatus, type Prisma } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
@@ -634,7 +635,12 @@ export class AttendanceController {
     const roles = jwt.realm_access?.roles ?? [];
     if (roles.includes('parent')) {
       const gship = await this.prisma.guardianship.findFirst({
-        where: { tenantId: me.tenantId, studentId, status: 'active', guardian: { userProfileId: me.id } },
+        where: {
+          tenantId: me.tenantId,
+          studentId,
+          ...guardianshipLiveWhere(),
+          guardian: { userProfileId: me.id },
+        },
       });
       if (!gship) throw new ForbiddenException();
     } else {

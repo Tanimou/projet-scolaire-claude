@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -108,7 +109,7 @@ export class StudentAccessService {
       const guardianships = await this.prisma.guardianship.findMany({
         where: {
           tenantId: user.tenantId,
-          status: 'active',
+          ...guardianshipLiveWhere(),
           guardian: { userProfileId: user.id },
         },
         select: { studentId: true },

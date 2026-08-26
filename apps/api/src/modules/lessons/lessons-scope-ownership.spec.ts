@@ -20,6 +20,7 @@ import { StudentAccessService } from '../students/student-access.service';
 import type { TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { assertOwnedByTeacher, LessonsController } from './lessons.controller';
+import { matchesStatusFilter } from '../../shared/testing/prisma-status-filter';
 
 /**
  * S-E01-1e — le module `lessons` entre dans la portée tenant (ADR-048), sa clé
@@ -270,7 +271,11 @@ function makeHarness(options: { roles: string[]; teacherProfileId?: string | nul
       findMany: async ({ where }: { where: Row }) => {
         scopeAtOwnerAbacRead.push(currentTenantScopeFrame()?.tenantId);
         return (db.tables['guardianship'] ?? [])
-          .filter((row) => row['tenantId'] === where['tenantId'] && row['status'] === where['status'])
+          .filter(
+            (row) =>
+              row['tenantId'] === where['tenantId'] &&
+              matchesStatusFilter(row['status'] as string, where['status'] as never),
+          )
           .map((row) => ({ studentId: row['studentId'] as string }));
       },
     },

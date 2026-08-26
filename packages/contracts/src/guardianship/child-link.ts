@@ -2,6 +2,10 @@ import { z } from 'zod';
 
 import { GUARDIAN_RELATIONSHIP, type GuardianshipClaimStatus } from '../dto/child-claim';
 import { UuidSchema } from '../dto/common';
+// S-E03-3c / ADR-074 — le vocabulaire du statut de lien vit dans le module
+// frère `link-liveness.ts` ; `import type` uniquement, donc aucun cycle à
+// l'exécution et aucun coût pour `apps/web`.
+import type { GuardianshipLinkStatus } from './link-liveness';
 
 /**
  * S-E03-3b / PF-357 / PF-12 / ADR-073 — LA projection canonique de
@@ -101,8 +105,16 @@ export type ParentChildLinkState = (typeof PARENT_CHILD_LINK_STATE)[number];
  * Les trois valeurs de `GuardianshipStatus` (`schema.prisma:170-174`), en TYPE
  * SEUL et délibérément : voir l'avertissement du docblock. Aucun schéma Zod ne
  * valide cette union — le statut du lien ne franchit jamais le fil.
+ *
+ * ⚠ S-E03-3c / ADR-074 — ce n'est plus une liste de littéraux. Cette union
+ * était la QUATRIÈME copie à la main des membres de `GuardianshipStatus`, et le
+ * docblock de tête l'annonçait déjà comme une dette assumée. Elle ALIASE
+ * désormais le vocabulaire canonique de `link-liveness.ts`, dont le cliquet
+ * assied l'égalité avec l'énum Prisma lue dans `schema.prisma`. Le NOM est
+ * conservé — il est importé par `child-claims.service.ts` et lu dans deux
+ * signatures publiques, et le renommer serait un coût sans contrepartie.
  */
-export type ParentGuardianshipLinkStatus = 'pending' | 'active' | 'revoked';
+export type ParentGuardianshipLinkStatus = GuardianshipLinkStatus;
 
 /**
  * §3.6 — le rang de l'ordre total. Énoncé UNE fois : trois ordres pour une

@@ -1,3 +1,5 @@
+import { guardianshipLiveWhere } from '@pilotage/contracts';
+
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 
 import { StudentAccessService } from './student-access.service';
@@ -146,7 +148,20 @@ describe('StudentAccessService.canAccessStudent — parent ABAC boundary', () =>
     ).resolves.toBe(false);
   });
 
-  it('parent guardianship lookup is scoped by tenant, active status AND guardian ownership', async () => {
+  /**
+   * S-E03-3c / ADR-074 — la portée est désormais énoncée par le prédicat
+   * canonique `guardianshipLiveWhere()` au lieu du littéral `status: 'active'`.
+   *
+   * ⚠ CETTE ASSERTION N'A PAS ÉTÉ RELÂCHÉE POUR PASSER. Elle reste une égalité
+   * EXACTE sur le `where` complet, et elle vaut désormais DAVANTAGE : la portée
+   * attendue est écrite ici en toutes lettres (`{ in: ['active'] }`) ET
+   * confrontée au prédicat du produit. Un élargissement futur de la portée
+   * VIVANT — quelqu'un y ajoutant `pending` — ferait donc ÉCHOUER ce test sur
+   * la frontière ABAC parent, ce qui est exactement là où on veut qu'il
+   * échoue. Le jeu de lignes sélectionné est INCHANGÉ : `{ in: ['active'] }` et
+   * `'active'` désignent les mêmes lignes.
+   */
+  it('parent guardianship lookup is scoped by tenant, LIVE status AND guardian ownership', async () => {
     const { service, findMany } = makeService([MY_CHILD]);
 
     await service.canAccessStudent(PARENT, jwtWithRoles(['parent']), MY_CHILD, SCHOOL);
@@ -154,11 +169,15 @@ describe('StudentAccessService.canAccessStudent — parent ABAC boundary', () =>
     expect(findMany).toHaveBeenCalledWith({
       where: {
         tenantId: TENANT,
-        status: 'active',
+        status: { in: ['active'] },
         guardian: { userProfileId: PARENT.id },
       },
       select: { studentId: true },
     });
+
+    // Et le prédicat canonique EST bien celui-là — sans cette ligne, l'égalité
+    // ci-dessus ne prouverait que la forme du double, pas la portée du produit.
+    expect(guardianshipLiveWhere()).toEqual({ status: { in: ['active'] } });
   });
 
   it('a parent with NO active guardianships is denied every student', async () => {

@@ -14,7 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { snapshotCoalesceKey } from '@pilotage/contracts';
+import { guardianshipLiveWhere, snapshotCoalesceKey } from '@pilotage/contracts';
 import { AssessmentKind } from '@prisma/client';
 import {
   IsDateString,
@@ -340,7 +340,7 @@ export class AssessmentsController {
           where: {
             tenantId: me.tenantId,
             studentId: { in: studentIds },
-            status: 'active',
+            ...guardianshipLiveWhere(),
             guardian: { userProfileId: { not: null } },
           },
           include: {

@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 
 import { MailerService } from '../../shared/mail/mailer.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -168,7 +169,7 @@ export class ParentDigestCronService implements OnApplicationBootstrap, OnModule
         const guardianships = await this.prisma.guardianship.findMany({
           where: {
             tenantId,
-            status: 'active',
+            ...guardianshipLiveWhere(),
             guardian: { userProfileId: profile.id },
           },
           select: { studentId: true },

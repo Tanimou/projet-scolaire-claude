@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 
 import type { KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import type { UserSyncService } from '../../shared/auth/user-sync.service';
@@ -589,7 +590,21 @@ describe('S-E05-5 — roster (AC-2)', () => {
 
 describe('S-E05-5 — studentAttendance (AC-3 / AC-4)', () => {
   // ---- AC-4 : la branche PARENT, EXERCÉE, pas inspectée --------------------
-  it('parent TUTEUR : 200, et le where de tutelle est INCHANGÉ à l’octet', async () => {
+  /**
+   * S-E03-3c / ADR-074 — le littéral `status: 'active'` est devenu le prédicat
+   * canonique `guardianshipLiveWhere()`, donc `{ in: ['active'] }`.
+   *
+   * ⚠ « INCHANGÉ À L'OCTET » devient « SÉLECTIONNE LES MÊMES LIGNES », et ce
+   * n'est PAS un relâchement — c'est le rétablissement de ce que le test veut
+   * dire. Ce qu'il protège est la PORTÉE de la tutelle sur la branche parent,
+   * pas l'encodage de cette portée : `{ in: ['active'] }` et `'active'`
+   * désignent exactement les mêmes lignes. L'égalité reste EXACTE sur le
+   * `where` complet, et la portée attendue est écrite ici en toutes lettres
+   * PUIS confrontée au prédicat du produit — de sorte qu'un élargissement futur
+   * de la portée VIVANT (quelqu'un y ajoutant `pending`) ferait toujours
+   * échouer ce test, ce qui est précisément sa raison d'être.
+   */
+  it('parent TUTEUR : 200, et le where de tutelle SÉLECTIONNE LES MÊMES LIGNES', async () => {
     const h = makeHarness({});
     const out = await h.controller.studentAttendance(MY_STUDENT, undefined, undefined, jwt(PARENT));
     expect(out.summary.total).toBe(1);
@@ -598,9 +613,10 @@ describe('S-E05-5 — studentAttendance (AC-3 / AC-4)', () => {
     expect(g[0]?.where).toEqual({
       tenantId: TENANT,
       studentId: MY_STUDENT,
-      status: 'active',
+      status: { in: ['active'] },
       guardian: { userProfileId: ME },
     });
+    expect(guardianshipLiveWhere()).toEqual({ status: { in: ['active'] } });
   });
 
   it('parent NON tuteur : ForbiddenException NUE, UNE requête de tutelle, ZÉRO requête professeur', async () => {

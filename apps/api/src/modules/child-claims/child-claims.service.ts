@@ -9,6 +9,7 @@ import {
 import {
   compareParentChildLinkRows,
   deriveParentChildLinkState,
+  guardianshipLiveWhere,
   isNameableForGuardian,
   mayProjectChildIdentity,
 } from '@pilotage/contracts';
@@ -750,7 +751,13 @@ export class ChildClaimsService {
     // Idempotent re-approve: already approved + the driven link already active → no-op.
     if (claim.status === 'approved' && claim.guardianshipId && claim.matchedStudentId) {
       const link = await this.prisma.guardianship.findFirst({
-        where: { id: claim.guardianshipId, tenantId: args.tenantId, status: 'active' },
+        // S-E03-3c / ADR-074 — question de VIVACITÉ (« le lien piloté est-il
+        // déjà vivant ? »), donc le prédicat canonique. À NE PAS confondre avec
+        // les `status: 'pending'` de `withdraw()` / `approve()` / `reject()`
+        // plus bas : ceux-là sont des gardes d'état-DE-DÉPART sur une mutation
+        // (concurrence optimiste), pas des lectures de vivacité, et ils restent
+        // délibérément écrits en clair.
+        where: { id: claim.guardianshipId, tenantId: args.tenantId, ...guardianshipLiveWhere() },
         select: { id: true },
       });
       if (link) {

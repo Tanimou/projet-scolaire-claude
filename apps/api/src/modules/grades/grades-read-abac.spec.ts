@@ -13,6 +13,7 @@ import { type TeacherProfileService } from '../teaching/teacher-profile.service'
 
 import { GradesController } from './grades.controller';
 import { type GradesService } from './grades.service';
+import { matchesStatusFilter } from '../../shared/testing/prisma-status-filter';
 
 /**
  * S-E03-2 / `AC-1` / `PF-288` / `ADR-071` — les DEUX lectures « notes de cet
@@ -143,7 +144,7 @@ function makeWorld() {
           guardianships.filter(
             (g) =>
               g['tenantId'] === args.where.tenantId &&
-              g['status'] === args.where.status &&
+              matchesStatusFilter(g['status'] as string, args.where.status) &&
               g['guardianUserProfileId'] === args.where.guardian.userProfileId,
           ),
       ),
