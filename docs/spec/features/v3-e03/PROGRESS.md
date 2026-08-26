@@ -863,3 +863,45 @@ registry convergence) wait on it explicitly, and `link-liveness.ts` is now the w
 modules.
 
 *(Written 2026-08-26, `S-E03-5` land pass, run 86. Later slices: annotate, do not delete.)*
+
+### Annotation — run 88, 2026-08-26 : ce qui précède a été ÉCRIT par le run 86, et VÉRIFIÉ par le run 88
+
+Le run 86 a rédigé toute la section ci-dessus **au pass de land, avant de mourir**. Il n'a jamais exécuté
+une seule preuve : il a acquis le lock à 11:27 et s'est arrêté à 12:48 sur `You've hit your session limit`,
+sans `git commit`, sans `typecheck`, sans `build`, sans gate. Tout ce que la section affirme était donc,
+jusqu'à ce run, **une intention non mesurée** — exactement la forme que
+`feedback_landed_is_not_ran` nomme.
+
+**Ce que le run 88 a récupéré.** Un tick de 19:15 avait sauvé les 16 fichiers **suivis** dans `51b5524`,
+mais le reaper stashe **sans `-u`** : les cinq livrables **non suivis** lui étaient invisibles — dont la
+story (39 Ko), l'ADR (19 Ko) et **les deux artefacts de preuve**. `PROGRESS.md` référençait donc par chemin
+deux fichiers qu'un `git clean` aurait effacés. Ils ont été committés **en premier**, avant toute
+vérification, pour qu'une seconde interruption ne puisse pas répéter la perte (`3333c3f`).
+
+**Ce que le run 88 a exécuté** — sur `C:\Users\HP\Downloads\pilotage-scolaire-claude`, arbre committé :
+
+| Preuve | Commande | Résultat |
+|---|---|---|
+| Typecheck | `pnpm typecheck` avec `TURBO_FORCE=true` | **13/13, `0 cached`, 1 m 34 s** |
+| Suites de la tranche | `jest pending-request-agreement · guardianship-pending-request-derivation-gate · guardianship-liveness-derivation-gate` | **3 suites, 69/69** |
+| **ROUGE AVANT** *(le cliquet n'est pas vide)* | `git checkout origin/main -- analytics.service.ts admin/enrollments/page.tsx` puis le cliquet | **2 échecs / 27 passes** — `R-A/R-B` sur le littéral `status: 'pending'` d'`analytics.service.ts`, `R-C` sur le miroir d'union de `page.tsx:27` |
+| **VERT APRÈS** | l'arbre de la tranche restauré, même cliquet | **29/29** |
+| Build | `pnpm build` *(l'unique du run)* | **8/8, exit 0, 7 m 44 s** |
+| Gate | `bash scripts/ci-gate.sh` **deux fois** | **`GATE: PASS (fast)`** aux deux passes, exit 0 |
+
+> **Le premier `TURBO_FORCE` n'était pas une précaution de style.** Le `pnpm typecheck` initial a rendu
+> *13/13 successful, 13 cached, `FULL TURBO`, 844 ms* — un vert obtenu **sans exécuter tsc une seule fois**,
+> sur un arbre que personne n'avait jamais typé. C'est la forme la plus discrète du faux vert : le verdict
+> est exact, la mesure est absente. Un cache hit n'est pas une vérification.
+>
+> **De même, la ligne 84 de la sortie du gate imprime un `GATE: PASS` nu** (`PF-325`,
+> `tenant-scope-deployment-check.js:261`) 1206 lignes avant le vrai verdict. Les deux passes ont été lues
+> à la **dernière** ligne `GATE:`, jamais par grep.
+
+**Ce qui n'a PAS été fait, et pourquoi.** Aucune sonde live : Docker Desktop refuse toujours de démarrer sur
+cette machine (constat du run 86, revérifié), et la base locale `pilotage` sur 5432 a ses 55 tables mais
+**zéro ligne**. Aucune preuve exécutée contre la pile n'est donc revendiquée ici — ni par le run 86, ni par
+celui-ci. La tranche est **TIER B** (`S-E03-5` §Tiers) : correction de justesse sur une lecture, pas une
+couture d'autorisation, donc la sonde live n'est pas requise — mais l'absence est déclarée plutôt que tue.
+
+*(Écrit 2026-08-26, run 88, pass de vérification et de land. Tranches suivantes : annoter, ne pas supprimer.)*
