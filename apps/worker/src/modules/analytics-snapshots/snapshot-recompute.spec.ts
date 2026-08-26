@@ -455,6 +455,15 @@ describe('SnapshotRecomputeService.recomputeScope — idempotent rebuild (E6-S5)
 // no-op for a class-less trigger that cannot be resolved.
 // ---------------------------------------------------------------------------
 
+/**
+ * PF-24 — a stand-in for a real stored coalescing key. The drain's settle derives
+ * the TERMINAL key from the key the row carries, so any harness that omits it hands
+ * `terminalCoalesceKey` an `undefined` and every settle throws. That is a harness
+ * artefact, not a defect in the drain: the production `select` in `drainTenant`
+ * reads `coalesceKey`.
+ */
+const CANONICAL_KEY = 't1|coefficient_changed|y1|-|maths|-|-';
+
 function makeDrainHarness(opts: {
   trigger: {
     id: string;
@@ -487,7 +496,9 @@ function makeDrainHarness(opts: {
         }
         return Promise.resolve([{ tenantId: TENANT }]);
       }),
-      findFirst: jest.fn().mockResolvedValue({ tenantId: TENANT, ...trigger }),
+      findFirst: jest
+        .fn()
+        .mockResolvedValue({ tenantId: TENANT, coalesceKey: CANONICAL_KEY, ...trigger }),
     },
     teachingAssignment: { findMany: teachingAssignmentFindMany },
     grade: { findMany: jest.fn().mockResolvedValue([]) },
@@ -642,9 +653,17 @@ describe('SnapshotDrainCronService — manual_rebuild routing (E6-S5)', () => {
 
 describe('SnapshotDrainCronService — failed-row revival (E6-S5 PM-G)', () => {
   it('revives a parked (failed) trigger older than the cooldown back to pending with attempts=0', async () => {
-    const findMany = jest.fn().mockResolvedValue([{ id: 'f1' }, { id: 'f2' }]);
-    const updateMany = jest.fn().mockResolvedValue({ count: 2 });
-    const prisma = { snapshotRecomputeTrigger: { findMany, updateMany } };
+    // PF-24 — a PARKED row carries a TERMINAL key (that is how it reached `failed`
+    // without tripping the unique), so the harness must hand the revive terminal
+    // keys, exactly as the table would.
+    const canonical = 't1|grade_published|y1|cA|maths|-|-';
+    const findMany = jest.fn().mockResolvedValue([
+      { id: 'f1', tenantId: 't1', coalesceKey: `${canonical}#terminal:f1` },
+      { id: 'f2', tenantId: 't1', coalesceKey: `${canonical}#terminal:f2` },
+    ]);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const deleteMany = jest.fn().mockResolvedValue({ count: 0 });
+    const prisma = { snapshotRecomputeTrigger: { findMany, updateMany, deleteMany } };
     const service = new SnapshotDrainCronService(prisma as never, { recomputeScope: jest.fn() } as never);
     const revived = await (
       service as unknown as { reviveFailedTriggers(): Promise<number> }
@@ -658,6 +677,10 @@ describe('SnapshotDrainCronService — failed-row revival (E6-S5 PM-G)', () => {
     const data = updateMany.mock.calls[0]![0].data;
     expect(data.status).toBe('pending');
     expect(data.attempts).toBe(0);
+    // PF-24 / AC-3 — and the row goes back under its CANONICAL key, so the API
+    // enqueue folds the next dirty onto it instead of growing a second pending row.
+    expect(data.coalesceKey).toBe(canonical);
+    expect(updateMany.mock.calls[1]![0].data.coalesceKey).toBe(canonical);
   });
 
   it('is a no-op when there are no parked triggers past the cooldown', async () => {

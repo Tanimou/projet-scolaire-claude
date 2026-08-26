@@ -483,11 +483,31 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       // `processedAt = now` AT CLAIM TIME so the stale-processing reclaim keys on the
       // claim instant (how long it has been RUNNING), never on `enqueuedAt` (how long
       // it waited in the backlog) — a freshly-claimed row is never reclaimed mid-run.
-      const claim = await this.prisma.snapshotRecomputeTrigger.updateMany({
-        where: { id, tenantId, status: 'pending' },
-        data: { status: 'processing', processedAt: new Date() },
-      });
-      if (claim.count === 0) continue; // someone else claimed it
+      //
+      // PF-24 — the CLAIM is the fourth site the unique constrains, and the only one
+      // that is not a settle. `processing` keeps the CANONICAL key (it must: the row
+      // is still the live one for its scope), so claiming a pending row while an
+      // EARLIER row for the same scope is still `processing` raises P2002 — reachable
+      // whenever a recompute outlives a tick and a dirty was enqueued meanwhile,
+      // which is the same window the settle comments describe. This call sits before
+      // the `try` below, so that P2002 used to escape `drainTenant` into the
+      // per-tenant catch and abandon the REST of the tenant's batch for the tick.
+      // A claim that collides has, by definition, lost the race to a live row for
+      // its scope, so it is treated exactly as `claim.count === 0` already is.
+      let claimed = false;
+      try {
+        const claim = await this.prisma.snapshotRecomputeTrigger.updateMany({
+          where: { id, tenantId, status: 'pending' },
+          data: { status: 'processing', processedAt: new Date() },
+        });
+        claimed = claim.count > 0;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        this.logger.debug(
+          `Trigger ${id} (tenant=${tenantId}) not claimed — a live row already holds its scope`,
+        );
+      }
+      if (!claimed) continue; // someone else claimed it, or holds the scope
 
       const trigger = await this.prisma.snapshotRecomputeTrigger.findFirst({
         where: { id, tenantId },
