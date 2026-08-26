@@ -16,11 +16,11 @@ import {
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import type { ChildClaimListResponse, ChildClaimStatusRow } from './claim-types';
+import type { ChildLinksView, ParentChildLinksResponse } from './claim-types';
 
 import { PortalShell } from '@/components/PortalShell';
 import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
-import { ChildClaimsStatusStrip } from '@/components/parent/ChildClaimsStatusStrip';
+import { ChildLinksPanel } from '@/components/parent/ChildLinksPanel';
 import { api, ApiError } from '@/lib/api-client';
 import {
   enrollmentDecor,
@@ -31,6 +31,7 @@ import {
   type EnrollmentDecorRow,
   type EnrollmentDisplay,
 } from '@/lib/enrollment-activity';
+import { isAccessDenied, read } from '@/lib/read-result';
 
 
 export const metadata: Metadata = { title: 'Mes enfants' };
@@ -77,27 +78,68 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 }
 
 /**
- * Fetch the parent's own child-claims (`GET /parent/child-claims`). Distinguishes
- * the "backend not migrated yet" edge (404/501/503 — the additive `db push` is an
- * operator pre-req) from no-claims so the strip degrades to a calm "indisponible"
- * banner rather than crashing. Any other error → empty list.
+ * S-E03-3b / `PF-357` — reads the parent's own child LINKS
+ * (`GET /parent/child-claims`) and returns a **discriminated** outcome.
+ *
+ * ## What it replaces, and why the old shape could not be repaired in place
+ *
+ * `fetchClaims` returned `{ claims, available }`. Every failure therefore had
+ * to invent an empty `claims` array to fill that field — and the panel renders
+ * an empty array as the school fact *"you have not attached any child"*. A 403
+ * (guardianship revoked), a 422 (this account has no parent profile) and a 500
+ * all arrived at the panel wearing the same clothes as a genuinely empty
+ * account. That is `PF-05`'s class on this page, and no amount of care inside
+ * the old return type removes it: the type itself has nowhere to put "we do
+ * not know". `ChildLinksView` has no array outside its `ok` member, so the
+ * emptiness statement is now unreachable from a failure — structurally, not by
+ * vigilance.
+ *
+ * ## The status routing, and the 404 collision it settles (FM-5)
+ *
+ * Two rules of the story overlapped on `404`: "a 404 means the route family
+ * isn't migrated yet" (calm banner) and "a 404 is an access answer" (denied).
+ * The written tie-break was *"calm banner only when the response carries no
+ * JSON body"* — and that test is **inexpressible here**: `read()` yields
+ * `ApiFailure & { status }`, and `ApiFailure` drops `ApiError.body`
+ * (`api-client.ts`). Evaluating it would mean editing `read-result.ts`, which
+ * the other parent pages share.
+ *
+ * Settled by measurement instead: the `@Get()` handler behind this route
+ * throws **no** `NotFoundException` — the only one in that controller is on
+ * `:id/withdraw` — so its real failures are 403 (permission guard) and 422
+ * (`resolveGuardian`, "this account has no parent profile"). A 404 reaching
+ * here is an access answer, not a missing deployment, and the deployment case
+ * keeps its own signal in `501/503`.
+ *
+ * Branch ORDER is load-bearing: `isAccessDenied` is true for 404, so the
+ * `501/503` term must be evaluated first or the calm banner becomes
+ * unreachable.
+ *
+ * `422` gets its own explicit term beside `isAccessDenied` rather than being
+ * folded into it. `isAccessDenied` is `403 || 404` and is shared with the
+ * other parent pages `ADR-071` converted; widening it there would silently
+ * change how *those* pages render, so the widening lives at this call site
+ * only.
+ *
+ * A `200` whose payload has no `links` array is a **failed** read, never an
+ * empty one: that is exactly the deploy-skew shape (new page, un-restarted
+ * API) that would otherwise reproduce this slice's own bug while every gate
+ * stayed green. Hence no `?? []` anywhere on this path.
  */
-async function fetchClaims(): Promise<{
-  claims: ChildClaimStatusRow[];
-  available: boolean;
-}> {
-  try {
-    const resp = await api<ChildClaimListResponse>('/api/v1/parent/child-claims', {
-      cache: 'no-store',
-    });
-    return { claims: resp.claims ?? [], available: true };
-  } catch (err) {
-    if (err instanceof ApiError && [404, 501, 503].includes(err.status)) {
-      return { claims: [], available: false };
-    }
-    if (err instanceof ApiError) return { claims: [], available: true };
-    throw err;
+async function readChildLinks(): Promise<ChildLinksView> {
+  const result = await read(
+    'parent-children/child-links',
+    api<ParentChildLinksResponse>('/api/v1/parent/child-claims', { cache: 'no-store' }),
+  );
+
+  if (result.ok) {
+    return Array.isArray(result.data?.links)
+      ? { kind: 'ok', rows: result.data.links }
+      : { kind: 'failure' };
   }
+  if (result.status === 501 || result.status === 503) return { kind: 'unavailable' };
+  if (isAccessDenied(result) || result.status === 422) return { kind: 'denied' };
+  return { kind: 'failure' };
 }
 
 function computeAge(birthIso: string | null | undefined): number | null {
@@ -116,11 +158,18 @@ function initials(first?: string | null, last?: string | null): string {
 }
 
 export default async function ParentChildrenPage() {
-  const [resp, claimsResult] = await Promise.all([
+  const [resp, linksView] = await Promise.all([
     safe(api<{ data: Child[]; total: number }>('/api/v1/students', { cache: 'no-store' })),
-    fetchClaims(),
+    readChildLinks(),
   ]);
   const children = resp?.data ?? [];
+
+  // The submit drawer is disabled ONLY when the route family genuinely is not
+  // there yet. A 403 / 422 / 5xx leaves it ENABLED: disabling it would print
+  // « Le rattachement en ligne n'est pas encore disponible » — a failed read
+  // rendered as a fact about the school, which is `ADR-071 §D5` at the
+  // inverse polarity `PF-346` already cost a land pass.
+  const attachFormAvailable = linksView.kind !== 'unavailable';
 
   const total = children.length;
 
@@ -180,7 +229,7 @@ export default async function ParentChildrenPage() {
         ]}
         title="Mes enfants"
         subtitle="Tous les enfants rattachés à votre compte parent — cliquez pour voir le profil complet"
-        actions={<ChildClaimDrawer available={claimsResult.available} />}
+        actions={<ChildClaimDrawer available={attachFormAvailable} />}
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -219,7 +268,7 @@ export default async function ParentChildrenPage() {
             tone="amber"
           >
             <div className="mt-2">
-              <ChildClaimDrawer available={claimsResult.available} />
+              <ChildClaimDrawer available={attachFormAvailable} />
             </div>
           </EmptyState>
         ) : (
@@ -353,11 +402,14 @@ export default async function ParentChildrenPage() {
         )}
       </section>
 
-      {/* E9-S1 — "Mes demandes" : self-scoped child-claim status surface. */}
-      <ChildClaimsStatusStrip
-        claims={claimsResult.claims}
-        available={claimsResult.available}
-      />
+      {/*
+        S-E03-3b — « Rattachements et demandes » : la contrepartie
+        administrative de la liste ci-dessus, projetée depuis le MÊME fait
+        (`Guardianship`) qu'elle. Le panneau reçoit un résultat discriminé et
+        non « une liste plus un drapeau » : une lecture qui échoue n'a plus de
+        tableau vide à rendre comme « vous n'avez rattaché aucun enfant ».
+      */}
+      <ChildLinksPanel view={linksView} />
     </PortalShell>
   );
 }

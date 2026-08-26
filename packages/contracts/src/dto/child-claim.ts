@@ -103,36 +103,26 @@ export type ChildClaimAlreadyLinkedResponse = z.infer<
 // ---------------------------------------------------------------------------
 
 /**
- * One row of the parent's own claim-status surface. Carries the parent's OWN typed
- * fields + status + relationship + `decisionReason` (only when rejected) + the matched
- * child { studentId, firstName, lastName } ONLY when the driven link is active
- * (post-approval) — never on submitted/match_failed/rejected/withdrawn (no oracle on
- * the status read either).
+ * S-E03-3b / PF-357 / ADR-073 §R.1 — `ChildClaimStatusRowSchema` and
+ * `ChildClaimListResponseSchema` USED TO LIVE HERE and have been REPLACED, not kept
+ * alongside: two shapes for one surface is two truths (`DNC-01`).
+ *
+ * The route is unchanged (`GET /api/v1/parent/child-claims`, still walled by
+ * `guardianships.claim`); what changed is WHAT IT PROJECTS. It no longer reads only
+ * `GuardianshipClaim` — the REQUEST — it unions it with `Guardianship` — the FACT — so
+ * a guardian holding an active link and zero claims stops being told they have attached
+ * no child (2460 active links / 0 claims on the measured stack: a 100 % reproduction).
+ * The new shape is `ParentChildLinkRowSchema` / `ParentChildLinksResponseSchema` in
+ * `../guardianship/child-link.ts`, where the state vocabulary that decides it also lives.
+ *
+ * The dependency edge is ONE-WAY — `guardianship/` imports `GUARDIAN_RELATIONSHIP` and
+ * `GuardianshipClaimStatus` from THIS file, and this file imports nothing from there. A
+ * cycle would resolve one side to `undefined` at CJS module-init and `z.enum(undefined)`
+ * would throw on import: a boot failure no unit test of the derivation would show
+ * (`FM-7`). Do not add an import in the other direction.
+ *
+ * Every submit / already-linked / admin-queue schema below and above is UNTOUCHED.
  */
-export const ChildClaimStatusRowSchema = z.object({
-  id: UuidSchema,
-  status: z.enum(GUARDIANSHIP_CLAIM_STATUS),
-  relationship: z.enum(GUARDIAN_RELATIONSHIP),
-  claimedFirstName: z.string(),
-  claimedLastName: z.string(),
-  claimedBirthDate: z.string().nullable(),
-  decisionReason: z.string().nullable(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  child: z
-    .object({
-      studentId: UuidSchema,
-      firstName: z.string(),
-      lastName: z.string(),
-    })
-    .nullable(),
-});
-export type ChildClaimStatusRow = z.infer<typeof ChildClaimStatusRowSchema>;
-
-export const ChildClaimListResponseSchema = z.object({
-  claims: z.array(ChildClaimStatusRowSchema),
-});
-export type ChildClaimListResponse = z.infer<typeof ChildClaimListResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Admin approval queue — GET /admin/child-claims?status=submitted  (E9-S2)

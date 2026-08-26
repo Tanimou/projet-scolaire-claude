@@ -4,12 +4,13 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-25)** `in-progress` — **three slices landed, all three on 2026-08-25, and there was none before
-them.** `S-E03-4` (run 80 — `PF-15` closed on ONE AXIS OF TWO with `PF-328` as the named residual, `PF-04`/`PF-36`
-advanced not closed, `ADR-070`). `S-E03-2` (run 81 — **`PF-288` CLOSED as a class**, `PF-05` **advanced not
-closed**, `ADR-071`). `S-E03-3` (run 82 — `PF-12` **advanced not closed**: three of nine measured axes removed,
-`PF-357` — the audit's own third clause — untouched, `ADR-072`). All three landed ⚠️ **needing human review, none
-auto-merged**.
+**Status (2026-08-26)** `in-progress` — **four slices landed, three of them on 2026-08-25 and the fourth the
+next day, and there was none before them.** `S-E03-4` (run 80 — `PF-15` closed on ONE AXIS OF TWO with `PF-328`
+as the named residual, `PF-04`/`PF-36` advanced not closed, `ADR-070`). `S-E03-2` (run 81 — **`PF-288` CLOSED as
+a class**, `PF-05` **advanced not closed**, `ADR-071`). `S-E03-3` (run 82 — `PF-12` **advanced not closed**:
+three of nine measured axes removed, `PF-357` — the audit's own third clause — untouched, `ADR-072`).
+`S-E03-3b` (run 83 — **`PF-357` CLOSED**, `PF-12` **advanced again and still not closed** because `ADR-073
+§D11`'s own re-check failed, `ADR-073`). All four were flagged ⚠️ P1 at the sprint pass; the first three nonetheless auto-merged green (PRs #273, #274, #275 — #275 prefixed `[high-risk]`), which is what the routine's gate decision actually does with a P1 slice whose gates carry evidence. Corrected at run 84: the earlier wording claimed 'none auto-merged', and `gh pr list` contradicts it.
 
 > *Numbering correction, run 81:* the entries below originally dated `S-E03-4` to "run 79". The selection log
 > (`scheduled-tasks/daily-improvement-v3/state/selection-log.jsonl`) records `S-ROUTINE-1` as run 79, `S-E03-4`
@@ -52,6 +53,7 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-4`** — canonical academic-year resolution | `PF-15` (one axis of two), advances `PF-04` / `PF-36`; raises `PF-327`…`PF-330` | ⚠️ **2026-08-25, run 80 — landed needing human review (NOT auto-merged), P1 `[tenancy][truth]`** |
 | **`S-E03-2`** — the parent grades read becomes ONE guarded contract, and a failed read stops rendering as "no grades published" | **closes `PF-288`** (class, both remaining sites); **advances `PF-05`** — NOT closed; raises `PF-335`…`PF-353` | ⚠️ **2026-08-25, run 81 — landed needing human review (NOT auto-merged), P1 `[authz][truth]`** |
 | **`S-E03-3`** — "is this child actively enrolled" becomes ONE derivation, and the parent surfaces stop each answering it differently | **advances `PF-12`** — NOT closed (3 of 9 measured axes); raises `PF-356`…`PF-365` | ⚠️ **2026-08-25, run 82 — landed needing human review (NOT auto-merged), P1 `[truth]`** |
+| **`S-E03-3b`** — the parent attachment panel projects from the FACT (`Guardianship`), with `GuardianshipClaim` as provenance only | **closes `PF-357`**; **advances `PF-12`** — still NOT closed (`ADR-073 §D11` re-check failed); raises `PF-367`…`PF-371` | ⚠️ **2026-08-26, run 84 — landed needing human review (NOT auto-merged), P1 `[truth][security]`** |
 | `S-E03-1`, `S-E03-5`… | `PF-20`, `PF-24`, `PF-40`, `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82: it was authored and landed, and its story lives at `docs/spec/features/v3-e03/stories/S-E03-3.md`.) |
 
 ---
@@ -585,7 +587,7 @@ owes no entry (`PF-80` not armed).
 
 ---
 
-## Next slice → `PF-357` — the claim panel, i.e. `PF-12`'s own third clause
+## ~~Next slice → `PF-357`~~ — **DELIVERED at run 84 by `S-E03-3b`.** Kept for its reasoning; the live pointer is at the end of this file
 
 `S-E03-3` made the enrolment badge canonical and left, on the **same page**, a panel that answers a different
 question from a different table: `ChildClaimsStatusStrip.tsx:120-136` projects from `GuardianshipClaim`, so an
@@ -619,3 +621,92 @@ It ranks ahead of:
 finally has a `spec.md`, a `tasks.md` and a denominator.
 
 *(Written 2026-08-25, `S-E03-3` land pass, run 82. Later slices: annotate, do not delete.)*
+
+---
+
+## S-E03-3b — evidence (run 83, 2026-08-26)
+
+**Story** `docs/spec/features/v3-e03/stories/S-E03-3b.md` · **ADR** `ADR-073` · **Closes** `PF-357` ·
+**Advances** `PF-12` (still `open`) · **Raises** `PF-367` · `PF-368` · `PF-369` · `PF-370` · `PF-371`.
+
+### What was actually wrong
+
+Measured on the local stack, 2026-08-26: **2460 `active` guardianships, 28 `pending`, 2459 distinct guardians
+holding an active link — and 0 `GuardianshipClaim` rows.** `GET /api/v1/parent/child-claims` read the *claim*
+table alone, so for every parent in the data the page listed their children and then, three centimetres lower,
+stated *« Vous n'avez pas encore rattaché d'enfant »*. That is `PF-12`'s own third clause, and `DNC-01` in its
+purest form. The inverse also held: an `approved` claim whose `Guardianship` had since been revoked still
+rendered a green *« Validé »* badge.
+
+### What the fix is
+
+The panel projects from `Guardianship` (the FACT) unioned with `GuardianshipClaim` (its PROVENANCE), keyed by
+the CHILD rather than by the record. The five-member vocabulary, the total derivation over all 4 × 6
+`(linkStatus, claimStatus)` pairs, the identity predicate and the total order all live once in
+`packages/contracts/src/guardianship/child-link.ts`; the portal is handed decided verdicts and no raw
+`GuardianshipClaimStatus` at all, so *« Validé »-over-a-revoked-link* is **inexpressible**, not merely fixed.
+
+### The review pass overturned the story's own §3.4 — read this before quoting the closure
+
+The slice as implemented shipped `mayProjectChildIdentity = link !== null && (link.status === 'active' ||
+provenance === null || provenance.status === 'approved')`. **Only the first disjunct was gated on the link
+being live**, and with 2460 of 2460 links carrying zero claims, `provenance === null` was the ordinary case.
+The panel therefore returned the child's real name **and internal `studentId`** for `revoked` links — i.e. to
+the guardian `DELETE /guardians/guardianships/:id` had just de-authorised — and for `pending` links, to a
+guardian not yet authorised. `StudentAccessService` (`student-access.service.ts:111`) authorises `active`
+guardianships only, so these were children the platform denies the same caller everywhere else on the same
+page. Pre-slice the panel returned nothing at all for these rows, so it was **new** disclosure of children's
+data shipped inside a correctness fix.
+
+Corrected before landing (`ADR-073 §R.6`, restoring `§D5` and, for the unnameable case, `§D4`):
+
+- `mayProjectChildIdentity = link !== null && link.status === 'active'`;
+- a **second path** existed and had to be closed too — `displayName`'s last fallback re-read `link.student`
+  whenever `child` was null and there was no provenance, so gating the predicate alone still leaked. A link
+  that is not `active` with no claim behind it has no name this caller may read and is now **not projected at
+  all** (`isNameableForGuardian`); the fallback that used to read `link.student` throws.
+- Guarded by **T-2** (revoked + `approved` claim → `child: null`), **T-8** (⊆ against the `active` SUBSET, not
+  the whole Guardianship set, plus a whole-payload assertion), **T-8b** / **T-8c** (claim-less revoked and
+  pending → not projected) and **T-8d** (revoked *with* a claim → still projected, named from `claimed*`).
+
+The lesson, and it is the paired-lists lesson again: `§R.1` justified widening the predicate by saying the
+architect's narrow rule was *contained* in the wide one. Containment runs the other way — a wide predicate is
+never justified by containing a narrow one.
+
+### `PF-12` is ADVANCED, never `closed` — and `PF-357` IS closed
+
+`PF-357` closes: the panel now reads the fact, and the emptiness sentence has one guarded home which is true
+when it renders. **`PF-12` does not.** `ADR-073 §D11` set the re-check condition itself — *if any parent-facing
+surface still predicates `Guardianship.status` outside one shared predicate, the row is `advanced`* — and the
+re-check FAILED at the review pass: the slice never created `isLiveGuardianship`, and four parent-facing sites
+still spell the predicate by hand (`student-access.service.ts:111` and `:192`,
+`apps/worker/.../parent-digest-cron.service.ts:171`, `.../digest-aggregate.service.ts:60`). They all agree on
+`'active'`, so nothing contradicts today — but one question with five hand-written homes is exactly the shape
+`PF-12` names. `PF-356`, `PF-358`, `PF-359`, `PF-360` and `PF-363` also remain open under it.
+
+---
+
+## Next slice → `PF-356` — the `schoolId` asymmetry across the parent paths
+
+Ranked successor now that `PF-357` is delivered, and it was already second on the previous pointer's own list.
+`GET /students` applies `schoolId` from `SchoolContextService.forUser` (*"the school in the tenant with the
+most students"*), while `StudentAccessService` and `AnalyticsService.parentDashboard` ignore school entirely.
+In a multi-school tenant the **list is empty while the detail page renders fully**, and
+`apps/worker/src/modules/parent-digest/parent-digest-cron.service.ts:168-175` emails about a child the portal
+denies exists. It also reaches into `ADR-072`: keyed on `forUser` instead of on the school that owns the rows,
+two projections resolve two canonical years and reproduce `PF-12` on a fresh axis (`ADR-072 §R-4`).
+
+It is a wider slice than `S-E03-3b` — the seam is `SchoolContextService` and there is a semantic decision
+inside it (is the parent scope school-agnostic, or does every parent path apply the same school resolution?) —
+so it wants its own `epic-spec`-style decision, not an improvised one.
+
+**A cheaper, strictly-contained alternative if the board wants a short run:** `PF-358` + the `PF-12` residual
+`ADR-073 §D11` names — give the guardianship predicate ONE home the way `ADR-072` gave the enrolment predicate
+one, apply it at the five hand-written sites, and filter `_count.guardianships` so a child stops displaying
+*"2 responsables"* when one of them has been removed. That is the move that turns `PF-12` from `advanced` into
+`closed`.
+
+**Still owed for `V3-E03`, unchanged since `S-E03-4` and now four slices old:** an **`epic-spec` run**, so this
+epic finally has a `spec.md`, a `tasks.md` and a denominator.
+
+*(Written 2026-08-26, `S-E03-3b` review/land pass, run 84. Later slices: annotate, do not delete.)*

@@ -4,12 +4,16 @@
 - **Date** 2026-08-25
 - **Story** `S-E03-3b` — the parent claim panel must project from the FACT, with `GuardianshipClaim` as provenance only
 - **Epic** `V3-E03` — Canonical truth and query contracts (layer L0)
-- **Closes** `PF-357` (axis 5 of `PF-12`) and therefore, with `ADR-072`'s three axes, **`PF-12` itself** — subject to
-  §D11, which states the one axis that must be re-checked before the ledger row is written `closed`
-- **Raises** `PF-367` (the 422 "no parent profile" false denial) · `PF-368` (a claim-less `revoked` link is
-  unrepresentable and silently dropped) · `PF-369` (`claim-types.ts` is a hand-kept mirror of a shipped contract) ·
-  `PF-370` (`packages/contracts` gains a **third** sibling definition module — `ADR-041 §D4`'s registry deviation
-  deepens; supersedes nothing, extends `PF-365`)
+- **Closes** `PF-357` (axis 5 of `PF-12`). **`PF-12` itself stays `open` / advanced** — `§D11`’s re-check was
+  run at the review pass and FAILED: the guardianship predicate still has five hand-written homes (four of them
+  parent-facing), so the axis `PF-12` names is narrowed, not removed. See `§D11` for the measurement
+- **Raises** `PF-367` (the `canWithdraw` affordance discriminates matched from unmatched) · `PF-368` (three enum
+  literal lists in `packages/contracts/src/enums/index.ts` contradict `schema.prisma`) · `PF-369` (`withdraw()`
+  nulls `guardianshipId` and destroys provenance) · `PF-370` (`packages/contracts` gains a **third** sibling
+  definition module — `ADR-041 §D4`'s registry deviation deepens; supersedes nothing, extends `PF-365`) ·
+  `PF-371` (`claim-types.ts` is a hand-kept FE mirror of a shipped contract with no mechanism keeping the two in
+  step). **This line is the canonical allocation — see §R, which reconciles it against the draft ids used in
+  `§D4` / `§D7a` / the FE file list below.**
 - **Related** `ADR-022` (enrollment self-service child claim — **the no-oracle wall this ADR must not breach**) ·
   `ADR-072 §A3` (the server answers, the portal consumes a verdict; `import type` only from `packages/contracts`) ·
   `ADR-072 §A1`/`§A2` (contracts modules take no Prisma dependency; sibling modules need not be symmetric) ·
@@ -22,6 +26,13 @@
 ## Verdict
 
 **CONCERNS — proceed, under the rulings below.**
+
+> ⚠ **READ `§R` BEFORE `§D1`–`§D11`.** This ADR was drafted in the same planning pass as the story
+> `docs/spec/features/v3-e03/stories/S-E03-3b.md`, and the two drafts diverged on the state vocabulary, the
+> envelope key, the row-identity shape, the DTO strategy and the finding-id allocation. **`§R` records which
+> side won on each axis, with the measurement that settled it.** Where `§R` and a `§D` disagree, `§R` is the
+> ruling and the `§D` paragraph is retained for its reasoning only. The story's `§3` is the implementable
+> design.
 
 No schema change, no migration, no new dependency, no new package, no new guard, no permission touched.
 `G-MIGRATION` is correctly **not** triggered; `schema.prisma` must not be opened, so
@@ -182,7 +193,10 @@ a live fact nor an in-flight request — and is out of this surface.
 
 Accepted consequence, stated so it is not later read as a regression: an **admin-revoked, admin-created** link
 vanishes from the panel rather than reading "lien retiré". That is a real, if minor, loss of honesty, and it is
-recorded as **`PF-368`** — fix direction: *give `Guardianship` an explicit grant/revoke provenance (or backfill
+recorded as ~~a finding of its own~~ — **SUPERSEDED by `§R.1`: the story's `§3.2` step 3 recovers the withdrawn
+claim as provenance, so the residue is not nameable and a genuinely admin-created revoked link IS projected as
+`ended`. No id is owed; the paragraph below is retained only for the reasoning that made step 3 mandatory** —
+fix direction *(moot)*: *give `Guardianship` an explicit grant/revoke provenance (or backfill
 `approvedAt`) so "was once granted" is expressible; then project revoked-but-granted links with a neutral history
 state.* It is **not** solved here with a column that does not exist.
 
@@ -238,8 +252,10 @@ the reason it must be reused rather than re-written (`PF-174`, already lived).
 profil parent. Contactez l'établissement."* — when the caller holds no `Guardian` row. Today that 422 falls into
 `if (err instanceof ApiError) return { claims: [], available: true }` and the parent is told **"Vous n'avez pas
 encore rattaché d'enfant"**: an actionable account-provisioning problem rendered as a statement about their family.
-It is the same class as `AC-5` and closes with it. Recorded as **`PF-367`** and fixed here because the fix is the
-same table row.
+It is the same class as `AC-5` and closes with it — **fixed here**, by the story's `§4` row 3, because the fix is
+the same table row. **No id is allocated for it (`§R.2`)**; an item this slice genuinely closes earns a statement,
+not a ledger row. `§R.2` also carries the measurement this paragraph is missing: `isAccessDenied` covers 403 and
+404 **only**, so the 422 needs its own explicit term in the condition or it renders as a retryable failure.
 
 ### D8 — the prop shape is the rule: `claims: [] + available?: boolean` is deleted
 
@@ -312,6 +328,136 @@ ledger row must say so in the same words, or the next reader will believe the gu
 If, at the land pass, any *parent-facing* surface still predicates `Guardianship.status` outside
 `isLiveGuardianship`, the row is `advanced`, not `closed`.
 
+**Re-checked at the review pass of run 83 — the answer is `advanced`, and the ledger says so.**
+Measured by reading every non-spec `Guardianship.status` predicate under `apps/api/src` and `apps/worker/src`:
+
+- `isLiveGuardianship` **was never created** — this slice shipped `mayProjectChildIdentity` /
+  `isNameableForGuardian`, which answer *may this caller be shown this child*, not *is this link live*.
+- Four **parent-facing** sites still spell the predicate by hand, and all four spell it `status: 'active'`:
+  `students/student-access.service.ts:111` and `:192` (the parent ABAC wall itself),
+  `apps/worker/.../parent-digest-cron.service.ts:171` and `.../digest-aggregate.service.ts:60`.
+
+They **agree**, so no contradiction is live on the parent portal today — which is why `PF-357` closes. But
+`§D11`’s test is about the predicate having ONE home, and it does not: five hand-written sites for one
+question is the shape `PF-12` names. **`PF-12` is therefore recorded `open` / advanced**, with the remaining
+axis stated in its own row, and it is not this slice’s to widen (`GUARDRAILS §5`: one coherent improvement).
+
+---
+
+## §R — Reconciliation with the story (authoritative; written at the implementation pass)
+
+This ADR and `S-E03-3b.md` were drafted in parallel and shipped contradicting each other. Nothing below
+re-opens a design question: each row states which document governs, and **the measurement that settled it**.
+Where a `§D` paragraph conflicts with this table, this table is the ruling.
+
+### R.1 — Design axes: the story's `§3` governs
+
+| Axis | ADR draft | **Governs** | Why |
+|---|---|---|---|
+| State vocabulary | `pending_review` / `pending_link` (`§D3`) | **story `§3.3`** — the five members `linked · requested · request_rejected · request_withdrawn · ended` | The story's table is a *total* function of `(linkStatus \| null, claimStatus \| null)` with an exhaustive-`never` assertion (T-9). `§D3`'s two-name sketch never enumerated the 24 pairs |
+| Envelope key | `{ attachments: [...] }` (`§D6.4`) | **story `§3.5`** — `{ links: [...] }` | Either satisfies `§D6.5`; one key must be picked and the story's is the one the tests, the ratchet and the FE mirror are written against |
+| Method name | `listAttachmentsForGuardian` (`§D1`) | **story `§5`** — `listChildLinksForGuardian` | Cosmetic; the story's name is the one the ratchet `R3` and the controller call site cite. `§D1`'s substantive ruling — **the HTTP route does not change** — stands unaltered |
+| Row identity | two nullable fields, never one opaque `id` (`§D6.2`) | **story `§3.1`/`§3.5`** — one `id` **plus** a separate nullable `claimId` | `§D6.2`'s hazard is real (a link id posted to `/parent/child-claims/:id/withdraw` is a 404) and is **already closed** by the story: `claimId` is its own field and `canWithdraw` is server-computed, so the component never posts `id`. The two-field sketch solved the same hazard twice |
+| A claim-less `revoked` link | **not projected** (`§D4`) | **story `§3.3` row 5 + `§3.2` step 3** — projected as `ended` | `§D4` assumed provenance is joined by `guardianshipId` alone, so a withdrawn probe's residue would look admin-created. The story's step-3 fallback (`matchedStudentId === link.studentId`, `[createdAt desc, id desc]`) **re-attaches** that withdrawn claim, so the residue resolves to `request_withdrawn` with `child: null`, not to a nameable `ended` row. With provenance recovered, projecting a genuinely admin-created revoked link is honest and is not an oracle — no caller action produced it. **Overturned in part at the review pass (`§R.6`):** step 3 stands and is still load-bearing (story FM-1, T-3), so a withdrawn/rejected residue keeps its provenance and is projected. But a *genuinely* admin-created `revoked` or `pending` link has no provenance and, under the corrected `§D5`, no nameable identity either — so `§D4` is RESTORED for it: it is **not projected**. `§D4`'s accepted-loss paragraph stands as written; the id it allocated stays withdrawn, since the review pass fixed the axis rather than recording it |
+| Child identity | `active` links only (`§D5`) | **`§D5` — and the story `§3.4` as drafted was a LEAK.** Overturned at the review pass of the same run; see `§R.6` | The draft row reasoned that `§D5` is *contained* in `§3.4`. The containment is the other way round: `§D5` is the strict predicate, `§3.4` was the wide one, and a wide predicate cannot be justified by containing a narrow one. `§3.4`'s `provenance === null` disjunct was gated on no link status at all, and **2460 of 2460 live links carry zero claims**, so it fired for `revoked` and `pending` links as the normal case. The predicate is `link !== null && link.status === 'active'` |
+| DTO strategy | additive; `dto/child-claim.ts` read-only (`§D6.1`) | **story `§5`** — replace `ChildClaimStatusRowSchema` / `ChildClaimListResponseSchema` | **`§D6.1`'s premise is false, and it was measured.** It claims `ChildClaimStatusRow` "is also imported by `apps/web/src/app/admin/child-claims/types.ts`". `grep -rn "ChildClaimListResponse\|ChildClaimStatusRow" apps packages` (excluding `dist/`) returns **17 hits across 5 files, none of them under `apps/web/src/app/admin/`**. The real cross-portal dependency is a *different* symbol — see `R.3` |
+
+### R.2 — The 422 is FIXED by this slice, and no id is allocated for it
+
+`§D7a` allocated a finding to the `resolveGuardian` 422 false denial. **Verified: the story's `§4` row 3 fixes
+it** — the 422 routes to `ReadErrorState variant="denied", retryable={false}`, which is neither the empty state
+nor a claim about the family. Per the operator's instruction, an item genuinely fixed by this slice earns a
+statement, not an id. **`§D7a` is retained as the rationale for `§4` row 3; the id it allocated is withdrawn.**
+
+**One measurement `§D7a` did not make, and the implementer needs it:**
+`isAccessDenied` (`apps/web/src/lib/read-result.ts:75-77`) is **exactly** `status === 403 || status === 404`.
+**It does not cover 422.** A `§4` row 3 written as `isAccessDenied(result) ? denied : failure` therefore sends
+the 422 to `variant="failure"` **with a retry button that can never succeed**. The 422 needs its own explicit
+term in the condition. Do **not** widen `isAccessDenied` itself — it is consumed by other parent pages
+(`ADR-071 §D5`) and changing its meaning is a change to those pages.
+
+### R.3 — The real cross-portal constraint on `claim-types.ts`
+
+`apps/web/src/app/admin/child-claims/types.ts:17-20` imports `ChildClaimRelationship` and `ChildClaimStatus`
+**from `@/app/parent/children/claim-types`**. The admin queue's vocabulary is therefore sourced from a
+*parent-portal* FE mirror.
+
+- **Safe to delete** (story `§5`): `ChildClaimStatusRow` (`:63-76`) and `ChildClaimListResponse` (`:78-80`) —
+  no other file imports either.
+- **Must survive, or the admin queue stops compiling**: `CHILD_CLAIM_RELATIONSHIP` / `ChildClaimRelationship`
+  (`:15-23`) and `CHILD_CLAIM_STATUS` / `ChildClaimStatus` (`:25-33`), plus `ChildClaimRequestInput`,
+  `ChildClaimSubmitResponse` and `ClaimUnavailable`, which the submit drawer and server actions use.
+
+This is `PF-371`'s substance and it is worse than "a mirror with no sync mechanism": the mirror is also a
+*cross-portal* dependency. Recorded, not fixed.
+
+### R.4 — An accepted residual on the no-oracle wall, deliberately not given an id
+
+`§D3.3` requires `createdAt`/`updatedAt` to come from the **claim**, never the link, so a matched `submitted`
+row and a `match_failed` row cannot be told apart by a timestamp source. The story's `§3.6` instead takes
+`createdAt` from **the fact when a link exists**, and T-5 erases `createdAt`/`updatedAt` before its deep-equal.
+
+**Ruled: the story governs, and the residual is accepted.** `submitClaim` writes the link and the claim inside
+one transaction, so the two timestamps differ by microseconds and neither is observable against a reference the
+caller holds — the row carries exactly one `createdAt`, not both. This is a theoretical discriminator, not an
+exploitable one. It is named here so a later reader does not mistake T-5's erasure list for an oversight. **No
+id is allocated** — the operator's allocation for this run is closed at `PF-371`. A future slice that widens the
+wall's test to timestamps should start from this paragraph.
+
+### R.6 — The REVIEW pass overturned `§R.1`’s child-identity row: `§D5` governs, and `§D4` is restored for the unnameable case
+
+Written at the review pass of the same run, on a measurement, and it reverses a row of `§R.1` rather than
+re-opening a design question.
+
+**What `§R.1` shipped.** `mayProjectChildIdentity = link !== null && (link.status === 'active' || provenance === null || provenance.status === 'approved')`.
+
+**Why it is wrong.** Only the first disjunct is gated on the link being live. `StudentAccessService`
+(`apps/api/src/modules/students/student-access.service.ts:111` and `:192`) scopes a parent to
+`status: 'active'` guardianships **only**, so `GET /students` and every downstream ABAC check deny exactly the
+students the other two disjuncts named. And the second disjunct is not an edge: **2460 of 2460 live links
+carry zero claims** (this ADR’s own Context measurement), so `provenance === null` is the ordinary shape of
+the data, not the exception. The consequences, both first-party:
+
+- `DELETE /api/v1/guardians/guardianships/:id` (`guardians.controller.ts:348`) is the admin’s custody-removal
+  off-switch. It flips `status` to `revoked` and creates no claim. After it ran, the panel returned the
+  child’s real `firstName`/`lastName` **and internal `studentId`** to the guardian just de-authorised.
+- A `pending` admin-created link (28 live) named a child to a guardian the school has **not yet** authorised.
+
+Pre-slice, `listForGuardian` read `GuardianshipClaim` alone and returned nothing for these rows, so this was
+**new** disclosure of children’s data shipped inside a correctness fix — against `GUARDRAILS §1`.
+
+**The ruling.** `§D5` governs verbatim: identity is projected for `status === 'active'` and for nothing else,
+`studentId` included. `§R.1`’s justification (“`§D5` is *contained* in `§3.4`’s first disjunct”) inverts the
+direction of containment — a wide predicate is not justified by containing a narrow one.
+
+**And a corollary that `§R.1` did not see.** Gating the predicate alone was not sufficient: the projection’s
+`displayName` fallback re-read `link.student` whenever `child` was `null` **and** there was no provenance, so
+the same name went out by a second path. A link that is not `active` with no claim behind it therefore has no
+name this caller may read at all, and is **not projected** — which is `§D4` restored, for its own reason. The
+rule is stated once, as `isNameableForGuardian`, beside the predicate it composes.
+
+**Not a lost capability.** The pre-slice panel rendered nothing for these rows, and the children list above it
+is `active`-only too, so the two surfaces still agree — which is all `PF-357` asks.
+
+**The tripwire.** This ADR's own *Verification* item 4 — *"an `approved` claim over a `revoked` link reads
+neither \"Validé\" nor the child's name"* — was **failing** in the implemented diff, and story T-2 asserted its
+negation. An ADR that states its acceptance in one place and has it contradicted in another is the `DNC-01`
+shape this epic keeps catching itself in; the acceptance was right and the implementation was wrong.
+
+**Evidence:** `child-claims.service.spec.ts` T-2 (revoked + `approved` claim → `child: null`), T-8 (⊆ against
+the **active** subset, plus a whole-payload assertion that no non-active child’s name or id appears), T-8b
+(revoked, no claim → not projected), T-8c (pending, no claim → not projected), T-8d (revoked **with** a claim
+→ still projected, named from `claimed*`).
+
+### R.5 — Unchanged and still binding
+
+`§D2` (the vocabulary lives in one `packages/contracts` module, imported by the web app with `import type` only,
+never executed there) · `§D3`'s *analysis* of the wall and the rows-2-and-6 collapse it demands · `§D6.5` (a
+payload missing the envelope key is a **failed** read, never an empty one) · `§D7`'s outcome table minus the
+422 row's id · `§D8` (the prop shape carries the rule; `claims: [] + available?: boolean` is deleted) · `§D9`
+(one emptiness copy) · `§D10` (G-TENANT, the ratchet's house properties, the `⊆`-not-equality G-TRUTH
+assertion) · `§D11` (the `PF-358` re-check before the ledger row is written `closed`).
+
 ---
 
 ## Module / file boundaries — exact, and disjoint by owner
@@ -333,7 +479,10 @@ If, at the land pass, any *parent-facing* surface still predicates `Guardianship
 - `apps/web/src/app/parent/children/page.tsx` — delete `fetchClaims`, adopt `read()` (§D7), pass the union prop
 - `apps/web/src/app/parent/children/claim-types.ts` — the row type becomes
   `import type { ParentAttachmentRow } from '@pilotage/contracts'` (already the house pattern in ~15 web files).
-  The runtime const lists stay FE-local — **out of scope**, recorded as **`PF-369`**
+  The runtime const lists stay FE-local — **out of scope**, recorded as **`PF-371`** (`§R.1`, `§R.3`). **`§R.3`
+  is binding on this file:** `CHILD_CLAIM_RELATIONSHIP` / `ChildClaimRelationship` and `CHILD_CLAIM_STATUS` /
+  `ChildClaimStatus` are imported by `apps/web/src/app/admin/child-claims/types.ts:17-20` and **must survive**;
+  only `ChildClaimStatusRow` and `ChildClaimListResponse` may be deleted
 - `apps/web/src/components/parent/ChildClaimsStatusStrip.tsx` — union prop, state→chip table, failure renders
   (§D8). **`STATUS_CHIP`'s `match_failed`≡`submitted` collapse is preserved by §D3, not deleted**
 - `apps/web/src/app/parent/children/claim-actions.ts` — read-only unless the withdraw guard needs the `claimId`
@@ -352,8 +501,9 @@ are listed above the sentence. One guardianship predicate exists, in one place, 
 failed, denied or unprovisioned read stops being rendered as a family fact — three states that today all say the
 same false thing. The defective render is deleted from the type system rather than from the code path.
 
-**Negative, accepted.** A claim-less `revoked` link disappears from the panel (§D4, `PF-368`) — a small loss of
-honesty taken deliberately over a wall breach. `packages/contracts` grows a third definition module while
+**Negative, accepted.** ~~A claim-less `revoked` link disappears from the panel~~ — **withdrawn by `§R.1`: it is
+projected as `ended`, because `§3.2` step 3 recovers the withdrawn probe's provenance and makes the residue
+`child: null` instead of invisible.** `packages/contracts` grows a third definition module while
 `ADR-041 §D4`'s registry still does not exist (§D2, `PF-370`). The response shape of a live endpoint changes, with
 one consumer and a fail-loud guard (§D6). `PF-358`'s three admin sites remain divergent on the very column this
 slice canonicalises (§D11).
@@ -367,13 +517,24 @@ change, `packages/contracts` CJS pin untouched (`GUARDRAILS §2`).
 
 1. **RED-BEFORE, evidenced by execution.** A guardian with one `active` `Guardianship` and **zero** claims: assert
    the projection is non-empty. Run it against the pre-diff code, paste the failure, then restore.
-2. **The wall test of §D3** — `toEqual` between the matched and unmatched fixtures, modulo `claimId`. A
-   label-only assertion does **not** discharge this.
-3. **§D4** — a `revoked` link with no claim yields no row; the withdrawn claim over that same link yields exactly
-   one row, naming only the parent's own typed name.
+2. **The wall test of §D3** — this is the story's **T-5**: `toEqual` between the matched (`submitted` + `pending`
+   link) and unmatched (`match_failed`, no link) fixtures, modulo the identifier/timestamp erasure list in
+   story `§6`. A label-only assertion does **not** discharge this. Both rows must read `state: 'requested'`
+   (story `§3.3` rows 2 and 6), `child: null` and `decisionReason: null`; only `canWithdraw` may differ, and
+   that difference is `PF-367`, recorded not fixed.
+3. **§D4 as reconciled by §R.1** — this is the story's **T-3**: a `revoked` link whose withdrawn claim carries
+   `guardianshipId: null, matchedStudentId: S` yields **exactly one** row, `state: 'request_withdrawn'`,
+   **`child: null`**, naming only the parent's own typed name. A second row, or a non-null `child`, is FM-1
+   shipping — the leak sold as the fix.
 4. **§D5 / `AC-3`** — an `approved` claim over a `revoked` link reads neither "Validé" nor the child's name.
+   **This item was FAILING in the implemented diff and is the tripwire that caught `§R.1`'s error** (`§R.6`):
+   story T-2 asserted the exact opposite — `child` equal to the real student — because the draft `§3.4` had an
+   `approved` disjunct. Corrected; T-2 now asserts `child: null` and that the payload carries no `studentId`.
 5. **G-TENANT** — a foreign-tenant guardian id yields zero rows.
-6. **G-TRUTH** — the ⊆ assertion of §D10, with the `PF-356` reason for `⊆` written in the test.
+6. **G-TRUTH** — the ⊆ assertion of §D10, against the **`active` SUBSET** of the caller's guardianships and not
+   the whole set (⊆-against-all-links passes while the panel leaks — `§R.6`), with the `PF-356` reason for `⊆`
+   rather than equality written in the test, plus a whole-payload assertion that no non-active child's name or
+   id appears anywhere in the response.
 7. **The one-way ratchet** of §D10, with its floor, its passing negative control and its allowlist asserted empty.
 8. **No live ROPC probe.** The realm is 100 % confidential; every such probe in run 77 returned 401. Jest against
    fixtures, per the story.
