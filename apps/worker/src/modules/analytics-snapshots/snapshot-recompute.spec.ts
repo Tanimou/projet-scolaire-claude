@@ -9,7 +9,11 @@ import {
   trendDelta,
   weightedGlobal,
 } from './snapshot-formula';
-import { snapshotCoalesceKey } from './snapshot-keys';
+import {
+  canonicalCoalesceKey,
+  snapshotCoalesceKey,
+  terminalCoalesceKey,
+} from './snapshot-keys';
 import { SnapshotRecomputeService } from './snapshot-recompute.service';
 
 type Mock = ReturnType<typeof jest.fn>;
@@ -136,6 +140,44 @@ describe('snapshotCoalesceKey', () => {
     expect(snapshotCoalesceKey('T', 'grade_published', { ...base, classSectionId: 'cA' })).not.toBe(
       snapshotCoalesceKey('T', 'grade_published', { ...base, classSectionId: 'cB' }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 2b — PF-24: a TERMINAL key never competes for the pending coalescing slot.
+//
+// `@@unique([tenantId, coalesceKey, status])` makes the *pending* slot coalescing.
+// Applied to `done`/`failed` it meant "at most one done row and one failed row per
+// scope, ever" — so the SECOND recompute of any scope could not be marked done
+// (P2002), the row stayed `processing`, and the freshness read (which derives
+// `recomputing` from `status IN (pending, processing)`) pinned `recomputing: true`
+// forever. These assertions pin the derivation the fix rests on.
+// ---------------------------------------------------------------------------
+
+describe('terminalCoalesceKey / canonicalCoalesceKey (PF-24)', () => {
+  const scope = { classSectionId: 'c1', subjectId: 's1', termId: 't1', academicYearId: 'y1' };
+  const key = snapshotCoalesceKey('T', 'grade_published', scope);
+
+  it('two terminal rows for the SAME scope get two DIFFERENT keys — the done/done collision is gone', () => {
+    // Row A drained the scope yesterday, row B drains the same scope today.
+    expect(terminalCoalesceKey(key, 'row-a')).not.toBe(terminalCoalesceKey(key, 'row-b'));
+  });
+
+  it('a terminal key never equals the canonical key — a done row cannot occupy the pending slot', () => {
+    expect(terminalCoalesceKey(key, 'row-a')).not.toBe(key);
+  });
+
+  it('the canonical key round-trips out of a terminal key — a revived row coalesces again', () => {
+    expect(canonicalCoalesceKey(terminalCoalesceKey(key, 'row-a'))).toBe(key);
+  });
+
+  it('canonicalCoalesceKey leaves a never-mangled key untouched (rows written before the fix)', () => {
+    expect(canonicalCoalesceKey(key)).toBe(key);
+  });
+
+  it('is idempotent: re-deriving a terminal key from an already-terminal one does not stack suffixes', () => {
+    const once = terminalCoalesceKey(key, 'row-a');
+    expect(terminalCoalesceKey(once, 'row-a')).toBe(once);
   });
 });
 

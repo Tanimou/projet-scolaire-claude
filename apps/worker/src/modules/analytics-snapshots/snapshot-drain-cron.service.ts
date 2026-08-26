@@ -3,6 +3,7 @@ import { DOMAIN_EVENTS } from '@pilotage/contracts';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
+import { canonicalCoalesceKey, terminalCoalesceKey } from './snapshot-keys';
 import { SnapshotRecomputeService } from './snapshot-recompute.service';
 
 const INTERVAL_MS = Number(process.env.SNAPSHOT_RECOMPUTE_INTERVAL_MS ?? 60 * 1000);
@@ -13,6 +14,13 @@ const BATCH_SIZE = Number(process.env.SNAPSHOT_RECOMPUTE_BATCH ?? 25);
 const MAX_ATTEMPTS = Number(process.env.SNAPSHOT_RECOMPUTE_MAX_ATTEMPTS ?? 5);
 /** A `processing` row older than this is reclaimed to `pending` (crash recovery, PM-10). */
 const STALE_PROCESSING_MIN = Number(process.env.SNAPSHOT_RECOMPUTE_STALE_MIN ?? 15);
+/**
+ * PF-24 — bound on the per-tick stale-`processing` reclaim. The reclaim became a
+ * per-row loop (a single `updateMany` is atomic, so ONE colliding row would abort
+ * the reclaim of every other), so it needs the same explicit per-tick bound every
+ * other sweep already carries. The remainder is reclaimed on the next tick.
+ */
+const STALE_RECLAIM_TAKE = Number(process.env.SNAPSHOT_STALE_RECLAIM_TAKE ?? 200);
 /**
  * E6-S3 — upper bound on the per-trigger class fan-out for a class-less
  * `coefficient_changed` trigger (FR7). A coefficient change on a subject can touch
@@ -47,6 +55,16 @@ const REBUILD_FANOUT_TAKE = Number(process.env.SNAPSHOT_REBUILD_FANOUT_TAKE ?? 2
  * change — reuses the existing `revision` column.
  */
 const SNAPSHOT_REVISION_FLOOR = Number(process.env.SNAPSHOT_REVISION_FLOOR ?? 1);
+
+/**
+ * PF-24 — duck-typed unique-violation predicate. Prisma raises
+ * `PrismaClientKnownRequestError` with `code: 'P2002'`; matching on the code alone
+ * keeps this a type-only dependency on `@prisma/client` (the worker imports Prisma
+ * as `import type` everywhere) and matches how the API's P2002 catches are exercised.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2002';
+}
 
 /**
  * E6-S1 — snapshot recompute drain cron. Structural sibling of `AlertsCronService`
@@ -206,15 +224,26 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
    */
   private async reclaimStaleProcessing(): Promise<void> {
     const cutoff = new Date(Date.now() - STALE_PROCESSING_MIN * 60 * 1000);
-    const reclaimed = await this.prisma.snapshotRecomputeTrigger.updateMany({
+    const stale = await this.prisma.snapshotRecomputeTrigger.findMany({
       where: {
         status: 'processing',
         OR: [{ processedAt: { lt: cutoff } }, { processedAt: null }],
       },
-      data: { status: 'pending' },
+      orderBy: { processedAt: 'asc' },
+      take: STALE_RECLAIM_TAKE,
+      select: { id: true, tenantId: true, coalesceKey: true },
     });
-    if (reclaimed.count > 0) {
-      this.logger.warn(`Reclaimed ${reclaimed.count} stale processing trigger(s) → pending`);
+    if (stale.length === 0) return;
+    // PF-24 — one row at a time through `requeueCanonical`. A single `updateMany`
+    // is atomic: ONE stale row whose scope already has a live `pending` row raises
+    // P2002 on `@@unique([tenantId, coalesceKey, status])` and aborts the reclaim of
+    // every OTHER stale row — crash recovery wedged for the whole deployment.
+    let reclaimed = 0;
+    for (const row of stale) {
+      if (await this.requeueCanonical(row)) reclaimed += 1;
+    }
+    if (reclaimed > 0) {
+      this.logger.warn(`Reclaimed ${reclaimed} stale processing trigger(s) → pending`);
     }
   }
 
@@ -231,17 +260,22 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       where: { status: 'failed', processedAt: { lt: cutoff } },
       orderBy: { processedAt: 'asc' },
       take: FAILED_REVIVE_TAKE,
-      select: { id: true },
+      select: { id: true, tenantId: true, coalesceKey: true },
     });
     if (stale.length === 0) return 0;
-    const revived = await this.prisma.snapshotRecomputeTrigger.updateMany({
-      where: { id: { in: stale.map((s) => s.id) }, status: 'failed' },
-      data: { status: 'pending', attempts: 0, lastError: null },
-    });
-    if (revived.count > 0) {
-      this.logger.warn(`Revived ${revived.count} parked (failed) trigger(s) → pending (retry)`);
+    // PF-24 — a parked row carries a TERMINAL coalescing key, so the revive MUST put
+    // the canonical one back: otherwise the API enqueue would no longer fold onto the
+    // revived row and the queue would grow one uncoalesced row per dirty. That restore
+    // can legitimately collide with a live `pending` row for the same scope, so it runs
+    // per row (an `updateMany` would abort the whole batch on the first collision).
+    let revived = 0;
+    for (const row of stale) {
+      if (await this.requeueCanonical(row, { attempts: 0, lastError: null })) revived += 1;
     }
-    return revived.count;
+    if (revived > 0) {
+      this.logger.warn(`Revived ${revived} parked (failed) trigger(s) → pending (retry)`);
+    }
+    return revived;
   }
 
   /**
@@ -465,6 +499,8 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
           subjectId: true,
           academicYearId: true,
           attempts: true,
+          // PF-24 — the settle needs the stored key to derive the terminal one.
+          coalesceKey: true,
         },
       });
       if (!trigger) continue;
@@ -498,24 +534,33 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
           // class-scoped manual_rebuild) → a single class recompute.
           await this.recompute.recomputeScope(trigger);
         }
-        await this.prisma.snapshotRecomputeTrigger.updateMany({
-          where: { id, tenantId },
-          data: { status: 'done', processedAt: new Date() },
-        });
+        // PF-24 — the terminal write carries a per-ROW terminal key. Before this,
+        // `done` kept the canonical key and hit `@@unique([tenantId, coalesceKey,
+        // status])` against the `done` row left by the FIRST recompute of the same
+        // scope: every second recompute of every scope threw P2002, the row stayed
+        // `processing` forever and the freshness read pinned `recomputing: true`.
+        await this.settleTrigger(trigger, 'done');
         recomputed += 1;
       } catch (err) {
         const attempts = trigger.attempts + 1;
         const parked = attempts >= MAX_ATTEMPTS;
-        await this.prisma.snapshotRecomputeTrigger.updateMany({
-          where: { id, tenantId },
-          data: {
-            // Parked → stays `failed`; otherwise back to `pending` to retry next tick.
-            status: parked ? 'failed' : 'pending',
-            attempts,
-            lastError: (err as Error).message.slice(0, 500),
-            processedAt: new Date(),
-          },
-        });
+        const lastError = (err as Error).message.slice(0, 500);
+        // PF-24 — the FAILURE write hit the same constraint from both sides: parking
+        // on `failed` collided with an older parked row for the scope, and the retry
+        // write back to `pending` collided with a dirty enqueued while this row was
+        // `processing`. Either P2002 escaped `drainTenant` into the per-tenant catch
+        // and silently abandoned the REST of that tenant's batch for the tick — so
+        // fixing only the `done` write would have left this abort path open. The
+        // settle is collision-safe on both branches, and a settle that fails for any
+        // OTHER reason is logged rather than allowed to abort the batch.
+        try {
+          // Parked → stays `failed`; otherwise back to `pending` to retry next tick.
+          await this.settleTrigger(trigger, parked ? 'failed' : 'pending', { attempts, lastError });
+        } catch (settleErr) {
+          this.logger.error(
+            `Could not settle trigger ${id} (tenant=${tenantId}) after a recompute failure: ${(settleErr as Error).message}`,
+          );
+        }
         failed += 1;
         if (parked) parkedCount += 1;
         this.logger.error(
@@ -525,6 +570,82 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       }
     }
     return { recomputed, failed, parked: parkedCount };
+  }
+
+  /**
+   * PF-24 — write a trigger's OUTCOME status without ever tripping
+   * `@@unique([tenantId, coalesceKey, status])`.
+   *
+   * That unique is what makes the *pending* slot coalescing (one live row per
+   * scope). It was never meant to constrain terminal rows, but `coalesceKey` is a
+   * pure function of `(tenant, reason, scope)`, so it constrained them anyway: one
+   * `done` row and one `failed` row per scope, for the lifetime of the table.
+   *
+   *   - `done` / `failed` → the row takes `terminalCoalesceKey(key, id)`, suffixed
+   *     with its own primary key. Collision-free BY CONSTRUCTION, not by retry: no
+   *     two rows can ever derive the same terminal key.
+   *   - `pending` (retry) → the row must take the CANONICAL key back, which CAN
+   *     legitimately collide with a live pending row for the same scope; that case
+   *     is handled in `requeueCanonical`.
+   */
+  private async settleTrigger(
+    trigger: { id: string; tenantId: string; coalesceKey: string },
+    status: 'done' | 'failed' | 'pending',
+    extra: { attempts?: number; lastError?: string | null } = {},
+  ): Promise<void> {
+    if (status === 'pending') {
+      await this.requeueCanonical(trigger, extra);
+      return;
+    }
+    const { id, tenantId, coalesceKey } = trigger;
+    await this.prisma.snapshotRecomputeTrigger.updateMany({
+      where: { id, tenantId },
+      data: {
+        ...extra,
+        status,
+        coalesceKey: terminalCoalesceKey(coalesceKey, id),
+        processedAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * PF-24 — put a row back into the `pending` coalescing slot under its CANONICAL
+   * key (stripping a terminal suffix if it carried one). Returns `true` when the row
+   * is now pending.
+   *
+   * The canonical key is exactly the one the API enqueue upserts on, so the restore
+   * can collide with a live pending row for the same `(tenant, reason, scope)`. That
+   * collision is not an error: the surviving pending row IS this row's work — it
+   * recomputes the same scope on a later tick. The redundant row is dropped (the
+   * trigger table is transient bookkeeping, not a domain aggregate — no audit
+   * concern, ADR-019 §Non-goals) rather than left wedged in a non-terminal status
+   * forever, which is the failure this whole finding is about.
+   */
+  private async requeueCanonical(
+    trigger: { id: string; tenantId: string; coalesceKey: string },
+    extra: { attempts?: number; lastError?: string | null } = {},
+  ): Promise<boolean> {
+    const { id, tenantId } = trigger;
+    try {
+      const updated = await this.prisma.snapshotRecomputeTrigger.updateMany({
+        where: { id, tenantId },
+        data: {
+          ...extra,
+          status: 'pending',
+          coalesceKey: canonicalCoalesceKey(trigger.coalesceKey),
+          processedAt: new Date(),
+        },
+      });
+      return updated.count > 0;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      await this.prisma.snapshotRecomputeTrigger.deleteMany({ where: { id, tenantId } });
+      this.logger.debug(
+        `Trigger ${id} (tenant=${tenantId}) dropped as redundant — a pending row already covers its scope`,
+      );
+      return false;
+    }
   }
 
   /**
