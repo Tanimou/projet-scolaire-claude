@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 import { AnnouncementScope, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -179,7 +180,7 @@ export class AnnouncementRecipientsService {
   private async guardiansOfStudents(tenantId: string, studentIds: string[]): Promise<Set<string>> {
     if (studentIds.length === 0) return new Set();
     const guardianships = await this.prisma.guardianship.findMany({
-      where: { tenantId, studentId: { in: studentIds }, status: 'active' },
+      where: { tenantId, studentId: { in: studentIds }, ...guardianshipLiveWhere() },
       include: { guardian: { select: { userProfileId: true } } },
     });
     const set = new Set<string>();

@@ -19,6 +19,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   candidateEnrollmentWhere,
   enrollmentTotalOrder,
+  guardianshipLiveWhere,
+  guardianshipOnTheBooksWhere,
   projectEnrollmentActivity,
   resolveActiveAcademicYear,
   selectActiveEnrollment,
@@ -257,9 +259,9 @@ export class StudentsController {
               academicYear: { select: { id: true, name: true } },
             },
           },
-          // First active primary guardian — surfaced as "Responsable légal" in the table
+          // First live primary guardian — surfaced as "Responsable légal" in the table
           guardianships: {
-            where: { status: 'active' },
+            where: guardianshipLiveWhere(),
             orderBy: [{ isPrimaryContact: 'desc' }, { createdAt: 'asc' }],
             take: 1,
             include: {
@@ -271,9 +273,17 @@ export class StudentsController {
           // `enrollments` AJOUTÉ (additif) : le jeu candidat est filtré sur le
           // statut, donc sans le total un enfant diplômé serait rendu « aucune
           // inscription » au lieu de « hors année en cours ».
-          // (`guardianships` compte aussi les liens RÉVOQUÉS — PF-358,
-          //  enregistré, hors périmètre de cette tranche.)
-          _count: { select: { guardianships: true, enrollments: true } },
+          //
+          // S-E03-3c / PF-358 / ADR-074 — `guardianships` comptait les liens
+          // RÉVOQUÉS, si bien qu'un enfant pouvait afficher « 2 responsables »
+          // alors qu'un des deux avait été retiré. Le compte porte désormais la
+          // MÊME portée que le tableau juste au-dessus : VIVANT.
+          _count: {
+            select: {
+              guardianships: { where: guardianshipLiveWhere() },
+              enrollments: true,
+            },
+          },
         },
       }),
       this.prisma.student.count({ where }),
@@ -373,8 +383,13 @@ export class StudentsController {
             academicYear: true,
           },
         },
+        // S-E03-3c / ADR-074 — portée AU REGISTRE, énoncée par son nom. Le
+        // `{ not: 'revoked' }` qu'elle remplace lui est équivalent tant que
+        // `GuardianshipStatus` compte trois membres ; la constante est DÉRIVÉE
+        // de l'énum précisément pour que cette équivalence ne dépende plus de
+        // ce que personne ne s'en souvienne (leçon des listes appariées).
         guardianships: {
-          where: { status: { not: 'revoked' } },
+          where: guardianshipOnTheBooksWhere(),
           include: { guardian: true },
         },
       },

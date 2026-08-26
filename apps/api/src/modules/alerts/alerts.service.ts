@@ -5,7 +5,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { resolveActiveAcademicYear } from '@pilotage/contracts';
+import { guardianshipLiveWhere, resolveActiveAcademicYear } from '@pilotage/contracts';
 // `Prisma` is imported as a runtime value (used for `instanceof
 // Prisma.PrismaClientKnownRequestError` in the P2002 idempotency catch) as well
 // as for its `Prisma.*` type helpers.
@@ -1030,7 +1030,7 @@ export class AlertsService {
       where: {
         tenantId: args.tenantId,
         studentId: args.studentId,
-        status: 'active',
+        ...guardianshipLiveWhere(),
         guardian: { userProfileId: { not: null } },
       },
       include: { guardian: { select: { userProfileId: true } } },

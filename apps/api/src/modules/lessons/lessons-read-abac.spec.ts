@@ -14,6 +14,7 @@ import { StudentAccessService } from '../students/student-access.service';
 import { type TeacherProfileService } from '../teaching/teacher-profile.service';
 
 import { LessonsController } from './lessons.controller';
+import { matchesStatusFilter } from '../../shared/testing/prisma-status-filter';
 
 /**
  * S-E03-2 / `AC-2` / `ADR-071 §D1`+`§D2` — `GET /api/v1/lessons?studentId=…`.
@@ -118,7 +119,7 @@ function makeWorld() {
           return guardianships.filter(
             (g) =>
               g['tenantId'] === args.where.tenantId &&
-              g['status'] === args.where.status &&
+              matchesStatusFilter(g['status'] as string, args.where.status) &&
               g['guardianUserProfileId'] === args.where.guardian.userProfileId,
           );
         },

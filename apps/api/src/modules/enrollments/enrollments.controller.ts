@@ -17,6 +17,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 import { EnrollmentStatus, Prisma } from '@prisma/client';
 import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
@@ -447,7 +448,7 @@ export class EnrollmentsController {
         where: {
           tenantId: args.tenantId,
           studentId: args.studentId,
-          status: 'active',
+          ...guardianshipLiveWhere(),
           guardian: { userProfileId: { not: null } },
         },
         include: {

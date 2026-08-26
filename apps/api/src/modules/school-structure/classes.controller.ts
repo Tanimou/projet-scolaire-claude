@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 import { ClassStatus, Prisma } from '@prisma/client';
 import { IsEnum, IsInt, IsObject, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 
@@ -162,7 +163,7 @@ export class ClassesController {
                 birthDate: true,
                 email: true,
                 status: true,
-                _count: { select: { guardianships: { where: { status: 'active' } } } },
+                _count: { select: { guardianships: { where: guardianshipLiveWhere() } } },
               },
             },
           },

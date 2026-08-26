@@ -4,8 +4,12 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-26)** `in-progress` — **four slices landed, three of them on 2026-08-25 and the fourth the
-next day, and there was none before them.** `S-E03-4` (run 80 — `PF-15` closed on ONE AXIS OF TWO with `PF-328`
+**Status (2026-08-26)** `in-progress` — **FIVE slices landed, and there was none before 2026-08-25.**
+`S-E03-3c` (run 85 — **`PF-358` CLOSED**, `PF-12` advanced a third time and still not closed, `ADR-074`; the
+guardianship predicate now has exactly ONE home). Roadmap findings owned by this epic: **1 closed of 9**
+(`PF-15`, on one axis of two), with `PF-04`, `PF-05`, `PF-12` and `PF-36` advanced-not-closed — so the standing
+`V3-E03` directive (four of nine before another epic may be chosen freely) **still binds**. The four earlier
+slices: `S-E03-4` (run 80 — `PF-15` closed on ONE AXIS OF TWO with `PF-328`
 as the named residual, `PF-04`/`PF-36` advanced not closed, `ADR-070`). `S-E03-2` (run 81 — **`PF-288` CLOSED as
 a class**, `PF-05` **advanced not closed**, `ADR-071`). `S-E03-3` (run 82 — `PF-12` **advanced not closed**:
 three of nine measured axes removed, `PF-357` — the audit's own third clause — untouched, `ADR-072`).
@@ -710,3 +714,70 @@ one, apply it at the five hand-written sites, and filter `_count.guardianships` 
 epic finally has a `spec.md`, a `tasks.md` and a denominator.
 
 *(Written 2026-08-26, `S-E03-3b` review/land pass, run 84. Later slices: annotate, do not delete.)*
+
+---
+
+## `S-E03-3c` — ONE guardianship liveness predicate (run 85, 2026-08-26)
+
+**`PF-358` CLOSED · `PF-12` advanced a third time, still NOT closed · `PF-372`..`PF-376` recorded · `ADR-074`**
+
+This run took the *"cheaper, strictly-contained alternative"* the previous section names, and it is worth
+saying plainly that **the previous section was right about the move and wrong about its size**: it estimated
+"the five hand-written sites"; the re-measurement found **~20 production read sites, three spellings and a
+fourth form with no predicate at all**.
+
+### What was actually wrong, measured 2026-08-26
+
+`status: 'active'` ×12 · `status: { not: 'revoked' }` ×2 · **unfiltered `_count` ×3**. The first two are *not
+the same question* — one asks « does this adult guard this child NOW », the other « is this link ON THE
+BOOKS » — and both are legitimate. The defect was that neither had a name, so the choice was made site by
+site, and the third form was indistinguishable from an oversight.
+
+Two contradictions were live:
+
+1. **`GET /guardians` contradicted itself on one object** — unfiltered `_count.guardianships` above a
+   `{ not: 'revoked' }` array. « 2 rattachements » over a list showing one.
+2. **`DELETE /guardians/:id` was unfinishable.** It refused while `_count.guardianships > 0`, unfiltered,
+   replying *« Révoquez d'abord les rattachements »* — but revoking sets `revoked`, which that count kept
+   counting. **The remedy the error prescribes could never lift it.** This is the concrete, user-visible defect
+   of the slice, and it is pinned red-before / green-after.
+
+### What landed
+
+`packages/contracts/src/guardianship/link-liveness.ts` — two named scopes (LIVE, ON-THE-BOOKS) plus a declared
+all-states marker; ON-THE-BOOKS **derived** by subtracting the terminal state, never written, with a ratchet
+test comparing the contract vocabulary to the Prisma enum **parsed out of `schema.prisma`**. Twenty-odd sites
+converted across `apps/api` and `apps/worker`. `ParentGuardianshipLinkStatus` (ADR-073) stops being a fourth
+hand-written copy and aliases the canonical union.
+
+**No authorization changed** — the ABAC assertions were **strengthened**, not relaxed: each now writes the
+expected scope out in full *and* confronts it with the product predicate, so widening LIVE fails the test on
+the parent boundary.
+
+### Three things worth carrying
+
+1. **The residual note that ordered this work was wrong on two of its five sites** (`PF-374`): both were
+   `Enrollment.status`, not `Guardianship.status`. A run that had executed it literally would have converted
+   two enrolment sites onto a guardianship predicate. **A residual note is a lead, never a measurement.**
+2. **The ratchet had a blind spot, and the RED proof is what found it.** R-A only sees `prisma.guardianship.*`
+   calls; the *majority* of this slice's sites are relations read from `student`/`guardian`. R-C was added.
+   Final red-before proof: **11 offenders across three rules**. A ratchet that is never red proves nothing.
+3. **Fake Prisma clients that emulate one `where` syntax manufacture false RED on the security seam**
+   (`PF-376`). Six ABAC tests reported a `ForbiddenException` *that does not exist in the product*, purely
+   because their doubles compared `row.status === where.status`. The dangerous twin — a double that
+   over-matches — would manufacture false GREEN there.
+
+### Why `PF-12` still is not `closed`
+
+Its own text named the closing condition (*"the guardianship predicate has more than one home"*) and that
+condition **is now met**. But applying to itself the discipline that caught `PF-374`, the honest verdict is
+that `PF-12` names a **class**, and four measured axes remain: `PF-356`, `PF-359`, `PF-360`, `PF-363`. Closing
+it on the strength of one satisfied clause would be the `DNC-06` pattern every preceding slice caught itself
+committing. **The remaining move is `PF-363` + `PF-356` in one slice** — both parent-portal read projections,
+both `G-TRUTH`+`G-PORTAL`, and together the last axes with a live user-visible consequence.
+
+**Still owed for `V3-E03`, unchanged and now five slices old:** an **`epic-spec` run**, so this epic finally has
+a `spec.md`, a `tasks.md` and a denominator. `PF-365`/`PF-370` (the registry convergence) are explicitly
+waiting on it, and `link-liveness.ts` makes the sibling family four modules wide.
+
+*(Written 2026-08-26, `S-E03-3c` land pass, run 85. Later slices: annotate, do not delete.)*

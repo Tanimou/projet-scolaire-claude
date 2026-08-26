@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { guardianshipLiveWhere } from '@pilotage/contracts';
 import { LessonStatus } from '@prisma/client';
 import {
   IsArray,
@@ -228,7 +229,10 @@ export class LessonsController {
                     select: {
                       firstName: true,
                       guardianships: {
-                        where: { status: 'active', guardian: { userProfileId: { not: null } } },
+                        where: {
+                          ...guardianshipLiveWhere(),
+                          guardian: { userProfileId: { not: null } },
+                        },
                         select: {
                           guardian: { select: { userProfileId: true } },
                         },

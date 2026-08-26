@@ -13,6 +13,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  GUARDIANSHIP_ALL_STATES_ARE_DELIBERATE,
+  GUARDIANSHIP_SCOPE_LABEL,
+  guardianshipOnTheBooksWhere,
+} from '@pilotage/contracts';
 import { GuardianRelationship, GuardianshipStatus } from '@prisma/client';
 import {
   IsBoolean,
@@ -105,28 +110,41 @@ export class GuardiansController {
       ];
     }
     if (studentId) {
-      where.guardianships = { some: { studentId, status: { not: 'revoked' } } };
+      where.guardianships = { some: { studentId, ...guardianshipOnTheBooksWhere() } };
     }
 
+    // S-E03-3c / PF-358 / ADR-074 — LE COMPTE ET LE TABLEAU PORTENT DÉSORMAIS
+    // LA MÊME PORTÉE. Avant cette tranche, `_count.guardianships` n'avait AUCUN
+    // filtre tandis que le tableau juste en dessous filtrait `{ not: 'revoked' }` :
+    // la même charge utile se contredisait donc elle-même — « 2 rattachements »
+    // au-dessus d'une liste qui en montrait un. C'est la forme exacte que PF-12
+    // nomme, sur un seul objet.
     const data = await this.prisma.guardian.findMany({
       where,
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
       take,
       include: {
-        _count: { select: { guardianships: true } },
+        _count: { select: { guardianships: { where: guardianshipOnTheBooksWhere() } } },
         guardianships: {
-          where: { status: { not: 'revoked' } },
+          where: guardianshipOnTheBooksWhere(),
           include: { student: { select: { id: true, firstName: true, lastName: true } } },
         },
       },
     });
-    return { data };
+    return { data, guardianshipScope: GUARDIANSHIP_SCOPE_LABEL.onTheBooks };
   }
 
   @Get(':id')
   @RequiresPermission('parents.read')
   async getOne(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
+    // S-E03-3c / ADR-074 §2.6 — LECTURE TOUS ÉTATS, DÉLIBÉRÉE. La fiche d'un
+    // parent est une vue de GESTION : l'admin doit y voir l'historique, donc
+    // les liens révoqués. Ce n'est PAS l'oubli de filtre que la tranche ferme
+    // ailleurs — mais rien ne distinguait les deux avant que le site ne le
+    // DISE. Il le dit maintenant, dans son propre code, là où un relecteur le
+    // voit ; une allowlist dans le cliquet aurait produit l'inverse.
+    void GUARDIANSHIP_ALL_STATES_ARE_DELIBERATE;
     const guardian = await this.prisma.guardian.findUnique({
       where: { id },
       include: {
@@ -134,7 +152,7 @@ export class GuardiansController {
       },
     });
     if (!guardian || guardian.tenantId !== me.tenantId) throw new NotFoundException();
-    return guardian;
+    return { ...guardian, guardianshipScope: GUARDIANSHIP_SCOPE_LABEL.allStates };
   }
 
   @Post()
@@ -197,9 +215,25 @@ export class GuardiansController {
   @RequiresPermission('parents.delete')
   async remove(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
+    // S-E03-3c / PF-358 / ADR-074 — LE GARDE COMPTAIT LES LIENS RÉVOQUÉS, SI
+    // BIEN QUE LE REMÈDE QU'IL PRESCRIT NE POUVAIT JAMAIS LE LEVER.
+    //
+    // Le message dit « Révoquez d'abord les rattachements ». Révoquer passe le
+    // lien à `revoked` — que ce `_count` NON FILTRÉ continuait de compter. Un
+    // utilisateur appliquant l'instruction à la lettre rebouclait donc
+    // indéfiniment : la seule sortie était de supprimer les lignes en base.
+    // Ce n'est pas une divergence d'affichage, c'est une opération admin
+    // impossible à mener à terme.
+    //
+    // La portée correcte est AU REGISTRE, pas VIVANT : un lien `pending` est
+    // une décision humaine encore en vol, et supprimer le parent sous elle la
+    // ferait disparaître sans qu'elle ait été tranchée. Le garde reste donc
+    // volontairement plus large que `guardianshipLiveWhere()`.
     const guardian = await this.prisma.guardian.findUnique({
       where: { id },
-      include: { _count: { select: { guardianships: true } } },
+      include: {
+        _count: { select: { guardianships: { where: guardianshipOnTheBooksWhere() } } },
+      },
     });
     if (!guardian || guardian.tenantId !== me.tenantId) throw new NotFoundException();
     if (guardian._count.guardianships > 0) {
@@ -221,6 +255,12 @@ export class GuardiansController {
     @Query('guardianId') guardianId?: string,
   ) {
     const me = await this.users.ensureUser(jwt);
+    // S-E03-3c / ADR-074 §2.6 — LECTURE TOUS ÉTATS, DÉLIBÉRÉE. C'est l'écran de
+    // GESTION des rattachements : montrer les liens révoqués est sa raison
+    // d'être, et son `orderBy` trie déjà sur `status`. La déclaration ne change
+    // pas la requête ; elle rend l'intention lisible, pour que « non filtré »
+    // cesse d'être indistinguable d'un oubli.
+    void GUARDIANSHIP_ALL_STATES_ARE_DELIBERATE;
     const data = await this.prisma.guardianship.findMany({
       where: {
         tenantId: me.tenantId,
@@ -233,7 +273,7 @@ export class GuardiansController {
       },
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
     });
-    return { data };
+    return { data, guardianshipScope: GUARDIANSHIP_SCOPE_LABEL.allStates };
   }
 
   @Post('guardianships')

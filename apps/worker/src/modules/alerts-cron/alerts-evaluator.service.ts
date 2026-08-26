@@ -1,6 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
-import { resolveActiveAcademicYear } from '@pilotage/contracts';
+import { guardianshipLiveWhere, resolveActiveAcademicYear } from '@pilotage/contracts';
 import type { AlertRuleCode, AlertSeverity, NotificationSeverity, Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 
@@ -213,7 +213,7 @@ export class AlertsEvaluatorService {
         where: {
           tenantId: args.tenantId,
           studentId: args.studentId,
-          status: 'active',
+          ...guardianshipLiveWhere(),
           guardian: { userProfileId: { not: null } },
         },
         include: { guardian: { select: { userProfileId: true } } },

@@ -1,4 +1,4 @@
-import { resolveActiveAcademicYear } from '@pilotage/contracts';
+import { guardianshipLiveWhere, resolveActiveAcademicYear } from '@pilotage/contracts';
 import ExcelJS from 'exceljs';
 
 import { prismaAcademicYearReader } from '../../../shared/academic-year/prisma-academic-year-reader';
@@ -42,7 +42,7 @@ export async function generateEnrollmentXlsx(args: GenerateArgs): Promise<Genera
           student: {
             include: {
               guardianships: {
-                where: { status: 'active' },
+                where: guardianshipLiveWhere(),
                 orderBy: [{ isPrimaryContact: 'desc' }, { createdAt: 'asc' }],
                 take: 1,
                 include: { guardian: true },
