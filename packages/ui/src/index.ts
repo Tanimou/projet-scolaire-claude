@@ -102,6 +102,16 @@ export {
   type EnrollmentScopeInput,
   type EnrollmentStatusBadgeProps,
 } from './components/EnrollmentStatusBadge';
+// The canonical parent child-link rendering. Five contract states + one reserved
+// front-end member, ONE mapping — see the component's docblock for why it accepts a
+// resolved verdict and never a link/claim pair.
+export {
+  ChildLinkStatusBadge,
+  childLinkDateLabel,
+  childLinkStateLabel,
+  type ChildLinkBadgeState,
+  type ChildLinkStatusBadgeProps,
+} from './components/ChildLinkStatusBadge';
 export { DateCard, type DateCardProps, type DateCardTone } from './components/DateCard';
 export { Tabs, TabsList, TabsTrigger, TabsContent, type TabsProps } from './components/Tabs';
 export { SectionHeader, type SectionHeaderProps } from './components/SectionHeader';

@@ -6,17 +6,24 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import {
+  compareParentChildLinkRows,
+  deriveParentChildLinkState,
+  isNameableForGuardian,
+  mayProjectChildIdentity,
+} from '@pilotage/contracts';
 import type {
   AdminChildClaimQueueResponse,
   AdminChildClaimRow,
   ApproveChildClaimResponse,
   AuditActionCode,
   ChildClaimAlreadyLinkedResponse,
-  ChildClaimListResponse,
-  ChildClaimStatusRow,
   ChildClaimSubmitResponse,
   GuardianRelationship,
   GuardianshipClaimStatus,
+  ParentChildLinkRow,
+  ParentChildLinksResponse,
+  ParentGuardianshipLinkStatus,
 } from '@pilotage/contracts';
 import { Prisma } from '@prisma/client';
 
@@ -311,42 +318,273 @@ export class ChildClaimsService {
   }
 
   /**
-   * The parent's own claim-status surface (self-scoped to the resolved Guardian,
-   * tenant-scoped). The matched child name/details are projected ONLY when the driven
-   * Guardianship is `active` (post-approval) — never on submitted/match_failed/
-   * rejected/withdrawn (no oracle on the status read either). decisionReason only on
-   * rejected. A single self-scoped query (no client N+1).
+   * S-E03-3b / PF-357 / PF-12 / ADR-073 — the parent's own attachment surface,
+   * projected from the FACT (`Guardianship`) unioned with its PROVENANCE
+   * (`GuardianshipClaim`), self-scoped to the resolved Guardian and tenant-scoped.
+   *
+   * WHAT THIS REPLACES, AND WHY IT IS NOT A REFACTOR
+   * -----------------------------------------------
+   * `listForGuardian` read ONE table — the request — while the children list rendered
+   * three centimetres above it on the same page reads the other one — the fact. Measured
+   * 2026-08-26 on the live stack: **2460 `active` links, 28 `pending`, 2459 distinct
+   * guardians holding an active link, and 0 claims**. So EVERY parent in the data was
+   * shown their children and then told « Vous n'avez pas encore rattaché d'enfant ».
+   * That is `DNC-01` — a panel contradicting its own page — and it is `PF-12`'s third
+   * clause verbatim.
+   *
+   * THE UNION, IN THREE STEPS (§3.2). ROW IDENTITY IS THE CHILD, NOT THE RECORD (§3.1)
+   * ---------------------------------------------------------------------------------
+   *   1. every `Guardianship` of the caller becomes a row — **this is AC-1**;
+   *   2. a claim resolving to an identity that already has a row becomes that row's
+   *      PROVENANCE; otherwise it IS a row of its own — **this is AC-2**;
+   *   3. provenance attaches BY PREFERENCE: first the claim whose `guardianshipId`
+   *      equals the link's id, failing that the caller's most recent claim whose
+   *      `matchedStudentId` equals the link's `studentId`, ordered `[createdAt desc,
+   *      id desc]`.
+   *
+   * `identity(entity) = studentId ?? matchedStudentId ?? id`, and
+   * `@@unique([guardianId, studentId])` (`schema.prisma:589`) makes the FACT side of a
+   * row unambiguous by construction.
+   *
+   * ⚠ **Step 3's fallback is load-bearing, not tidiness.** BOTH `withdraw()` and
+   * `rejectClaim()` null `guardianshipId` while revoking the link, in the same
+   * transaction — see their own docblocks for why the FK must be released. Without the
+   * fallback the revoked link they leave behind looks ADMIN-CREATED, loses the
+   * `claimed*` values the parent typed, and is therefore dropped as unnameable (§3.4's
+   * corollary) — so the parent's own withdrawn / rejected request would silently vanish
+   * from the panel instead of resolving to `request_withdrawn` / `request_rejected`
+   * with its « Renvoyer une demande » affordance. That is `FM-1`. Guarded by T-3 and
+   * T-10. Recorded, not fixed: `PF-369`.
+   *
+   * ⚠ Before this slice's REVIEW pass the same missing fallback was a *leak* rather
+   * than a disappearance, because `mayProjectChildIdentity` carried a `provenance ===
+   * null` disjunct that printed the child's real name for admin-created links of ANY
+   * status. That disjunct is gone (`ADR-073 §D5`); see the predicate's docblock.
+   *
+   * ⚠ Never `where: { guardianshipId: null }` to find the "orphan" claims. Membership is
+   * DERIVED from the identity map — a hand-written second list of the same thing is how
+   * the two sides drift (the paired-lists lesson).
+   *
+   * ONE ROW PER CHILD, INCLUDING WHEN THAT ABSORBS A ROW (W-2)
+   * ----------------------------------------------------------
+   * Claim-created rows join the identity map too, so two DETACHED claims at one identity
+   * — reachable through reject → resubmit → reject, and through the revoked-reuse branch
+   * of `submitClaim` — collapse to ONE row whose provenance is the most recent claim.
+   * The older claim is absorbed and stops rendering. That is a deliberate
+   * one-child-one-row decision (ADR-073 §R), not an accident.
+   *
+   * TENANCY (G-TENANT) — both reads carry `tenantId` AND `guardianId`, both server-derived
+   * by the controller's `resolveGuardian`, never client-supplied, and both spelled as
+   * plain required members. Never `...(x ? { x } : {})` in a `where`: Prisma strips
+   * `undefined` and the query silently WIDENS (`ADR-065 §D5`).
+   *
+   * FM-4 / DNC-06 — every field of the wire shape has a source in a `select` written
+   * here. The `student` relation on the GUARDIANSHIP read is the one that matters: 2460
+   * of 2460 live active links have no claim at all, so omitting it would leave
+   * `displayName` and `child` with no source for exactly the rows this method exists to
+   * produce — `FM-4` reproduced inside its own fix.
+   *
+   * Two `findMany` calls replace one. No client N+1; no per-row query.
    */
-  async listForGuardian(args: { tenantId: string; guardianId: string }): Promise<ChildClaimListResponse> {
-    const rows = await this.prisma.guardianshipClaim.findMany({
-      where: { tenantId: args.tenantId, guardianId: args.guardianId },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        guardianship: { select: { status: true } },
-        student: { select: { id: true, firstName: true, lastName: true } },
-      },
+  async listChildLinksForGuardian(args: {
+    tenantId: string;
+    guardianId: string;
+  }): Promise<ParentChildLinksResponse> {
+    const [links, claims] = await Promise.all([
+      this.prisma.guardianship.findMany({
+        where: { tenantId: args.tenantId, guardianId: args.guardianId },
+        select: {
+          id: true,
+          studentId: true,
+          relationship: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          // FM-4: without this the 2460 claim-less active links have NO name to print.
+          student: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      this.prisma.guardianshipClaim.findMany({
+        where: { tenantId: args.tenantId, guardianId: args.guardianId },
+        select: {
+          id: true,
+          status: true,
+          relationship: true,
+          guardianshipId: true,
+          matchedStudentId: true,
+          claimedFirstName: true,
+          claimedLastName: true,
+          claimedDob: true,
+          decisionReason: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+    ]);
+
+    type LinkRow = (typeof links)[number];
+    type ClaimRow = (typeof claims)[number];
+    interface Draft {
+      link: LinkRow | null;
+      provenance: ClaimRow | null;
+    }
+
+    // Step 1 — every link of the caller is a row, keyed by the CHILD.
+    const byIdentity = new Map<string, Draft>();
+    const byLinkId = new Map<string, Draft>();
+    for (const link of links) {
+      const draft: Draft = { link, provenance: null };
+      byIdentity.set(link.studentId, draft);
+      byLinkId.set(link.id, draft);
+    }
+
+    // The one ordering used to decide preference, stated once: most recent first.
+    const ordered = [...claims].sort((a, b) => {
+      const at = a.createdAt.getTime();
+      const bt = b.createdAt.getTime();
+      if (at !== bt) return bt - at;
+      if (a.id === b.id) return 0;
+      return a.id < b.id ? 1 : -1;
     });
 
-    const claims: ChildClaimStatusRow[] = rows.map((r) => {
-      const linkActive = r.guardianship?.status === 'active';
-      return {
-        id: r.id,
-        status: r.status,
-        relationship: r.relationship,
-        claimedFirstName: r.claimedFirstName,
-        claimedLastName: r.claimedLastName,
-        claimedBirthDate: this.toIsoDate(r.claimedDob),
-        decisionReason: r.status === 'rejected' ? r.decisionReason : null,
-        createdAt: r.createdAt.toISOString(),
-        updatedAt: r.updatedAt.toISOString(),
-        child:
-          linkActive && r.student
-            ? { studentId: r.student.id, firstName: r.student.firstName, lastName: r.student.lastName }
-            : null,
-      };
-    });
+    // Step 3, first preference — the joined claim (`guardianshipId` is @unique, so at
+    // most one claim can claim a given link).
+    const attached = new Set<string>();
+    for (const claim of ordered) {
+      if (claim.guardianshipId === null) continue;
+      const draft = byLinkId.get(claim.guardianshipId);
+      if (draft && draft.provenance === null) {
+        draft.provenance = claim;
+        attached.add(claim.id);
+      }
+    }
 
-    return { claims };
+    // Step 2 + step 3's fallback — in [createdAt desc, id desc] order, so the FIRST
+    // claim to reach an identity is the most recent one, which is the preference §3.2
+    // states. A claim reaching an identity that already holds provenance is ABSORBED.
+    for (const claim of ordered) {
+      if (attached.has(claim.id)) continue;
+      const identity = claim.matchedStudentId ?? claim.id;
+      const existing = byIdentity.get(identity);
+      if (existing) {
+        if (existing.provenance === null) existing.provenance = claim;
+        continue;
+      }
+      byIdentity.set(identity, { link: null, provenance: claim });
+    }
+
+    const rows: ParentChildLinkRow[] = [];
+    for (const draft of byIdentity.values()) {
+      // §3.4 / ADR-073 §D4+§D5 — a draft with NO provenance and a link that is not
+      // `active` has no name this caller may read: the child's identity is walled off
+      // by the same `status: 'active'` rule `StudentAccessService` applies, and the
+      // parent typed no `claimed*` values because they never made a request. It is
+      // NOT rendered nameless — it is not projected at all. Dropping it here rather
+      // than blanking `displayName` downstream is what keeps `link.student` from
+      // leaking back out through the projection's own name fallback.
+      if (!isNameableForGuardian(draft.link, draft.provenance)) continue;
+      rows.push(this.projectChildLinkRow(draft.link, draft.provenance));
+    }
+
+    // §3.6 — ONE deterministic total order, stated once in the contract module.
+    rows.sort(compareParentChildLinkRows);
+
+    return { links: rows };
+  }
+
+  /**
+   * The projection of ONE union row. Every downstream decision is taken HERE so the
+   * portal is handed verdicts and no predicate (`ADR-073 §D1`): the raw
+   * `GuardianshipClaimStatus` never reaches the wire, not as `status`, not nested.
+   *
+   * `displayName` is TOTAL, and the proof is short enough to keep next to the code.
+   * `mayProjectChildIdentity` is `link !== null && link.status === 'active'`, and the
+   * caller has already dropped every draft failing `isNameableForGuardian`, so on entry
+   * `provenance !== null || (link !== null && link.status === 'active')`. If the
+   * identity is not projected, `provenance !== null`, so `claimed*` exists. `(no link,
+   * no claim)` is unreachable and the derivation throws on it (T-9). Every reachable
+   * branch therefore has a name to print, and the branch that would have had to read
+   * `link.student` WITHOUT the identity gate no longer exists — it throws, because
+   * reaching it would mean the caller's filter was removed and a child's name was about
+   * to be printed to a guardian the school has not (or no longer) authorised.
+   *
+   * `canWithdraw === true ⇒ claimId !== null` holds BY CONSTRUCTION — both read the same
+   * `provenance` — which is what keeps the withdraw POST off the row's `id` (`FM-6`).
+   */
+  private projectChildLinkRow(
+    link: {
+      id: string;
+      studentId: string;
+      relationship: GuardianRelationship;
+      status: ParentGuardianshipLinkStatus;
+      createdAt: Date;
+      updatedAt: Date;
+      student: { id: string; firstName: string; lastName: string };
+    } | null,
+    provenance: {
+      id: string;
+      status: GuardianshipClaimStatus;
+      relationship: GuardianRelationship;
+      claimedFirstName: string;
+      claimedLastName: string;
+      claimedDob: Date | null;
+      decisionReason: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    } | null,
+  ): ParentChildLinkRow {
+    const state = deriveParentChildLinkState(link?.status ?? null, provenance?.status ?? null);
+    const child =
+      mayProjectChildIdentity(link, provenance) && link !== null
+        ? {
+            studentId: link.student.id,
+            firstName: link.student.firstName,
+            lastName: link.student.lastName,
+          }
+        : null;
+
+    // The parent's OWN typed values are the fallback — they leak nothing, because the
+    // parent supplied them. There is deliberately NO third fallback onto
+    // `link.student`: that was the second path by which a non-active link printed the
+    // child's real name, and it survived the identity gate on its own. An unnameable
+    // draft is filtered upstream, so reaching here means that filter was removed.
+    if (child === null && provenance === null) {
+      throw new Error(
+        'projectChildLinkRow: unnameable row reached the projection — a link that is not ' +
+          '`active` with no provenance must be dropped by `isNameableForGuardian` (ADR-073 §D4/§D5).',
+      );
+    }
+    const displayName = child
+      ? `${child.firstName} ${child.lastName}`
+      : `${provenance!.claimedFirstName} ${provenance!.claimedLastName}`;
+
+    const isRejected = state === 'request_rejected';
+    const timestamps = link ?? provenance;
+
+    return {
+      id: link?.id ?? provenance!.id,
+      state,
+      displayName,
+      relationship: link?.relationship ?? provenance!.relationship,
+      child,
+      claimedBirthDate: provenance ? this.toIsoDate(provenance.claimedDob) : null,
+      decisionReason: isRejected ? (provenance?.decisionReason ?? null) : null,
+      claimId: provenance?.id ?? null,
+      // PF-367 — UNCHANGED semantics, deliberately: widening this is a mutation change
+      // (`withdraw()`'s from-status guard), therefore G-AUDIT, therefore its own slice.
+      canWithdraw: provenance?.status === 'submitted',
+      resubmit:
+        isRejected && provenance
+          ? {
+              firstName: provenance.claimedFirstName,
+              lastName: provenance.claimedLastName,
+              birthDate: this.toIsoDate(provenance.claimedDob),
+              relationship: provenance.relationship,
+            }
+          : null,
+      createdAt: timestamps!.createdAt.toISOString(),
+      updatedAt: timestamps!.updatedAt.toISOString(),
+    };
   }
 
   /**

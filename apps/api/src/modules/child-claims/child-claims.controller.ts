@@ -105,12 +105,25 @@ export class ChildClaimsController {
     });
   }
 
+  /**
+   * S-E03-3b / PF-357 / ADR-073 — the ROUTE PATH, the `@Get()` and the
+   * `guardianships.claim` wall are UNCHANGED on purpose (`ChildClaimDrawer.tsx:402`
+   * deep-links to `/parent/children#mes-demandes`). What changed is what the service
+   * projects: the FACT (`Guardianship`) unioned with its provenance, no longer the
+   * request alone. `tenantId`/`guardianId` still come from `resolveGuardian` — server-
+   * derived, never client-supplied.
+   */
   @Get()
   @RequiresPermission('guardianships.claim')
-  @ApiOperation({ summary: "List the caller's OWN child-claims (self-scoped, no oracle on the read)" })
+  @ApiOperation({
+    summary: "List the caller's OWN child links + requests (self-scoped, no oracle on the read)",
+  })
   async list(@CurrentJwt() jwt: KeycloakJwtPayload) {
     const { guardian } = await this.resolveGuardian(jwt);
-    return this.service.listForGuardian({ tenantId: guardian.tenantId, guardianId: guardian.id });
+    return this.service.listChildLinksForGuardian({
+      tenantId: guardian.tenantId,
+      guardianId: guardian.id,
+    });
   }
 
   @Post(':id/withdraw')
