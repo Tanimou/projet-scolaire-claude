@@ -87,6 +87,49 @@ export function snapshotCoalesceKey(
   ].join('|');
 }
 
+/**
+ * PF-24 — separator that turns a canonical coalescing key into a **terminal** key.
+ *
+ * The `@@unique([tenantId, coalesceKey, status])` on `snapshot_recompute_trigger`
+ * is what makes the *pending* slot coalescing (one live row per scope). Applied to
+ * a TERMINAL status it means the opposite: at most one `done` row and at most one
+ * `failed` row may ever exist per `(tenant, scope)` — so the SECOND recompute of
+ * any scope cannot be marked `done` (P2002), the row stays `processing` forever and
+ * `recomputing` pins true. The key is a pure function of `(tenant, reason, scope)`,
+ * so this is unconditional, not a race.
+ *
+ * Fix: terminal rows stop competing for the coalescing slot. `done`/`failed` carry
+ * a key suffixed with the row's own id — unique by construction (the id is the
+ * primary key), so a terminal write can never raise P2002. `pending`/`processing`
+ * keep the canonical key, so enqueue-side coalescing is byte-for-byte unchanged.
+ *
+ * The separator cannot occur inside a canonical key: that key is `tenantId`, a
+ * snake_case `reason` and five uuid-or-`-` fields joined with `|`.
+ */
+const TERMINAL_COALESCE_SEPARATOR = '#terminal:';
+
+/**
+ * PF-24 — the key a trigger row carries once it reaches a TERMINAL status
+ * (`done` / `failed`). Unique per row id, so terminal rows never collide with each
+ * other, and never occupy the canonical coalescing slot. Idempotent: re-deriving
+ * from an already-terminal key yields the same result.
+ */
+export function terminalCoalesceKey(coalesceKey: string, triggerId: string): string {
+  return `${canonicalCoalesceKey(coalesceKey)}${TERMINAL_COALESCE_SEPARATOR}${triggerId}`;
+}
+
+/**
+ * PF-24 — the canonical (coalescing) key behind any stored key. Strips a terminal
+ * suffix if present; a key that was never mangled is returned unchanged (so rows
+ * written before this fix keep working). This is the key a row MUST carry whenever
+ * it goes back to `pending`/`processing`, otherwise the API enqueue would no longer
+ * fold onto it and the queue would grow one uncoalesced row per dirty.
+ */
+export function canonicalCoalesceKey(coalesceKey: string): string {
+  const at = coalesceKey.indexOf(TERMINAL_COALESCE_SEPARATOR);
+  return at === -1 ? coalesceKey : coalesceKey.slice(0, at);
+}
+
 /* ------------------------------------------------------------------------- *
  * E6-S5 — optional admin operability surface (additive).
  *

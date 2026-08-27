@@ -9,7 +9,11 @@ import {
   trendDelta,
   weightedGlobal,
 } from './snapshot-formula';
-import { snapshotCoalesceKey } from './snapshot-keys';
+import {
+  canonicalCoalesceKey,
+  snapshotCoalesceKey,
+  terminalCoalesceKey,
+} from './snapshot-keys';
 import { SnapshotRecomputeService } from './snapshot-recompute.service';
 
 type Mock = ReturnType<typeof jest.fn>;
@@ -136,6 +140,44 @@ describe('snapshotCoalesceKey', () => {
     expect(snapshotCoalesceKey('T', 'grade_published', { ...base, classSectionId: 'cA' })).not.toBe(
       snapshotCoalesceKey('T', 'grade_published', { ...base, classSectionId: 'cB' }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 2b — PF-24: a TERMINAL key never competes for the pending coalescing slot.
+//
+// `@@unique([tenantId, coalesceKey, status])` makes the *pending* slot coalescing.
+// Applied to `done`/`failed` it meant "at most one done row and one failed row per
+// scope, ever" — so the SECOND recompute of any scope could not be marked done
+// (P2002), the row stayed `processing`, and the freshness read (which derives
+// `recomputing` from `status IN (pending, processing)`) pinned `recomputing: true`
+// forever. These assertions pin the derivation the fix rests on.
+// ---------------------------------------------------------------------------
+
+describe('terminalCoalesceKey / canonicalCoalesceKey (PF-24)', () => {
+  const scope = { classSectionId: 'c1', subjectId: 's1', termId: 't1', academicYearId: 'y1' };
+  const key = snapshotCoalesceKey('T', 'grade_published', scope);
+
+  it('two terminal rows for the SAME scope get two DIFFERENT keys — the done/done collision is gone', () => {
+    // Row A drained the scope yesterday, row B drains the same scope today.
+    expect(terminalCoalesceKey(key, 'row-a')).not.toBe(terminalCoalesceKey(key, 'row-b'));
+  });
+
+  it('a terminal key never equals the canonical key — a done row cannot occupy the pending slot', () => {
+    expect(terminalCoalesceKey(key, 'row-a')).not.toBe(key);
+  });
+
+  it('the canonical key round-trips out of a terminal key — a revived row coalesces again', () => {
+    expect(canonicalCoalesceKey(terminalCoalesceKey(key, 'row-a'))).toBe(key);
+  });
+
+  it('canonicalCoalesceKey leaves a never-mangled key untouched (rows written before the fix)', () => {
+    expect(canonicalCoalesceKey(key)).toBe(key);
+  });
+
+  it('is idempotent: re-deriving a terminal key from an already-terminal one does not stack suffixes', () => {
+    const once = terminalCoalesceKey(key, 'row-a');
+    expect(terminalCoalesceKey(once, 'row-a')).toBe(once);
   });
 });
 
@@ -413,6 +455,15 @@ describe('SnapshotRecomputeService.recomputeScope — idempotent rebuild (E6-S5)
 // no-op for a class-less trigger that cannot be resolved.
 // ---------------------------------------------------------------------------
 
+/**
+ * PF-24 — a stand-in for a real stored coalescing key. The drain's settle derives
+ * the TERMINAL key from the key the row carries, so any harness that omits it hands
+ * `terminalCoalesceKey` an `undefined` and every settle throws. That is a harness
+ * artefact, not a defect in the drain: the production `select` in `drainTenant`
+ * reads `coalesceKey`.
+ */
+const CANONICAL_KEY = 't1|coefficient_changed|y1|-|maths|-|-';
+
 function makeDrainHarness(opts: {
   trigger: {
     id: string;
@@ -445,7 +496,9 @@ function makeDrainHarness(opts: {
         }
         return Promise.resolve([{ tenantId: TENANT }]);
       }),
-      findFirst: jest.fn().mockResolvedValue({ tenantId: TENANT, ...trigger }),
+      findFirst: jest
+        .fn()
+        .mockResolvedValue({ tenantId: TENANT, coalesceKey: CANONICAL_KEY, ...trigger }),
     },
     teachingAssignment: { findMany: teachingAssignmentFindMany },
     grade: { findMany: jest.fn().mockResolvedValue([]) },
@@ -600,9 +653,17 @@ describe('SnapshotDrainCronService — manual_rebuild routing (E6-S5)', () => {
 
 describe('SnapshotDrainCronService — failed-row revival (E6-S5 PM-G)', () => {
   it('revives a parked (failed) trigger older than the cooldown back to pending with attempts=0', async () => {
-    const findMany = jest.fn().mockResolvedValue([{ id: 'f1' }, { id: 'f2' }]);
-    const updateMany = jest.fn().mockResolvedValue({ count: 2 });
-    const prisma = { snapshotRecomputeTrigger: { findMany, updateMany } };
+    // PF-24 — a PARKED row carries a TERMINAL key (that is how it reached `failed`
+    // without tripping the unique), so the harness must hand the revive terminal
+    // keys, exactly as the table would.
+    const canonical = 't1|grade_published|y1|cA|maths|-|-';
+    const findMany = jest.fn().mockResolvedValue([
+      { id: 'f1', tenantId: 't1', coalesceKey: `${canonical}#terminal:f1` },
+      { id: 'f2', tenantId: 't1', coalesceKey: `${canonical}#terminal:f2` },
+    ]);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const deleteMany = jest.fn().mockResolvedValue({ count: 0 });
+    const prisma = { snapshotRecomputeTrigger: { findMany, updateMany, deleteMany } };
     const service = new SnapshotDrainCronService(prisma as never, { recomputeScope: jest.fn() } as never);
     const revived = await (
       service as unknown as { reviveFailedTriggers(): Promise<number> }
@@ -616,6 +677,10 @@ describe('SnapshotDrainCronService — failed-row revival (E6-S5 PM-G)', () => {
     const data = updateMany.mock.calls[0]![0].data;
     expect(data.status).toBe('pending');
     expect(data.attempts).toBe(0);
+    // PF-24 / AC-3 — and the row goes back under its CANONICAL key, so the API
+    // enqueue folds the next dirty onto it instead of growing a second pending row.
+    expect(data.coalesceKey).toBe(canonical);
+    expect(updateMany.mock.calls[1]![0].data.coalesceKey).toBe(canonical);
   });
 
   it('is a no-op when there are no parked triggers past the cooldown', async () => {
