@@ -20,12 +20,31 @@ import { useTransition } from 'react';
  * **Pourquoi la liste TRAVERSE la frontière au lieu d'être importée ici.**
  * Ce fichier est un `'use client'` : y importer la *valeur*
  * `GUARDIANSHIP_LINK_STATUSES` tirerait `@pilotage/contracts` — un paquet CJS
- * consommé par son barrel racine — dans le bundle navigateur, ce qu'aucun
- * composant client du dépôt ne fait aujourd'hui. La dérivation reste donc du
- * côté serveur, et `TAB_LABEL` en dessous est un `Record<EnrollmentsTab, …>` :
- * un quatrième état ajouté à l'énum devient une **erreur de typecheck** ici,
- * pas un onglet muet. La garantie est plus forte que l'itération, pas plus
- * faible.
+ * consommé par son barrel racine — dans le bundle navigateur. La dérivation
+ * reste donc du côté serveur, et `TAB_LABEL` en dessous est un
+ * `Record<EnrollmentsTab, …>` : un quatrième état ajouté à l'énum devient une
+ * **erreur de typecheck** ici, pas un onglet muet. La garantie est plus forte
+ * que l'itération, pas plus faible.
+ *
+ * **CORRECTION MESURÉE (S-E03-8 / PF-40, 2026-08-27).** Ce paragraphe affirmait
+ * en plus « ce qu'aucun composant client du dépôt ne fait aujourd'hui ». Cette
+ * clause était FAUSSE, et l'était déjà depuis `S-E04-2` / `PF-14` :
+ * `admin/audit/audit-labels.ts` est un module neutre (sans `'use client'`) qui
+ * importe et ré-exporte les VALEURS `auditActionTone`, `classifyAuditAction`,
+ * `auditVocabularyExplanation`… depuis le barrel racine `@pilotage/contracts`,
+ * et `AuditDetailDrawer.tsx` (`'use client'`, ligne 1) les consomme. Un module
+ * importé par un composant client entre dans le bundle quelle que soit sa propre
+ * directive : des valeurs de contracts partent donc déjà au navigateur en
+ * production, sur `/admin/audit`.
+ *
+ * Ce qui reste vrai est une PRÉFÉRENCE, pas une interdiction : garder la
+ * dérivation côté serveur là où elle y est déjà. Ce qui n'est pas vrai est
+ * l'affirmation universelle. Elle est retirée plutôt que laissée en place :
+ * `S-E03-8` place le prédicat de fenêtre calendrier dans
+ * `packages/contracts/src/calendar/` et l'importe DEPUIS des composants clients,
+ * et deux commentaires de production qui affirment des conventions
+ * contradictoires sont exactement la dérive que cet epic existe pour tuer
+ * (ADR-078, D1).
  *
  * **`counts` peut être `null`, et ce n'est pas un détail.** Sur une lecture
  * échouée, la page ne rend pas cette barre du tout — mais si un appelant futur

@@ -4,6 +4,7 @@ import { CalendarManager } from './CalendarManager';
 
 import { PortalShell } from '@/components/PortalShell';
 import { api } from '@/lib/api-client';
+import { resolveSchoolCalendarAnchor } from '@/lib/school-calendar-anchor';
 
 
 export const metadata: Metadata = { title: 'Calendrier scolaire' };
@@ -87,6 +88,12 @@ export default async function CalendarPage() {
     api<{ data: SimpleClass[] }>('/api/v1/classes', { cache: 'no-store' }),
   ]);
 
+  // L'instant de référence du manager, résolu ICI (page `force-dynamic`) et
+  // passé en prop. Le manager est `'use client'` et ne lit plus d'horloge :
+  // c'est ce qui rend ses compteurs identiques en SSR et à l'hydratation
+  // (S-E03-8 / PF-40 / ADR-078).
+  const anchor = resolveSchoolCalendarAnchor();
+
   return (
     <PortalShell portal="admin">
       <div>
@@ -103,6 +110,7 @@ export default async function CalendarPage() {
           years={years.data}
           gradeLevels={levels.data}
           classes={classes.data}
+          anchor={anchor}
         />
       </div>
     </PortalShell>

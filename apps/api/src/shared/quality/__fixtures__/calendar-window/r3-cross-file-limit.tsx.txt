@@ -1,0 +1,21 @@
+// LA LIMITE DÉCLARÉE DE R3, ET SON CONTRÔLE.
+//
+// Ici la liste arrive DÉJÀ TRONQUÉE, en prop, depuis un autre fichier. Son
+// `.length` est rendu comme un total — c'est exactement le défaut d'AC-3 — et le
+// cliquet NE LE VOIT PAS : R3 suit l'affectation dans le MÊME fichier et ne
+// poursuit pas une valeur tronquée à travers une frontière de composant.
+//
+// Cette limite est ÉCRITE plutôt que subie. Le suivi inter-fichiers demande une
+// analyse de flot de données sur le graphe des props, c'est-à-dire un classifieur
+// de la taille de cette tranche entière. La dette est CHIFFRÉE par un test dédié
+// et porte l'id PF-404. Une portée rétrécie en silence se relit plus tard comme
+// « tout est couvert » — c'est la leçon de PF-398.
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
+
+export function CrossFileLimit({ upcoming }: { upcoming: PortalCalendarEvent[] }) {
+  return (
+    <header>
+      <span>{upcoming.length} prochains</span>
+    </header>
+  );
+}

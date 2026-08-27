@@ -1,0 +1,21 @@
+// FIXTURE CONTREVENANTE — R4. Le module canonique redevenu DÉPENDANT DU FUSEAU
+// et DÉPENDANT D'AUTRUI. Chacune des quatre lignes ci-dessous ré-ouvrirait A4 en
+// silence : les bornes cesseraient d'être une fonction de la seule ancre, donc le
+// rendu serveur et l'hydratation cesseraient de rendre le même nombre, sans
+// qu'aucun écran ne change d'apparence.
+import { z } from 'zod';
+
+export const AnchorSchema = z.object({ nowMs: z.number() });
+
+export function monthWindowImpure(monthOffset: number) {
+  // (1) une horloge lue DANS le module : l'ancre ne serait plus la seule entrée.
+  const now = Date.now();
+  const d = new Date(now);
+  // (2) accesseurs civils AMBIANTS : ils lisent le fuseau du processus.
+  const year = d.getFullYear();
+  const monthIndex = d.getMonth() + monthOffset;
+  // (3) construction par composantes locales : arité 3.
+  const start = new Date(year, monthIndex, 1).getTime();
+  const end = new Date(year, monthIndex + 1, 1).getTime();
+  return { startMs: start, endMs: end };
+}

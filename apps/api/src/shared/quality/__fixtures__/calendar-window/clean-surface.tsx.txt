@@ -1,0 +1,52 @@
+// CONTRÔLE NÉGATIF — la surface CONFORME. Le cliquet doit être silencieux ici,
+// sinon son remède serait irréalisable et il serait relâché plutôt que respecté.
+//
+// Elle porte aussi la LIMITE ÉCRITE de R3 : `+{dayEvents.length - 3}` est un
+// INDICATEUR DE DÉBORDEMENT, pas un total tronqué. `dayEvents` n'est pas issu
+// d'une troncature — c'est la liste COMPLÈTE du jour — et la coupe à 3 est
+// appliquée en ligne, à l'endroit du rendu. La cellule dit donc « voici trois
+// pastilles, et il y en a n de plus », ce qui est exact. R3 ne suit que les
+// LIAISONS affectées depuis une chaîne se terminant par `.slice(0, N)`.
+'use client';
+
+import {
+  capList,
+  eventsInWindow,
+  monthWindow,
+  upcomingEvents,
+  type CalendarAnchor,
+} from '@pilotage/contracts';
+
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
+
+export function CleanSurface({
+  anchor,
+  events,
+  dayEvents,
+  monthOffset,
+}: {
+  anchor: CalendarAnchor;
+  events: PortalCalendarEvent[];
+  dayEvents: PortalCalendarEvent[];
+  monthOffset: number;
+}) {
+  const monthEvents = eventsInWindow(events, monthWindow(anchor, monthOffset));
+  const upcoming = capList(upcomingEvents(events, anchor), 12);
+
+  return (
+    <section>
+      <span>{monthEvents.length} événements</span>
+      <span>
+        {upcoming.truncated
+          ? upcoming.cap + ' affichés sur ' + upcoming.total
+          : upcoming.total + ' à venir'}
+      </span>
+      <div>
+        {dayEvents.slice(0, 3).map((e) => (
+          <i key={e.id} />
+        ))}
+        {dayEvents.length > 3 ? <em>+{dayEvents.length - 3}</em> : null}
+      </div>
+    </section>
+  );
+}

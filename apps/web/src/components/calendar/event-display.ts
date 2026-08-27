@@ -75,3 +75,102 @@ export function calendarScopeLabel(event: PortalCalendarEvent): string {
   if (event.cycle) return `Cycle ${event.cycle.name}`;
   return "Toute l'école";
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// LIBELLÉS DE PORTÉE — déclarés UNE fois, importés partout (S-E03-8 / PF-40).
+//
+// Précédent cicatriciel : `admin/enrollments/page.tsx` documente une chaîne de
+// portée RECOPIÉE à la main qui avait divergé d'une apostrophe (`'` vs `’`)
+// sous un docblock affirmant l'identité — `PF-371`. Une portée écrite deux fois
+// est une portée qui divergera. Ces fonctions sont donc le seul endroit du
+// dépôt où l'on rédige « ce que ce nombre compte ».
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Noms de mois FR, indexés comme `Date.prototype.getMonth()` (0 = janvier). */
+export const FR_MONTHS = [
+  'Janvier',
+  'Février',
+  'Mars',
+  'Avril',
+  'Mai',
+  'Juin',
+  'Juillet',
+  'Août',
+  'Septembre',
+  'Octobre',
+  'Novembre',
+  'Décembre',
+] as const;
+
+/** Noms de mois FR abrégés — pour les pastilles de date. */
+export const FR_MONTHS_SHORT = [
+  'janv',
+  'févr',
+  'mars',
+  'avr',
+  'mai',
+  'juin',
+  'juil',
+  'août',
+  'sept',
+  'oct',
+  'nov',
+  'déc',
+] as const;
+
+/**
+ * « Novembre 2026 ». Prend les composantes DÉRIVÉES de l'ancre serveur, jamais
+ * une `Date` reformatée côté navigateur : `toLocaleDateString` sans `timeZone`
+ * peut rendre un mois différent sur le serveur et dans le navigateur pour le
+ * même instant, ce qui ferait revivre le défaut d'hydratation par le libellé.
+ */
+export function calendarMonthLabel(parts: { year: number; monthIndex: number }): string {
+  return `${FR_MONTHS[parts.monthIndex] ?? ''} ${parts.year}`;
+}
+
+/** Le nom du filtre actif, ou la mention explicite « tous types ». */
+export function calendarFilterLabel(activeTypeLabel: string | null): string {
+  return activeTypeLabel ? `filtré sur « ${activeTypeLabel} »` : 'tous types confondus';
+}
+
+/** Portée de la carte « TOTAL / AFFICHÉS ». */
+export function calendarTotalScope(activeTypeLabel: string | null): string {
+  return `Calendrier visible pour vous — ${calendarFilterLabel(activeTypeLabel)}`;
+}
+
+/** Portée de la carte mensuelle. Dit « touchant », jamais « du mois » : sous le
+ *  prédicat de CHEVAUCHEMENT, un congé à cheval compte dans les deux mois. */
+export function calendarMonthScope(
+  parts: { year: number; monthIndex: number },
+  activeTypeLabel: string | null,
+): string {
+  return `${calendarMonthLabel(parts)} — événements touchant le mois, ${calendarFilterLabel(
+    activeTypeLabel,
+  )}`;
+}
+
+/** Portée de la carte hebdomadaire. Nomme la semaine ISO, pas « sous 7 jours ». */
+export function calendarWeekScope(activeTypeLabel: string | null): string {
+  return `Semaine ISO en cours (lundi → dimanche) — ${calendarFilterLabel(activeTypeLabel)}`;
+}
+
+/** Portée de la carte « PROCHAIN ». */
+export function calendarNextScope(activeTypeLabel: string | null): string {
+  return `Le plus proche non terminé — ${calendarFilterLabel(activeTypeLabel)}`;
+}
+
+/**
+ * En-tête d'une liste plafonnée. Le vrai total est calculé AVANT la coupe, donc
+ * ce libellé ne peut pas dire « 12 » quand il y en a 39 (`DNC-06`, classe PF-20).
+ * `total === 0` rend `null` : un vide se raconte avec des mots, pas un `0` posé
+ * dans une rangée de nombres.
+ */
+export function calendarCappedHeader(summary: {
+  total: number;
+  truncated: boolean;
+  items: readonly unknown[];
+}): string | null {
+  if (summary.total === 0) return null;
+  if (!summary.truncated) return `${summary.total} à venir`;
+  return `${summary.items.length} affichés sur ${summary.total} à venir`;
+}

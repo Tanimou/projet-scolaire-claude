@@ -1,0 +1,31 @@
+// FIXTURE CONTREVENANTE — R2. Un composant CLIENT qui lit l'horloge et le
+// calendrier civil du VISITEUR. Next rend les composants clients sur le serveur :
+// chaque nombre ci-dessous est donc calculé une fois sur l'horloge du conteneur
+// et une seconde fois sur celle du navigateur, et React patche le nœud de texte
+// en silence. C'est le mécanisme A4 de PF-40.
+'use client';
+
+import { useMemo } from 'react';
+
+import type { CalendarEvent } from './page';
+
+export function ViewerClock({ events }: { events: CalendarEvent[] }) {
+  // Arité 0 : l'horloge du visiteur, au scope de rendu.
+  const today = new Date();
+
+  const upcomingCount = useMemo(() => {
+    // Indiscernable lexicalement d'un scope de rendu — d'où la portée large de R2.
+    const now = Date.now();
+    return events.filter((e) => Date.parse(e.startsAt) >= now).length;
+  }, [events]);
+
+  // Accesseurs civils AMBIANTS : ils lisent le fuseau du navigateur.
+  const label = today.getFullYear() + '-' + today.getMonth() + '-' + today.getDate();
+
+  return (
+    <div>
+      <span>{label}</span>
+      <span>{upcomingCount}</span>
+    </div>
+  );
+}
