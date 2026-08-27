@@ -13,6 +13,23 @@ export interface CapacityBarProps {
   showAbsolute?: boolean;
   /** Explicitly mark this row as "full" (also auto-detected at 100%) */
   full?: boolean;
+  /**
+   * Ce que `value` compte, au pluriel — la **population** de la jauge.
+   *
+   * Une barre de progression n'expose que des nombres à une technologie
+   * d'assistance : « Capacité 24 sur 30 » ne dit pas *24 quoi*. Le lecteur
+   * voyant a le contexte de la colonne ; l'utilisateur de lecteur d'écran, non.
+   * Nommer la population est donc la moitié de l'information, pas une
+   * décoration — et c'est d'autant plus vrai ici que « combien d'élèves y a-t-il
+   * dans cette classe » a plusieurs réponses selon les statuts comptés.
+   *
+   * Défaut aligné sur le seul usage du composant (l'effectif d'une classe face
+   * à sa capacité — cf. la documentation de `value` et `max` ci-dessus). Un
+   * appelant qui compte autre chose le dit ici.
+   */
+  populationLabel?: string;
+  /** Ce que `max` compte, au pluriel. Cf. {@link CapacityBarProps.populationLabel}. */
+  capacityLabel?: string;
   className?: string;
 }
 
@@ -29,6 +46,8 @@ export function CapacityBar({
   showPercent = true,
   showAbsolute,
   full,
+  populationLabel = 'élèves inscrits',
+  capacityLabel = 'places',
   className,
 }: CapacityBarProps) {
   const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
@@ -49,7 +68,7 @@ export function CapacityBar({
         aria-valuemin={0}
         aria-valuemax={max}
         aria-valuenow={value}
-        aria-label={`Capacité ${value} sur ${max}`}
+        aria-label={`${value} ${populationLabel} sur ${max} ${capacityLabel}`}
         className={cn('h-1.5 overflow-hidden rounded-full', trackCls)}
         style={{ width }}
       >

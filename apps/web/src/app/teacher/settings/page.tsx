@@ -76,7 +76,18 @@ function localeLabel(code: string | null | undefined): string {
 interface TeachingSummary {
   subjects: Array<{ id: string; name: string; color: string | null }>;
   classCount: number;
-  studentCount: number;
+  /**
+   * SOMME des effectifs des sections de l'enseignant — donc un nombre
+   * d'INSCRIPTIONS, pas un nombre d'élèves (S-E03-7 / ADR-079).
+   *
+   * QUATRIÈME dérivation cliente de « combien d'élèves ? » dans le portail
+   * enseignant, et la seule qui reste hors du module canonique : elle est
+   * ÉPINGLÉE par le cliquet R3 (plafond décroissant), pas convertie — la
+   * convertir demanderait un endpoint agrégé que cette tranche n'ouvre pas
+   * (PF-414). Le nom et le libellé disent désormais ce qu'elle compte
+   * vraiment ; la valeur, elle, ne change pas.
+   */
+  enrolmentCount: number;
   weeklyHours: number;
   mainClassCount: number;
   yearName: string | null;
@@ -103,7 +114,11 @@ function summarize(assignments: TeacherAssignment[]): TeachingSummary {
     if (Number.isFinite(h)) weeklyHours += h;
   }
 
-  const studentCount = [...classes.values()].reduce((sum, n) => sum + n, 0);
+  // `reduce(+)` sur des effectifs de sections DISJOINTES : le résultat est un
+  // nombre de LIGNES d'inscription. Un élève inscrit dans deux des classes de
+  // l'enseignant y compte deux fois, et rien en base ne l'interdit — l'index
+  // unique partiel annoncé par `schema.prisma` n'existe pas (PF-361/PF-409).
+  const enrolmentCount = [...classes.values()].reduce((sum, n) => sum + n, 0);
 
   // With no active year we fall back to ALL assignments, which may span several
   // years — only label the summary with a year when the scope is a single one,
@@ -114,7 +129,7 @@ function summarize(assignments: TeacherAssignment[]): TeachingSummary {
   return {
     subjects: [...subjects.values()],
     classCount: classes.size,
-    studentCount,
+    enrolmentCount,
     weeklyHours,
     mainClassCount: mainClasses.size,
     yearName,
@@ -270,7 +285,15 @@ function ProfilePanel({ me, summary }: { me: MeResponse | null; summary: Teachin
         <div className="grid grid-cols-2 gap-px border-y border-slate-100 bg-slate-100 sm:grid-cols-4">
           <StatCell icon={BookOpen} label="Matières" value={summary.subjects.length} />
           <StatCell icon={GraduationCap} label="Classes" value={summary.classCount} />
-          <StatCell icon={Users} label="Élèves suivis" value={summary.studentCount} />
+          {/* « Élèves suivis » est réservé au nombre d'élèves DISTINCTS. Cette
+              valeur est un cumul d'effectifs : elle s'appelle donc
+              « Inscriptions ». Deux noms, deux questions, aucun recouvrement. */}
+          <StatCell
+            icon={Users}
+            label="Inscriptions"
+            value={summary.enrolmentCount}
+            hint="cumul des effectifs"
+          />
           <StatCell
             icon={Clock}
             label="Heures / semaine"
@@ -396,10 +419,13 @@ function StatCell({
   icon: Icon,
   label,
   value,
+  hint,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: string | number;
+  /** Portée de la mesure, rendue sous le libellé — visible, jamais un tooltip. */
+  hint?: string;
 }) {
   return (
     <div className="flex items-center gap-3 bg-white px-5 py-4">
@@ -407,10 +433,11 @@ function StatCell({
         <Icon className="h-4 w-4" />
       </span>
       <div className="min-w-0">
-        <p className="text-lg font-bold leading-none text-slate-900">{value}</p>
+        <p className="text-lg font-bold leading-none tabular-nums text-slate-900">{value}</p>
         <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
           {label}
         </p>
+        {hint && <p className="mt-0.5 text-[10px] leading-tight text-slate-400">{hint}</p>}
       </div>
     </div>
   );

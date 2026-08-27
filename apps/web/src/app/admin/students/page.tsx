@@ -74,6 +74,17 @@ interface StudentsAggregateResponse {
   totalStudents: number;
   newThisMonth: number;
   activeStudents: number;
+  /**
+   * Part des élèves de l'établissement ayant une inscription active
+   * (S-E03-7 / ADR-079).
+   *
+   * Ce taux divisait des LIGNES d'inscription par des TÊTES d'élèves, sur deux
+   * portées différentes : il pouvait donc DÉPASSER 100 % dès qu'un élève tenait
+   * deux inscriptions actives la même année — ce que rien n'interdit en base
+   * (PF-361/PF-409). Numérateur et dénominateur comptent désormais la même
+   * chose sur la même portée : le taux BAISSE ou reste égal, et ne peut plus
+   * excéder 100 %.
+   */
   activePct: number;
   growthPctVsLastYear: number;
   trends: {
@@ -227,9 +238,18 @@ export default async function StudentsPage({
           tone="violet"
           label="ÉLÈVES ACTIFS"
           value={aggregate?.activeStudents ?? '—'}
-          delta={aggregate?.activePct}
-          deltaSuffix="%"
-          deltaPeriod="du total"
+          // `activePct` n'est PAS un delta : c'est une PART du total. Rendu par
+          // `delta`, il recevait une flèche « ↑ » verte qui annonçait une
+          // progression jamais mesurée — et cette tranche change sa dérivation
+          // (S-E03-7 / ADR-079), ce qui aurait fait bouger la flèche sans
+          // qu'aucune tendance ne bouge. Une correction de calcul déguisée en
+          // tendance est un mensonge plus coûteux que la divergence qu'elle
+          // corrige : le taux redevient une portée, écrite en toutes lettres.
+          scope={
+            aggregate
+              ? `${aggregate.activePct} % des ${aggregate.totalStudents} élèves de l'établissement ont une inscription active.`
+              : 'Mesure indisponible — aucun taux n’est affiché.'
+          }
           trend={aggregate?.trends.activeStudents}
         />
 

@@ -125,6 +125,12 @@ function makeService(overrides?: {
   classSections?: typeof CLASS_SECTIONS;
   /** S-E03-6 / PF-20 — le nombre de règles d'alerte ACTIVÉES en base. */
   enabledAlertRules?: number;
+  /**
+   * S-E03-7 / PF-36 — les élèves PARTAGÉS entre sections : `{ [sectionId]:
+   * { [index]: studentId } }`. Ils rendent la dé-duplication OBSERVABLE ; sans
+   * eux, distinct et cumul coïncident et le roll-up ne prouverait rien.
+   */
+  sharedStudents?: Record<string, Record<number, string>>;
 }) {
   const activeYear = overrides?.activeYear === undefined ? { id: ACTIVE_YEAR } : overrides.activeYear;
   const classSections = overrides?.classSections ?? CLASS_SECTIONS;
@@ -254,6 +260,37 @@ function makeService(overrides?: {
     userProfile: {
       findMany: jest.fn().mockResolvedValue([]),
     },
+    /**
+     * S-E03-7 / PF-36 / ADR-079 — le roll-up par CYCLE ne SOMME plus les
+     * effectifs : il LIT les élèves DISTINCTS.
+     *
+     * Ce délégué manquait, et son absence est la démonstration la plus nette que
+     * le nombre n'était pas une lecture : un tableau de bord entièrement moqué
+     * rendait « 45 » sans qu'aucune ligne d'inscription n'existe, parce que
+     * c'était `agg.studentCount += c._count.enrollments`. Deux sections
+     * partageant un élève — LÉGAL, PF-361 — le comptaient donc DEUX FOIS.
+     *
+     * Les lignes sont DÉRIVÉES des `_count` de `CLASS_SECTIONS` : sans élève
+     * partagé, distinct === cumul, et les assertions historiques (45 / 18)
+     * restent vraies pour la BONNE raison. `sharedStudents` injecte le
+     * chevauchement et fait apparaître l'écart que la tranche corrige.
+     */
+    enrollment: {
+      findMany: jest.fn().mockImplementation((args: Record<string, unknown> = {}) => {
+        const where = (args.where ?? {}) as { classSectionId?: { in?: string[] } };
+        const wanted = new Set(where.classSectionId?.in ?? []);
+        const rows: Array<{ studentId: string; classSectionId: string }> = [];
+        for (const section of classSections) {
+          if (!wanted.has(section.id)) continue;
+          const size = section._count?.enrollments ?? 0;
+          for (let i = 0; i < size; i += 1) {
+            const shared = overrides?.sharedStudents?.[section.id]?.[i];
+            rows.push({ studentId: shared ?? `${section.id}-s${i}`, classSectionId: section.id });
+          }
+        }
+        return Promise.resolve(rows);
+      }),
+    },
   };
 
   const grades = { statsForStudent: jest.fn().mockResolvedValue(null) };
@@ -284,6 +321,33 @@ describe('AnalyticsService.adminDashboard — U1 reorg', () => {
     expect(primaire.classCount).toBe(1);
     expect(primaire.studentCount).toBe(18);
     expect(primaire.teacherCount).toBe(1);
+  });
+
+  /**
+   * S-E03-7 / PF-36 / ADR-079 — AC-7 #5, le roll-up par cycle.
+   *
+   * Le test au-dessus ne peut PAS distinguer une somme d'une dé-duplication :
+   * sans élève partagé, les deux rendent 45. Celui-ci ajoute UN élève inscrit
+   * dans 6eA ET 6eB la même année — légal (PF-361) — et exige 44.
+   *
+   * ⚠ ROUGE sur l'arbre d'avant la conversion : `agg.studentCount +=
+   * c._count.enrollments` rendait 45 quoi qu'il arrive, puisqu'il ne lisait
+   * aucune ligne d'inscription.
+   */
+  it('S-E03-7 — le roll-up par cycle compte des ÉLÈVES DISTINCTS, pas une somme d’effectifs', async () => {
+    const { service } = makeService({
+      // Le premier inscrit de 6eB EST le premier inscrit de 6eA.
+      sharedStudents: { 'cs-6eA': { 0: 'shared-1' }, 'cs-6eB': { 0: 'shared-1' } },
+    });
+    const res = await service.adminDashboard({ tenantId: TENANT, schoolId: SCHOOL });
+    const college = res.schoolStructure.cycles.find((c) => c.cycleId === CYCLE_COLLEGE.id)!;
+
+    // 25 + 20 = 45 PLACES, mais 44 TÊTES. Le roll-up rend des têtes.
+    expect(college.studentCount).toBe(44);
+    expect(college.studentCount).not.toBe(45);
+    // La classe n'a pas disparu au passage : on a changé le nombre d'élèves,
+    // pas le nombre de classes.
+    expect(college.classCount).toBe(2);
   });
 
   it('still exposes the legacy levels buckets alongside cycles', async () => {

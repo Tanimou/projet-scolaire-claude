@@ -130,6 +130,11 @@ export class GradesController {
       include: {
         teachingAssignment: {
           include: {
+            // S-E03-7 / ADR-079 — ÉPINGLÉ, NON CONVERTI (AC-9). GARDE
+            // D'APPARTENANCE : ces lignes alimentent un `Set` qui REJETTE toute
+            // note portant sur un élève hors classe. Changer la population
+            // change QUI peut être noté — une décision d'écriture, non mesurable
+            // sur une base vide. Épinglé dans le plafond décroissant du cliquet.
             classSection: { include: { enrollments: { where: { status: 'active' } } } },
           },
         },

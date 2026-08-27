@@ -63,6 +63,15 @@ interface StructureResponse {
     totalLevels: number;
     totalClasses: number;
     totalSubjects: number;
+    /**
+     * Élèves de l'ÉCOLE COURANTE (S-E03-7 / ADR-079).
+     *
+     * Ce total était compté sans clause d'école : il portait tout le tenant,
+     * arbre compris et hors-arbre compris, sous un en-tête qui décrit une seule
+     * école. Il BAISSE donc, ou reste égal, et s'accorde enfin avec la somme des
+     * niveaux affichés en dessous — l'écart entre l'en-tête et l'arbre était
+     * précisément le symptôme. La portée est désormais écrite à l'écran.
+     */
     totalStudents: number;
     totalGuardians: number;
     activeEnrollments: number;
@@ -129,7 +138,7 @@ export default async function StructurePage({
           icon={<Users className="h-4 w-4" />}
           label="Élèves inscrits"
           value={data.stats.activeEnrollments}
-          hint={`${data.stats.totalStudents} au total`}
+          hint={`${data.stats.totalStudents} élèves dans l'établissement`}
           tone="teacher"
         />
       </div>

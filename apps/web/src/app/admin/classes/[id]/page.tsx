@@ -224,37 +224,53 @@ export default async function ClassDetailPage({ params }: { params: Promise<{ id
 
       {/* Indicateurs clés */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard icon={Users} tone="blue" label="EFFECTIF" value={`${cls.capacity.current}/${cls.maxStudents}`}>
-          {Math.round(fillRate * 100)}% de remplissage
-        </KpiCard>
+        {/* `capacity.current` — inscriptions ACTIVES — et non le `_count`
+            tous-statuts que la MÊME charge utile renvoie à côté (S-E03-7 /
+            ADR-079). Les deux ont toujours différé d'une unité par inscription
+            `dropped`/`transferred_out`/`pending` : c'est le « 25 ou 26 » de
+            l'audit. Ne pas rebrancher cette carte sur `_count` ; la portée
+            ci-dessous dit laquelle des deux populations est affichée. */}
+        <KpiCard
+          icon={Users}
+          tone="blue"
+          label="EFFECTIF"
+          value={`${cls.capacity.current}/${cls.maxStudents}`}
+          scope={`Inscriptions actives sur ${cls.maxStudents} place${
+            cls.maxStudents > 1 ? 's' : ''
+          } — ${Math.round(fillRate * 100)} % de remplissage.`}
+        />
+        {/* Les trois cartes voisines passent aussi par `scope` : le slot réserve
+            sa hauteur (`h-2` au lieu de `h-10`), donc mélanger `scope` et
+            `children` dans une même rangée désaligne les cartes. */}
         <KpiCard
           icon={BookOpen}
           tone="violet"
           label="TAUX DE NOTATION"
           value={pct(cls.gradingRate.rate)}
-        >
-          {cls.gradingRate.graded}/{cls.gradingRate.total} évaluation(s) publiée(s)
-        </KpiCard>
+          scope={`${cls.gradingRate.graded}/${cls.gradingRate.total} évaluation(s) publiée(s).`}
+        />
         <KpiCard
           icon={GraduationCap}
           tone="green"
           label="PERFORMANCE MOYENNE"
           value={onTwenty(cls.performance.averageScore)}
-        >
-          {cls.performance.passRate !== null
-            ? `${cls.performance.passRate}% ≥ 10/20 · ${cls.performance.gradedCount} note(s)`
-            : 'Aucune note publiée'}
-        </KpiCard>
+          scope={
+            cls.performance.passRate !== null
+              ? `${cls.performance.passRate} % ≥ 10/20 · ${cls.performance.gradedCount} note(s) publiée(s).`
+              : 'Aucune note publiée.'
+          }
+        />
         <KpiCard
           icon={ShieldAlert}
           tone={cls.openAlertsCount > 0 ? 'rose' : 'slate'}
           label="ALERTES OUVERTES"
           value={cls.openAlertsCount}
-        >
-          {cls.attendanceRate !== null
-            ? `Présence ${cls.attendanceRate}%`
-            : 'Présence non renseignée'}
-        </KpiCard>
+          scope={
+            cls.attendanceRate !== null
+              ? `Présence ${cls.attendanceRate} % sur la période.`
+              : 'Présence non renseignée.'
+          }
+        />
       </div>
 
       {/* Capacity bar */}

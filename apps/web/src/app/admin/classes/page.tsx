@@ -41,6 +41,16 @@ interface ClassItem {
     cycle: { id: string; name: string; color: string | null };
   };
   academicYear: { id: string; name: string; status: 'active' | 'closed' | 'archived' };
+  /**
+   * Effectif de la section : inscriptions ACTIVES (population `seated`).
+   *
+   * S-E03-7 / ADR-079 — la LISTE lisait déjà la bonne population ; c'est le
+   * DÉTAIL (`GET /classes/:id`) qui renvoyait, dans la MÊME charge utile, un
+   * `_count` tous statuts à côté d'un `capacity.current` actif seul. La liste ne
+   * change donc pas de valeur ici ; ce qui manquait, c'est que l'écran DISE
+   * laquelle des deux populations il montre — « 25 » et « 26 » pour la même
+   * classe, c'est exactement l'alternance rapportée par l'audit.
+   */
   _count: { enrollments: number };
   teachingAssignments: Array<{
     id: string;
@@ -231,7 +241,12 @@ export default async function ClassesPage({
                     <th className="px-4 py-3">Salle</th>
                     <th className="px-4 py-3">Année académique</th>
                     <th className="px-4 py-3">Capacité maximale</th>
-                    <th className="px-4 py-3">Effectif actuel</th>
+                    <th className="px-4 py-3">
+                      Effectif actuel
+                      <span className="block text-[10px] font-medium normal-case tracking-normal text-slate-400">
+                        inscriptions actives
+                      </span>
+                    </th>
                     <th className="px-4 py-3">Taux d&apos;occupation</th>
                     <th className="px-4 py-3">Enseignant référent</th>
                     <th className="px-4 py-3">Statut</th>

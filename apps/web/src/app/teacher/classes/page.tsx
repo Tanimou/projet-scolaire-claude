@@ -87,7 +87,17 @@ export default async function TeacherClassesPage() {
 
   const totalClasses = classes.length;
   const totalSubjects = new Set(assignments.map((a) => a.subject.id)).size;
-  const totalStudents = classes.reduce((s, c) => s + c.enrolledCount, 0);
+  // SOMME d'effectifs — donc des INSCRIPTIONS, pas des élèves (S-E03-7 / ADR-079).
+  //
+  // La valeur ne change pas dans cette tranche ; c'est son NOM qui était faux.
+  // Un élève inscrit dans deux des classes de l'enseignant compte deux fois
+  // ici, et rien en base ne l'en empêche : l'index unique partiel promis par
+  // `schema.prisma` (« au plus une inscription active par élève et par année »)
+  // n'existe pas (PF-361/PF-409). Cette somme est donc honnête comme somme de
+  // LIGNES d'inscription, et fausse comme nombre d'élèves. Le nombre d'élèves
+  // distincts est une LECTURE, jamais une somme : il est rendu par la carte
+  // matière du tableau de bord (`distinctStudentCount`).
+  const totalEnrolments = classes.reduce((s, c) => s + c.enrolledCount, 0);
   const mainTeacherOf = classes.filter((c) => c.isMainTeacher).length;
 
   return (
@@ -102,18 +112,44 @@ export default async function TeacherClassesPage() {
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard icon={Users} tone="blue" label="CLASSES" value={totalClasses}>
-          Classes enseignées
-        </KpiCard>
-        <KpiCard icon={GraduationCap} tone="violet" label="ÉLÈVES" value={totalStudents}>
-          Cumul des effectifs
-        </KpiCard>
-        <KpiCard icon={BookOpen} tone="green" label="MATIÈRES" value={totalSubjects}>
-          Matières enseignées
-        </KpiCard>
-        <KpiCard icon={Layers} tone="amber" label="PROF PRINCIPAL" value={mainTeacherOf}>
-          {mainTeacherOf > 0 ? 'classes' : 'aucune'}
-        </KpiCard>
+        <KpiCard
+          icon={Users}
+          tone="blue"
+          label="CLASSES"
+          value={totalClasses}
+          scope="Classes où vous intervenez cette année."
+        />
+        {/* `INSCRIPTIONS`, pas `ÉLÈVES` : la valeur est un `reduce(+)` d'effectifs.
+            Une carte étiquetée « ÉLÈVES » ne doit jamais porter un cumul — la
+            portée sous le nombre ne rattrape pas un nom déjà faux, elle ne fait
+            que le rendre à moitié honnête. */}
+        <KpiCard
+          icon={Layers}
+          tone="violet"
+          label="INSCRIPTIONS"
+          value={totalEnrolments}
+          scope={`Somme des effectifs de vos ${totalClasses} classe${
+            totalClasses > 1 ? 's' : ''
+          }. Un élève inscrit dans deux d'entre elles est compté deux fois.`}
+        />
+        <KpiCard
+          icon={BookOpen}
+          tone="green"
+          label="MATIÈRES"
+          value={totalSubjects}
+          scope="Matières distinctes que vous enseignez."
+        />
+        <KpiCard
+          icon={GraduationCap}
+          tone="amber"
+          label="PROF PRINCIPAL"
+          value={mainTeacherOf}
+          scope={
+            mainTeacherOf > 0
+              ? 'Classes dont vous êtes le professeur principal.'
+              : 'Vous n’êtes professeur principal d’aucune classe.'
+          }
+        />
       </div>
 
       {classes.length === 0 ? (

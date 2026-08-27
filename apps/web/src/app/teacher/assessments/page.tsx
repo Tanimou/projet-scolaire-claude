@@ -48,6 +48,15 @@ interface AssessmentRow {
       id: string;
       name: string;
       gradeLevel: { name: string };
+      /**
+       * Effectif de la section — DÉNOMINATEUR de la progression de saisie.
+       *
+       * S-E03-7 / ADR-079 : côté API ce compte passe de « tous les statuts » à
+       * la population `seated` (inscriptions actives). Le pourcentage affiché
+       * MONTE donc, ou reste égal, et « saisie complète » redevient ATTEIGNABLE
+       * pour une classe portant une inscription `dropped` — auparavant un élève
+       * parti restait un dénominateur qu'aucune note ne pouvait remplir.
+       */
       _count: { enrollments: number };
     };
     subject: { id: string; code: string; name: string; color: string | null };
@@ -365,7 +374,15 @@ export default async function TeacherAssessmentsPage({
                     <th className="px-4 py-3">Évaluation</th>
                     <th className="px-4 py-3">Matière · Classe</th>
                     <th className="px-4 py-3">Date</th>
-                    <th className="px-4 py-3 text-right">Notes saisies</th>
+                    {/* La portée du dénominateur est écrite dans l'en-tête, pas
+                        dans un tooltip : « 18 / 25 » ne veut rien dire tant
+                        qu'on ignore qui sont les 25. */}
+                    <th className="px-4 py-3 text-right">
+                      Notes saisies
+                      <span className="block text-[10px] font-medium normal-case tracking-normal text-slate-400">
+                        sur les élèves inscrits
+                      </span>
+                    </th>
                     <th className="px-4 py-3 text-right">Coef · Barème</th>
                     <th className="px-4 py-3">Statut</th>
                     <th className="px-4 py-3 text-right">Action</th>
@@ -455,9 +472,23 @@ export default async function TeacherAssessmentsPage({
                                 {a._count.grades}
                                 <span className="text-slate-400"> / {enrollments}</span>
                               </span>
+                              {/* SC 1.3.1 / 4.1.2 : la barre est une mesure, pas
+                                  une décoration. Son libellé NOMME la population
+                                  du dénominateur — un `title` seul est invisible
+                                  au doigt et peu fiable pour les technologies
+                                  d'assistance, et il portait ici la seule
+                                  mention de « qui » est compté. */}
                               <div
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={enrollments}
+                                aria-valuenow={Math.min(a._count.grades, enrollments)}
+                                aria-label={`${a._count.grades} note${
+                                  a._count.grades > 1 ? 's' : ''
+                                } saisie${a._count.grades > 1 ? 's' : ''} sur ${enrollments} élève${
+                                  enrollments > 1 ? 's' : ''
+                                } inscrit${enrollments > 1 ? 's' : ''} (${filledPct} %)`}
                                 className="h-1.5 w-20 overflow-hidden rounded-full bg-slate-100"
-                                title={`${filledPct}% des élèves notés`}
                               >
                                 <div
                                   className={`h-full rounded-full transition-all ${

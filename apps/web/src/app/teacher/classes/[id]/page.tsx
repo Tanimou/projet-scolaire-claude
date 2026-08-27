@@ -214,7 +214,12 @@ export default async function TeacherClassDetailPage({ params }: { params: Promi
   const today = startOfDay(now);
 
   // Gradebook-derived
-  const studentsCount = assignment.classSection._count.enrollments;
+  // Effectif d'UNE section — inscriptions actives (`/teachers/me/assignments`).
+  // Nommé `rosterSize` et non `studentsCount` : c'est la réponse à « combien
+  // d'élèves dans CETTE classe ? », jamais à « combien d'élèves ai-je ? »
+  // (S-E03-7 / ADR-079). Les deux se ressemblent assez pour avoir porté le même
+  // nom, et c'est de là que vient l'écart 46-vs-43 du portail enseignant.
+  const rosterSize = assignment.classSection._count.enrollments;
   const classAverage = gradebook?.classAverage ?? null;
   const assessmentsTotal = gradebook?.assessments.length ?? 0;
   const assessmentsPublished = gradebook?.assessments.filter((a) => a.isPublished).length ?? 0;
@@ -372,9 +377,14 @@ export default async function TeacherClassDetailPage({ params }: { params: Promi
 
       {/* -- KPI strip -------------------------------------------------- */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard icon={Users} tone="teal" label="ÉLÈVES" value={studentsCount}>
+        {/* `EFFECTIF`, pas `ÉLÈVES` : la valeur est l'effectif d'UNE section
+            (S-E03-7 / ADR-079). « ÉLÈVES » est le mot du portail enseignant pour
+            les élèves DISTINCTS sur un ENSEMBLE de classes — la carte matière du
+            tableau de bord. Deux questions, deux mots ; ici c'en est une seule,
+            et elle ne se somme jamais avec ses voisines. */}
+        <KpiCard icon={Users} tone="teal" label="EFFECTIF" value={rosterSize}>
           {studentsScored > 0
-            ? `${studentsScored} avec moyenne · ${studentsCount - studentsScored} sans note`
+            ? `${studentsScored} avec moyenne · ${rosterSize - studentsScored} sans note`
             : 'Aucune moyenne calculée'}
         </KpiCard>
         <KpiCard
@@ -759,7 +769,7 @@ export default async function TeacherClassDetailPage({ params }: { params: Promi
               <div>
                 <h2 className="text-sm font-bold text-slate-900">Répartition de la classe</h2>
                 <p className="text-[11px] text-slate-500">
-                  {studentsScored} sur {studentsCount} élève{studentsCount > 1 ? 's' : ''} noté{studentsCount > 1 ? 's' : ''}
+                  {studentsScored} sur {rosterSize} élève{rosterSize > 1 ? 's' : ''} noté{rosterSize > 1 ? 's' : ''}
                 </p>
               </div>
             </header>
@@ -767,7 +777,7 @@ export default async function TeacherClassDetailPage({ params }: { params: Promi
               {(['excellent', 'bon', 'correct', 'risque', 'unknown'] as PerfBand[]).map((band) => {
                 const meta = BAND_META[band];
                 const n = distribution[band];
-                const pct = studentsCount > 0 ? Math.round((n / studentsCount) * 100) : 0;
+                const pct = rosterSize > 0 ? Math.round((n / rosterSize) * 100) : 0;
                 return (
                   <li key={band} className="flex items-center gap-3 px-5 py-2.5">
                     <span className={`h-8 w-1.5 shrink-0 rounded-full ${meta.stripe}`} aria-hidden />
@@ -781,7 +791,7 @@ export default async function TeacherClassDetailPage({ params }: { params: Promi
                         </div>
                         <div className="font-mono text-sm font-bold tabular-nums text-slate-900">
                           {n}
-                          <span className="ml-1 text-[10px] font-medium text-slate-500">/ {studentsCount}</span>
+                          <span className="ml-1 text-[10px] font-medium text-slate-500">/ {rosterSize}</span>
                         </div>
                       </div>
                       <div className="mt-1.5">
