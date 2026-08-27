@@ -1,0 +1,16 @@
+// FIXTURE — NOT COMPILED, NOT WALKED.
+//
+// S-E03-9 / ADR-080 §D5 R5 — le CONTRÔLE DE FALSIFIABILITÉ de R4.
+// C'est `packages/contracts/src/dto/conversation.ts:105-110` tel qu'il était sur
+// HEAD : la SEULE implémentation déjà correcte du contrat, et donc la graine du
+// module canonique — mais une SECONDE déclaration des bornes, ce que R4 interdit
+// hors de `packages/contracts/src/pagination/page-window.ts`.
+//
+// R4 est à TOLÉRANCE ZÉRO et son résiduel réel est 0 : sans cette fixture, « 0
+// contravention » ne se distinguerait pas de « le détecteur ne voit rien ».
+
+export const PreFixInboxQuerySchema = z.object({
+  status: z.enum(CONVERSATION_STATUS).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});

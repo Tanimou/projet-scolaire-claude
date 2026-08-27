@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { guardianshipLiveWhere } from '@pilotage/contracts';
+import { guardianshipLiveWhere, pageSizeOf, pageWindow } from '@pilotage/contracts';
 import { LessonStatus } from '@prisma/client';
 import {
   IsArray,
@@ -141,6 +141,18 @@ export function assertOwnedByTeacher(
 export function unknownClassSession(): BadRequestException {
   return new BadRequestException('La séance sélectionnée est introuvable dans votre établissement.');
 }
+
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de page du fil de leçons, avec SES
+ * nombres : 100 par défaut, 500 au maximum. Inchangés.
+ *
+ * ⚠ `apps/web/src/app/teacher/documents` appelle `lessons?mine=true&limit=500`,
+ * c'est-à-dire EXACTEMENT le plafond — second site mesuré où le littéral du
+ * client et le plafond du serveur se touchent (ADR-080 §D1).
+ *
+ * `.pick({ limit: true })` : ce point d'entrée n'accepte pas d'`offset`.
+ */
+const LESSONS_LIST_PAGE_WINDOW = pageWindow({ def: 100, max: 500 }).pick({ limit: true });
 
 @ApiTags('lessons')
 @ApiBearerAuth()
@@ -367,7 +379,12 @@ export class LessonsController {
       };
     }
     // PUR, donc DEHORS : borner la pagination ne lit pas la base.
-    const take = Math.min(parseInt(limit ?? '100', 10) || 100, 500);
+    // S-E03-9 / ADR-080 — et désormais UNE analyse, pas une septième.
+    const parsedWindow = LESSONS_LIST_PAGE_WINDOW.safeParse({ limit });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const take = pageSizeOf(parsedWindow.data);
 
     // ── S-E03-2 / `AC-2` / `ADR-071 §D1`+`§D2` — LE MUR ABAC ÉLÈVE, HISSÉ ──────
     //

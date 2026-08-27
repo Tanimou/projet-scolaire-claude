@@ -1,16 +1,16 @@
 import {
+  BadRequestException,
   Body,
   Controller,
-  DefaultValuePipe,
   ForbiddenException,
   Get,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { pageWindow, pageWindowOf } from '@pilotage/contracts';
 
 import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -36,6 +36,13 @@ import { CreateParentBulletinDto } from './dto/create-parent-bulletin.dto';
  *  - every read/download re-scoped to `requestedBy = me` (no cross-parent IDOR),
  *  - `report_card_pdf` jobs only.
  */
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre des bulletins exportés par un parent :
+ * 20 par défaut, 100 au maximum. Inchangés. Site MESURÉ PAR LA PASSE CRITIQUE
+ * (hors des neuf du brief), converti pour la même raison que les quatre autres.
+ */
+const PARENT_EXPORT_JOBS_PAGE_WINDOW = pageWindow({ def: 20, max: 100 });
+
 @ApiTags('parent-exports')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -86,15 +93,23 @@ export class ParentExportsController {
   @ApiOperation({ summary: "List the caller's own bulletin export jobs (newest first)" })
   async list(
     @CurrentJwt() jwt: KeycloakJwtPayload,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-    @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
+    @Query('limit') limitRaw: string | undefined,
+    @Query('offset') offsetRaw: string | undefined,
   ) {
+    const parsedWindow = PARENT_EXPORT_JOBS_PAGE_WINDOW.safeParse({
+      limit: limitRaw,
+      offset: offsetRaw,
+    });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
     return this.exports.listForParent({
       tenantId: me.tenantId,
       requestedBy: me.id,
-      limit: Math.min(100, Math.max(1, limit)),
-      offset: Math.max(0, offset),
+      limit: take,
+      offset: skip,
     });
   }
 

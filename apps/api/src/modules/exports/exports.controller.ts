@@ -1,15 +1,15 @@
 import {
+  BadRequestException,
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { pageWindow, pageWindowOf } from '@pilotage/contracts';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -21,6 +21,14 @@ import { SchoolContextService } from '../school-structure/school-context.service
 
 import { ExportsService } from './exports.service';
 import { CreateExportDto } from './exports.types';
+
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de la liste des travaux d'export :
+ * 20 par défaut, 100 au maximum. Inchangés. Site MESURÉ PAR LA PASSE CRITIQUE,
+ * absent des neuf du brief ; converti pour la même raison que les quatre autres
+ * (aucune raison structurelle de l'exempter, cf. `meeting-requests`).
+ */
+const EXPORT_JOBS_PAGE_WINDOW = pageWindow({ def: 20, max: 100 });
 
 @ApiTags('exports')
 @ApiBearerAuth()
@@ -52,14 +60,19 @@ export class ExportsController {
   @ApiOperation({ summary: 'List recent export jobs for the tenant' })
   async list(
     @CurrentJwt() jwt: KeycloakJwtPayload,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-    @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
+    @Query('limit') limitRaw: string | undefined,
+    @Query('offset') offsetRaw: string | undefined,
   ) {
+    const parsedWindow = EXPORT_JOBS_PAGE_WINDOW.safeParse({ limit: limitRaw, offset: offsetRaw });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
     return this.exports.listForTenant({
       tenantId: me.tenantId,
-      limit: Math.min(100, Math.max(1, limit)),
-      offset: Math.max(0, offset),
+      limit: take,
+      offset: skip,
     });
   }
 

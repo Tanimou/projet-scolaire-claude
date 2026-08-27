@@ -1,0 +1,16 @@
+// FIXTURE — NOT COMPILED, NOT WALKED.
+//
+// S-E03-9 / ADR-080 §D5 R5 — le CONTRÔLE DE FALSIFIABILITÉ de R3.
+// C'est `alerts.controller.ts:124-125` / `exports.controller.ts:55-56` tel
+// qu'ils étaient sur HEAD. R3 est à TOLÉRANCE ZÉRO : les dix sites mesurés sont
+// convertis, il n'en reste aucun. Cette fixture est donc la SEULE façon de
+// prouver que le détecteur peut encore rougir.
+
+export class PreFixPipeController {
+  async list(
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
+  ) {
+    return { limit, offset };
+  }
+}

@@ -1,5 +1,14 @@
-import { Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { pageSizeOf, pageWindow } from '@pilotage/contracts';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -18,6 +27,20 @@ import { NotificationsService } from './notifications.service';
  * `createdAt` / `readAt` / `link` fields preserve the contract that the
  * TopbarBell expected from the legacy `AnnouncementReceipt` shim.
  */
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de page de la cloche, avec SES
+ * nombres : 20 par défaut, 100 au maximum. Inchangés.
+ *
+ * Ce site CLAMPAIT DÉJÀ correctement par le bas
+ * (`Math.min(100, Math.max(1, …))`) : il ne portait PAS le défaut d'inversion.
+ * Il est converti quand même — la tranche supprime la DIVERGENCE, pas seulement
+ * ses quatre victimes, et une huitième forme correcte reste une huitième forme.
+ *
+ * ⚠ `apps/web/src/components/notifications` appelle `notifications?limit=100`,
+ * EXACTEMENT le plafond (ADR-080 §D1).
+ */
+const NOTIFICATIONS_PAGE_WINDOW = pageWindow({ def: 20, max: 100 }).pick({ limit: true });
+
 @ApiTags('notifications')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -35,8 +58,12 @@ export class NotificationsController {
     @Query('limit') limitRaw?: string,
     @Query('unreadOnly') unreadOnly?: string,
   ) {
+    const parsedWindow = NOTIFICATIONS_PAGE_WINDOW.safeParse({ limit: limitRaw });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const limit = pageSizeOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
-    const limit = Math.min(100, Math.max(1, parseInt(limitRaw ?? '20', 10) || 20));
     const data = await this.notifications.list({
       tenantId: me.tenantId,
       userProfileId: me.id,

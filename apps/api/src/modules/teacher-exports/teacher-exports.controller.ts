@@ -1,17 +1,17 @@
 import {
+  BadRequestException,
   Body,
   Controller,
-  DefaultValuePipe,
   ForbiddenException,
   Get,
   NotFoundException,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { pageWindow, pageWindowOf } from '@pilotage/contracts';
 
 import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -43,6 +43,13 @@ import { CreateTeacherGradeGridDto } from './dto/create-teacher-grade-grid.dto';
  *  - every read/download re-scoped to `requestedBy = me` (no cross-teacher IDOR),
  *  - `grades_xlsx` jobs only.
  */
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre des grilles de notes exportées par un
+ * enseignant : 20 par défaut, 100 au maximum. Inchangés. Site MESURÉ PAR LA
+ * PASSE CRITIQUE (hors des neuf du brief), converti pour la même raison.
+ */
+const TEACHER_EXPORT_JOBS_PAGE_WINDOW = pageWindow({ def: 20, max: 100 });
+
 @ApiTags('teacher-exports')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -104,16 +111,24 @@ export class TeacherExportsController {
   async list(
     @CurrentJwt() jwt: KeycloakJwtPayload,
     @Query('classSectionId') classSectionId: string | undefined,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-    @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
+    @Query('limit') limitRaw: string | undefined,
+    @Query('offset') offsetRaw: string | undefined,
   ) {
+    const parsedWindow = TEACHER_EXPORT_JOBS_PAGE_WINDOW.safeParse({
+      limit: limitRaw,
+      offset: offsetRaw,
+    });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
     return this.exports.listForTeacher({
       tenantId: me.tenantId,
       requestedBy: me.id,
       classSectionId: classSectionId || undefined,
-      limit: Math.min(100, Math.max(1, limit)),
-      offset: Math.max(0, offset),
+      limit: take,
+      offset: skip,
     });
   }
 

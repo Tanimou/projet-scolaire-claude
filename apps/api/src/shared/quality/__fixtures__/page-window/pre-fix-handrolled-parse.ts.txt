@@ -1,0 +1,21 @@
+// FIXTURE — NOT COMPILED, NOT WALKED (`.ts.txt`, under `__fixtures__/`).
+//
+// S-E03-9 / ADR-080 §D5 R5 — le CONTRÔLE DE FALSIFIABILITÉ de R1 et R2.
+// C'est `analytics.controller.ts:277-278` tel qu'il était sur HEAD, à l'octet
+// près. Le cliquet DOIT le voir ROUGE ; s'il le voyait vert, il ne prouverait
+// rien de l'arbre réel non plus.
+//
+// Aucun nom réel de tenant, d'école ou de personne (PF-295).
+
+export class PreFixController {
+  async auditList(limit?: string, offset?: string) {
+    const take = Math.min(parseInt(limit ?? '50', 10) || 50, 200);
+    const skip = parseInt(offset ?? '0', 10) || 0;
+    return { take, skip };
+  }
+
+  async notificationsList(limitRaw?: string) {
+    const limit = Math.min(100, Math.max(1, parseInt(limitRaw ?? '20', 10) || 20));
+    return { limit };
+  }
+}

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -12,6 +13,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   ROSTER_YEAR_IMPLIED_BY_SECTION,
   distinctStudentsWhere,
+  pageSizeOf,
+  pageWindow,
   readDistinctStudentsAcrossSections,
   rosterCountArg,
 } from '@pilotage/contracts';
@@ -36,6 +39,14 @@ class UpdateTeacherDto {
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsString() @MaxLength(2000) notes?: string;
 }
+
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre des dernières notes d'un enseignant,
+ * avec SES nombres : 50 par défaut, 100 au maximum. Inchangés. Ce site clampait
+ * déjà correctement par le bas ; il est converti pour supprimer la FORME, pas
+ * seulement le symptôme.
+ */
+const TEACHER_RECENT_GRADES_PAGE_WINDOW = pageWindow({ def: 50, max: 100 }).pick({ limit: true });
 
 @ApiTags('teaching')
 @ApiBearerAuth()
@@ -330,9 +341,13 @@ export class TeachersController {
     @CurrentJwt() jwt: KeycloakJwtPayload,
     @Query('limit') limitRaw?: string,
   ) {
+    const parsedWindow = TEACHER_RECENT_GRADES_PAGE_WINDOW.safeParse({ limit: limitRaw });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const limit = pageSizeOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
     const teacher = await this.teachers.ensureForUser(me);
-    const limit = Math.min(100, Math.max(1, parseInt(limitRaw ?? '50', 10) || 50));
 
     const grades = await this.prisma.grade.findMany({
       where: {

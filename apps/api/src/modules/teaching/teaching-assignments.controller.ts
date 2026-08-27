@@ -13,7 +13,15 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ASSIGNMENT_ROLES, type AssignmentRole } from '@pilotage/contracts';
+import {
+  ASSIGNMENT_ROLES,
+  type AssignmentRole,
+  distinctGroupCount,
+  pageWindow,
+  pageWindowOf,
+  resultTotal,
+} from '@pilotage/contracts';
+import { type Prisma } from '@prisma/client';
 import { IsBoolean, IsIn, IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -23,6 +31,7 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { SchoolContextService } from '../school-structure/school-context.service';
 
 import { resolveRoleSync } from './assignment-role.util';
 
@@ -42,6 +51,19 @@ class UpdateAssignmentDto {
   @IsOptional() @IsIn(ASSIGNMENT_ROLES as unknown as string[]) role?: AssignmentRole;
 }
 
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de page des affectations : 100 par
+ * défaut, 500 au maximum.
+ *
+ * Ce sont des nombres NEUFS, et c'est assumé : ce point d'entrée n'avait AUCUNE
+ * borne (`findMany` sans `take`, quatre `include` imbriqués, ~290 lignes en une
+ * charge utile). Il n'existe donc pas de défaut observable à préserver ici — le
+ * défaut de 100 est plus LARGE que la page par défaut de tout autre site
+ * converti, précisément pour qu'aucun appelant existant ne voie sa première
+ * page rétrécir sous ce qu'il affichait déjà.
+ */
+const TEACHING_ASSIGNMENTS_PAGE_WINDOW = pageWindow({ def: 100, max: 500 });
+
 @ApiTags('teaching')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -50,8 +72,69 @@ export class TeachingAssignmentsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly users: UserSyncService,
+    private readonly ctx: SchoolContextService,
   ) {}
 
+  /**
+   * S-E03-9 / PF-50 / ADR-080 §D4 — LA MOITIÉ « VÉRITÉ » DE LA TRANCHE.
+   *
+   * AVANT : `findMany` SANS `take`, avec quatre `include` imbriqués. Toutes les
+   * lignes du tenant (~290 mesurées) partaient dans une charge utile, et
+   * `apps/web/src/app/admin/assignments/page.tsx:39-43` dérivait QUATRE KPI de
+   * ce tableau — dont `assignments.length` sous l'étiquette « AFFECTATIONS
+   * ACTIVES ».
+   *
+   * ⚠ POURQUOI LES AGRÉGATS SONT OBLIGATOIRES ET NON « OPTIONNELS »
+   * ---------------------------------------------------------------
+   * Borner ce point d'entrée SANS eux fabriquerait un défaut de vérité PIRE que
+   * celui que PF-50 nomme. Trois des quatre KPI deviendraient la taille de la
+   * page portant le nom d'un total — le défaut de PF-20 (« la longueur d'une
+   * constante ») et de PF-40 (« un compte sur une liste tronquée »), pour la
+   * troisième fois.
+   *
+   * Le quatrième est pire encore : `subjectsWithoutTeacher` est une DIFFÉRENCE
+   * D'ENSEMBLES dont l'AUTRE opérande, `GET /subjects`, est lui-même un
+   * `findMany` non borné (`school-structure/subjects.controller.ts:110`,
+   * `PF-422`). Borner le seul côté des affectations rendrait la différence
+   * MONOTONEMENT FAUSSE DANS LA DIRECTION ALARMANTE : sur une page de 100 lignes
+   * parmi ~290, presque chaque matière serait déclarée « sans enseignant ». Un
+   * KPI qui sous-estime est un bug ; un KPI qui FABRIQUE une crise de
+   * recrutement sur le tableau de bord d'une école viole la north star
+   * (GUARDRAILS §1 : chaque chiffre doit être explicable et conduire à l'étape
+   * suivante — celui-là conduirait chaque admin à la MAUVAISE étape suivante).
+   *
+   * ⚠ CE N'EST PAS DNC-01 : `groupBy(...).length` EST UNE TÊTE DE COMPTE
+   * --------------------------------------------------------------------
+   * Dans le vocabulaire d'ADR-079 §D3 : la longueur INTERDITE est celle d'un
+   * tableau BORNÉ par une taille de page. Un `groupBy` ne porte aucun `take` et
+   * n'en a pas besoin — sa CARDINALITÉ *est* la réponse. `distinctGroupCount()`
+   * le dit dans le nom et dans le type, pour qu'aucun relecteur n'ait à le
+   * deviner. Et c'est un `groupBy`, jamais `findMany` + `new Set(...)` : cette
+   * dernière forme est exactement la régression de fan-out que `PF-418` a
+   * enregistrée au run 93, en citant PF-50 comme la finding qu'elle aggravait.
+   * Jamais `$queryRaw` non plus : du SQL brut sortirait de la portée du gate de
+   * déploiement tenant-scope.
+   *
+   * ⚠ G-TENANT — les SEPT lectures portent `tenantId` (la page, le total, les
+   * QUATRE `groupBy` et le `count` de matières). Un agrégat est une lecture
+   * comme une autre.
+   *
+   * ⚠ G-AUTHZ — `@RequiresPermission('teaching_assignments.read')` et les deux
+   * gardes sont INCHANGÉS. Le changement de FORME est ADDITIF (`{ data }` est
+   * préservé) et le seul code de réponse nouveau est le **400** de AC-3.
+   *
+   * HÉRITÉ, NON CORRIGÉ (DNC-06)
+   * ----------------------------
+   * `PF-421` — l'étiquette « AFFECTATIONS ACTIVES » du portail admin. Il
+   * n'existe AUCUN prédicat `active` sur `TeachingAssignment` (voir
+   * `schema.prisma:1006-1032`) et aucun n'est appliqué ici : le compte est celui
+   * de TOUTES les affectations. L'étiquette est fausse depuis qu'elle a été
+   * écrite, INDÉPENDAMMENT de la pagination. Corriger le mot (ou ajouter le
+   * prédicat) est une décision produit, pas une correction de dérivation.
+   * `PF-422` — `/subjects` et `/classes` restent non bornés ; §D4 les rend
+   * inoffensifs POUR CE KPI en déplaçant la différence côté serveur, il ne les
+   * borne pas.
+   */
   @Get()
   @RequiresPermission('teaching_assignments.read')
   async list(
@@ -60,33 +143,159 @@ export class TeachingAssignmentsController {
     @Query('classSectionId') classSectionId?: string,
     @Query('subjectId') subjectId?: string,
     @Query('academicYearId') academicYearId?: string,
+    @Query('limit') limitRaw?: string,
+    @Query('offset') offsetRaw?: string,
   ) {
-    const me = await this.users.ensureUser(jwt);
-    const data = await this.prisma.teachingAssignment.findMany({
-      where: {
-        tenantId: me.tenantId,
-        ...(teacherProfileId ? { teacherProfileId } : {}),
-        ...(classSectionId ? { classSectionId } : {}),
-        ...(subjectId ? { subjectId } : {}),
-        ...(academicYearId ? { academicYearId } : {}),
-      },
-      include: {
-        teacherProfile: {
-          include: { userProfile: { select: { firstName: true, lastName: true, email: true } } },
-        },
-        classSection: {
-          include: { gradeLevel: { include: { cycle: { select: { name: true, color: true } } } } },
-        },
-        subject: { select: { id: true, name: true, code: true, color: true } },
-        academicYear: { select: { id: true, name: true, status: true } },
-      },
-      orderBy: [
-        { classSection: { gradeLevel: { orderIndex: 'asc' } } },
-        { classSection: { name: 'asc' } },
-        { subject: { name: 'asc' } },
-      ],
+    const parsedWindow = TEACHING_ASSIGNMENTS_PAGE_WINDOW.safeParse({
+      limit: limitRaw,
+      offset: offsetRaw,
     });
-    return { data };
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
+
+    const me = await this.users.ensureUser(jwt);
+    const { schoolId } = await this.ctx.forTenant(me.tenantId);
+
+    // UNE portée, construite UNE fois (patron `PF-358` /
+    // `guardians.controller.ts:376-378`). La page, le total et les deux
+    // `groupBy` reçoivent LE MÊME OBJET : aucun des quatre ne peut en épeler la
+    // moitié, ni oublier l'axe tenant. Deux littéraux construits à la main
+    // seraient deux portées qui divergeraient au premier filtre ajouté.
+    const where: Prisma.TeachingAssignmentWhereInput = {
+      tenantId: me.tenantId,
+      ...(teacherProfileId ? { teacherProfileId } : {}),
+      ...(classSectionId ? { classSectionId } : {}),
+      ...(subjectId ? { subjectId } : {}),
+      ...(academicYearId ? { academicYearId } : {}),
+    };
+
+    /**
+     * LA COUVERTURE A UNE AUTRE PORTÉE, ET C'EST DÉLIBÉRÉ (AC-5b).
+     *
+     * Le panneau « Couverture » du portail admin affirme quelque chose sur
+     * TOUTES LES CLASSES ACTIVES de l'établissement (« Couverture complète.
+     * Toutes les classes actives ont un professeur principal… »). Le calculer
+     * sur `where` le ferait accuser de « sans professeur principal » CHAQUE
+     * classe que le filtre courant exclut — la même erreur monotone que celle
+     * décrite plus haut, transposée d'une page à un filtre. La couverture porte
+     * donc sur le tenant, restreint à l'année scolaire SI l'appelant en a nommé
+     * une (une classe a un PP *pour une année*), et sur rien d'autre.
+     *
+     * Le champ `scope` du payload NOMME cette portée pour que l'interface ne
+     * puisse pas l'étiqueter à tort.
+     */
+    const coverageWhere: Prisma.TeachingAssignmentWhereInput = {
+      tenantId: me.tenantId,
+      ...(academicYearId ? { academicYearId } : {}),
+    };
+
+    const [
+      data,
+      totalRows,
+      teacherGroups,
+      classGroups,
+      subjectsWithoutTeacherCount,
+      principalGroups,
+      assistantGroups,
+      subjectGroups,
+    ] = await Promise.all([
+      this.prisma.teachingAssignment.findMany({
+        where,
+        include: {
+          teacherProfile: {
+            include: { userProfile: { select: { firstName: true, lastName: true, email: true } } },
+          },
+          classSection: {
+            include: { gradeLevel: { include: { cycle: { select: { name: true, color: true } } } } },
+          },
+          subject: { select: { id: true, name: true, code: true, color: true } },
+          academicYear: { select: { id: true, name: true, status: true } },
+        },
+        orderBy: [
+          { classSection: { gradeLevel: { orderIndex: 'asc' } } },
+          { classSection: { name: 'asc' } },
+          { subject: { name: 'asc' } },
+        ],
+        take,
+        skip,
+      }),
+      this.prisma.teachingAssignment.count({ where }),
+      // `_count: { _all: true }` est la forme maison des `groupBy` de ce dépôt
+      // (`guardians.controller.ts:446-451`, `analytics.service.ts:3611-3618`).
+      // Ce n'est PAS la valeur lue ici — la CARDINALITÉ l'est — mais garder la
+      // forme évite d'introduire une seconde façon d'écrire un `groupBy`, ce
+      // qui serait le défaut de cette tranche appliqué à elle-même.
+      this.prisma.teachingAssignment.groupBy({
+        by: ['teacherProfileId'],
+        where,
+        _count: { _all: true },
+      }),
+      this.prisma.teachingAssignment.groupBy({
+        by: ['classSectionId'],
+        where,
+        _count: { _all: true },
+      }),
+      // La différence d'ensembles, CÔTÉ SERVEUR et en UNE lecture. Le
+      // dénominateur est celui de `GET /subjects` (les matières de l'école du
+      // contexte), pour que les deux surfaces ne puissent pas répondre deux
+      // nombres différents ; `tenantId` est ajouté ici, ce qui le RESSERRE.
+      this.prisma.subject.count({
+        where: { tenantId: me.tenantId, schoolId, teachingAssignments: { none: where } },
+      }),
+      this.prisma.teachingAssignment.groupBy({
+        by: ['classSectionId'],
+        where: { ...coverageWhere, role: 'principal' },
+        _count: { _all: true },
+      }),
+      this.prisma.teachingAssignment.groupBy({
+        by: ['classSectionId'],
+        where: { ...coverageWhere, role: 'assistant' },
+        _count: { _all: true },
+      }),
+      // Les ids des matières POURVUES, sur la même portée `coverageWhere` que
+      // les deux agrégats ci-dessus. Le panneau de couverture NOMME les
+      // matières sans enseignant ; un scalaire ne peut pas produire des noms,
+      // et le dériver de `data` en nommerait toutes celles absentes de la page.
+      // La portée est celle de l'établissement, pas celle des filtres : sinon
+      // le tiers « matières » du panneau contredirait son propre libellé
+      // « Portée : tout l'établissement » que les deux autres tiers respectent.
+      this.prisma.teachingAssignment.groupBy({
+        by: ['subjectId'],
+        where: coverageWhere,
+        _count: { _all: true },
+      }),
+    ]);
+
+    const total = resultTotal(totalRows);
+
+    return {
+      // Enveloppe maison, déjà livrée à `students.controller.ts:349` — pas de
+      // sous-objet `meta`/`pagination` inventé (ADR-080 §D4).
+      data,
+      total,
+      limit: take,
+      offset: skip,
+      /**
+       * LES QUATRE KPI, EN AGRÉGATS SERVEUR SUR L'ENSEMBLE FILTRÉ. Aucun n'est
+       * la longueur de `data`, et `total: data.length` ne compilerait PAS :
+       * `ResultTotal` n'est pas assignable depuis un `number` nu (ADR-080 §D2).
+       */
+      totals: {
+        assignments: total,
+        teachers: distinctGroupCount(teacherGroups),
+        classes: distinctGroupCount(classGroups),
+        subjectsWithoutTeacher: resultTotal(subjectsWithoutTeacherCount),
+      },
+      coverage: {
+        /** Portée NOMMÉE : l'établissement, jamais la page ni les filtres. */
+        scope: 'establishment' as const,
+        classSectionIdsWithPrincipal: principalGroups.map((g) => g.classSectionId),
+        classSectionIdsWithAssistant: assistantGroups.map((g) => g.classSectionId),
+        subjectIdsWithTeacher: subjectGroups.map((g) => g.subjectId),
+      },
+    };
   }
 
   @Post()

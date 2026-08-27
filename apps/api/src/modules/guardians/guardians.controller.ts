@@ -20,6 +20,8 @@ import {
   type GuardianshipLinkStatus,
   guardianshipOnTheBooksWhere,
   guardianshipRequestQueueWhere,
+  pageSizeOf,
+  pageWindow,
 } from '@pilotage/contracts';
 import { GuardianRelationship, GuardianshipStatus } from '@prisma/client';
 import {
@@ -81,6 +83,22 @@ class UpdateGuardianshipDto {
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
 }
 
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de page de la liste de responsables,
+ * avec SES nombres : 50 par défaut, 200 au maximum. Inchangés.
+ *
+ * `.pick({ limit: true })` : ce point d'entrée n'a JAMAIS accepté d'`offset`.
+ * Le retirer du schéma est plus honnête que d'en accepter un qui serait ignoré
+ * en silence — un paramètre lu et jeté est la forme même du défaut que cette
+ * tranche ferme.
+ *
+ * ⚠ `apps/web/src/app/admin/students/[id]` appelle `guardians?limit=200`,
+ * c'est-à-dire EXACTEMENT le plafond. C'est l'argument mesuré d'ADR-080 §D1
+ * pour loger la fabrique dans `packages/contracts` : le littéral du client et
+ * le plafond du serveur ne sont pas deux listes tenues à la main.
+ */
+const GUARDIANS_LIST_PAGE_WINDOW = pageWindow({ def: 50, max: 200 }).pick({ limit: true });
+
 @ApiTags('guardians')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -100,9 +118,13 @@ export class GuardiansController {
     @Query('studentId') studentId?: string,
     @Query('limit') limit?: string,
   ) {
+    const parsedWindow = GUARDIANS_LIST_PAGE_WINDOW.safeParse({ limit });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const take = pageSizeOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
-    const take = Math.min(parseInt(limit ?? '50', 10) || 50, 200);
 
     const where: Record<string, unknown> = { tenantId: me.tenantId, schoolId };
     if (q) {
@@ -366,6 +388,22 @@ export class GuardiansController {
       );
     }
 
+    // S-E03-9 / PF-50 / PF-424 — NON CONVERTI, et c'est une RAISON, pas un
+    // chemin en attente de travail (AC-2).
+    //
+    // C'est la ONZIÈME forme, et la seule qui ne soit pas une fenêtre
+    // `limit`/`offset` : c'est un NUMÉRO DE PAGE 1-basé (`?page=2&pageSize=10`)
+    // dont le décalage est DÉRIVÉ (`skip: (page - 1) * pageSize`). L'exprimer
+    // par la fabrique canonique exigerait soit de RENOMMER deux paramètres de
+    // requête visibles par l'appelant — un changement d'API, pas un changement
+    // d'analyseur, donc plus large que cette tranche —, soit d'ajouter une
+    // SECONDE expression d'analyse au module canonique, ce que AC-1 interdit
+    // précisément parce que c'est ainsi que la divergence recommence.
+    //
+    // Il CLAMPE CORRECTEMENT par le bas (`Math.max(…, 1)` aux deux lignes) : il
+    // ne porte donc PAS le défaut d'inversion que la tranche ferme. Il reste
+    // COMPTÉ dans le plafond décroissant `R2` du cliquet — un plafond n'exempte
+    // personne, il interdit la récidive — et enregistré en `PF-424`.
     const pageSize = Math.min(Math.max(parseInt(pageSizeRaw ?? '10', 10) || 10, 1), 100);
     const page = Math.max(parseInt(pageRaw ?? '1', 10) || 1, 1);
 

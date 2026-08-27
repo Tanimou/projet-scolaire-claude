@@ -1,20 +1,19 @@
 import {
+  BadRequestException,
   Body,
   Controller,
-  DefaultValuePipe,
   ForbiddenException,
   Get,
   NotFoundException,
   Param,
   ParseEnumPipe,
-  ParseIntPipe,
   Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ALERT_STATUS } from '@pilotage/contracts';
+import { ALERT_STATUS, pageWindow, pageWindowOf } from '@pilotage/contracts';
 import { $Enums } from '@prisma/client';
 import type { AlertRuleCode, AlertSeverity, AlertStatus } from '@prisma/client';
 
@@ -56,6 +55,14 @@ const ALERT_STATUSES: ReadonlyArray<AlertStatus> = ALERT_STATUS;
  * tableau de bord. `$Enums.AlertSeverity` est la meme source que la colonne.
  */
 const ALERT_SEVERITIES: ReadonlyArray<AlertSeverity> = Object.values($Enums.AlertSeverity);
+
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de page de la liste d'alertes, avec
+ * SES nombres : 50 par défaut, 200 au maximum. Ce sont EXACTEMENT ceux que
+ * `DefaultValuePipe(50)` + `Math.min(200, Math.max(1, limit))` appliquaient ; la
+ * tranche change l'ANALYSE, pas la taille de page du produit.
+ */
+const ALERT_INSTANCES_PAGE_WINDOW = pageWindow({ def: 50, max: 200 });
 
 @ApiTags('alerts')
 @ApiBearerAuth()
@@ -121,9 +128,21 @@ export class AlertsController {
     )
     severity: AlertSeverity | undefined,
     @Query('studentId') studentId: string | undefined,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
-    @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
+    // S-E03-9 / ADR-080 — `DefaultValuePipe` + `ParseIntPipe` + un écrêtage en
+    // aval formaient l'une des NEUF analyses divergentes. Les chaînes brutes
+    // arrivent désormais telles quelles et LA fenêtre canonique les tranche :
+    // le défaut vit avec le plafond, dans un seul objet, une seule fois.
+    @Query('limit') limitRaw: string | undefined,
+    @Query('offset') offsetRaw: string | undefined,
   ) {
+    const parsed = ALERT_INSTANCES_PAGE_WINDOW.safeParse({
+      limit: limitRaw,
+      offset: offsetRaw,
+    });
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsed.data);
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
     return this.alerts.listInstances({
@@ -132,8 +151,8 @@ export class AlertsController {
       status,
       severity,
       studentId,
-      limit: Math.min(200, Math.max(1, limit)),
-      offset: Math.max(0, offset),
+      limit: take,
+      offset: skip,
     });
   }
 

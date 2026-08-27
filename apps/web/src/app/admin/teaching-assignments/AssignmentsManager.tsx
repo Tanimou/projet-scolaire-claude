@@ -1,14 +1,31 @@
 'use client';
 
+import { ErrorState, Pagination } from '@pilotage/ui';
 import { Crown, Loader2, Plus, Star, Trash2, UserCheck, UserCog } from 'lucide-react';
-import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 
 import { createAssignment, deleteAssignment, updateAssignment } from './actions';
-import type { Assignment, AssignmentRole, ClassOption, SubjectOption, TeacherOption } from './types';
+import type {
+  Assignment,
+  AssignmentRole,
+  AssignmentsCoverage,
+  ClassOption,
+  SubjectOption,
+  TeacherOption,
+} from './types';
 
 // Re-export so the new `/admin/assignments` page can import types via this module
-export type { Assignment, AssignmentRole, ClassOption, SubjectOption, TeacherOption } from './types';
+export type {
+  Assignment,
+  AssignmentRole,
+  AssignmentsCoverage,
+  AssignmentsTotals,
+  ClassOption,
+  SubjectOption,
+  TeacherOption,
+  TeachingAssignmentsResponse,
+} from './types';
 
 /** Libellés FR des rôles d'affectation. */
 const ROLE_LABELS: Record<AssignmentRole, string> = {
@@ -35,49 +52,129 @@ export function isPrimaryOrKindergarten(cycleName: string): boolean {
   );
 }
 
+/**
+ * S-E03-9 (PF-50) — le contrat de ce composant a CHANGÉ.
+ *
+ * Avant : « donne-moi tout » — `assignments` était l'ensemble des affectations
+ * du tenant, et chaque chiffre rendu ici était une longueur de tableau.
+ * Depuis que `GET /api/v1/teaching-assignments` est borné, `assignments` est
+ * **une page**. Trois conséquences, toutes appliquées ci-dessous :
+ *
+ *  1. Le compteur d'en-tête lit `total` (agrégat serveur), pas `assignments.length`.
+ *  2. Le panneau de couverture lit `coverage` (agrégats serveur de portée
+ *     établissement : classes avec PP, classes avec assistant, matières
+ *     pourvues) et jamais `assignments`. Une
+ *     alerte « classe sans professeur principal » déduite d'une page serait une
+ *     fausse accusation sur une surface de gouvernance, et la bannière verte
+ *     « Couverture complète » une affirmation d'ensemble tirée de 100 lignes
+ *     sur 290.
+ *  3. Les filtres classe/professeur passent par l'URL et par l'API (paramètres
+ *     `classSectionId` / `teacherProfileId`, déjà acceptés) : filtrer dans le
+ *     navigateur ne verrait que la page courante et rendrait « aucune
+ *     affectation » sur un établissement non vide.
+ *
+ * `total` et `coverage` sont `null` quand la lecture a échoué. Un
+ * `0` de repli serait une invention : chaque surface concernée le dit alors en
+ * toutes lettres au lieu d'afficher un chiffre.
+ */
 export function AssignmentsManager({
   assignments,
   teachers,
   classes,
   subjects,
+  total,
+  coverage,
+  page,
+  pageSize,
+  totalPages,
+  filterClass,
+  filterTeacher,
+  listState,
 }: {
+  /** La **page** courante, pas l'ensemble. */
   assignments: Assignment[];
   teachers: TeacherOption[];
   classes: ClassOption[];
   subjects: SubjectOption[];
+  /** `count(where)` serveur sur l'ensemble filtré. `null` = lecture échouée. */
+  total: number | null;
+  coverage: AssignmentsCoverage | null;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  filterClass: string;
+  filterTeacher: string;
+  listState: 'ok' | 'error' | 'out-of-range';
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [pending, startTransition] = useTransition();
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filterClass, setFilterClass] = useState<string>('');
-  const [filterTeacher, setFilterTeacher] = useState<string>('');
 
+  /**
+   * Un changement de filtre est une navigation serveur, et il **remet la
+   * pagination à 1** : rester en page 7 après avoir restreint le jeu à trois
+   * lignes rendrait une page vide qui ressemble à « il n'y a rien ».
+   */
+  const setFilter = useCallback(
+    (key: 'classSectionId' | 'teacherProfileId', value: string) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? '');
+      if (value) params.set(key, value);
+      else params.delete(key);
+      params.delete('page');
+      const qs = params.toString();
+      startTransition(() => {
+        router.push(qs ? `${pathname}?${qs}` : pathname);
+      });
+    },
+    [router, pathname, searchParams],
+  );
+
+  const resetFilters = useCallback(() => {
+    startTransition(() => {
+      router.push(pathname);
+    });
+  }, [router, pathname]);
+
+  const filtersApplied = Boolean(filterClass || filterTeacher);
+
+  // Regroupement par classe **de la page courante**. Aucun filtrage ici : le
+  // serveur a déjà appliqué `classSectionId` / `teacherProfileId`.
   const grouped = useMemo(() => {
     const byClass = new Map<string, { cls: Assignment['classSection']; year: Assignment['academicYear']; items: Assignment[] }>();
     for (const a of assignments) {
-      if (filterClass && a.classSection.id !== filterClass) continue;
-      if (filterTeacher && a.teacherProfile.id !== filterTeacher) continue;
       if (!byClass.has(a.classSection.id))
         byClass.set(a.classSection.id, { cls: a.classSection, year: a.academicYear, items: [] });
       byClass.get(a.classSection.id)!.items.push(a);
     }
     return [...byClass.values()];
-  }, [assignments, filterClass, filterTeacher]);
+  }, [assignments]);
+
+  const truncated = total !== null && assignments.length < total;
+  const rangeStart = total === null || total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = total === null ? assignments.length : Math.min(total, page * pageSize);
 
   return (
     <div className="space-y-5">
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>
       )}
 
-      <CoveragePanel assignments={assignments} classes={classes} subjects={subjects} />
+      <CoveragePanel classes={classes} subjects={subjects} coverage={coverage} />
 
       <div className="flex flex-wrap items-center gap-2">
+        <label className="sr-only" htmlFor="filter-class">
+          Filtrer par classe
+        </label>
         <select
+          id="filter-class"
           value={filterClass}
-          onChange={(e) => setFilterClass(e.target.value)}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+          disabled={pending}
+          onChange={(e) => setFilter('classSectionId', e.target.value)}
+          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-60 sm:w-auto"
         >
           <option value="">Toutes les classes</option>
           {classes.map((c) => (
@@ -86,10 +183,15 @@ export function AssignmentsManager({
             </option>
           ))}
         </select>
+        <label className="sr-only" htmlFor="filter-teacher">
+          Filtrer par professeur
+        </label>
         <select
+          id="filter-teacher"
           value={filterTeacher}
-          onChange={(e) => setFilterTeacher(e.target.value)}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+          disabled={pending}
+          onChange={(e) => setFilter('teacherProfileId', e.target.value)}
+          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-60 sm:w-auto"
         >
           <option value="">Tous les professeurs</option>
           {teachers.map((t) => (
@@ -98,17 +200,38 @@ export function AssignmentsManager({
             </option>
           ))}
         </select>
-        <span className="ml-auto text-xs text-slate-500">{assignments.length} affectation(s)</span>
+        {filtersApplied && (
+          <button
+            type="button"
+            onClick={resetFilters}
+            disabled={pending}
+            className="inline-flex min-h-8 items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-60"
+          >
+            Réinitialiser les filtres
+          </button>
+        )}
+        {/* Un seul total, dérivé de l'agrégat serveur — jamais `assignments.length`. */}
+        <span className="ml-auto text-xs text-slate-500">
+          {total === null ? 'Total indisponible' : `${total.toLocaleString('fr-FR')} affectation(s)`}
+        </span>
         {!creating && (
           <button
             type="button"
             onClick={() => setCreating(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-500/30"
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-500/30 focus-visible:outline-2 focus-visible:outline-offset-2 sm:w-auto"
           >
             <Plus className="h-4 w-4" /> Nouvelle affectation
           </button>
         )}
       </div>
+
+      {truncated && (
+        <p className="text-[11px] text-slate-600">
+          Affichage des {assignments.length} affectations de cette page sur{' '}
+          {total?.toLocaleString('fr-FR')}. Affinez les filtres ou changez de page pour voir les
+          autres.
+        </p>
+      )}
 
       {creating && (
         <NewAssignmentForm
@@ -124,16 +247,77 @@ export function AssignmentsManager({
         />
       )}
 
-      {grouped.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-          <UserCheck className="mx-auto h-10 w-10 text-slate-300" />
-          <p className="mt-3 text-sm text-slate-600">
-            Aucune affectation pour ces filtres. Créez-en une pour démarrer.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {grouped.map(({ cls, year, items }) => (
+      {/* SC 4.1.3 — le résultat d'un changement de filtre ou de page est annoncé.
+          `Pagination` masque son résumé quand tout tient sur une page : cette
+          région, elle, existe toujours. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {total === null
+          ? 'Le nombre d’affectations n’a pas pu être lu.'
+          : `Affichage de ${rangeStart} à ${rangeEnd} sur ${total} affectations.`}
+      </p>
+
+      <section
+        aria-label="Affectations"
+        aria-busy={pending ? 'true' : undefined}
+        className={pending ? 'opacity-70 transition-opacity' : 'transition-opacity'}
+      >
+        {listState === 'error' ? (
+          // Une lecture échouée n'est PAS une affirmation de vide : rendre une
+          // liste vide dirait « cette école n'a aucune affectation ».
+          <ErrorState
+            title="Impossible de charger les affectations."
+            description="La lecture a échoué. Aucun chiffre n’est affiché tant que la liste n’a pas pu être lue."
+          />
+        ) : listState === 'out-of-range' ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+            <p className="text-sm text-slate-600">
+              Cette page n’existe plus ({totalPages} page(s) au total).
+            </p>
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="mt-3 inline-flex min-h-8 items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2"
+            >
+              Revenir à la première page
+            </button>
+          </div>
+        ) : grouped.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+            <UserCheck className="mx-auto h-10 w-10 text-slate-300" />
+            {/* Deux phrases distinctes : un état de l'école ≠ un état de la requête. */}
+            {filtersApplied ? (
+              <>
+                <p className="mt-3 text-sm text-slate-600">
+                  Aucune affectation ne correspond à ces filtres.
+                </p>
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="mt-3 inline-flex min-h-8 items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2"
+                >
+                  Réinitialiser les filtres
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mt-3 text-sm text-slate-600">
+                  Aucune affectation. Créez-en une pour démarrer.
+                </p>
+                {!creating && (
+                  <button
+                    type="button"
+                    onClick={() => setCreating(true)}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-500/30 focus-visible:outline-2 focus-visible:outline-offset-2"
+                  >
+                    <Plus className="h-4 w-4" /> Nouvelle affectation
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {grouped.map(({ cls, year, items }) => (
             <section
               key={cls.id}
               className="overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200"
@@ -153,8 +337,15 @@ export function AssignmentsManager({
                     </span>
                   </div>
                 </div>
+                {/*
+                  Les affectations d'une classe peuvent enjamber une frontière de
+                  page : ce chiffre est donc reformulé, pas re-dérivé. Il dit ce
+                  qu'il compte — les lignes rendues ici — et ne prétend plus
+                  « matières couvertes / possibles », qui était une affirmation
+                  d'ensemble.
+                */}
                 <span className="text-xs text-slate-500">
-                  {items.length} matière(s) couverte(s) / {subjects.length} possible(s)
+                  {items.length} affectation(s) sur cette page
                 </span>
               </header>
 
@@ -183,9 +374,20 @@ export function AssignmentsManager({
                 ))}
               </ul>
             </section>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+
+        {listState === 'ok' && total !== null && (
+          <Pagination
+            page={page}
+            total={total}
+            pageSize={pageSize}
+            itemLabel={{ singular: 'affectation', plural: 'affectations' }}
+            className="mt-4 rounded-2xl border border-slate-200"
+          />
+        )}
+      </section>
     </div>
   );
 }
@@ -428,52 +630,81 @@ function NewAssignmentForm({
 }
 
 /**
- * Panneau "alertes de couverture". Trois familles d'alertes :
+ * Panneau « alertes de couverture ». Trois familles d'alertes :
  *   1. classe (active) sans professeur principal ;
  *   2. classe de cycle primaire/maternelle (active) sans assistant ;
  *   3. matière sans aucun enseignant affecté.
  * (La surcharge enseignant est traitée dans une autre unité.)
+ *
+ * **S-E03-9 / AC-5b — d'où viennent ces trois listes.** Elles sont la différence
+ * entre deux ensembles de **portée globale** : le tableau `classes` (resp.
+ * `subjects`), lu entier, et les listes d'ids renvoyées par les agrégats serveur
+ * `coverage` (les trois listes d'ids), calculées sur tout l'ensemble
+ * filtré et scopées `tenantId`.
+ *
+ * Elles ne touchent **jamais** le tableau `assignments`, qui n'est plus qu'une
+ * page. Une alerte dérivée d'une page nommerait des classes qui ont bel et bien
+ * un professeur principal, simplement absentes de la fenêtre courante : sur une
+ * surface de gouvernance, c'est une fausse accusation qui génère du travail
+ * humain. Et la bannière verte « Couverture complète » est le cas le plus
+ * dangereux dans l'autre sens — un fait d'ensemble affirmé à partir de 100
+ * lignes sur 290. Test de relecture : s'il existe une fenêtre de pagination sous
+ * laquelle ce panneau change, cette règle est violée.
+ *
+ * Quand l'agrégat n'a pas pu être lu, le panneau le DIT. Il ne rend ni alertes
+ * ni bannière verte : « nous n'avons pas pu lire » et « tout est couvert » sont
+ * deux phrases différentes.
  */
 function CoveragePanel({
-  assignments,
   classes,
   subjects,
+  coverage,
 }: {
-  assignments: Assignment[];
   classes: ClassOption[];
   subjects: SubjectOption[];
+  /** Agrégat serveur sur tout l'ensemble filtré. `null` = lecture échouée. */
+  coverage: AssignmentsCoverage | null;
 }) {
   const alerts = useMemo(() => {
+    if (!coverage) return null;
+
     const activeClasses = classes.filter(
       (c) => c.status === 'active' && c.academicYear.status === 'active',
     );
 
-    // Index des affectations par classe pour les contrôles 1 & 2.
-    const byClass = new Map<string, Assignment[]>();
-    for (const a of assignments) {
-      const list = byClass.get(a.classSection.id);
-      if (list) list.push(a);
-      else byClass.set(a.classSection.id, [a]);
-    }
+    // Ensembles d'ids de PORTÉE GLOBALE (agrégats serveur), pas des index
+    // construits sur la page.
+    const withPrincipal = new Set(coverage.classSectionIdsWithPrincipal);
+    const withAssistant = new Set(coverage.classSectionIdsWithAssistant);
+    const assigned = new Set(coverage.subjectIdsWithTeacher);
 
     const classLabel = (c: ClassOption) => `${c.gradeLevel.cycle.name} · ${c.name}`;
 
     const noPrincipal = activeClasses
-      .filter((c) => !(byClass.get(c.id) ?? []).some((a) => a.role === 'principal'))
+      .filter((c) => !withPrincipal.has(c.id))
       .map((c) => classLabel(c));
 
     const noAssistant = activeClasses
       .filter((c) => isPrimaryOrKindergarten(c.gradeLevel.cycle.name))
-      .filter((c) => !(byClass.get(c.id) ?? []).some((a) => a.role === 'assistant'))
+      .filter((c) => !withAssistant.has(c.id))
       .map((c) => classLabel(c));
 
-    const assignedSubjectIds = new Set(assignments.map((a) => a.subject.id));
     const subjectsWithoutTeacher = subjects
-      .filter((s) => !assignedSubjectIds.has(s.id))
+      .filter((s) => !assigned.has(s.id))
       .map((s) => s.name);
 
     return { noPrincipal, noAssistant, subjectsWithoutTeacher };
-  }, [assignments, classes, subjects]);
+  }, [classes, subjects, coverage]);
+
+  if (!alerts) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm text-amber-900">
+        <span className="font-bold">Couverture indisponible.</span> Les alertes de couverture
+        portent sur l&apos;ensemble de l&apos;établissement et sont calculées côté serveur ; cette
+        mesure n&apos;a pas pu être lue. Aucune alerte n&apos;est affichée — ni son contraire.
+      </div>
+    );
+  }
 
   const total =
     alerts.noPrincipal.length + alerts.noAssistant.length + alerts.subjectsWithoutTeacher.length;
@@ -484,6 +715,9 @@ function CoveragePanel({
         <span className="font-bold">Couverture complète.</span> Toutes les classes actives ont un
         professeur principal, les cycles primaire/maternelle ont un assistant, et chaque matière a au
         moins un enseignant.
+        <span className="mt-1 block text-xs text-emerald-700">
+          Portée : tout l&apos;établissement, agrégat serveur — pas la page affichée.
+        </span>
       </div>
     );
   }
@@ -498,6 +732,9 @@ function CoveragePanel({
           {total}
         </span>
       </div>
+      <p className="mt-1 text-xs text-amber-900">
+        Portée : tout l&apos;établissement (agrégat serveur), pas la page affichée.
+      </p>
       <div className="mt-3 grid gap-3 md:grid-cols-3">
         <CoverageGroup
           title="Classes sans professeur principal"

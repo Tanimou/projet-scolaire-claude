@@ -1,6 +1,17 @@
 import { z } from 'zod';
 
+import { type PageWindowBounds, pageWindow } from '../pagination/page-window';
+
 import { UuidSchema } from './common';
+
+/**
+ * S-E03-9 / PF-50 / ADR-080 §D3 — the messaging page window, UNCHANGED: 50 by
+ * default, 200 maximum, exactly the numbers these three schemas carried when
+ * they hand-wrote them. The slice changes the PARSER, never the product's page
+ * sizes; the pair is named here so a future change to it is a visible edit
+ * rather than three literals drifting apart.
+ */
+const MESSAGING_PAGE_WINDOW: PageWindowBounds = { def: 50, max: 200 };
 
 /**
  * Conversation — E2-S1 (parent ↔ teacher messaging).
@@ -101,11 +112,14 @@ export type ConversationMessageDto = z.infer<typeof ConversationMessageDtoSchema
  * server-side from the JWT, NOT passed here). `status` defaults to the visible
  * set (active + read_only); `archived`/`blocked` are excluded unless requested.
  * `limit` is capped 1..200 (default 50); `offset` for paging.
+ *
+ * S-E03-9 / PF-50 / ADR-080 §D1 — RE-EXPRESSED on the canonical factory, NOT
+ * duplicated. This schema was the ONLY already-correct page window in the tree,
+ * so `pageWindow()` is a generalisation of it: same default, same cap, same
+ * 400s, byte-for-byte the same validators. No observable behaviour changes.
  */
-export const ConversationInboxQuerySchema = z.object({
+export const ConversationInboxQuerySchema = pageWindow(MESSAGING_PAGE_WINDOW).extend({
   status: z.enum(CONVERSATION_STATUS).optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
 });
 export type ConversationInboxQuery = z.infer<typeof ConversationInboxQuerySchema>;
 
@@ -120,11 +134,14 @@ export type ConversationInboxResponse = z.infer<typeof ConversationInboxResponse
  * Paged thread messages. `before` is an ISO cursor (exclusive upper bound on
  * `createdAt`) for "load older"; a page is returned oldest→newest. `limit`
  * capped 1..200 (default 50).
+ *
+ * S-E03-9 / ADR-080 §D1 — RE-EXPRESSED on the canonical factory. Cursor-paged,
+ * so it takes `limit` ONLY: `.pick({ limit: true })` drops `offset` rather than
+ * accepting one it would silently ignore. Same default, same cap, same 400s.
  */
-export const ConversationMessagesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  before: z.string().datetime().optional(),
-});
+export const ConversationMessagesQuerySchema = pageWindow(MESSAGING_PAGE_WINDOW)
+  .pick({ limit: true })
+  .extend({ before: z.string().datetime().optional() });
 export type ConversationMessagesQuery = z.infer<typeof ConversationMessagesQuerySchema>;
 
 /** A page of messages + a `hasMore` flag so the UI can offer "load previous". */
@@ -200,11 +217,12 @@ export type ConversationReportDto = z.infer<typeof ConversationReportDtoSchema>;
  * Admin moderation oversight query. `status` defaults to `open` (the triage
  * queue); admins can request `reviewed`/`dismissed`. Tenant/school scoped
  * server-side. `limit` capped 1..200 (default 50); `offset` for paging.
+ *
+ * S-E03-9 / ADR-080 §D1 — RE-EXPRESSED on the canonical factory (see the inbox
+ * schema above). Same default, same cap, same 400s.
  */
-export const ConversationReportsQuerySchema = z.object({
+export const ConversationReportsQuerySchema = pageWindow(MESSAGING_PAGE_WINDOW).extend({
   status: z.enum(CONVERSATION_REPORT_STATUS).optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
 });
 export type ConversationReportsQuery = z.infer<typeof ConversationReportsQuerySchema>;
 

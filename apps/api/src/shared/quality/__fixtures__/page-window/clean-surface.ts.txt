@@ -1,0 +1,21 @@
+// FIXTURE — NOT COMPILED, NOT WALKED.
+//
+// S-E03-9 / ADR-080 §D5 R5 — le CONTRÔLE NÉGATIF. C'est la forme CONVERTIE,
+// telle qu'elle est livrée aux treize sites. Le cliquet doit la voir VERTE.
+//
+// Un détecteur qui rougirait ici serait un détecteur que la prochaine
+// conversion « corrigerait » en le relâchant : c'est la sortie que
+// `academic-year-resolution-gate.spec.ts:20-32` nomme et interdit.
+
+const LIST_PAGE_WINDOW = pageWindow({ def: 50, max: 200 });
+
+export class CleanController {
+  async list(limitRaw?: string, offsetRaw?: string) {
+    const parsedWindow = LIST_PAGE_WINDOW.safeParse({ limit: limitRaw, offset: offsetRaw });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
+    return { take, skip };
+  }
+}

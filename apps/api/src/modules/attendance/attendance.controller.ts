@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { guardianshipLiveWhere } from '@pilotage/contracts';
+import { guardianshipLiveWhere, pageSizeOf, pageWindow } from '@pilotage/contracts';
 import { AttendanceStatus, type Prisma } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
@@ -277,6 +277,17 @@ export function teacherOfStudentAssignmentWhere(input: {
   };
 }
 
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre des séances du tableau d'assiduité,
+ * avec SES nombres : 200 par défaut, 500 au maximum. Inchangés.
+ *
+ * Ce site était le plus prudent des neuf (`Number.isFinite` puis
+ * `Math.min(Math.max(parsed, 1), 500)`) : il ne portait pas l'inversion. C'était
+ * néanmoins une NEUVIÈME façon d'écrire la même règle, et neuf façons d'écrire
+ * une règle est exactement la définition de PF-50.
+ */
+const ATTENDANCE_SESSIONS_PAGE_WINDOW = pageWindow({ def: 200, max: 500 }).pick({ limit: true });
+
 @ApiTags('attendance')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -322,10 +333,11 @@ export class AttendanceController {
     if (!a || a.tenantId !== me.tenantId) throw new NotFoundException('Affectation introuvable.');
     await this.assertOwnership(a.teacherProfileId, me, jwt);
 
-    const parsedLimit = parseInt(limitStr ?? '200', 10);
-    const limit = Number.isFinite(parsedLimit)
-      ? Math.min(Math.max(parsedLimit, 1), 500)
-      : 200;
+    const parsedWindow = ATTENDANCE_SESSIONS_PAGE_WINDOW.safeParse({ limit: limitStr });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const limit = pageSizeOf(parsedWindow.data);
 
     const sessions = await this.prisma.classSession.findMany({
       where: { tenantId: me.tenantId, teachingAssignmentId: a.id },
