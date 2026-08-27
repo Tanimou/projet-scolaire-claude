@@ -6,11 +6,12 @@ import Link from 'next/link';
 import { ComposeForm, type ComposeChild } from '../ComposeForm';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import {
   resolveEnrollmentActivity,
   type CarriesEnrollmentActivity,
 } from '@/lib/enrollment-activity';
+import { readParentChildren } from '@/lib/parent-children';
 
 
 export const metadata: Metadata = { title: 'Nouveau message' };
@@ -30,15 +31,6 @@ interface Child extends CarriesEnrollmentActivity {
   id: string;
   firstName: string;
   lastName: string;
-}
-
-async function safe<T>(p: Promise<T>): Promise<T | null> {
-  try {
-    return await p;
-  } catch (err) {
-    if (err instanceof ApiError) return null;
-    throw err;
-  }
 }
 
 /**
@@ -66,8 +58,13 @@ export default async function ParentNewMessagePage({
 }) {
   const sp = await searchParams;
 
-  const resp = await safe(api<{ data: Child[] }>('/api/v1/students', { cache: 'no-store' }));
-  const children: ComposeChild[] = (resp?.data ?? []).map((c) => {
+  // S-E03-3d / `PF-363` — sur un échec de lecture, cette page n'affiche NI
+  // « Aucun enfant rattaché » (une affirmation sur la famille produite par
+  // notre propre panne) NI le formulaire : un sélecteur de destinataire vide
+  // invite le parent à rédiger puis à échouer à l'envoi.
+  const childrenRead = await readParentChildren<Child>('parent-message-new/children');
+  const childrenFailure = childrenRead.ok ? null : childrenRead;
+  const children: ComposeChild[] = (childrenRead.ok ? childrenRead.data.data : []).map((c) => {
     const enrolment = resolveEnrollmentActivity(c);
     // Hors `active`, le sélecteur ne montre PAS une classe périmée : il montre
     // la portée (« Hors année en cours … »), ce qui reste une information utile
@@ -104,7 +101,15 @@ export default async function ParentNewMessagePage({
           Retour aux messages
         </Link>
 
-        {children.length === 0 ? (
+        {childrenFailure ? (
+          <ChildrenReadError
+            failure={childrenFailure}
+            domain="Vous pourrez écrire à l'enseignant·e dès que la liste sera de nouveau lisible."
+            // Voir `/parent/messages` : l'action par défaut pointerait sur
+            // cette page même. On renvoie vers les rattachements.
+            secondaryAction={{ label: 'Voir mes rattachements', href: '/parent/children' }}
+          />
+        ) : children.length === 0 ? (
           <EmptyState
             icon={UserRoundX}
             tone="slate"

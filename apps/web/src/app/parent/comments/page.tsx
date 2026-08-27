@@ -31,7 +31,9 @@ import type {
 } from './types';
 
 import { PortalShell } from '@/components/PortalShell';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, ApiError } from '@/lib/api-client';
+import { readParentChildren } from '@/lib/parent-children';
 
 export const metadata: Metadata = { title: 'Commentaires' };
 export const dynamic = 'force-dynamic';
@@ -86,10 +88,31 @@ export default async function ParentCommentsPage({
   }>;
 }) {
   const sp = await searchParams;
-  const studentsResp = await safe(
-    api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' }),
-  );
-  const children = studentsResp?.data ?? [];
+  // S-E03-3d / `PF-363` — l'échec de lecture est conservé au lieu d'être
+  // écrasé en liste vide, et sa branche est évaluée AVANT le test de vacuité :
+  // un 403 / 500 ne peut plus s'afficher comme « Aucun enfant rattaché ».
+  const childrenRead = await readParentChildren<StudentSummary>('parent-comments/children');
+
+  if (!childrenRead.ok) {
+    return (
+      <PortalShell portal="parent">
+        <PageHeader
+          breadcrumb={[
+            { label: 'Tableau de bord', href: '/parent/dashboard' },
+            { label: 'Commentaires' },
+          ]}
+          title="Commentaires des enseignants"
+        />
+        <ChildrenReadError
+          className="mt-6"
+          failure={childrenRead}
+          domain="Les commentaires des enseignants n'ont pas disparu : ils n'ont pas pu être chargés."
+        />
+      </PortalShell>
+    );
+  }
+
+  const children = childrenRead.data.data;
 
   if (children.length === 0) {
     return (

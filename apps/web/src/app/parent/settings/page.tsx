@@ -37,6 +37,7 @@ import {
 } from '../../admin/settings/display-prefs-types';
 
 import { PortalShell } from '@/components/PortalShell';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, ApiError } from '@/lib/api-client';
 import {
   enrollmentDecor,
@@ -45,6 +46,8 @@ import {
   type EnrollmentDecorRow,
 } from '@/lib/enrollment-activity';
 import { fetchMe, type MeResponse } from '@/lib/me';
+import { readParentChildren, type ParentChildrenResponse } from '@/lib/parent-children';
+import type { ReadResult } from '@/lib/read-result';
 
 
 export const metadata: Metadata = { title: 'Paramètres' };
@@ -99,18 +102,30 @@ function localeLabel(code: string | null | undefined): string {
 }
 
 export default async function ParentSettingsPage() {
-  const [me, prefsResp, childrenResp, displayResp] = await Promise.all([
+  // ─────────────────────────────────────────────────────────────────────────
+  // S-E03-3d / `PF-363` — la lecture des enfants sort du `safe()` collectif.
+  //
+  // Cette page est le pire cas de la population, parce qu'un échec n'y
+  // *affirmait* pas seulement : il **prescrivait une mauvaise action**. Sur un
+  // 403 (tutelle révoquée) ou un 500, l'onglet « Ma famille » proposait
+  // « Comment rattacher un enfant ? » à un parent qui a des enfants — il
+  // l'envoyait ouvrir une demande de rattachement pour un enfant qu'il garde
+  // déjà. C'est un contresens direct avec la promesse « transformer
+  // l'information en action ».
+  //
+  // Les deux surfaces qui portent la revendication — le badge du bandeau de
+  // profil et le panneau « Ma famille » — reçoivent le MÊME résultat discriminé
+  // et basculent donc ensemble. Les trois autres lectures restent sur `safe()`
+  // (résidu déclaré, `PF-391`) : elles ne prétendent rien sur la famille.
+  // ─────────────────────────────────────────────────────────────────────────
+  const [me, prefsResp, childrenRead, displayResp] = await Promise.all([
     fetchMe(),
     safe(
       api<{ data: PreferenceRow[] }>('/api/v1/notifications/preferences', {
         cache: 'no-store',
       }),
     ),
-    safe(
-      api<{ data: Child[]; total: number }>('/api/v1/students', {
-        cache: 'no-store',
-      }),
-    ),
+    readParentChildren<Child>('parent-settings/children'),
     safe(
       api<{ data: DisplayPreferences }>('/api/v1/me/display-preferences', {
         cache: 'no-store',
@@ -119,7 +134,6 @@ export default async function ParentSettingsPage() {
   ]);
 
   const preferences = prefsResp?.data ?? [];
-  const children = childrenResp?.data ?? [];
   const display: DisplayPreferences = displayResp?.data ?? DISPLAY_PREFS_DEFAULTS;
 
   return (
@@ -144,7 +158,17 @@ export default async function ParentSettingsPage() {
           </TabsList>
 
           <TabsContent value="profile">
-            <ProfilePanel me={me} childCount={children.length} />
+            {/*
+              `null` = « on ne sait pas », et le badge est alors OMIS. Pas
+              « 0 enfant », pas « — enfants », pas de squelette scintillant
+              (un scintillement qui ne se résout jamais se lit « encore en
+              chargement », indéfiniment). L'absence est honnête ; l'explication
+              vit dans l'onglet « Ma famille », qui bascule sur la même lecture.
+            */}
+            <ProfilePanel
+              me={me}
+              childCount={childrenRead.ok ? childrenRead.data.data.length : null}
+            />
           </TabsContent>
 
           <TabsContent value="notifications">
@@ -189,7 +213,7 @@ export default async function ParentSettingsPage() {
           </TabsContent>
 
           <TabsContent value="family">
-            <FamilyPanel items={children} />
+            <FamilyPanel childrenRead={childrenRead} />
           </TabsContent>
 
           <TabsContent value="display">
@@ -267,7 +291,14 @@ export default async function ParentSettingsPage() {
 // Profile tab — read-only summary of the parent user with avatar + meta chips
 // =============================================================================
 
-function ProfilePanel({ me, childCount }: { me: MeResponse | null; childCount: number }) {
+function ProfilePanel({
+  me,
+  childCount,
+}: {
+  me: MeResponse | null;
+  /** `null` lorsque la lecture des enfants a ÉCHOUÉ — le badge est alors omis. */
+  childCount: number | null;
+}) {
   if (!me) {
     return (
       <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/60">
@@ -283,11 +314,13 @@ function ProfilePanel({ me, childCount }: { me: MeResponse | null; childCount: n
 
   const fullName = `${me.firstName ?? ''} ${me.lastName ?? ''}`.trim() || me.email;
   const initialBadge =
-    childCount === 0
-      ? 'Aucun enfant rattaché'
-      : childCount === 1
-        ? '1 enfant rattaché'
-        : `${childCount} enfants rattachés`;
+    childCount === null
+      ? null
+      : childCount === 0
+        ? 'Aucun enfant rattaché'
+        : childCount === 1
+          ? '1 enfant rattaché'
+          : `${childCount} enfants rattachés`;
 
   return (
     <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/60">
@@ -311,10 +344,12 @@ function ProfilePanel({ me, childCount }: { me: MeResponse | null; childCount: n
             <h2 className="mt-1 text-2xl font-bold text-white sm:text-3xl">{fullName}</h2>
             <p className="mt-1 text-sm text-blue-100">{me.email}</p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-white/20 backdrop-blur-sm">
-                <Users className="h-3 w-3" />
-                {initialBadge}
-              </span>
+              {initialBadge !== null && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-white/20 backdrop-blur-sm">
+                  <Users className="h-3 w-3" />
+                  {initialBadge}
+                </span>
+              )}
               <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-white/20 backdrop-blur-sm">
                 <Languages className="h-3 w-3" />
                 {localeLabel(me.locale)}
@@ -352,7 +387,32 @@ function ProfilePanel({ me, childCount }: { me: MeResponse | null; childCount: n
 // Family tab — list of guardian children with class info + quick CTA
 // =============================================================================
 
-function FamilyPanel({ items }: { items: Child[] }) {
+/**
+ * Le panneau reçoit le **résultat de lecture**, pas un tableau. Avec
+ * `items: Child[]`, l'échec n'avait nulle part où aller : il arrivait ici
+ * déguisé en `[]`, et le panneau rendait alors le CTA « Comment rattacher un
+ * enfant ? » — une lecture ratée transformée en invitation à ouvrir une
+ * demande de rattachement en double. Le type lui-même rend cette confusion
+ * inexprimable, comme `ChildLinksView` l'a fait pour `S-E03-3b`.
+ */
+function FamilyPanel({
+  childrenRead,
+}: {
+  childrenRead: ReadResult<ParentChildrenResponse<Child>>;
+}) {
+  if (!childrenRead.ok) {
+    return (
+      <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/60">
+        <ChildrenReadError
+          failure={childrenRead}
+          domain="Aucun rattachement n'a été retiré de votre compte."
+        />
+      </section>
+    );
+  }
+
+  const items = childrenRead.data.data;
+
   if (items.length === 0) {
     return (
       <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/60">

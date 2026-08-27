@@ -4,7 +4,10 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-26)** `in-progress` — **SIX slices landed, and there was none before 2026-08-25.**
+**Status (2026-08-27)** `in-progress` — **SEVEN slices landed, and there was none before 2026-08-25.**
+`S-E03-3d` (run 89 — **`PF-356` and `PF-363` CLOSED**, `PF-12` **advanced a FOURTH time and still NOT closed**
+because axes 8 (`PF-359`) and 9 (`PF-360`) stand, `ADR-076`; the parent list and the parent detail page now
+return the same population of children, and a failed `/students` read stopped being a claim about the family).
 `S-E03-5` (run 86 — **`PF-373` CLOSED**, `PF-20` **advanced and NOT closed** because its « alertes » half is
 alive at two mechanisms (`PF-378`), `PF-371` advanced, `ADR-075`; the admin « Demandes » queue now reads the
 population it claims to read, and the KPI above it changed value on purpose — tenant-wide → school).
@@ -63,6 +66,7 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-3b`** — the parent attachment panel projects from the FACT (`Guardianship`), with `GuardianshipClaim` as provenance only | **closes `PF-357`**; **advances `PF-12`** — still NOT closed (`ADR-073 §D11` re-check failed); raises `PF-367`…`PF-371` | ⚠️ **2026-08-26, run 84 — landed needing human review (NOT auto-merged), P1 `[truth][security]`** |
 | **`S-E03-3c`** — ONE guardianship liveness predicate, and a delete guard whose own remedy could never unblock it | **closes `PF-358`**; **advances `PF-12`** — still NOT closed; raises `PF-372`…`PF-376` | ⚠️ **2026-08-26, run 85 — landed needing human review, P1 `[truth]`** |
 | **`S-E03-5`** — « combien de demandes de rattachement attendent l’admin, et la page où j’atterris dit-elle la même chose » becomes ONE derivation | **closes `PF-373`**; **advances `PF-20`** — NOT closed (the « alertes » half is `PF-378`) and **advances `PF-371`**; raises `PF-377`…`PF-379` | ⚠️ **2026-08-26, run 86 — landed needing human review, P1 `[truth]`** |
+| **`S-E03-3d`** — the parent LIST stops disagreeing with the parent DETAIL page, and a FAILED read stops being an emptiness claim about the family | **closes `PF-356`** (axis 4) and **`PF-363`** (axis 7); **advances `PF-12`** a fourth time — still NOT closed (axes 8/9 = `PF-359`/`PF-360`); raises `PF-389`…`PF-393` **plus `PF-396`/`PF-397` cited in shipped source with no ledger row — see the landing conditions** | ⚠️ **2026-08-27, run 89 — landed needing human review (NOT auto-merged), P1 `[authz][truth]`** |
 | `S-E03-1`, `S-E03-6`… | `PF-24`, `PF-40`, `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82 and `S-E03-5` left it at run 86: both were authored and landed, and their stories live under `docs/spec/features/v3-e03/stories/`.) |
 
 ---
@@ -695,7 +699,7 @@ still spell the predicate by hand (`student-access.service.ts:111` and `:192`,
 
 ---
 
-## Next slice → `PF-356` — the `schoolId` asymmetry across the parent paths
+## ~~Next slice → `PF-356`~~ — **DELIVERED at run 89 by `S-E03-3d`** (`ADR-076`), paired with `PF-363` by operator override. Kept unedited as the record of why it was ranked first; the live pointer is at the END of this file
 
 Ranked successor now that `PF-357` is delivered, and it was already second on the previous pointer's own list.
 `GET /students` applies `schoolId` from `SchoolContextService.forUser` (*"the school in the tenant with the
@@ -905,3 +909,139 @@ celui-ci. La tranche est **TIER B** (`S-E03-5` §Tiers) : correction de justesse
 couture d'autorisation, donc la sonde live n'est pas requise — mais l'absence est déclarée plutôt que tue.
 
 *(Écrit 2026-08-26, run 88, pass de vérification et de land. Tranches suivantes : annoter, ne pas supprimer.)*
+
+---
+
+## `S-E03-3d` — the parent LIST and the parent DETAIL page return the same children, and a FAILED read stops being an emptiness claim (run 89, 2026-08-27)
+
+**Selected by the ledger, not by override on the axis.** The pointer this file carried nominated `PF-356` and
+described the defect down to the worker line number. The operator override **paired** it with `PF-363`, and the
+pairing is safe for a structural reason worth keeping: axis 4 is **one `apps/api` handler**, axis 7 is
+**thirteen `apps/web` server pages** — disjoint file sets, so the FE and BE implement agents could not collide
+(`GUARDRAILS §4`).
+
+### What was actually wrong, measured 2026-08-26
+
+**Axis 4 — `PF-356`.** `GET /api/v1/students` built its `where` as
+`{ tenantId, schoolId, ...(scope.studentIds === null ? {} : { id: { in } }) }`. The `schoolId` came from
+`SchoolContextService.forUser` — *"the school of this tenant carrying the most students"*, ties broken by
+`createdAt asc`. That is a value **that moves when a THIRD school enrols pupils**, and it was being intersected
+with `StudentAccessService.scopeForUser`, which already returns a **tenant-keyed, authoritative** id set and
+whose school parameter has been `_schoolId`, underscore-prefixed and genuinely unread, for its whole life.
+
+The consequence is not a leak, and the diff says so rather than dressing it up: the intersection **never refused
+an illegitimate row.** It **deleted legitimate ones.** In a multi-school tenant a parent's list came back empty
+while `GET /api/v1/students/:id` rendered the same child in full, in the same tenant, at the same second — and
+`apps/worker/.../parent-digest-cron.service.ts:168-175`, which resolves its population from `guardianship` and
+**never consults `SchoolContextService`**, kept emailing about the child the portal denied existed. The worker
+is the *witness* to the contradiction, not a *site* of it; it was correctly not edited.
+
+**Axis 7 — `PF-363`.** `safe()` mapped a failing `/students` call to `[]`, and the pages rendered `[]` as
+*« Aucun enfant rattaché »* — a claim about the family, manufactured out of our own outage. `OPEN.md:157`
+recorded the population as **six** pages and named two `parent/children/[id]` **detail** reads that are not in
+the population at all. Correcting that count was a deliverable (`AC-5`): the derived number is **thirteen list
+readers**, of which two were already converted.
+
+### What landed
+
+- **`apps/api/src/modules/students/student-scope-where.ts`** (new). The composition leaves the handler and
+  becomes a **disjunction**, not a subtraction: the `null` sentinel — **admins only**, `super_admin` /
+  `school_admin`, with every other principal falling to `[]` — keeps `{ tenantId, schoolId }`
+  **byte-identical to `main`**; an explicit id set gets `{ tenantId, id: { in } }` with **no school key**.
+  `tenantId` is present on **both** branches, and that clause **is** the tenancy wall on this path, because the
+  whole read runs on `PrismaService`, the owner connection, where RLS is bypassed. The `=== null`
+  discrimination is preserved **explicitly** — never `?.length`, never truthiness (`PF-288` / `ADR-065 §D5`) —
+  so `[]` still produces `id: { in: [] }`, the **refusal**.
+- **`apps/web/src/lib/parent-children.ts`** + **`apps/web/src/components/parent/ChildrenReadError.tsx`** (new).
+  ONE reader, ONE failure render, thirteen pages. **No `?? []` and no `|| []` anywhere on the path.** The
+  failure component renders fixed strings only — it never surfaces a host, a route, a status or the error
+  object to a parent — and it flips `role="status"` → `role="alert"` **by construction** rather than by a second
+  boolean that could disagree with the first.
+- **`apps/api/src/shared/quality/student-school-scope-gate.spec.ts`** (new, 692 lines). An AST-derived one-way
+  ratchet (`ts.createSourceFile`, not regex over text) over three roots, with **per-root** anti-vacuity floors,
+  five RED-BEFORE cases, four positive controls, a `MANUAL_ALLOWLIST` that is **empty and asserted empty**, and
+  a self-scan forbidding any `SKIP_*` / `ALLOW_*` / `NODE_ENV` disarm (`DNC-10`).
+- **`ADR-076`**, and the story `docs/spec/features/v3-e03/stories/S-E03-3d.md`.
+
+### The three things this slice got right that are worth copying
+
+1. **It corrected the comment it falsified, in the same diff.** `students.controller.ts` carried *"en pratique
+   la liste est déjà scopée à une école, donc c'est UNE requête"*. That was true **only because** the `where`
+   carried `schoolId`. Rather than leave a now-false sentence sitting above a loop, the diff rewrites it, states
+   the new bound (**K ≤ the number of DISTINCT schools among the ≤ 200 rows of the page, never the number of
+   rows**), records the batching as a residue instead of fixing it inside a truth slice, and **asserts the bound
+   in a test** so it cannot drift in silence.
+2. **It removed a lying KPI tile instead of zeroing it.** On `/parent/calendar`, the « Évaluations à venir »
+   tile is **withdrawn** when the children read fails. A rendered `0` would have been the same lie one line
+   lower.
+3. **It declared what it could not measure.** No live probe ran — Docker Desktop refuses to start on this
+   machine and local `pilotage@5432` holds 0 students. `ADR-076` says so in its verification section instead of
+   inheriting a paragraph. `landed: true ≠ ran: true`.
+
+### Why `PF-12` still is not `closed` — a fourth time
+
+Axes 8 (`PF-359`) and 9 (`PF-360`) stand, and **both are blocked on rulings, not on effort**: `PF-359` waits on
+the semantic ruling for the section-anchored relational family (`PF-362`), and `PF-360` waits on the product
+decision of whether `Student.status` gates parent visibility at all. Improvising either inside a truth slice is
+precisely what the three preceding slices refused to do. `PF-12` is **advanced**, never `closed`.
+
+### The landing conditions this run did NOT close — read them before merging
+
+They were enumerated in the PR body and **the land pass (run 90) closed every one of them** — recorded here so a
+later slice does not re-derive the reasoning. (1) `OPEN.md` was untouched by the sprint; the land pass added the
+closure rows for `PF-356` / `PF-363`, `PF-12`'s fourth ADVANCED mark, and rows for every id below. (2) The
+id collision was real and is **resolved by SENSE, never by position**, exactly as
+`project_parallel_runs_collide_on_ids` prescribes — three planning agents had allocated `PF-389`…`PF-392` to
+different findings:
+
+| Id | Finding it now denotes | What the land pass did |
+|---|---|---|
+| `PF-389` | `calendar.controller.ts` reproduces axis 4 via `forTenant` | kept — the one id all three agents agreed on |
+| `PF-390` | `?unenrolled=true` still keyed on `forUser`'s academic year | **absorbed `PF-396`**, which was the SAME finding under a second id |
+| `PF-391` | the converted pages keep a local `safe()` for their OTHER reads | kept (story §10 + `settings/page.tsx:119`) |
+| `PF-392` | `safe<T>` duplicated across ~61 server pages, no ratchet | kept (story §10) |
+| `PF-393` | `OPEN.md:157` understated `PF-363`'s population | kept |
+| **`PF-394`** | `scopeForUser` / `canAccessStudent` carry a DEAD `schoolId` param at ~25 sites | **new id** — had been double-booked onto `PF-391` |
+| **`PF-395`** | `parent/grades/page.tsx` is the 15th `/students` caller, off the shared reader | **new id** — had been double-booked onto `PF-392` |
+| `PF-397` | `canonicalYearBySchool` does K sequential resolutions | kept — **frozen by `expect(CTRL_SRC).toContain('PF-397')`**, so renumbering it would have gone red |
+
+**`PF-396` is deliberately retired, not reused.** It named the same defect as `PF-390`; leaving a hole in the
+numbering is cheaper than a second id for one finding, and reusing it later would resurrect the ambiguity.
+
+*(Written 2026-08-27, `S-E03-3d` land pass, run 90. Later slices: annotate, do not delete.)*
+
+---
+
+## Next slice → `PF-378` — the « alertes » half of `PF-20`, i.e. the only remaining move that CLOSES a roadmap finding
+
+**Why this and not another `PF-12` axis.** After seven slices this epic has **closed one of its nine** roadmap
+findings. `PF-12` **cannot** close next run: its two surviving axes are both blocked on semantic rulings (above).
+`PF-20` **can**, and its remaining half is already fully diagnosed at two mechanisms:
+
+1. **Server.** `analytics.service.ts:2899-2900` sets the « Alertes configurées » KPI to
+   `AnalyticsService.DEFAULT_ALERT_RULES.length` — *a constant's length*. No database read can contradict it,
+   which is the real engine of « 4 alertes vs 0 règles »: the number never consults the data.
+2. **Page.** `admin/alerts/page.tsx:108-109` keeps a local `safe()`, `:136` turns a failed read into `[]` and
+   `:256` renders that as *« Aucune règle configurée »* — `PF-346`'s exact shape — while `:146`/`:149` derive
+   `enabledRules` / `highOpen` from a `limit=100` page whose `total` is used **two lines above** at `:147`.
+
+**Both remedies are already in the repository and have each shipped twice** (`read()` + `ReadErrorState`,
+`ADR-071`; the served-`total` discipline, `ADR-075` — applied to `/admin/enrollments` by `S-E03-5` itself), so
+the slice is small. Better: the ratchet `S-E03-5` shipped **already asserts this half still exists**, so it goes
+RED **on purpose** the moment the fix lands — the cheapest red-before this epic will ever get.
+
+**The one decision to write down is not technical:** is « configured rules » a **constant** or a **persisted
+collection**? Answer it in the ADR. A slice that routes the page through `read()` and leaves the KPI as an array
+length has fixed the *rendering* of the contradiction and kept its *source*.
+
+**A cheaper, strictly-contained alternative:** `PF-395` + `PF-397` — convert the fifteenth `/api/v1/students`
+caller (`parent/grades/page.tsx`, correct in *policy* but off the shared reader, so `ADR-076`'s own
+*"la lecture est UNE"* is one file short of true), and batch `canonicalYearBySchool`. Neither closes a roadmap
+finding; both remove a declared residue.
+
+**Still owed for `V3-E03`, unchanged and now SEVEN slices old:** an **`epic-spec` run**. There are now **four**
+sibling contract modules — `academic-year/`, `enrollment/`, `guardianship/link-liveness.ts`,
+`students/student-scope-where.ts` — converging on a registry (`PF-365` / `PF-370`) that nobody has been allowed
+to design, because designing it is an epic-spec decision and this epic has never had one.
+
+*(Written 2026-08-27, `S-E03-3d` land pass, run 90. Later slices: annotate, do not delete.)*

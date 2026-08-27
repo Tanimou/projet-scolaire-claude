@@ -47,6 +47,7 @@ import { PortalShell } from '@/components/PortalShell';
 import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 import { FreshnessChip } from '@/components/freshness/FreshnessChip';
 import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, isNextNavigationSignal } from '@/lib/api-client';
 import {
   enrollmentDecor,
@@ -55,6 +56,7 @@ import {
   type EnrollmentDecorRow,
 } from '@/lib/enrollment-activity';
 import { fetchMe } from '@/lib/me';
+import { readParentChildren } from '@/lib/parent-children';
 
 const FAMILY_OVERVIEW_MAX = 8;
 
@@ -200,20 +202,49 @@ export default async function ParentDashboardPage({
   searchParams: Promise<{ studentId?: string }>;
 }) {
   const params = await searchParams;
-  const [me, students, calendarResp] = await Promise.all([
+  // ─────────────────────────────────────────────────────────────────────────
+  // S-E03-3d / `PF-363` — le pire site de la population, et il ne portait même
+  // pas la phrase qui a servi à la mesurer.
+  //
+  // Sur un `/students` en échec, `activeStudent` était `undefined` et la page
+  // rendait « Ajoutez votre enfant pour suivre sa scolarité » **avec le tiroir
+  // de demande de rattachement**. Autrement dit : une lecture ratée
+  // sollicitait une ÉCRITURE — un `GuardianshipClaim` en double, pour un
+  // enfant que le parent garde déjà, déposé dans la file d'attente que
+  // `S-E03-5` vient de remettre d'aplomb. Un état d'échec ne propose jamais
+  // une action qui écrit.
+  // ─────────────────────────────────────────────────────────────────────────
+  const [me, studentsRead, calendarResp] = await Promise.all([
     fetchMe(),
-    safe(api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' })),
+    readParentChildren<StudentSummary>('parent-dashboard/children'),
     safe(api<{ data: PortalCalendarEvent[] }>('/api/v1/calendar/events', { cache: 'no-store' })),
   ]);
 
-  const allStudents = students?.data ?? [];
+  if (!studentsRead.ok) {
+    return (
+      <PortalShell
+        portal="parent"
+        title="Tableau de bord"
+        subtitle={`Bonjour ${me?.firstName ?? ''} 👋`}
+      >
+        <ChildrenReadError
+          failure={studentsRead}
+          domain="Le suivi de votre enfant reprendra dès que la liste sera de nouveau lisible."
+        />
+      </PortalShell>
+    );
+  }
+
+  const allStudents = studentsRead.data.data;
   const schoolEvents = calendarResp?.data ?? [];
   const activeStudent =
     params.studentId && allStudents.find((s) => s.id === params.studentId)
       ? allStudents.find((s) => s.id === params.studentId)
       : allStudents[0];
 
-  // No children attached → friendly empty state
+  // No children attached → friendly empty state. Désormais atteignable
+  // UNIQUEMENT sur une lecture réussie : le tiroir de rattachement n'est donc
+  // proposé qu'à un parent dont on SAIT qu'il ne garde aucun enfant.
   if (!activeStudent) {
     return (
       <PortalShell
