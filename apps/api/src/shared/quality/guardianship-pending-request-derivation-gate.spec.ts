@@ -96,10 +96,15 @@ import { join, relative, resolve, sep } from 'node:path';
  *    (`pending-request-agreement.spec.ts` : un fixture, trois lectures, une
  *    seule valeur) et par les tests unitaires du module contractuel.
  *
- * 2. IL NE FERME PAS `PF-20`. La moitié « 4 alerts vs 0 rules » vit ailleurs
- *    (`admin/alerts/page.tsx`, plus le KPI « Alertes configurées » qui vaut
- *    `DEFAULT_ALERT_RULES.length`, une constante de quatre entrées jamais lue
- *    en base). Enregistrée, non corrigée. `PF-20` AVANCE, il ne ferme pas.
+ * 2. IL NE FERMAIT PAS `PF-20` — `S-E03-6` a fermé l'autre moitié. Ce cliquet
+ *    ferme la moitié « demandes » ; la moitié « 4 alerts vs 0 rules » vivait
+ *    dans `admin/alerts/page.tsx` et dans le KPI « Alertes configurées », qui
+ *    valait `DEFAULT_ALERT_RULES.length` — une constante de QUATRE entrées en
+ *    face d'un enum qui en porte HUIT, jamais lue en base. Corrigée par
+ *    `S-E03-6` (`alert-rule-population.ts`, `ADR-077`) et gelée par
+ *    `alert-rule-catalogue-gate.spec.ts`. Le test de résidu en bas de CE
+ *    fichier a été RETOURNÉ en test de fermeture, comme il le demandait
+ *    lui-même. `PF-20` est fermé sur ses deux moitiés.
  *
  * 3. LIMITE CONNUE, la même que ses frères : `scripts/ci-gate.sh` ne fait
  *    tourner la suite complète que quand le diff touche `GATE_MACHINERY`. Ce
@@ -695,22 +700,40 @@ describe('le foyer déclarant tient ses promesses', () => {
  * ================================================================== */
 
 describe('les résidus sont assis — pour qu’on ne les déclare pas fermés', () => {
-  it('la moitié « alertes » de PF-20 est TOUJOURS LÀ (PF-378, hors portée)', () => {
-    // Le KPI « Alertes configurées » vaut la LONGUEUR D'UNE CONSTANTE, jamais
-    // une lecture en base. C'est le vrai mécanisme de « 4 alerts vs 0 rules »,
-    // et il survit à cette tranche : PF-20 AVANCE, il ne FERME PAS.
-    // Ce test échouera le jour où ce KPI deviendra une lecture — ce qui est le
-    // signal de fermer PF-20, et non de supprimer ce test.
+  it('la moitié « alertes » de PF-20 est FERMÉE (S-E03-6) — et ne peut pas rouvrir', () => {
+    // CE TEST ÉTAIT LE ROUGE-AVANT, ÉCRIT PAR `S-E03-5` UN RUN PLUS TÔT.
     //
-    // L'ID EST `PF-378`, PAS `PF-382` : la moitié « alertes » de PF-20 porte UN
-    // seul id, et il couvre SES DEUX mécanismes — celui-ci (le KPI serveur qui
-    // est la longueur d'une constante) et celui d'`admin/alerts/page.tsx` (une
-    // lecture ÉCHOUÉE rendue « Aucune règle configurée », plus deux KPI dérivés
-    // d'une page `limit=100` dont le `total` est déjà servi). `PF-382` était une
-    // seconde allocation pour la même moitié ; deux ids pour un résidu, c'est la
-    // dérive que `PF-374` enregistre. Les ids de ce run s'arrêtent à `PF-379`.
+    // Il affirmait `toContain('DEFAULT_ALERT_RULES.length')` pour ASSEOIR le
+    // résidu, et son propre commentaire disait : « Ce test échouera le jour où
+    // ce KPI deviendra une lecture — ce qui est le signal de fermer PF-20, et
+    // non de supprimer ce test. » Ce jour est `S-E03-6`. L'assertion est donc
+    // RETOURNÉE, pas retirée : le fichier garde une phrase sur ce KPI, et cette
+    // phrase interdit maintenant le retour en arrière.
+    //
+    // La constante comptait QUATRE codes quand l'enum en porte HUIT : ce n'était
+    // pas seulement un nombre invérifiable, c'était un nombre FAUX, et la
+    // seconde liste tenue à la main l'avait rendu faux en silence.
     const analytics = CLASSIFIED.get('apps/api/src/modules/analytics/analytics.service.ts');
     expect(analytics).toBeDefined();
-    expect(analytics!.source).toContain('DEFAULT_ALERT_RULES.length');
+
+    // R-1 — la DÉCLARATION de la constante n'existe plus.
+    //
+    // Le motif vise la déclaration, pas le nom nu : `CLASSIFIED` porte la
+    // source BRUTE, commentaires compris, et le correctif a laissé au-dessus du
+    // KPI une phrase qui CITE la constante pour expliquer sa disparition. Une
+    // assertion sur le nom nu rougirait donc sur sa propre explication, et le
+    // réflexe suivant serait d'effacer la phrase — c'est-à-dire la seule trace
+    // lisible du défaut. La version rigoureuse, qui RETIRE les commentaires
+    // avant de juger, vit dans `alert-rule-catalogue-gate.spec.ts`.
+    expect(analytics!.source).not.toMatch(/static\s+DEFAULT_ALERT_RULES/);
+
+    // R-2 — et le KPI passe par LA dérivation partagée. Sans cette moitié, R-1
+    // serait satisfaite en renommant simplement la constante.
+    expect(analytics!.source).toContain('countEnabledAlertRules');
+
+    // R-3 — anti-vacuité. Si le classifieur cessait un jour de lire ce fichier,
+    // R-1 passerait sur une chaîne vide et le cliquet deviendrait décoratif.
+    expect(analytics!.source.length).toBeGreaterThan(10_000);
+    expect(analytics!.source).toContain('adminDashboard');
   });
 });

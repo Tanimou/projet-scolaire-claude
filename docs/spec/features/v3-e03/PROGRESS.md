@@ -1045,3 +1045,101 @@ sibling contract modules — `academic-year/`, `enrollment/`, `guardianship/link
 to design, because designing it is an epic-spec decision and this epic has never had one.
 
 *(Written 2026-08-27, `S-E03-3d` land pass, run 90. Later slices: annotate, do not delete.)*
+
+---
+
+## `S-E03-6` (run 91, 2026-08-27) — « Alertes configurées » cesse d'être la longueur d'une constante, et `PF-20` ferme
+
+**Constatation de feuille de route FERMÉE : `PF-20`.** C'est la **deuxième** des neuf de cet épic
+(après `PF-15`, fermée sur un axe), et la première fermée *entière* depuis l'ouverture de `V3-E03`.
+Fermées avec elle : `PF-378` (les deux mécanismes de la moitié « alertes ») et `PF-63` (sept tests
+au baseline). Ouverte : `PF-398`.
+
+### Ce que la mesure a trouvé, et que le registre n'avait pas
+
+Le registre décrivait « un KPI qui vaut la longueur d'une constante ». C'est vrai, et **incomplet
+sur la moitié la plus intéressante** : cette constante était une **seconde liste tenue à la main du
+catalogue des règles, et elle avait déjà dérivé** — **quatre** codes contre les **huit** de l'énum
+`AlertRuleCode`. Manquaient `REPEATED_FAILURE`, `MISSING_ASSESSMENT`, `TEACHER_COMMENT_FLAG` et
+`IMPROVEMENT`.
+
+Le tableau de bord n'affichait donc pas seulement un nombre que la base ne pouvait pas contredire :
+il affichait un nombre **faux**. Et rien ne pouvait le signaler, puisque les deux listes ne se
+rencontraient nulle part dans le code — la forme exacte de `project_paired_lists_drift`, qui a déjà
+coûté un 503 sur quatre portails au run 59.
+
+Le docblock de la constante disait *« until R6 introduces the `AlertRule` model »*. **R6 l'a
+introduit.** Le substitut a survécu à sa propre date de péremption.
+
+### La décision, écrite dans `ADR-077` parce qu'elle n'est pas technique
+
+« Configurées » = **les règles ACTIVÉES dans cette école**, une collection persistée — le schéma
+tranche (`AlertRule.enabled @default(false)`, `@@unique([tenantId, schoolId, code])`), et
+`/admin/alerts` comptait déjà cette population-là. **Conséquence assumée : le KPI passe de « 4 » à
+« 0 »** sur tout établissement n'ayant activé aucune règle. Plus petit, et vrai.
+
+L'invariant qui autorise cette projection de lecture à ne rien écrire est démontré, pas supposé :
+`ensureRules` ne matérialise qu'à la première ouverture de la page, donc compter les règles
+*activées* rend `0` **avant comme après** matérialisation — par construction, pas par chance.
+
+### Les trois choses que cette tranche a apprises sur ses propres outils
+
+1. **Un cliquet doit juger du CODE, pas de la prose.** La première exécution a rougi sur le
+   commentaire qui *explique* le correctif. Un cliquet qui rougit sur sa propre explication se fait
+   relâcher dans le mois, **et pour une bonne raison** — la pire façon de perdre une règle. Le
+   nouveau cliquet **retire les commentaires avant de juger** ; son erreur possible est le faux
+   négatif, jamais le faux positif, et un contrôle positif prouve qu'il voit encore.
+
+2. **Le rouge-avant de `S-E03-5` a fonctionné exactement comme prévu**, et sa consigne
+   (*« fermer PF-20, et non supprimer ce test »*) a été suivie : l'assertion est **retournée**, pas
+   retirée. Sa forme, en revanche, était fragile — elle visait l'identifiant nu sur la source brute.
+   Elle vise désormais la déclaration.
+
+3. **`PF-63` n'était pas un élargissement opportuniste.** Les quatre nouveaux tests de comportement
+   appellent `adminDashboard`, qui échouait déjà pour une autre cause : **sans ce correctif,
+   l'évidence de `PF-20` était inexécutable.** La cause était dans la fixture — un mock servant une
+   seule forme de ligne à deux lectures du même délégué — et le baseline désignait déjà `V3-E03`
+   comme propriétaire.
+
+### Ce que cette tranche NE ferme pas, énoncé plutôt que découvert plus tard
+
+`PF-398` — **sept fichiers `apps/web`** récrivent le catalogue en union de littéraux, sans lien de
+compilation avec l'énum, alors que `ALERT_RULE_CODE` existe dans `@pilotage/contracts` et que le web
+l'importe déjà ailleurs. `R-A` s'arrête donc avant `apps/web`, **et la restriction est écrite dans le
+cliquet** : une portée rétrécie sans trace se relit plus tard comme « tout est couvert ». Un test
+dédié *chiffre* la dette pour qu'elle ne se lise pas comme « rien à signaler ».
+
+`PF-377` reste ouverte : la même CLASSE (un `count` dérivé d'un `.length` borné) aux deux centres
+d'action non-admin.
+
+---
+
+## Next slice → l'`epic-spec` que cet épic n'a toujours pas eu, et qui est maintenant en retard de HUIT tranches
+
+**Pourquoi c'est enfin le bon moment, et non « encore une fois ».** Il y a désormais **cinq** modules
+contractuels frères qui convergent visiblement vers un registre — `academic-year/`, `enrollment/`,
+`guardianship/link-liveness.ts`, `students/student-scope-where.ts` et, depuis cette tranche,
+`alerts/alert-rule-population.ts`. Chacun a été conçu isolément, chacun redécouvre les mêmes
+questions (où vit la clause de portée, comment le catalogue est dérivé, qui a le droit de compter),
+et **personne n'a jamais eu le droit de dessiner le tout** parce que c'est une décision d'`epic-spec`.
+`PF-365` / `PF-370` portent ce travail depuis cinq runs.
+
+**L'état chiffré de l'épic après huit tranches : 2 fermées sur 9** (`PF-15` sur un axe, `PF-20`
+entière). Les sept restantes se répartissent en deux familles que la spec devrait séparer
+explicitement :
+
+- **bloquées sur des ARBITRAGES sémantiques, pas sur de l'effort** — `PF-12` (deux axes survivants),
+  `PF-04` (« quel axe définit l'année d'un parent », `PF-329`) ;
+- **jamais commencées et sans story** — `PF-24` (la file de snapshots sans consommateur), `PF-40`,
+  `PF-50`, `PF-36`, `PF-05`.
+
+**Si une tranche d'implémentation est préférée malgré tout**, la moins chère qui ferme une
+constatation est **`PF-24`** : elle est intacte, elle n'attend aucun arbitrage, et la branche
+`ci/2026-08-26-v3-e03-snapshot-terminal-conflict` suggère qu'un run l'a déjà approchée — **la lire
+avant de recommencer** (`project_midrun_merge_hazard`).
+
+**Alternative strictement contenue :** `PF-398` (les sept fichiers web du catalogue) — ne ferme
+aucune constatation de feuille de route, mais retire une dette que cette tranche vient de mesurer et
+de geler, et le remède est déjà dans le dépôt (`ALERT_RULE_CODE`).
+
+*(Écrit le 2026-08-27, passe de land de `S-E03-6`, run 91. Tranches ultérieures : annoter, ne pas supprimer.)*

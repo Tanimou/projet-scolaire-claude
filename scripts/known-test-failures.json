@@ -35,34 +35,6 @@
   "apps": {
     "api": {
       "failures": {
-        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg builds the cycle drill-down ordered by cycle orderIndex": {
-          "finding": "PF-63",
-          "reason": "TypeError: Cannot read properties of undefined (reading 'getTime') — the spec's academic-year fixture no longer supplies the date field adminDashboard reads. Owner: V3-E03."
-        },
-        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg computes gradingRateByClass with correct completion % and status thresholds": {
-          "finding": "PF-63",
-          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
-        },
-        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg computes per-class teacher coverage with hasMainTeacher flag": {
-          "finding": "PF-63",
-          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
-        },
-        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg computes the student-teacher ratio over distinct active-year teachers": {
-          "finding": "PF-63",
-          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
-        },
-        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg counts distinct teachers per subject (teacherCoverageBySubject)": {
-          "finding": "PF-63",
-          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
-        },
-        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg no longer returns the removed cards (enrollmentRequests / teachingAssignmentsSummary / alertRules / recentExports)": {
-          "finding": "PF-63",
-          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
-        },
-        "src/modules/analytics/analytics.service.spec.ts::AnalyticsService.adminDashboard — U1 reorg still exposes the legacy levels buckets alongside cycles": {
-          "finding": "PF-63",
-          "reason": "Same root cause — undefined date on the academic-year fixture. Owner: V3-E03."
-        },
         "src/modules/remediation/remediation.service.spec.ts::RemediationService.catalogue — tenant + published + subject filter queries only published, tenant-scoped, subject-matching tutors with active slots": {
           "finding": "PF-64",
           "reason": "TypeError: Cannot read properties of undefined (reading 'findMany') — the prisma test double lacks a model the service now queries. This assertion is the tenant-scoping guard for the remediation catalogue, so it is G-TENANT evidence that is currently NOT running. Owner: V3-E10."
