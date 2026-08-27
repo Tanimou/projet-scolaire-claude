@@ -1,0 +1,28 @@
+// CONTRÔLE NÉGATIF — R3. La MÊME troncature, mais appariée à son vrai total dans
+// le même élément : « 12 affichés sur 39 ». Le cliquet doit rester SILENCIEUX
+// ici, sans quoi son remède serait irréalisable et il se ferait relâcher.
+//
+// La règle écrite : un `.length` tronqué peut être rendu à condition que le même
+// élément JSX porte AUSSI le total non tronqué, reconnu comme un identifiant
+// contenant « total » ou une propriété `.total`.
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
+
+export function PairedTotal({ events }: { events: PortalCalendarEvent[] }) {
+  const upcomingTotal = events.length;
+  const shown = events.slice(0, 12);
+
+  return (
+    <section>
+      <header>
+        <span>
+          {shown.length} affichés sur {upcomingTotal} à venir
+        </span>
+      </header>
+      <ul>
+        {shown.map((e) => (
+          <li key={e.id}>{e.title}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}

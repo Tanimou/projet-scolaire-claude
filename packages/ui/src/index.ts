@@ -17,6 +17,11 @@ export {
   formatDateCard,
   formatRelativeTime,
   formatInDays,
+  // L'instant de référence d'une étiquette relative. Exporté pour qu'une page
+  // serveur qui résout son `now` une seule fois puisse typer la prop qu'elle
+  // fait traverser, sans ré-écrire l'union à chaque frontière. Voir le docblock
+  // de `RelativeNow` : affirmation ⇒ passez `now` ; décoratif ⇒ le défaut suffit.
+  type RelativeNow,
 } from './lib/format';
 export {
   gradeBucket,

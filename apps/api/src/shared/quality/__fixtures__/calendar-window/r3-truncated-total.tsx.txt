@@ -1,0 +1,24 @@
+// FIXTURE CONTREVENANTE — R3. L'en-tête rend la longueur d'une liste TRONQUÉE
+// comme si c'était un total. Avec 39 événements à venir, il imprime « 12
+// prochains ». C'est la classe fermée sous PF-20 et ré-enregistrée sous PF-377 :
+// un nombre plafonné est une affirmation FAUSSE sur l'école, pas un détail
+// d'affichage.
+import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
+
+export function TruncatedTotal({ events }: { events: PortalCalendarEvent[] }) {
+  const upcomingEventsList = events.slice(0, 12);
+
+  return (
+    <section>
+      <header>
+        <h3>À venir</h3>
+        <span>{upcomingEventsList.length} prochains</span>
+      </header>
+      <ul>
+        {upcomingEventsList.map((e) => (
+          <li key={e.id}>{e.title}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}

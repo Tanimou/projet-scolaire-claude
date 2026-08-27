@@ -5,6 +5,58 @@ import { useMemo, useState } from 'react';
 
 import { cn } from '../lib/cn';
 
+/**
+ * ## Ce composant ne décide PAS quels événements sont « dans le mois »
+ *
+ * Distinction à tenir, parce qu'elle est la raison pour laquelle ce fichier
+ * ressemble à un doublon du prédicat de fenêtre calendrier sans en être un :
+ *
+ *   • **Arithmétique de CELLULES** (ici) — combien de cases peindre, où tombe
+ *     le premier lundi, quel libellé de mois écrire. Elle ne répond à aucune
+ *     question sur une population et n'affirme aucun total.
+ *   • **Prédicat d'APPARTENANCE** (pas ici) — « cet événement concerne-t-il le
+ *     mois M ? ». C'est *cette* réponse qui doit venir d'un foyer unique, et
+ *     c'est elle qui divergeait d'un portail à l'autre.
+ *
+ * `MiniCalendar` reçoit `events` **déjà résolus en numéros de jour**
+ * ({@link CalendarEventDot.day}) : l'appartenance a donc été tranchée par
+ * l'appelant, en amont. Un appelant qui dériverait ces jours d'un prédicat
+ * maison ré-ouvrirait la divergence — le remède est chez lui, pas ici, et le
+ * déplacer ici ne ferait que déguiser une seconde déclaration en composant
+ * partagé.
+ *
+ * ## Deux conséquences pour l'appelant, et elles sont contraignantes
+ *
+ * 1. La prop `month` porte le fuseau de qui l'a construite. Un appelant qui la
+ *    dérive de l'horloge du **visiteur** dans un composant client fait rendre
+ *    au serveur puis au navigateur deux mois différents une heure par mois, à
+ *    la bascule. L'instant de référence doit être résolu **une fois, côté
+ *    serveur**, et traverser en prop.
+ * 2. `month` n'est lu qu'en **valeur initiale** d'un état local : la navigation
+ *    ±1 mois appartient ensuite à ce composant, et une nouvelle valeur de prop
+ *    ne la réinitialise pas. Voulu — sinon un re-rendu parent ramènerait
+ *    l'utilisateur au mois courant sous ses doigts.
+ *
+ * ## ⚠️ La conséquence 1 est une RÈGLE, pas une description : ses DEUX appelants
+ * vivants la violent aujourd'hui
+ *
+ * Écrit ici plutôt que découvert plus tard, parce qu'un contrat énoncé au
+ * présent se lit comme un contrat TENU, et que ce fichier deviendrait alors la
+ * preuve d'une propriété que personne n'a :
+ *
+ *   • `apps/web/src/app/teacher/dashboard/_components/CalendarPanel.tsx` —
+ *     `'use client'`, `month` dérivé d'un `new Date()` de rendu. Dette `PF-403`.
+ *   • `apps/web/src/app/parent/dashboard/_components/UpcomingPanel.tsx` —
+ *     même forme, même population (des ÉVALUATIONS). Dette `PF-408`.
+ *
+ * Les deux sont hors du périmètre de `S-E03-8`, dont l'invariant porte sur les
+ * ÉVÉNEMENTS d'établissement : les convertir demande le prédicat canonique
+ * généralisé aux évaluations, ce qui est une tranche, pas une retouche. Le
+ * cliquet `calendar-window-derivation-gate` gouverne `CalendarPanel` par sa
+ * table d'exclusions déclarées ; `UpcomingPanel` lui échappe parce que son nom
+ * ne contient pas « calendar » — ce trou est nommé dans `PF-408` pour qu'il ne
+ * se relise pas comme une couverture.
+ */
 export interface CalendarEventDot {
   /** Day number within the displayed month */
   day: number;

@@ -7,6 +7,7 @@ import {
   type PortalCalendarEvent,
 } from '@/components/calendar/PortalCalendarView';
 import { api, ApiError } from '@/lib/api-client';
+import { resolveSchoolCalendarAnchor } from '@/lib/school-calendar-anchor';
 
 export const metadata: Metadata = { title: 'Calendrier scolaire' };
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,13 @@ export default async function TeacherCalendarPage() {
   );
   const events = resp?.data ?? [];
 
+  // L'instant de référence est résolu ICI, une fois par requête (la page est
+  // `force-dynamic`), et traverse la frontière serveur/client en prop. C'est la
+  // SEULE horloge lue par la surface calendrier : la vue portail n'en lit plus
+  // aucune, donc SSR et hydratation calculent les mêmes compteurs
+  // (S-E03-8 / PF-40 / ADR-078).
+  const anchor = resolveSchoolCalendarAnchor();
+
   return (
     <PortalShell portal="teacher">
       <PageHeader
@@ -36,7 +44,7 @@ export default async function TeacherCalendarPage() {
         title="Calendrier scolaire"
         subtitle="Vacances, jours fériés, périodes d'examens, réunions et journées pédagogiques"
       />
-      <PortalCalendarView portal="teacher" events={events} />
+      <PortalCalendarView portal="teacher" events={events} anchor={anchor} />
     </PortalShell>
   );
 }

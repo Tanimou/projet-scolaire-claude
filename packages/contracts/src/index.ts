@@ -8,3 +8,5 @@ export * from './events';
 export * from './release';
 export * from './observability';
 export * from './security';
+export * from './calendar';
+export * from './school-time';

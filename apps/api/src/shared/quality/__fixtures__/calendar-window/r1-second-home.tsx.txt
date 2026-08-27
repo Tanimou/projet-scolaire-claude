@@ -1,0 +1,53 @@
+// FIXTURE CONTREVENANTE — R1. Ce fichier n'est jamais compilé ni rendu ; il est
+// lu comme TEXTE par calendar-window-derivation-gate.spec.ts et DOIT être
+// signalé. Extension `.tsx.txt` : hors `testMatch`, hors `tsc`, hors ESLint.
+//
+// Il porte les quatre formes de R1, telles qu'elles existaient sur `main` :
+//   1. une fenêtre de mois construite à la main (`new Date` d'arité >= 2) ;
+//   2. une re-déclaration locale d'un nom canonique ;
+//   3. un prédicat « à venir » écrit à la main sur `endsAt` ;
+//   4. une appartenance au mois comparée par composante, SANS l'année.
+'use client';
+
+import { useMemo, useState } from 'react';
+
+interface Ev {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+}
+
+// (2) seconde déclaration d'un nom que le module canonique exporte déjà.
+function monthWindow(year: number, monthIndex: number) {
+  // (1) fenêtre bâtie à la main, bornes fermées à 23:59:59.
+  const start = new Date(year, monthIndex, 1).getTime();
+  const end = new Date(year, monthIndex + 1, 0, 23, 59, 59).getTime();
+  return { start, end };
+}
+
+export function SecondHome({ events }: { events: Ev[] }) {
+  const [monthOffset] = useState(0);
+  const month = new Date(2026, 9 + monthOffset, 1);
+
+  const upcoming = useMemo(
+    // (3) prédicat « à venir » réécrit ici plutôt qu'importé.
+    () => events.filter((e) => new Date(e.endsAt).getTime() >= 1_700_000_000_000),
+    [events],
+  );
+
+  const inMonth = events.filter((e) => {
+    const s = new Date(e.startsAt);
+    // (4) même mois, année NON comparée — le défaut de CalendarManager:254.
+    return s.getMonth() === month.getMonth();
+  });
+
+  const window = monthWindow(month.getFullYear(), month.getMonth());
+
+  return (
+    <div>
+      <span>{upcoming.length}</span>
+      <span>{inMonth.length}</span>
+      <span>{window.end - window.start}</span>
+    </div>
+  );
+}

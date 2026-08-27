@@ -1,5 +1,5 @@
 import { EmptyState, PageHeader } from '@pilotage/ui';
-import { CalendarRange, GraduationCap, PartyPopper, School, Sun, Users } from 'lucide-react';
+import { CalendarRange, GraduationCap, Info, PartyPopper, School, Sun, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
@@ -10,6 +10,7 @@ import {
 import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, ApiError } from '@/lib/api-client';
 import { readParentChildren } from '@/lib/parent-children';
+import { resolveSchoolCalendarAnchor } from '@/lib/school-calendar-anchor';
 
 export const metadata: Metadata = { title: 'Calendrier scolaire' };
 export const dynamic = 'force-dynamic';
@@ -156,6 +157,11 @@ export default async function ParentCalendarPage({
 
   const allEvents = [...officialEvents, ...evaluationEvents];
 
+  // L'instant de référence de TOUTE la surface calendrier de cette page, résolu
+  // une fois par requête (`force-dynamic`) et passé en prop. Voir ADR-078 :
+  // aucun composant client calendrier ne lit plus d'horloge.
+  const anchor = resolveSchoolCalendarAnchor();
+
   // Comptes par grande catégorie pour la bande de synthèse (sections claires).
   const count = (predicate: (e: PortalCalendarEvent) => boolean) => allEvents.filter(predicate).length;
   const sections = [
@@ -233,9 +239,34 @@ export default async function ParentCalendarPage({
         />
       ) : null}
 
-      {/* Bande de synthèse — repère d'un coup d'œil les grandes catégories. */}
+      {/*
+        Bande de synthèse — repère d'un coup d'œil les grandes catégories.
+
+        Ses cinq comptes ne sont PAS filtrés par la vue calendrier située en
+        dessous, et c'est légitime : leurs libellés sont explicites et distincts,
+        aucun ne porte le mot nu « événements ». Elle n'est donc pas une instance
+        de `DNC-01` et ne doit pas être « corrigée » en la branchant sur le filtre
+        du `PortalCalendarView` (S-E03-8, résiduel déclaré).
+
+        En revanche, cinq tuiles alignées se LISENT comme une partition
+        exhaustive, et elles n'en sont pas une : un événement de portée cycle ou
+        niveau n'est compté par aucune tuile, et une même vacance apparaît dans
+        « Planning de l'école » ET dans « Vacances & jours fériés ». Le titre et
+        la note ci-dessous existent pour que la rangée cesse de promettre une
+        arithmétique qu'elle ne tient pas — sans changer un seul chiffre.
+      */}
+      <div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+          Répartition par portée
+        </h2>
+        <p className="inline-flex items-center gap-1 text-[11px] text-slate-600">
+          <Info className="h-3 w-3 shrink-0 text-slate-500" aria-hidden />
+          Un même événement peut compter dans plusieurs lignes ; ces totaux ne
+          s&apos;additionnent pas.
+        </p>
+      </div>
       <div
-        className={`mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 ${
+        className={`mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 ${
           childrenFailure ? 'lg:grid-cols-4' : 'xl:grid-cols-5'
         }`}
       >
@@ -287,7 +318,7 @@ export default async function ParentCalendarPage({
         </p>
       ) : null}
 
-      <PortalCalendarView portal="parent" events={allEvents} />
+      <PortalCalendarView portal="parent" events={allEvents} anchor={anchor} />
     </PortalShell>
   );
 }

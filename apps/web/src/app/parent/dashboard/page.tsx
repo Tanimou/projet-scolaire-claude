@@ -57,6 +57,7 @@ import {
 } from '@/lib/enrollment-activity';
 import { fetchMe } from '@/lib/me';
 import { readParentChildren } from '@/lib/parent-children';
+import { resolveSchoolCalendarAnchor } from '@/lib/school-calendar-anchor';
 
 const FAMILY_OVERVIEW_MAX = 8;
 
@@ -237,6 +238,9 @@ export default async function ParentDashboardPage({
 
   const allStudents = studentsRead.data.data;
   const schoolEvents = calendarResp?.data ?? [];
+  // Instant de référence unique de la requête (S-E03-8 / PF-40 / ADR-078) : le
+  // panneau ne lit plus sa propre horloge, il reçoit celle de la page.
+  const calendarAnchor = resolveSchoolCalendarAnchor();
   const activeStudent =
     params.studentId && allStudents.find((s) => s.id === params.studentId)
       ? allStudents.find((s) => s.id === params.studentId)
@@ -773,7 +777,7 @@ export default async function ParentDashboardPage({
       </div>
 
       {/* ─────────── Row 4 : École — événements scolaires à venir ─────────── */}
-      <SchoolEventsPanel events={schoolEvents} />
+      <SchoolEventsPanel events={schoolEvents} anchor={calendarAnchor} />
 
       {/* ─────────── Row 5 : Bottom support strip (Image 2 polish) ─────────── */}
       <div className="mt-6">

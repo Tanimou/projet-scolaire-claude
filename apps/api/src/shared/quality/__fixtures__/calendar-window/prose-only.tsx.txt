@@ -1,0 +1,37 @@
+// CONTRÔLE NÉGATIF — « LE CLIQUET JUGE DU CODE, PAS DE LA PROSE ».
+//
+// Ce fichier porte, dans ses COMMENTAIRES et dans ses LITTÉRAUX DE CHAÎNE, toutes
+// les formes que le cliquet interdit — y compris celles-ci :
+//
+//     const start = new Date(2026, 9, 1, 23, 59, 59);
+//     const now = Date.now();
+//     const upcoming = events.filter((e) => e.endsAt >= now).slice(0, 12);
+//     return <span>{upcoming.length} prochains</span>;
+//
+// et il DOIT rester vert. `PROGRESS.md` §1088 enregistre un cliquet devenu rouge
+// sur le commentaire qui expliquait son propre correctif, et note qu'un cliquet
+// pareil se fait relâcher dans le mois — pour une bonne raison. L'erreur
+// admissible ici est le faux NÉGATIF, jamais le faux POSITIF.
+'use client';
+
+import type { CalendarEvent } from './page';
+
+/**
+ * Le remède retire `new Date(y, m + 1, 0, 23, 59, 59)` et `Date.now()` des
+ * surfaces calendrier, ainsi que le `.slice(0, 12)` dont la longueur était rendue
+ * en « ${n} prochains ».
+ */
+const DOC = [
+  'new Date(2026, 9, 1, 23, 59, 59)',
+  'Date.now()',
+  'events.filter((e) => e.endsAt >= now).slice(0, 12)',
+  'today.getMonth() === month.getMonth()',
+].join(' | ');
+
+export function ProseOnly({ events }: { events: CalendarEvent[] }) {
+  return (
+    <div title={DOC}>
+      <span>{events.length}</span>
+    </div>
+  );
+}
