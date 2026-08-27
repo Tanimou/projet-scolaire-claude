@@ -37,7 +37,9 @@ import type {
 } from './types';
 
 import { PortalShell } from '@/components/PortalShell';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, ApiError } from '@/lib/api-client';
+import { readParentChildren } from '@/lib/parent-children';
 
 export const metadata: Metadata = { title: 'Recommandations' };
 export const dynamic = 'force-dynamic';
@@ -143,10 +145,35 @@ export default async function ParentRecommendationsPage({
   }>;
 }) {
   const sp = await searchParams;
-  const studentsResp = await safe(
-    api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' }),
+  // S-E03-3d / `PF-363` — l'échec de lecture est conservé au lieu d'être
+  // écrasé en liste vide, et sa branche est évaluée AVANT le test de vacuité.
+  // C'est la page la plus sensible du lot : « Aucun enfant rattaché » y valait
+  // aussi « aucune alerte à traiter », donc une lecture ratée éteignait la
+  // boucle alerte → action que promet l'étoile polaire du produit.
+  const childrenRead = await readParentChildren<StudentSummary>(
+    'parent-recommendations/children',
   );
-  const children = studentsResp?.data ?? [];
+
+  if (!childrenRead.ok) {
+    return (
+      <PortalShell portal="parent">
+        <PageHeader
+          breadcrumb={[
+            { label: 'Tableau de bord', href: '/parent/dashboard' },
+            { label: 'Recommandations' },
+          ]}
+          title="Recommandations"
+        />
+        <ChildrenReadError
+          className="mt-6"
+          failure={childrenRead}
+          domain="Cela ne veut pas dire qu'aucune recommandation ne vous attend."
+        />
+      </PortalShell>
+    );
+  }
+
+  const children = childrenRead.data.data;
 
   if (children.length === 0) {
     return (

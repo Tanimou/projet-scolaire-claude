@@ -50,6 +50,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
 import { StudentAccessService } from './student-access.service';
+import { studentScopeWhere } from './student-scope-where';
 
 class CreateStudentDto {
   @IsString() @MinLength(1) @MaxLength(80) firstName!: string;
@@ -191,11 +192,18 @@ export class StudentsController {
       : {};
 
     const where: Prisma.StudentWhereInput = {
-      tenantId: me.tenantId,
-      schoolId,
-      // `=== null` EXPLICITE : `null` est le sentinel NON RESTREINT (admins
-      // seuls) ; `[]` est le REFUS et DOIT produire `id: { in: [] }`.
-      ...(scope.studentIds === null ? {} : { id: { in: scope.studentIds } }),
+      // S-E03-3d / `PF-356` / `ADR-076` — LA PORTÉE EST DÉRIVÉE, ELLE N'EST
+      // PLUS COMPOSÉE ICI. `schoolId` et `id: { in: … }` ne CO-OCCURRENT
+      // JAMAIS : le sentinel `null` (admins seuls) garde l'école de travail, et
+      // un jeu d'ids EXPLICITE (parent / enseignant / élève-lui-même) repart
+      // SANS clé d'école — ce jeu EST déjà l'autorité, et il est déjà
+      // tenant-keyé. Intersecter cette autorité avec « l'école du tenant qui a
+      // le plus d'élèves » (`school-context.service.ts`) ne refusait aucun accès
+      // illégitime : elle faisait DISPARAÎTRE de cette liste des enfants que
+      // `GET /students/:id` rendait en entier, dans le même tenant, à la même
+      // seconde. `tenantId` reste sur les DEUX branches, et le `count` plus bas
+      // reçoit le MÊME objet `where` que le `findMany`.
+      ...studentScopeWhere({ tenantId: me.tenantId, schoolId, studentIds: scope.studentIds }),
       ...(status ? { status } : {}),
       ...searchClause,
     };
@@ -291,8 +299,22 @@ export class StudentsController {
 
     // B3 — l'année canonique est résolue UNE FOIS PAR ÉCOLE DISTINCTE, jamais
     // par élève : `take` monte à 200, et une résolution par ligne serait un N+1
-    // sur la liste la plus chaude de l'admin (GUARDRAILS §2). En pratique la
-    // liste est déjà scopée à une école, donc c'est UNE requête.
+    // sur la liste la plus chaude de l'admin (GUARDRAILS §2).
+    //
+    // S-E03-3d — LA PRÉMISSE PRÉCÉDENTE EST TOMBÉE, ET ON LA CORRIGE PLUTÔT QUE
+    // DE LA LAISSER MENTIR. Cette ligne disait « en pratique la liste est déjà
+    // scopée à une école, donc c'est UNE requête ». C'était vrai TANT QUE le
+    // `where` portait `schoolId` ; `ADR-076` vient de retirer cette clé sur la
+    // branche à jeu d'ids explicite, donc une liste parent/enseignant peut
+    // désormais s'étendre sur K écoles et cette boucle fait K résolutions
+    // SÉQUENTIELLES. La borne reste TENUE ET MESURABLE : K ≤ le nombre d'écoles
+    // DISTINCTES portant les ≤ 200 lignes de la page, jamais le nombre de
+    // lignes — et pour un parent K vaut le nombre d'écoles fréquentées par ses
+    // enfants, soit 1 ou 2 en pratique. Le batching de cette boucle est
+    // ENREGISTRÉ, non corrigé ici (résidu `PF-397`) : le faire dans la tranche
+    // qui retire une clé de `where` mélangerait une correction de vérité et une
+    // optimisation, et `student-scope-where.spec.ts` assert la borne « ≤ 1
+    // résolution par école DISTINCTE » pour qu'elle ne dérive pas en silence.
     const canonicalYears = await this.canonicalYearBySchool(
       me.tenantId,
       items.map((s) => s.schoolId),
