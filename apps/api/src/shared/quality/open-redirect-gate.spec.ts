@@ -755,9 +755,30 @@ describe('AC-5(c) — no file under apps/web/src hands a query value to a redire
     expect(offenders).toEqual([]);
   });
 
-  it('the bare-identifier sink inventory is exactly the three reviewed sites', () => {
+  it('the bare-identifier sink inventory is exactly the reviewed sites', () => {
     // Both directions (PM-1): no NEW bare-identifier sink may appear, and the
     // reviewed ones may not be deleted to satisfy the rule above.
+    //
+    // FOURTH ENTRY ADDED 2026-08-27 by the LAND PASS of `S-E03-9` (PF-50), and
+    // the entry is the REVIEW, not a waiver. `S-E03-9` gave `/admin/assignments`
+    // server-side pagination, and pagination needs a "reset the filters"
+    // control: `AssignmentsManager.tsx:138` is `router.push(pathname)`.
+    //
+    // Why it is SAFE, traced rather than assumed: `pathname` is bound at :110
+    // from Next's own `usePathname()`. That is the router's RESOLVED route for
+    // the component currently rendering — it is not read from `searchParams`,
+    // not from a prop, not from `document.location`, and there is no assignment
+    // to `pathname` anywhere in the file. A caller cannot steer it: to change it
+    // they must already be on a different route, at which point they have
+    // navigated themselves. The sink class this gate exists for (`PF-102`) is a
+    // QUERY value reaching a redirect; this is the router's own path reaching a
+    // redirect, which is the canonical Next idiom for clearing a query string.
+    //
+    // The gate is NOT weakened by this entry. It stays an exact-equality
+    // inventory in both directions: a FIFTH sink still reddens, and deleting one
+    // of these four still reddens. What the entry buys is that the review is
+    // written down where the next reader will find it, instead of being
+    // re-derived (or waved through) by whoever next trips the gate.
     const sites: string[] = [];
     for (const [path, source] of EXECUTABLE_SRC) {
       for (const hit of bareIdentifierSinks(source)) {
@@ -766,6 +787,7 @@ describe('AC-5(c) — no file under apps/web/src hands a query value to a redire
     }
     expect(sites.sort()).toEqual(
       [
+        'apps/web/src/app/admin/teaching-assignments/AssignmentsManager.tsx:pathname',
         'apps/web/src/components/PortalLoginForm.tsx:callbackUrl',
         'apps/web/src/components/notifications/NotificationListItem.tsx:link',
         'apps/web/src/components/notifications/NotificationListItem.tsx:link',

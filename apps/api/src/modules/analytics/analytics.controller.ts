@@ -15,6 +15,8 @@ import {
   type RebuildSnapshotsRequest,
   RebuildSnapshotsRequestSchema,
   normalizeYmd,
+  pageWindow,
+  pageWindowOf,
 } from '@pilotage/contracts';
 
 import { deriveAuditProvenance } from '../../shared/audit/provenance';
@@ -51,6 +53,26 @@ function requireAuditDay(name: 'from' | 'to', raw?: string): string | null {
   }
   return day;
 }
+
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de page du JOURNAL D'AUDIT, avec SES
+ * nombres : 50 par défaut, 200 au maximum. Inchangés.
+ *
+ * ⚠ C'EST LE SITE OÙ LA DIVERGENCE COÛTAIT LE PLUS CHER, et c'est pourquoi il
+ * est nommé ici. `Math.min(parseInt(limit ?? '50', 10) || 50, 200)` rendait
+ * `-5` pour `?limit=-5` : un `take` négatif, pour Prisma, veut dire « prends
+ * depuis la FIN, à l'envers ». Un auditeur qui paginait les entrées les plus
+ * RÉCENTES recevait silencieusement les plus ANCIENNES, sous le même en-tête —
+ * un faux signal de complétude sur une lecture que GUARDRAILS §1 rend
+ * non négociable. Et `parseInt(offset ?? '0', 10) || 0` n'écrêtait RIEN par le
+ * bas : `?offset=-1` atteignait Prisma en `skip` négatif, c'est-à-dire une
+ * erreur d'exécution, donc un **500** sur ce même point d'entrée.
+ *
+ * Ce n'est PAS une rupture d'autorisation — `tenantId` n'a jamais bougé — et
+ * cela ne doit pas être présenté comme telle. C'est un changement non documenté
+ * de QUELLES lignes reviennent. Les deux deviennent un 400 lisible.
+ */
+const AUDIT_LIST_PAGE_WINDOW = pageWindow({ def: 50, max: 200 });
 
 @ApiTags('analytics')
 @ApiBearerAuth()
@@ -271,11 +293,14 @@ export class AnalyticsController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
+    const parsedWindow = AUDIT_LIST_PAGE_WINDOW.safeParse({ limit, offset });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
     const fromDay = requireAuditDay('from', from);
     const toDay = requireAuditDay('to', to);
-    const take = Math.min(parseInt(limit ?? '50', 10) || 50, 200);
-    const skip = parseInt(offset ?? '0', 10) || 0;
     return this.analytics.auditList({
       tenantId: me.tenantId,
       from: fromDay ?? undefined,

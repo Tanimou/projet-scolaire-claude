@@ -4,7 +4,20 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-27)** `in-progress` — **TEN slices landed, and there was none before 2026-08-25.**
+**Status (2026-08-27)** `in-progress` — **ELEVEN slices landed, and there was none before 2026-08-25.**
+
+`S-E03-9` (run 94 — **`PF-50` ADVANCED and explicitly NOT closed**, `ADR-080`; one page window, one cap, one
+place, and a negative `limit` stops silently inverting the result set. Thirteen hand-rolled
+`parseInt`/`Math.min`/`ParseIntPipe` window parsers — **five defaults, four caps, three incompatible answers to an
+invalid input** — become one `pageWindow({ def, max })` factory in `packages/contracts/src/pagination/`, and
+`GET /teaching-assignments`, the epic's last unbounded `findMany` with four nested `include`s, gains
+`take`/`skip`/`total` plus **server-side** KPI aggregates and a named-scope coverage block, so the admin
+assignments page stops deriving a whole-SET claim from one page's array (`PF-421`). `PF-422` and `PF-423` fixed in
+the same slice. **The residual is NAMED, not hidden:** `PF-426` — 151 of 210 `findMany` call sites still carry no
+`take`, frozen by a ratchet spec that fails on 152. **NEEDS HUMAN REVIEW: this is a breaking change** — over-cap
+`limit` now returns **400** instead of clamping — and the slice ships **one RED test of its own** plus **zero live
+probes**. See § `S-E03-9`).
+
 `S-E03-10` (run 89, merged 2026-08-27 after a conflict resolution — `PF-24` **advanced and NOT closed**:
 the snapshot drain can now reach a terminal state on the *second* recompute of a scope, so `recomputing`
 can stop pinning true. **Nothing has been executed against Postgres** (Docker was down for the whole run),
@@ -96,7 +109,8 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-8`** — the school calendar stops counting the same events four different ways, and a counter stops changing after page load | **claims `PF-40`** (A1 divergent month predicate per portal · A2 KPI band ignoring the active filter · A3 a truncated `.length` rendered as a total · A4 the clock read *during render* of server-rendered client components); `ADR-078` rules D1–D4 + the `FreshnessChip` non-transfer test; **`PF-406` volet 1 found by the panel and fixed in-slice** (the anchor was carrying the *process* zone, UTC in the shipped container, against a `Europe/Paris` school); raises `PF-399`…`PF-406` | ⚠️ **2026-08-27, run 92 — NEEDS HUMAN REVIEW, do NOT auto-merge. Panel verdict NO-GO: three executed RED tests in the slice's own gates, none at baseline; `OPEN.md` untouched. Conditions in § `S-E03-8`** |
 | **`S-E03-10`** — a snapshot recompute trigger can reach a terminal state on the **second** recompute of a scope | **advances `PF-24`** — NOT closed (no executed proof against Postgres); raises `PF-380`…`PF-388` | ⚠️ **2026-08-26, run 89 — needs human review, P1 `[truth][worker][schema-adjacent]`. NOT auto-merge: `PF-380` is a blocking merge condition.** (`PF-381`, the test-architect's NO-GO, was raised AND closed inside the run: the mechanism evidence it prescribed was built at the land pass, a fourth conflict site — the claim — was found and fixed there, and the test excess is back to zero.) |
 | **`S-E03-7`** — une classe n'a qu'UN effectif : « combien d'élèves dans cette classe » cesse d'avoir quatre réponses, et la somme d'effectifs cesse d'être présentable comme un nombre d'élèves | **claims `PF-36`** as the CLASS of derivations converted; **closes `PF-410`** (structure header counted tenant-wide) and **`PF-412`** (count without `tenantId`); **annotates `PF-361`** (id preserved, live-database re-measurement); raises `PF-409`, `PF-411`, `PF-413`, `PF-414`, `PF-415`; `ADR-079` | ⚠️ **2026-08-27, run 93 — NEEDS HUMAN REVIEW, do NOT auto-merge. P0 `[truth][tenant][contracts][cross-portal]`.** Landing conditions in § `S-E03-7`: the `PF-36` and `PF-362` rows of `OPEN.md` are still `open`, and the `PF-412` row asserts a remedy that is not in the diff |
-| `S-E03-1`… | `PF-50` | **matrix row only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86, `S-E03-6` at run 91, `S-E03-8` at run 92 and **`S-E03-7` at run 93**: all five were authored and landed, so the habit is holding.) |
+| **`S-E03-9`** — one page window, one cap, one place; and a negative limit stops silently inverting the result set | **advances `PF-50`** — explicitly **NOT closed** (`AC-7`, named residual = `PF-426`); **fixes `PF-421`, `PF-422`, `PF-423`** in-slice; raises `PF-419`, `PF-420`, `PF-424`, `PF-425`, `PF-426`; `ADR-080` | ⚠️ **2026-08-27, run 94 — DONE, needs human review, do NOT auto-merge. P1 `[api-contract][truth][breaking-change]`** (re-tiered from P2 at the gate: thirteen endpoints now **reject** an over-cap `limit` instead of clamping it). Story `docs/daily-improvement-v3/stories/S-E03-9.md`; ADR `docs/adr/ADR-080-canonical-page-window.md`; canon `packages/contracts/src/pagination/page-window.ts`; ratchet `apps/api/src/shared/quality/page-window-derivation-gate.spec.ts` (`CENSUS_CEILING = 151`). **Evidence tier B — no live probe was possible** (Docker down for a fifth consecutive run, local DB empty): `pnpm typecheck` 13/13 green **only after** the two halves were consolidated into one checkout, the ratchet spec passes, and `page-window.spec.ts` still has **one RED test** (`AC-8 / G-TENANT` hard-codes SEVEN reads; the handler now issues EIGHT, all tenant-keyed). Landing conditions in § `S-E03-9`. |
+| `S-E03-1` | — | **matrix row only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86, `S-E03-6` at run 91, `S-E03-8` at run 92, `S-E03-7` at run 93 and **`S-E03-9` at run 94**: all six were authored, so the habit is holding. `PF-50` moved off this row at run 94 — it is `S-E03-9`'s, not `S-E03-1`'s.) |
 
 ---
 
@@ -1653,3 +1667,161 @@ spec-kit absent. `PF-365` / `PF-370` attendent depuis sept runs.
 **`PF-40` revendiquée sous conditions (run 92)** et **`PF-36` revendiquée sous conditions (run 93)**. Les cinq
 restantes : bloquées sur des **arbitrages sémantiques** (`PF-12` deux axes survivants, `PF-04`) ; **jamais
 commencées** (`PF-24`, `PF-50`, `PF-05`).
+
+> **Annotation run 94 (`S-E03-9`) — ce pointeur est périmé sur un point.** `PF-50` n'est plus « jamais
+> commencée » : la tranche `S-E03-9` l'attaque (spec écrite le 2026-08-27). Elle ne la FERME pas, et le §11 de la
+> story dit pourquoi en toutes lettres. Le reste du pointeur tient. **La sélection de ce run est un OVERRIDE
+> opérateur, pas un suivi de ce pointeur** — la story `S-E03-9` le dit dans son §0.
+
+---
+
+## `S-E03-9` — LIVRÉE (run 94, 2026-08-27) — ⚠️ revue humaine requise
+
+**Statut : implémentée et livrée dans ce même run.** Fichier de story :
+`docs/daily-improvement-v3/stories/S-E03-9.md`. Section de planification conservée telle quelle ci-dessous ;
+**la passe de land est annotée à la fin de cette section** (« Annotation de land »), pas fondue dedans.
+
+### Ce qui est mesuré, et ce qui ne l'est pas
+
+**Aucune sonde live. Aucune n'était possible** : Docker Desktop refuse de démarrer pour le **cinquième run
+consécutif** et la base locale `pilotage@5432` est vide (`enrollment = 0`). Tous les chiffres ci-dessous sont
+**mesurés en source** ou **exécutés dans un `node` nu**. La tranche est en **palier de preuve B** et la story
+interdit explicitement d'écrire « vérifié contre la pile ».
+
+**Le défaut, mesuré.** Une fenêtre de pagination est analysée **neuf fois, dans neuf fichiers**. Huit sont des
+expressions `parseInt`/`Math.min` écrites à la main ; la neuvième
+(`packages/contracts/src/dto/conversation.ts:105-108`) est un schéma Zod **déjà correct**, et c'est la seule.
+Les neuf divergent sur **cinq défauts** (20 / 50 / 100 / 200), **quatre plafonds** (100 / 200 / 500 / aucun) et —
+l'axe que l'audit n'avait pas nommé — **trois réponses incompatibles à une entrée invalide** (`PF-422`).
+
+Table exécutée dans `node` (reproduite intégralement au §2.2 de la story) :
+
+| entrée | analytics / students / guardians / lessons | alerts / notifications / teachers / attendance |
+|---|---|---|
+| `?limit=-5` | **`take: -5`** → Prisma prend **par la FIN, à l'envers** | `1` (borné en bas) |
+| `?limit=0` | le **défaut** (50 ou 100) | `1` ou le défaut, selon le site |
+| `?limit=1e3` | **`1`** (`parseInt` s'arrête à `e`) | **`1`** |
+| `?limit=abc` | le **défaut**, en silence | `alerts` : **400** ; les trois autres : le défaut |
+| `?offset=-5` | analytics / students : **`skip: -5`** → erreur runtime Prisma (500) | borné ou absent |
+
+Ce n'est **PAS** une rupture d'autorisation : `tenantId` est sur chacun de ces `where` et la tranche n'en touche
+aucun. La story l'écrit explicitement pour que la revue ne perde pas le vrai défaut dans ce débat.
+
+**L'endpoint non borné.** `apps/api/src/modules/teaching/teaching-assignments.controller.ts:55-89` est un
+`findMany` **sans `take`, sans `skip`, sans `total`**, avec **quatre `include` imbriqués** (l'audit A2 App. K.4 y
+mesurait 290 lignes).
+
+**Le piège de vérité, et il est plus grave que ce que le brief annonçait.** `admin/assignments/page.tsx:39-43`
+dérive **quatre KPI** du tableau reçu. Mais `AssignmentsManager.tsx:455-490` en dérive en plus une **affirmation
+d'ENSEMBLE** — « *Couverture complète. Toutes les classes actives ont un professeur principal…* ». Un KPI trop bas
+est faux ; **un panneau de couverture piloté par une page INVENTE des alertes de classe sans professeur
+principal**, et la boucle alerte→action est la promesse centrale du produit. C'est `DNC-01` appliqué à un
+**ensemble** et non à un compte : `PF-421`, mis dans le périmètre par l'`AC-5b`.
+
+### Recensement, mesuré par cette story (et il ne concorde pas avec le brief)
+
+```
+files scanned: 174
+findMany call sites (non-spec): 213
+  with take:  57
+  WITHOUT take: 156
+```
+
+Le brief annonçait **158 sur 216**. Cette story mesure **156 sur 213**, script inclus verbatim au §5.6, et
+l'`AC-6(b)` ordonne à l'agent d'implémentation de **re-mesurer** plutôt que d'adopter l'un ou l'autre chiffre. Le
+gel du cliquet se fait sur le nombre **post-diff** (attendu : **155**) et non pré-diff — un durcissement délibéré
+par rapport au brief, à consigner dans `ADR-080 §D6`.
+
+### Deux corrections de fait apportées au brief
+
+1. `apps/api/src/modules/teachers/teachers.controller.ts` **n'existe pas**. Le vrai chemin est
+   `apps/api/src/modules/teaching/teachers.controller.ts` — le module qui porte déjà
+   `teaching-assignments.controller.ts`.
+2. La neuvième forme (le schéma Zod de messagerie) n'est **pas** un contrevenant : c'est la **seule implémentation
+   correcte du contrat présente dans l'arbre**. La story ne la « convertit » donc pas, elle la **ré-exprime** sur
+   le canon (`.extend()`), pour que la référence devienne un **usage** du canon et non un **doublon**. C'est aussi
+   l'argument n° 1 du foyer choisi (`packages/contracts/src/pagination/page-window.ts`) : le canon est la généralisation
+   d'un frère `contracts` existant, pas un foyer neuf.
+
+### Ce qui est déclaré HORS périmètre, comme des RAISONS et non comme des chemins en attente
+
+`PF-419` (transfert de tuples dans `messaging.service.ts:679-686` — le remède est un `lateral join` SQL brut, donc
+un **motif d'architecture nouveau** avec son propre ADR), `PF-420` (éventail 2N du dashboard parent — exige un
+nouvel endpoint agrégat `/batch`), `PF-424` (filtres client), `PF-425` (`/classes` et `/subjects` lus entiers),
+`PF-426` (les 155 `findMany` restants). Ce sont les cinq raisons pour lesquelles `PF-50` est **avancée et NON
+fermée** : écrire `closed` ici serait exactement l'erreur `closed ≠ fixed` consignée au run 93.
+
+*(Écrit le 2026-08-27, run 94, passe de planification. Tranches ultérieures : annoter, ne pas supprimer.)*
+
+### Annotation de land (run 94, 2026-08-27) — ce qui a changé entre la planification et la livraison
+
+**1. Le chiffre du recensement a bougé, et c'est le CLIQUET qui fait foi.** La section de planification annonce
+155 / 213 ; la mesure post-diff exécutée par le cliquet est **151 sur 210 appels, 174 fichiers**
+(`page-window-derivation-gate.spec.ts`, `CENSUS_CEILING = 151`). Les lignes `OPEN.md` de `PF-50` et `PF-426`
+citent encore 155 / 156 sur 213 : **elles sont périmées et doivent être ré-alignées sur la constante du cliquet**,
+qui est la définition exécutable. C'est, en petit, la dérive « deux listes tenues à la main » que la tranche
+existe pour supprimer — consignée ici plutôt que corrigée en silence.
+
+**2. Le foyer n'est pas celui que la story avait nommé.** La story écrivait
+`packages/contracts/src/pagination/page-window.ts` ; le module a été posé à
+`packages/contracts/src/pagination/page-window.ts`, exporté depuis `src/index.ts`. Le chemin livré est le **bon**
+(convention des frères `src/calendar`, `src/school-time`, `src/roster` — `ADR-078 §D1`, `ADR-079`) et `ADR-080
+§D1` en décide explicitement. **Le texte de l'`AC-1` est périmé, pas l'implémentation.**
+
+**3. La tranche a livré son propre défaut, et il a été rattrapé au gate, pas par un test.** Les deux moitiés ont
+été écrites dans DEUX checkouts (BE + contracts + UI dans le dépôt principal, `apps/web` dans
+`.claude/worktrees/practical-heyrovsky-b95dad`). Chacune typecheckait au vert **contre sa propre forme écrite à la
+main** : l'API émettait `totals`, la page lisait `summary`. Résultat sur l'arbre fusionné : les quatre KPI à `—`
+et le panneau de couverture définitivement « indisponible ». Réconcilié en faveur de `totals` (le nom de
+l'`ADR-080 §D4`), avec `coverage.subjectIdsWithTeacher` ajouté comme **huitième agrégat tenant-clé** parce que le
+panneau NOMME les matières et qu'un scalaire ne peut pas produire des noms. **`api<T>()` reste un cast non
+validé : rien n'empêche structurellement la récidive**, et le test de forme de réponse prescrit par le
+test-architect n'a **pas** été écrit.
+
+**4. Un test de la tranche est ROUGE sur l'arbre livré.**
+`apps/api/src/shared/pagination/page-window.spec.ts:505` (`AC-8 / G-TENANT`) attend **sept** lectures ; le
+handler en émet **huit**. Les huit portent `tenantId` — ce n'est pas une fuite, c'est la preuve que la suite n'a
+pas été relancée après le huitième agrégat. **Le remède est de DÉRIVER le compte** des mocks, jamais de passer le
+littéral à `8`.
+
+**5. Zéro preuve live.** Docker à l'arrêt pour le cinquième run consécutif, base locale vide. Palier de preuve
+**B** : mécanisme prouvé en `node` nu et par typecheck, **déploiement non prouvé**. Aucune phrase de cette section
+ne doit être lue comme « vérifié contre la pile ».
+
+*(Écrit le 2026-08-27, run 94, passe de land. Tranches ultérieures : annoter, ne pas supprimer.)*
+
+---
+
+## Next slice → **lever les trois conditions de land de `S-E03-9`**, puis l'`epic-spec` (en retard de ONZE tranches)
+
+**1. La condition la plus urgente n'est pas le test rouge, c'est le cast non validé.** `AC-5a` / `AC-5b` sont
+« corrigées mais non prouvées » : le contrat de réponse de `GET /teaching-assignments` est écrit **deux fois à la
+main** — une fois dans le `return` du contrôleur, une fois dans
+`apps/web/src/app/admin/teaching-assignments/types.ts` — et `api<T>()` caste sans valider. Le défaut vient d'être
+commis puis réparé **dans le même run** ; rien dans l'arbre n'empêche le suivant. La tranche est petite et bien
+définie : porter la forme de réponse dans `packages/contracts` (à côté de `pageWindow`), la faire importer par le
+contrôleur ET par `types.ts`, et asserter l'égalité des clés dans un spec. **Ne pas la ré-écrire comme une
+deuxième liste de clés recopiée** — ce serait la dérive de listes appariées reproduite pour la troisième fois dans
+la même tranche.
+
+**2. Puis le test rouge et les deux lignes `OPEN.md` périmées** — minutes, pas une tranche : dériver le compte de
+lectures de l'`AC-8`, et ré-aligner `PF-50` / `PF-426` sur `CENSUS_CEILING = 151` sur 210 (+ corriger le chemin
+`dto/` → `pagination/` dans les trois artefacts qui le citent).
+
+**3. Candidate strictement contenue, et elle ferme un trou que cette tranche a laissé ouvert : borner `offset`.**
+`pageWindow` plafonne `limit` et **pas** `offset` (`z.coerce.number().int().min(0)`, sans `.max()`), et le module
+est désormais canonique pour treize endpoints dont `GET /api/v1/analytics/audit`. `?offset=1e21` est accepté et
+part vers Prisma. Ce n'est **pas** une régression (les `parseInt` remplacés n'avaient pas de plafond non plus),
+mais c'est maintenant le seul endroit où le trou peut être fermé **une fois**.
+
+**4. Puis l'`epic-spec`, dont l'argument se renforce d'un cran de plus.** Il y a maintenant **neuf** modules
+contractuels frères, et la neuvième story a dû, comme la huitième, **arbitrer son propre foyer dans son §D1** —
+puis voir son propre `AC-1` devenir périmé parce que l'arbitrage a gagné contre le texte. Trois runs de suite, une
+tranche d'implémentation a payé le prix d'un spec-kit absent. `PF-365` / `PF-370` attendent depuis huit runs.
+
+**5. Chiffres de l'épic après onze tranches : 2 fermées sur 9 fermement** (`PF-15` sur un axe, `PF-20` entière),
+**`PF-40` et `PF-36` revendiquées sous conditions** (runs 92 et 93), **`PF-50` avancée avec un résidu NOMMÉ**
+(`PF-426`, run 94). Les quatre restantes : bloquées sur des **arbitrages sémantiques** (`PF-12` deux axes
+survivants, `PF-04`) ; **jamais commencées** (`PF-24` — mais voir `ci/2026-08-26-v3-e03-snapshot-terminal-conflict`
+avant de démarrer —, `PF-05`).
+

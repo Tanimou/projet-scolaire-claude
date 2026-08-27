@@ -21,6 +21,8 @@ import {
   enrollmentTotalOrder,
   guardianshipLiveWhere,
   guardianshipOnTheBooksWhere,
+  pageWindow,
+  pageWindowOf,
   projectEnrollmentActivity,
   resolveActiveAcademicYear,
   selectActiveEnrollment,
@@ -86,6 +88,17 @@ class UpdateStudentDto {
   @IsOptional() @IsEnum(StudentStatus) status?: StudentStatus;
   @IsOptional() @IsObject() customFields?: Record<string, unknown>;
 }
+
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de page de la liste d'élèves, avec SES
+ * nombres : 50 par défaut, 200 au maximum. Inchangés.
+ *
+ * `Math.min(parseInt(limit ?? '50', 10) || 50, 200)` rendait `-5` pour
+ * `?limit=-5` (Prisma : « depuis la fin, à l'envers ») et `50` pour `?limit=0`
+ * (`0 || 50`). `parseInt(offset ?? '0', 10) || 0` laissait passer un `skip`
+ * négatif. Les trois deviennent un 400.
+ */
+const STUDENTS_LIST_PAGE_WINDOW = pageWindow({ def: 50, max: 200 });
 
 @ApiTags('students')
 @ApiBearerAuth()
@@ -230,8 +243,14 @@ export class StudentsController {
     }
     if (callerFilters.length > 0) where.AND = callerFilters;
 
-    const take = Math.min(parseInt(limit ?? '50', 10) || 50, 200);
-    const skip = parseInt(offset ?? '0', 10) || 0;
+    // S-E03-9 / ADR-080 — UNE analyse, ici comme partout : bornes déclarées à
+    // côté de la classe, rejet (jamais écrêtage, jamais défaut de repli) rendu
+    // en 400 par la forme maison `safeParse` + `issues.map`.
+    const parsedWindow = STUDENTS_LIST_PAGE_WINDOW.safeParse({ limit, offset });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
 
     const [items, total] = await Promise.all([
       this.prisma.student.findMany({

@@ -22,7 +22,14 @@ export interface PaginationProps {
    * client-side handler.
    */
   onPageChange?: (next: number) => void;
-  /** Hide the "Affichage de X à Y sur N" summary */
+  /**
+   * Hide the "Affichage de X à Y sur N" summary.
+   *
+   * Le résumé est aussi la **région live** qui annonce le nouvel intervalle
+   * (SC 4.1.3, cf. le docblock du composant). Le masquer transfère cette
+   * responsabilité à l'appelant : il doit alors porter lui-même une annonce du
+   * décompte. Aucun appelant ne l'utilise aujourd'hui.
+   */
   hideSummary?: boolean;
   /** Force-show page numbers even when total fits in one page */
   alwaysShow?: boolean;
@@ -44,6 +51,33 @@ export interface PaginationProps {
  * Marked as a Client Component because it owns `onClick` handlers. Server
  * pages can render it directly: if no `onPageChange` is supplied, navigation
  * is performed via Next.js router updating the `?page=` query string.
+ *
+ * ## Le résumé est une région live (SC 4.1.3 — Messages d'état)
+ *
+ * Changer de page — ou changer un filtre qui recale la fenêtre — ne déplace pas
+ * le focus : à la souris on **voit** que « Affichage de 1 à 20 sur 290 » est
+ * devenu « de 21 à 40 sur 290 », au lecteur d'écran, rien n'était dit. Le
+ * résumé porte donc `role="status"` (`aria-live="polite"`, `aria-atomic`) : il
+ * est déjà la phrase exacte que l'on veut entendre, il est déjà rendu à
+ * l'écran, et il est déjà là au montage — les trois conditions d'une région
+ * live qui fonctionne. `aria-atomic` fait relire la phrase entière plutôt que
+ * le seul nombre qui a bougé : « 21 » tout seul n'est pas un message d'état.
+ *
+ * Pourquoi **ici** et pas dans chaque page : le décompte paginé est un fait
+ * partagé par les 23 surfaces qui montent ce composant, dans les quatre
+ * portails. Recopier une région `sr-only` par page, ce serait dupliquer au
+ * niveau applicatif une phrase que le design system rend déjà — et la laisser
+ * dériver page par page. Vérifié avant d'ajouter le rôle : aucune région live
+ * existante de `apps/web` ne porte ce décompte (les filtres annoncent « Mise à
+ * jour… », `UsersTable` une issue d'action, `AuditTable` l'ouverture d'un
+ * tiroir), donc rien n'est annoncé deux fois.
+ *
+ * Deux limites, énoncées plutôt que contournées :
+ *   • `hideSummary` retire la région — l'appelant reprend alors la charge.
+ *   • Quand `total <= pageSize` le composant ne rend rien (comportement
+ *     historique, conservé) : la région disparaît. Le cas « la liste s'est
+ *     vidée » est déjà couvert par `EmptyState`, qui porte son propre
+ *     `role="status"`. Les deux se relaient, aucun n'a besoin de l'autre.
  */
 export function Pagination({
   page,
@@ -125,7 +159,12 @@ export function Pagination({
       )}
     >
       {!hideSummary && (
-        <span className="text-xs text-slate-600 sm:text-sm">
+        <span
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="text-xs text-slate-600 sm:text-sm"
+        >
           Affichage de <strong className="font-semibold">{start}</strong> à{' '}
           <strong className="font-semibold">{end}</strong> sur{' '}
           <strong className="font-semibold">{total.toLocaleString('fr-FR')}</strong>{' '}

@@ -136,7 +136,7 @@ describe('ParentExportsController — guardianship ABAC + ownership scoping', ()
   it('list scopes to requestedBy = me and emits top-level termId/studentId', async () => {
     const { controller, exportsSvc } = makeController();
 
-    const res = await controller.list(jwtWithRoles(['parent']), 20, 0);
+    const res = await controller.list(jwtWithRoles(['parent']), '20', '0');
 
     expect(exportsSvc.listForParent).toHaveBeenCalledWith({
       tenantId: TENANT,

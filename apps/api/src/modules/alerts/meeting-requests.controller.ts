@@ -1,14 +1,14 @@
 import {
+  BadRequestException,
   Controller,
-  DefaultValuePipe,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { pageWindow, pageWindowOf } from '@pilotage/contracts';
 
 import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -33,6 +33,19 @@ const MEETING_REQUEST_STATUSES: MeetingRequestStatus[] = ['open', 'resolved', 'c
  * blocked here). Every query is tenant-scoped AND role-scoped:
  * admins see all in their school, teachers see only their own queue + unassigned.
  */
+/**
+ * S-E03-9 / PF-50 / ADR-080 — la fenêtre de la file de demandes de rendez-vous :
+ * 50 par défaut, 200 au maximum. Inchangés.
+ *
+ * ⚠ CE SITE N'ÉTAIT PAS DANS LES NEUF DU BRIEF. Il est l'un des CINQ que la
+ * passe critique a mesurés en plus (14 sites / 11 formes au total). Le convertir
+ * est ce que AC-2 EXIGE : il n'existe aucune raison STRUCTURELLE de le laisser —
+ * c'est le même idiome, sur le même contrat, dans le même dossier. Le laisser
+ * aurait obligé le cliquet R3 à porter une liste d'exemptions, c'est-à-dire la
+ * sortie que `academic-year-resolution-gate.spec.ts:20-32` interdit.
+ */
+const MEETING_REQUESTS_PAGE_WINDOW = pageWindow({ def: 50, max: 200 });
+
 @ApiTags('meeting-requests')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -50,9 +63,17 @@ export class MeetingRequestsController {
   async list(
     @CurrentJwt() jwt: KeycloakJwtPayload,
     @Query('status') statusRaw: string | undefined,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
-    @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
+    @Query('limit') limitRaw: string | undefined,
+    @Query('offset') offsetRaw: string | undefined,
   ) {
+    const parsedWindow = MEETING_REQUESTS_PAGE_WINDOW.safeParse({
+      limit: limitRaw,
+      offset: offsetRaw,
+    });
+    if (!parsedWindow.success) {
+      throw new BadRequestException(parsedWindow.error.issues.map((i) => i.message));
+    }
+    const { take, skip } = pageWindowOf(parsedWindow.data);
     const me = await this.users.ensureUser(jwt);
     const { schoolId } = await this.ctx.forUser(me);
     const status =
@@ -66,8 +87,8 @@ export class MeetingRequestsController {
       schoolId,
       scope,
       status,
-      limit: Math.min(200, Math.max(1, limit)),
-      offset: Math.max(0, offset),
+      limit: take,
+      offset: skip,
     });
   }
 

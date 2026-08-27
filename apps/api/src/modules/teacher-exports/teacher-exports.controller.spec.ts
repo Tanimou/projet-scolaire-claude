@@ -161,7 +161,7 @@ describe('TeacherExportsController — teaching-assignment ABAC + ownership scop
   it('list scopes to requestedBy = me and emits top-level classSectionId/termId', async () => {
     const { controller, exportsSvc } = makeController();
 
-    const res = await controller.list(jwtWithRoles(['teacher']), undefined, 20, 0);
+    const res = await controller.list(jwtWithRoles(['teacher']), undefined, '20', '0');
 
     expect(exportsSvc.listForTeacher).toHaveBeenCalledWith({
       tenantId: TENANT,
