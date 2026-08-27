@@ -123,6 +123,8 @@ const CLASS_SECTIONS = [
 function makeService(overrides?: {
   activeYear?: { id: string } | null;
   classSections?: typeof CLASS_SECTIONS;
+  /** S-E03-6 / PF-20 — le nombre de règles d'alerte ACTIVÉES en base. */
+  enabledAlertRules?: number;
 }) {
   const activeYear = overrides?.activeYear === undefined ? { id: ACTIVE_YEAR } : overrides.activeYear;
   const classSections = overrides?.classSections ?? CLASS_SECTIONS;
@@ -157,11 +159,51 @@ function makeService(overrides?: {
     },
     classSection: {
       count: jest.fn().mockResolvedValue(0),
-      findMany: jest.fn().mockResolvedValue(classSections),
+      // S-E03-6 / PF-63 — DEUX requêtes atterrissent sur ce délégué, exactement
+      // comme sur `academicYear.findMany` ci-dessous, et elles n'attendent pas
+      // les mêmes colonnes :
+      //   • la structure d'école lit des sections complètes (`cycle`, `level`,
+      //     `_count`…) — c'est `CLASS_SECTIONS` qui la sert ;
+      //   • la sparkline « Classes » émet `select: { createdAt: true }` et trie
+      //     ensuite par `createdAt.getTime()`. Les lignes de `CLASS_SECTIONS`
+      //     ne portent PAS `createdAt`, donc le tri déréférençait `undefined`.
+      //
+      // C'est la cause racine de `PF-63` : SEPT tests d'`adminDashboard` au
+      // baseline (`scripts/known-test-failures.json`), tous avec le même
+      // « Cannot read properties of undefined (reading 'getTime') », et le
+      // baseline en désignait déjà `V3-E03` comme propriétaire. Le défaut était
+      // dans la FIXTURE, pas dans le service : le mock servait une seule forme
+      // de ligne à deux lectures différentes. On discrimine donc sur la FORME
+      // de l'argument, jamais sur un compteur d'appels — même règle que le
+      // délégué voisin.
+      findMany: jest.fn().mockImplementation((args?: { select?: { createdAt?: boolean } }) => {
+        if (args?.select?.createdAt) {
+          return Promise.resolve(
+            classSections.map((_section, index) => ({
+              // Des dates DISTINCTES et déterministes : une courbe construite
+              // sur trente jours à partir de dates identiques ne prouverait
+              // rien du tri qu'elle est censée exercer.
+              createdAt: new Date(Date.UTC(2025, 8, 1 + index)),
+            })),
+          );
+        }
+        return Promise.resolve(classSections);
+      }),
     },
     guardianship: {
       count: jest.fn().mockResolvedValue(0),
       findMany: jest.fn().mockResolvedValue([]),
+    },
+    // S-E03-6 / PF-20 / ADR-077 — « Alertes configurées » LIT désormais la base.
+    //
+    // Ce délégué manquait, et son absence est la démonstration la plus nette
+    // que le KPI n'était pas une lecture : un tableau de bord entièrement moqué
+    // rendait « 4 » sans que le mock ait eu à fournir la moindre ligne, parce
+    // que le nombre était la longueur d'une constante privée. Il faut désormais
+    // répondre à `alertRule.count` — c'est exactement le changement voulu, et
+    // c'est pourquoi ces huit tests étaient rouges avant le correctif.
+    alertRule: {
+      count: jest.fn().mockResolvedValue(overrides?.enabledAlertRules ?? 0),
     },
     // S-E03-4 / ADR-070 — DEUX requêtes différentes atterrissent sur ce délégué,
     // et elles n'attendent pas les mêmes colonnes :
@@ -339,6 +381,60 @@ describe('AnalyticsService.adminDashboard — U1 reorg', () => {
     expect(payload.recentExports).toBeUndefined();
     // The pendingRequests KPI is kept.
     expect(res.kpis.pendingRequests).toBeDefined();
+  });
+
+  /* ================================================================== *
+   * S-E03-6 / PF-20 / PF-378 / ADR-077 — « Alertes configurées » EST UNE
+   * LECTURE. Le rouge-avant : ces trois tests étaient impossibles à écrire,
+   * puisque le KPI valait `DEFAULT_ALERT_RULES.length` et qu'aucune donnée
+   * ne pouvait le changer.
+   * ================================================================== */
+
+  it('PF-20 — le KPI « Alertes configurées » CHANGE avec la base', async () => {
+    // LE test que l'ancien code ne pouvait pas passer : deux états de la base,
+    // deux valeurs. Auparavant les deux rendaient « 4 ».
+    const aucune = await makeService({ enabledAlertRules: 0 }).service.adminDashboard({
+      tenantId: TENANT,
+      schoolId: SCHOOL,
+    });
+    expect(aucune.kpis.configuredAlerts.value).toBe(0);
+
+    const trois = await makeService({ enabledAlertRules: 3 }).service.adminDashboard({
+      tenantId: TENANT,
+      schoolId: SCHOOL,
+    });
+    expect(trois.kpis.configuredAlerts.value).toBe(3);
+    expect(trois.kpis.configuredAlerts.formatted).toBe('3');
+  });
+
+  it('PF-20 — un établissement sans règle activée affiche 0, plus « 4 »', async () => {
+    // Le désaccord mesuré : le tableau de bord annonçait « 4 alertes
+    // configurées » pendant que `/admin/alerts` comptait 0 règle activée, car
+    // `AlertRule.enabled` vaut `false` par défaut. Les deux écrans lisent
+    // maintenant la même population.
+    const { service } = makeService({ enabledAlertRules: 0 });
+    const res = await service.adminDashboard({ tenantId: TENANT, schoolId: SCHOOL });
+    expect(res.kpis.configuredAlerts.value).toBe(0);
+    expect(res.kpis.configuredAlerts.value).not.toBe(4);
+  });
+
+  it('PF-20 — la lecture est SCOPÉE au tenant ET à l’école, et filtre sur enabled', async () => {
+    const { service, prisma } = makeService({ enabledAlertRules: 2 });
+    await service.adminDashboard({ tenantId: TENANT, schoolId: SCHOOL });
+
+    const call = (prisma.alertRule.count as jest.Mock).mock.calls[0]?.[0];
+    expect(call).toEqual({
+      where: { tenantId: TENANT, schoolId: SCHOOL, enabled: true },
+    });
+  });
+
+  it('PF-20 — la portée du nombre est ÉTIQUETÉE sur la carte', async () => {
+    // Deux nombres honnêtes qui comptent des populations différentes se
+    // contredisent encore si aucun ne dit ce qu'il compte (ADR-041 §D3).
+    const { service } = makeService();
+    const res = await service.adminDashboard({ tenantId: TENANT, schoolId: SCHOOL });
+    expect(res.kpis.configuredAlerts.scope).toBeDefined();
+    expect(res.kpis.configuredAlerts.scope).toMatch(/activ/i);
   });
 
   it('handles a school with no active year gracefully (empty coverage/grading)', async () => {

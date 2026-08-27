@@ -297,6 +297,7 @@ export class AlertsService {
     tenantId: string;
     schoolId: string | null;
     status?: AlertStatus;
+    severity?: AlertSeverity;
     studentId?: string;
     limit: number;
     offset: number;
@@ -305,6 +306,11 @@ export class AlertsService {
       tenantId: args.tenantId,
       ...(args.schoolId ? { schoolId: args.schoolId } : {}),
       ...(args.status ? { status: args.status } : {}),
+      // S-E03-6 / ADR-077 §D3 — le filtre manquait, si bien que « combien
+      // d'alertes critiques » ne pouvait se calculer qu'en COMPTANT une page
+      // de 100 lignes côté web : un ÉCHANTILLON rendu comme un TOTAL dès la
+      // 101e alerte ouverte. Le `total` servi répond maintenant à la question.
+      ...(args.severity ? { severity: args.severity } : {}),
       ...(args.studentId ? { studentId: args.studentId } : {}),
     };
     // Le `Promise.all` d'origine est SÉQUENTIALISÉ : une transaction interactive
