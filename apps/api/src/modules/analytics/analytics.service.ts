@@ -11,15 +11,23 @@ import {
   UnknownTimezoneError,
   assertKnownTimezone,
   auditWindowCreatedAtFilter,
+  ROSTER_YEAR_IMPLIED_BY_SECTION,
   candidateEnrollmentWhere,
+  classRosterSize,
+  countDistinctStudents,
+  countDistinctStudentsByKey,
   enrollmentTotalOrder,
   guardianshipPendingRequestWhere,
   isAuditPortalNone,
   projectEnrollmentActivity,
+  readDistinctStudentsAcrossSections,
   resolveActiveAcademicYear,
   resolveAuditWindow,
+  rosterCountArg,
+  rosterStatusesFor,
   selectActiveEnrollment,
   selectReportingWindowEnrollment,
+  sumRosterSizes,
 } from '@pilotage/contracts';
 import {
   ALERT_RULES_SCOPE_LABEL,
@@ -33,6 +41,7 @@ import type {
 
 import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { prismaRosterReader } from '../../shared/roster/prisma-roster-reader';
 import { GradesService } from '../grades/grades.service';
 import { RemediationService } from '../remediation/remediation.service';
 
@@ -451,7 +460,24 @@ export interface TeacherSubjectStat {
   subjectName: string;
   subjectColor: string | null;
   classCount: number;
-  studentCount: number;
+  /**
+   * S-E03-7 / PF-36 / ADR-079 — élèves DISTINCTS sur l'ensemble des sections où
+   * l'enseignant intervient pour cette matière.
+   *
+   * RENOMMÉ depuis `studentCount`, délibérément. L'ancien champ était une SOMME
+   * CUMULATIVE d'effectifs (`stat.studentCount += _count.enrollments`) rendue
+   * sous le mot « élèves » : un élève inscrit dans deux des classes de
+   * l'enseignant y valait DEUX. C'est l'écart 46-vs-43 de l'audit, mesuré contre
+   * `GET /teachers/:id/load`, qui dé-duplique depuis toujours.
+   *
+   * Le nom porte la question parce qu'un `number` nu ne le peut pas. Ne JAMAIS
+   * le reconstruire en sommant des effectifs de section : la somme ne serait
+   * juste que sous l'invariant « au plus une inscription active par élève et par
+   * année », absent de la base (PF-361). Le type `DistinctStudentCount` du
+   * contrat rend cette erreur inexprimable côté serveur ; le fil, lui, ne
+   * transporte qu'un `number`.
+   */
+  distinctStudentCount: number;
 }
 
 export interface TeacherDashboardResponse {
@@ -1788,6 +1814,22 @@ export class AnalyticsService {
   }): Promise<TeacherDashboardResponse> {
     const { tenantId, teacherProfileId, academicYearId } = opts;
 
+    /**
+     * S-E03-7 / ADR-079 — PORTÉE D'ANNÉE DÉCLARÉE (FR-5).
+     *
+     * Le `_count` remplacé ici ne portait AUCUNE clause d'année : quand
+     * l'appelant omet `academicYearId`, la carte agrège TOUTES les années où
+     * l'enseignant a jamais enseigné (`analytics.service.ts`, filtre
+     * d'affectations conditionnel). C'est PF-413, mesuré et ENREGISTRÉ.
+     *
+     * La portée est donc DÉCLARÉE implicite, et c'est une CONSERVATION : lui
+     * ajouter une clause d'année ferait BAISSER la carte pour une raison
+     * ÉTRANGÈRE à la dé-duplication, donc un septième nombre changerait sans
+     * avoir été mesuré (AC-7). Le seul changement de cette tranche sur cette
+     * carte est la dé-duplication. PF-413 reste OUVERTE et NOMMÉE.
+     */
+    const yearScope = ROSTER_YEAR_IMPLIED_BY_SECTION;
+
     const assignments = await this.prisma.teachingAssignment.findMany({
       where: {
         tenantId,
@@ -1796,15 +1838,36 @@ export class AnalyticsService {
       },
       include: {
         subject: { select: { id: true, code: true, name: true, color: true } },
-        classSection: {
-          select: {
-            id: true,
-            name: true,
-            _count: { select: { enrollments: { where: { status: 'active' } } } },
-          },
-        },
+        classSection: { select: { id: true, name: true } },
       },
     });
+
+    /**
+     * LES ÉLÈVES DISTINCTS, LUS — jamais sommés (FR-2 / FR-6).
+     *
+     * L'ancienne forme était `stat.studentCount += a.classSection._count
+     * .enrollments` : une SOMME CUMULATIVE d'effectifs présentée comme un nombre
+     * d'élèves. Deux affectations sur la MÊME section (physique + chimie sur la
+     * 6ᵉA — le cas exact de l'audit) la faisaient compter la classe DEUX FOIS ;
+     * un élève partagé entre deux sections de l'enseignant y valait deux.
+     *
+     * Une seule requête pour toutes les sections, puis un `Set` par matière.
+     * Jamais une requête par matière (GUARDRAILS §2 : « Never N+1 »).
+     */
+    const sectionIds = [...new Set(assignments.map((a) => a.classSection.id))];
+    const { rows: rosterRows } = await readDistinctStudentsAcrossSections(
+      prismaRosterReader(this.prisma),
+      { tenantId, classSectionIds: sectionIds, population: 'seated', yearScope },
+    );
+    const subjectsBySection = new Map<string, Set<string>>();
+    for (const a of assignments) {
+      const bucket = subjectsBySection.get(a.classSection.id) ?? new Set<string>();
+      bucket.add(a.subject.id);
+      subjectsBySection.set(a.classSection.id, bucket);
+    }
+    const distinctBySubject = countDistinctStudentsByKey(rosterRows, (row) => [
+      ...(subjectsBySection.get(row.classSectionId) ?? []),
+    ]);
 
     // Group by subject — one card per subject regardless of how many classes
     const bySubject = new Map<string, TeacherSubjectStat>();
@@ -1815,10 +1878,12 @@ export class AnalyticsService {
         subjectName: a.subject.name,
         subjectColor: a.subject.color,
         classCount: 0,
-        studentCount: 0,
+        distinctStudentCount: 0,
       };
       stat.classCount += 1;
-      stat.studentCount += a.classSection._count?.enrollments ?? 0;
+      // Assigné, jamais cumulé — `+=` ici est précisément ce que le cliquet R2
+      // rend inexprimable.
+      stat.distinctStudentCount = distinctBySubject.get(a.subject.id) ?? 0;
       bySubject.set(a.subject.id, stat);
     }
 
@@ -1999,7 +2064,18 @@ export class AnalyticsService {
                 select: {
                   id: true,
                   name: true,
-                  _count: { select: { enrollments: { where: { status: 'active' } } } },
+                  // S-E03-7 / ADR-079 — EFFECTIF d'UNE section (dénominateur de
+                  // « X sur Y notés »). Population NOMMÉE ; portée d'année
+                  // DÉCLARÉE implicite — ce site n'en portait pas, et lui en
+                  // ajouter une changerait le dénominateur sans mesure (AC-7).
+                  _count: {
+                    select: {
+                      enrollments: rosterCountArg({
+                        population: 'seated',
+                        yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+                      }),
+                    },
+                  },
                 },
               },
               subject: { select: { code: true, name: true } },
@@ -2535,7 +2611,17 @@ export class AnalyticsService {
               cycle: { select: { id: true, name: true, color: true, orderIndex: true } },
             },
           },
-          _count: { select: { enrollments: { where: { status: 'active' } } } },
+          // S-E03-7 / ADR-079 — EFFECTIF d'UNE section. La portée d'année de la
+          // requête parente est celle des sections ; celle des LIGNES ne l'est
+          // pas (PF-409), donc elle est DÉCLARÉE implicite plutôt que supposée.
+          _count: {
+            select: {
+              enrollments: rosterCountArg({
+                population: 'seated',
+                yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+              }),
+            },
+          },
           teachingAssignments: {
             select: {
               teacherProfileId: true,
@@ -2621,7 +2707,17 @@ export class AnalyticsService {
       cycleColor: string | null;
       orderIndex: number;
       classCount: number;
-      studentCount: number;
+      /**
+       * S-E03-7 / ADR-079 — les SECTIONS du cycle, jamais un compte cumulé.
+       *
+       * L'ancienne forme était `agg.studentCount += c._count.enrollments` : une
+       * SOMME d'effectifs rendue sous le mot « élèves ». Un élève inscrit dans
+       * deux sections du même cycle la même année y valait DEUX — légal en base
+       * (PF-361), donc pas une anomalie de données mais une mauvaise question.
+       * On collecte les sections ici et on LIT les élèves distincts après la
+       * boucle, en UNE requête.
+       */
+      sectionIds: Set<string>;
       teacherIds: Set<string>;
       subjectCount: Map<string, { name: string; count: number }>;
     };
@@ -2689,12 +2785,15 @@ export class AnalyticsService {
           cycleColor: cycle.color,
           orderIndex: cycle.orderIndex,
           classCount: 0,
-          studentCount: 0,
+          sectionIds: new Set<string>(),
           teacherIds: new Set<string>(),
           subjectCount: new Map<string, { name: string; count: number }>(),
         };
         agg.classCount += 1;
-        agg.studentCount += c._count?.enrollments ?? 0;
+        // La SECTION est collectée ; les élèves distincts sont LUS après la
+        // boucle. Aucun `+=` sur un effectif — c'est la forme que le cliquet R2
+        // rend inexprimable.
+        agg.sectionIds.add(c.id);
         for (const tid of classTeacherIds) agg.teacherIds.add(tid);
         for (const ta of c.teachingAssignments) {
           const se = agg.subjectCount.get(ta.subject.id) ?? {
@@ -2712,6 +2811,33 @@ export class AnalyticsService {
     teacherCoverageByClass.sort((a, b) => a.className.localeCompare(b.className, 'fr'));
     gradingRateByClass.sort((a, b) => a.className.localeCompare(b.className, 'fr'));
 
+    /**
+     * S-E03-7 / ADR-079 — les élèves DISTINCTS par cycle, LUS en UNE requête.
+     *
+     * Portée d'année DÉCLARÉE implicite — CONSERVATION exacte : le `_count`
+     * remplacé n'en portait aucune. Les SECTIONS sont déjà restreintes à l'année
+     * canonique par la requête parente ; les LIGNES ne l'ont jamais été, et
+     * PF-409 mesure que rien en base ne les y oblige. Le seul changement sur ce
+     * roll-up est la dé-duplication (AC-7 #5).
+     */
+    const cycleIdBySection = new Map<string, string>();
+    for (const [cycleId, agg] of cycleAgg) {
+      for (const sectionId of agg.sectionIds) cycleIdBySection.set(sectionId, cycleId);
+    }
+    const { rows: cycleRosterRows } = await readDistinctStudentsAcrossSections(
+      prismaRosterReader(this.prisma),
+      {
+        tenantId,
+        classSectionIds: [...cycleIdBySection.keys()],
+        population: 'seated',
+        yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+      },
+    );
+    const distinctByCycle = countDistinctStudentsByKey(cycleRosterRows, (row) => {
+      const cycleId = cycleIdBySection.get(row.classSectionId);
+      return cycleId === undefined ? [] : [cycleId];
+    });
+
     // Cycles array, ordered by the cycle's own orderIndex.
     const cycles: AdminDashboardResponse['schoolStructure']['cycles'] = Array.from(cycleAgg.entries())
       .sort((a, b) => a[1].orderIndex - b[1].orderIndex)
@@ -2720,7 +2846,7 @@ export class AnalyticsService {
         cycleName: agg.cycleName,
         cycleColor: agg.cycleColor,
         classCount: agg.classCount,
-        studentCount: agg.studentCount,
+        studentCount: distinctByCycle.get(cycleId) ?? 0,
         teacherCount: agg.teacherIds.size,
         topSubjects: Array.from(agg.subjectCount.values())
           .sort((a, b) => b.count - a.count)
@@ -3421,13 +3547,54 @@ export class AnalyticsService {
       }),
     ]);
 
+    /**
+     * S-E03-7 / PF-36 / ADR-079 — DES TÊTES SUR DES TÊTES, MÊME PORTÉE (AC-7 #6).
+     *
+     * DEUX défauts vivaient dans ces quelques lignes, et ils se composaient :
+     *   (a) `enrollment.count` compte des LIGNES ; `totalStudents` (juste
+     *       au-dessus) compte des TÊTES (`student.count`). Un élève portant deux
+     *       inscriptions actives la même année — LÉGAL, PF-361 — comptait deux
+     *       fois au numérateur et une au dénominateur.
+     *   (b) le numérateur n'avait AUCUNE clause d'école alors que le
+     *       dénominateur porte `schoolId`. Dans un tenant multi-écoles, le
+     *       numérateur agrégeait TOUTES les écoles.
+     * Les deux poussaient le pourcentage vers le HAUT et pouvaient le faire
+     * DÉPASSER 100 % — un « % d'élèves actifs » supérieur à cent.
+     *
+     * Le nouveau numérateur est un nombre d'ÉLÈVES DISTINCTS, scopé à l'école
+     * courante. Il BAISSE ou reste égal, et il ne peut plus dépasser 100 %.
+     * La portée d'année reste EXACTEMENT celle d'avant (l'année canonique quand
+     * elle se résout) : aucune clause n'est ajoutée ni retirée sur cet axe.
+     *
+     * ⚠ IL COMPTE DES TÊTES **EN SQL**. La passe de land de S-E03-7 a remplacé
+     * ici un `enrollment.findMany({ select: { studentId } })` suivi d'un `Set`
+     * en JavaScript : identique sur une base vide, mais en production ce site
+     * tirait TOUTE inscription assise de l'école à chaque chargement du tableau
+     * de bord admin. Une ligne `student` EST une tête, donc `student.count`
+     * avec `enrollments: { some }` compte déjà des élèves DISTINCTS par
+     * construction — et il devient de surcroît DIRECTEMENT COMPARABLE à
+     * `totalStudents`, qui est le même agrégat sur la même table. Le
+     * dénominateur et le numérateur ne sont plus seulement « des têtes toutes
+     * les deux » : ils sont la MÊME requête, à une clause près.
+     *
+     * Ajouter un éventail de lignes dans la tranche qui prétend canoniser les
+     * comptes aurait aggravé `PF-50` (« unpaginated / fan-out hotspots »), une
+     * finding de CE MÊME épic.
+     */
     const activeStudents = activeYear
-      ? await this.prisma.enrollment.count({
+      ? await this.prisma.student.count({
           where: {
             tenantId,
+            schoolId,
             status: 'active',
-            academicYearId: activeYear.id,
-            student: { status: 'active' },
+            enrollments: {
+              some: {
+                tenantId,
+                // Population NOMMÉE, jamais un `status:` écrit à la main (FR-3).
+                status: { in: rosterStatusesFor('seated') },
+                academicYearId: activeYear.id,
+              },
+            },
           },
         })
       : totalStudents;
@@ -3524,7 +3691,17 @@ export class AnalyticsService {
         id: true,
         maxStudents: true,
         status: true,
-        _count: { select: { enrollments: { where: { status: 'active' } } } },
+        // S-E03-7 / ADR-079 — EFFECTIF d'UNE section. Portée d'année DÉCLARÉE
+        // implicite : la requête parente scope les SECTIONS par école, pas les
+        // LIGNES par année, et cette tranche n'ajoute pas de clause (PF-409).
+        _count: {
+          select: {
+            enrollments: rosterCountArg({
+              population: 'seated',
+              yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+            }),
+          },
+        },
       },
     });
 
@@ -3534,7 +3711,19 @@ export class AnalyticsService {
       (c) => (c._count?.enrollments ?? 0) >= (c.maxStudents ?? 30),
     ).length;
     const totalCapacity = classes.reduce((s, c) => s + (c.maxStudents ?? 0), 0);
-    const totalEnrolled = classes.reduce((s, c) => s + (c._count?.enrollments ?? 0), 0);
+    /**
+     * S-E03-7 / ADR-079 — LA SOMME EST JUSTE ICI, ET SON TYPE LE DIT.
+     *
+     * `avgCapacityPct` compare des PLACES OCCUPÉES à des PLACES OFFERTES sur des
+     * sections DISJOINTES : sommer est exactement la bonne opération. Elle passe
+     * donc par `sumRosterSizes`, dont le résultat (`SummedRosterSizes`) n'est PAS
+     * assignable à un nombre d'ÉLÈVES. C'est la distinction que PF-36 confondait :
+     * on ne somme pas des effectifs pour obtenir des têtes, on les somme pour
+     * obtenir un taux d'occupation.
+     */
+    const totalEnrolled = sumRosterSizes(
+      classes.map((c) => classRosterSize(c._count?.enrollments ?? 0)),
+    );
     const avgCapacityPct =
       totalCapacity === 0 ? 0 : Math.round((totalEnrolled / totalCapacity) * 1000) / 10;
 
@@ -3979,7 +4168,20 @@ export class AnalyticsService {
             id: true,
             name: true,
             gradeLevel: { select: { name: true } },
-            _count: { select: { enrollments: { where: { status: 'active' } } } },
+            // S-E03-7 / ADR-079 — EFFECTIF d'UNE section (une ligne par classe
+            // dans le rapport ; ces valeurs ne sont JAMAIS sommées ici).
+            _count: {
+              select: {
+                enrollments: rosterCountArg({
+                  population: 'seated',
+                  // DÉCLARÉE implicite, et c'est une CONSERVATION : ce `_count`
+                  // ne portait aucune clause d'année. Lui en ajouter une ferait
+                  // BAISSER un nombre affiché pour une raison étrangère à cette
+                  // tranche — un septième nombre qui change, donc un échec (AC-7).
+                  yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+                }),
+              },
+            },
           },
         },
       },

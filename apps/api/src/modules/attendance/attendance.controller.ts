@@ -518,6 +518,18 @@ export class AttendanceController {
     const session = await this.prisma.classSession.findUnique({
       where: { id: body.classSessionId },
       include: {
+        /**
+         * S-E03-7 / ADR-079 — ÉPINGLÉ, DÉLIBÉRÉMENT NON CONVERTI (AC-9).
+         *
+         * Ce n'est PAS un compte : c'est une GARDE D'APPARTENANCE. Les lignes
+         * alimentent `new Set(...)` puis REJETTENT tout enregistrement dont
+         * l'élève n'y figure pas. Élargir la population laisserait pointer un
+         * enfant parti ; la rétrécir rendrait un enfant légitimement inscrit
+         * NON MARQUABLE en plein cours. Un changement de population est ici une
+         * décision d'AUTORISATION D'ÉCRITURE, pas une correction de vérité de
+         * lecture, et le delta n'est pas mesurable ce run (base vide). Il reste
+         * dans le plafond DÉCROISSANT du cliquet — épinglé, pas exempté.
+         */
         teachingAssignment: { include: { classSection: { include: { enrollments: { where: { status: 'active' } } } } } },
       },
     });

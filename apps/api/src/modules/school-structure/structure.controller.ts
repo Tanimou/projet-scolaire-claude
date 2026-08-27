@@ -1,5 +1,13 @@
 import { Controller, Get, NotFoundException, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  ROSTER_YEAR_IMPLIED_BY_SECTION,
+  classRosterSize,
+  countDistinctStudents,
+  rosterCountArg,
+  rosterStatusesFor,
+  sumRosterSizes,
+} from '@pilotage/contracts';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../shared/auth/jwt-auth.guard';
@@ -92,7 +100,17 @@ export class StructureController {
               status: true,
               maxStudents: true,
               gradeLevelId: true,
-              _count: { select: { enrollments: { where: { status: 'active' } } } },
+              // S-E03-7 / ADR-079 — EFFECTIF d'UNE section (« N élèves » sous
+              // chaque classe de l'arbre). Population NOMMÉE ; conversion de
+              // FORME, la valeur ne change pas.
+              _count: {
+                select: {
+                  enrollments: rosterCountArg({
+                    population: 'seated',
+                    yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+                  }),
+                },
+              },
             },
             orderBy: { name: 'asc' },
           })
@@ -105,8 +123,50 @@ export class StructureController {
       this.prisma.$transaction([
         this.prisma.student.count({ where: { schoolId } }),
         this.prisma.guardian.count({ where: { schoolId } }),
-        this.prisma.enrollment.count({
-          where: { tenantId: me.tenantId, status: 'active', ...(yearId ? { academicYearId: yearId } : {}) },
+        /**
+         * ⚠ AC-7 #3 — LE NOMBRE QUI CHANGE : total d'en-tête de
+         * `/admin/school/structure`, « X élèves ».
+         *
+         * AVANT : le TENANT ENTIER, en LIGNES d'inscription. Ce compte ne
+         * portait aucune clause d'école alors que ses deux voisins immédiats
+         * (`student.count`, `guardian.count`) portent `schoolId`, et alors que
+         * l'arbre affiché juste en dessous ne montre QUE l'école courante. Dans
+         * un tenant multi-écoles, l'en-tête annonçait donc plus d'élèves que la
+         * somme des classes visibles — PF-410, FERMÉE ici.
+         *
+         * APRÈS : l'école courante, et des TÊTES et non des LIGNES. Le nombre
+         * BAISSE ou reste égal et s'accorde enfin avec la somme de l'arbre. La
+         * portée d'année est INCHANGÉE (celle du sélecteur, exactement comme
+         * avant) ; aucune clause n'est ajoutée sur cet axe.
+         *
+         * ⚠ IL COMPTE DES TÊTES **EN SQL**, il ne transporte pas de lignes.
+         * La passe de land de S-E03-7 a remplacé ici un
+         * `enrollment.findMany({ select: { studentId } })` suivi d'un `Set` en
+         * JavaScript : sur une base vide les deux rendent le même nombre, mais
+         * en production ce site tirait TOUTE inscription assise de l'école À
+         * CHAQUE chargement de page. Une ligne `student` EST une tête, donc
+         * `student.count` avec `enrollments: { some }` compte déjà des élèves
+         * DISTINCTS par construction — la dé-duplication n'a pas à voyager
+         * jusqu'au processus Node. Ajouter un éventail de lignes dans la
+         * tranche qui prétend canoniser les comptes aurait aggravé `PF-50`
+         * (« unpaginated / fan-out hotspots »), une finding de CE MÊME épic.
+         *
+         * Restant un `count`, il rejoint le `$transaction` de ses deux voisins :
+         * les trois totaux d'en-tête sont désormais lus dans UN SEUL instantané.
+         */
+        this.prisma.student.count({
+          where: {
+            tenantId: me.tenantId,
+            schoolId,
+            enrollments: {
+              some: {
+                tenantId: me.tenantId,
+                // Population NOMMÉE, jamais un `status:` écrit à la main (FR-3).
+                status: { in: rosterStatusesFor('seated') },
+                ...(yearId ? { academicYearId: yearId } : {}),
+              },
+            },
+          },
         }),
       ]),
     ]);
@@ -128,7 +188,18 @@ export class StructureController {
       orderIndex: cy.orderIndex,
       gradeLevels: cy.gradeLevels.map((lv) => {
         const lvClasses = classByLevel.get(lv.id) ?? [];
-        const studentsActive = lvClasses.reduce((sum, c) => sum + c._count.enrollments, 0);
+        /**
+         * S-E03-7 / ADR-079 — SOMME D'EFFECTIFS, et elle est JUSTE ICI.
+         *
+         * Ce total est rendu FACE À `capacity` (« X / Y élèves ») : il compare
+         * des PLACES OCCUPÉES à des PLACES OFFERTES sur des sections DISJOINTES
+         * d'un même niveau. C'est un TAUX D'OCCUPATION, pas un nombre d'élèves —
+         * la seule somme d'effectifs que cette tranche autorise, et son type
+         * (`SummedRosterSizes`) interdit de la faire passer pour des têtes.
+         */
+        const studentsActive = sumRosterSizes(
+          lvClasses.map((c) => classRosterSize(c._count.enrollments)),
+        );
         const capacity = lvClasses.reduce((sum, c) => sum + c.maxStudents, 0);
         return {
           id: lv.id,
@@ -152,7 +223,7 @@ export class StructureController {
       }),
     }));
 
-    const [studentCount, guardianCount, activeEnrollments] = totals;
+    const [studentCount, guardianCount, seatedStudentsInSchool] = totals;
     return {
       school,
       activeAcademicYearId,
@@ -166,7 +237,12 @@ export class StructureController {
         totalSubjects: subjects.length,
         totalStudents: studentCount,
         totalGuardians: guardianCount,
-        activeEnrollments,
+        /**
+         * AC-7 #3 — le nom reste (contrat client inchangé), la DÉRIVATION change :
+         * élèves DISTINCTS de l'ÉCOLE COURANTE, plus lignes d'inscription du
+         * tenant entier. BAISSE ou égal.
+         */
+        activeEnrollments: seatedStudentsInSchool,
       },
     };
   }
@@ -192,7 +268,16 @@ export class StructureController {
                   where: { academicYearId: activeAcademicYearId },
                   orderBy: { name: 'asc' },
                   include: {
-                    _count: { select: { enrollments: { where: { status: 'active' } } } },
+                    // S-E03-7 / ADR-079 — EFFECTIF d'UNE section, population
+                    // NOMMÉE. Conversion de FORME : la valeur ne change pas.
+                    _count: {
+                      select: {
+                        enrollments: rosterCountArg({
+                          population: 'seated',
+                          yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+                        }),
+                      },
+                    },
                   },
                 }
               : false,

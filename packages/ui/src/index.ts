@@ -29,7 +29,18 @@ export {
   type GradeBucket,
   type GradeBucketInfo,
 } from './lib/grade-bucket';
-export { subjectColor, SUBJECT_CODES, type SubjectColor, type SubjectCode } from './lib/subject-color';
+export {
+  contrastRatio,
+  onGradientInk,
+  relativeLuminance,
+  subjectColor,
+  SUBJECT_CODES,
+  WCAG_AA_NORMAL_TEXT,
+  type OnGradientInk,
+  type SubjectColor,
+  type SubjectCode,
+  type SubjectPalette,
+} from './lib/subject-color';
 export {
   ACCENT_TOKEN_MAP,
   DISPLAY_PREFS_DEFAULTS,

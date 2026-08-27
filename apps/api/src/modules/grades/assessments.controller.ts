@@ -14,7 +14,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { guardianshipLiveWhere, snapshotCoalesceKey } from '@pilotage/contracts';
+import {
+  ROSTER_YEAR_IMPLIED_BY_SECTION,
+  guardianshipLiveWhere,
+  rosterCountArg,
+  snapshotCoalesceKey,
+} from '@pilotage/contracts';
 import { AssessmentKind } from '@prisma/client';
 import {
   IsDateString,
@@ -120,7 +125,30 @@ export class AssessmentsController {
                 id: true,
                 name: true,
                 gradeLevel: { select: { name: true } },
-                _count: { select: { enrollments: true } },
+                /**
+                 * ⚠ AC-7 #2 — LE NOMBRE QUI CHANGE : dénominateur de « Saisie
+                 * X % » et du badge « saisie complète » sur
+                 * `/teacher/assessments`.
+                 *
+                 * AVANT : les SIX statuts. Une classe portant un élève
+                 * `dropped` ou `graduated` avait un dénominateur plus grand que
+                 * le nombre d'élèves qu'un enseignant peut réellement noter,
+                 * donc « saisie complète » était INATTEIGNABLE — 25 pour une
+                 * classe de 24 assis (le « 25 / 26 » de l'audit, vu du portail
+                 * enseignant).
+                 *
+                 * APRÈS : les assis. Le pourcentage MONTE ou reste égal, et
+                 * « saisie complète » redevient atteignable. Portée d'année
+                 * DÉCLARÉE implicite — ce site n'en portait aucune (PF-409).
+                 */
+                _count: {
+                  select: {
+                    enrollments: rosterCountArg({
+                      population: 'seated',
+                      yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+                    }),
+                  },
+                },
               },
             },
             subject: { select: { id: true, name: true, color: true, code: true } },

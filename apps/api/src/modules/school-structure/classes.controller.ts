@@ -13,7 +13,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { guardianshipLiveWhere } from '@pilotage/contracts';
+import {
+  ROSTER_YEAR_IMPLIED_BY_SECTION,
+  classRosterSize,
+  guardianshipLiveWhere,
+  rosterCountArg,
+  rosterStatusesFor,
+} from '@pilotage/contracts';
 import { ClassStatus, Prisma } from '@prisma/client';
 import { IsEnum, IsInt, IsObject, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 
@@ -100,7 +106,17 @@ export class ClassesController {
       include: {
         gradeLevel: { include: { cycle: true } },
         academicYear: { select: { id: true, name: true, status: true } },
-        _count: { select: { enrollments: { where: { status: 'active' } } } },
+        // S-E03-7 / ADR-079 — EFFECTIF d'UNE section (colonne « Effectif
+        // actuel »). Population NOMMÉE ; conversion de FORME : la valeur ne
+        // change pas, ce site filtrait déjà sur les assis.
+        _count: {
+          select: {
+            enrollments: rosterCountArg({
+              population: 'seated',
+              yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+            }),
+          },
+        },
         // Main teacher (Professeur principal) — first teaching assignment marked `isMainTeacher`
         teachingAssignments: {
           where: { isMainTeacher: true },
@@ -149,8 +165,11 @@ export class ClassesController {
             },
           },
         },
+        // S-E03-7 / ADR-079 — la LISTE nominative rendue par la page. Même
+        // population NOMMÉE que le compte ci-dessous : c'est ce qui ferme la
+        // contradiction DANS LA MÊME charge utile (« 25 / 26 » de l'audit).
         enrollments: {
-          where: { status: 'active' },
+          where: { status: { in: rosterStatusesFor('seated') } },
           orderBy: { student: { lastName: 'asc' } },
           include: {
             student: {
@@ -168,7 +187,20 @@ export class ClassesController {
             },
           },
         },
-        _count: { select: { enrollments: true } },
+        // ⚠ AC-7 #1 — LE NOMBRE QUI CHANGE : 26 → 25 sur une classe portant une
+        // inscription « dropped ». Ce compte portait les SIX statuts pendant que
+        // capacity.current (juste plus bas) ne porte que les assis : DEUX
+        // effectifs contradictoires dans UNE SEULE charge utile — c'est
+        // l'alternance « 25 / 26 » de l'audit. AUCUN pixel ne change : la page
+        // admin rend la longueur de la liste nominative, pas ce compte.
+        _count: {
+          select: {
+            enrollments: rosterCountArg({
+              population: 'seated',
+              yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+            }),
+          },
+        },
       },
     });
     if (!cls || cls.tenantId !== me.tenantId) throw new NotFoundException();
@@ -208,7 +240,11 @@ export class ClassesController {
 
     return {
       ...cls,
-      capacity: { current: cls.enrollments.length, max: cls.maxStudents },
+      // S-E03-7 / ADR-079 — l'effectif est NOMMÉ comme tel plutôt que d'être une
+      // longueur de tableau anonyme. Il s'accorde désormais avec `_count`
+      // ci-dessus, même population NOMMÉE, même charge utile. Le type interdit
+      // de le sommer pour obtenir un nombre d'ÉLÈVES.
+      capacity: { current: classRosterSize(cls.enrollments.length), max: cls.maxStudents },
       subjects, // subjects merged with effective coefficient
       teachers,
       alerts,
@@ -294,7 +330,20 @@ export class ClassesController {
     const me = await this.users.ensureUser(jwt);
     const cls = await this.prisma.classSection.findUnique({
       where: { id },
-      include: { _count: { select: { enrollments: { where: { status: 'active' } } } } },
+      // S-E03-7 / ADR-079 — GARDE d'écriture (« la classe n'est pas vide »).
+      // Conversion de FORME uniquement : `seated` === ['active'], donc la garde
+      // rend exactement le même verdict qu'avant. Une garde dont la valeur
+      // changerait ne serait pas convertie dans cette tranche (AC-9).
+      include: {
+        _count: {
+          select: {
+            enrollments: rosterCountArg({
+              population: 'seated',
+              yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+            }),
+          },
+        },
+      },
     });
     if (!cls || cls.tenantId !== me.tenantId) throw new NotFoundException();
     if (cls._count.enrollments > 0) {
@@ -303,7 +352,31 @@ export class ClassesController {
       );
     }
     // Soft alternative: close it rather than hard-delete if it has historical enrollments.
-    const historical = await this.prisma.enrollment.count({ where: { classSectionId: id } });
+    //
+    // PF-412 — `tenantId` est ÉNONCÉ, il n'est plus seulement impliqué.
+    //
+    // La passe de land de S-E03-7 a trouvé ce site inchangé alors que le ledger
+    // le déclarait fermé « par le type de `distinctStudentsWhere` » : c'était
+    // faux, et il fallait choisir entre corriger le site et corriger la ligne.
+    // Le site est corrigé, parce que la ligne avait raison sur le FOND.
+    //
+    // Ce n'est PAS une lecture d'effectif — c'est « reste-t-il la moindre trace
+    // d'inscription, TOUS statuts et TOUTES années confondus ? », donc elle ne
+    // passe légitimement pas par le module canonique : `rosterCountArg` filtre
+    // par population, et ce garde-fou doit justement ne rien filtrer. Le module
+    // ne pouvait donc pas la couvrir, et prétendre qu'il le faisait masquait la
+    // seule chose à faire ici : nommer le tenant.
+    //
+    // La fuite était déjà nulle en pratique — `cls.tenantId !== me.tenantId`
+    // lève trois lignes plus haut, et `classSectionId` est une clé d'une section
+    // déjà prouvée du tenant. Mais `enrollment.tenant_id` ne porte NI clé
+    // étrangère NI contrainte (PF-415, mesuré) : la base ne rattrapera pas une
+    // ligne mal rattachée, et la sûreté de ce compte reposait entièrement sur un
+    // garde situé ailleurs dans la fonction. Une clause explicite coûte zéro et
+    // survit au prochain refactor qui déplacera ce garde.
+    const historical = await this.prisma.enrollment.count({
+      where: { tenantId: me.tenantId, classSectionId: id },
+    });
     if (historical > 0) {
       return this.prisma.classSection.update({ where: { id }, data: { status: 'closed' } });
     }

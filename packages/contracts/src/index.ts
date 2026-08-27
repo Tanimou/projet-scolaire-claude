@@ -10,3 +10,4 @@ export * from './observability';
 export * from './security';
 export * from './calendar';
 export * from './school-time';
+export * from './roster';

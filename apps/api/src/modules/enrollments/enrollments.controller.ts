@@ -711,6 +711,18 @@ export class EnrollmentsController {
         where: { id: body.classSectionId },
         include: {
           academicYear: true,
+          /**
+           * S-E03-7 / ADR-079 — ÉPINGLÉ, DÉLIBÉRÉMENT NON CONVERTI (AC-9).
+           *
+           * Ce compte n'est pas un affichage : c'est une GARDE D'ÉCRITURE dure
+           * (`ConflictException` « Capacité atteinte »). Une garde dont le
+           * changement de valeur ne peut PAS être mesuré ne se change pas sur la
+           * foi d'un raisonnement : la base locale est vide (0 inscription) et
+           * Docker est à l'arrêt ce run, donc l'AC-7 (« dire de quoi à quoi »)
+           * est INSATISFIABLE pour ce site. Il reste donc dans le plafond
+           * DÉCROISSANT du cliquet — épinglé, pas exempté — et sa conversion
+           * appartient à une tranche qui pourra la mesurer. PF-415.
+           */
           _count: { select: { enrollments: { where: { status: 'active' } } } },
         },
       }),
@@ -918,6 +930,9 @@ export class EnrollmentsController {
       where: { id: body.toClassSectionId },
       include: {
         academicYear: true,
+        // S-E03-7 / ADR-079 — ÉPINGLÉ, NON CONVERTI (AC-9), même raison que la
+        // garde de capacité de `POST /enrollments` : une garde d'écriture dont
+        // le delta de valeur n'est pas mesurable ce run ne se change pas.
         _count: { select: { enrollments: { where: { status: 'active' } } } },
       },
     });

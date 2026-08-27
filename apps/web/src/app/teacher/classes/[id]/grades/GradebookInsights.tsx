@@ -263,7 +263,12 @@ export function GradebookInsights({ data }: { data: GradebookData }) {
     <div className="space-y-6">
       {/* KPI strip */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard icon={Users} tone="blue" label="ÉLÈVES" value={studentCount}>
+        {/* `EFFECTIF` — même page, même mot que la carte de l'onglet « Vue
+            d'ensemble » : c'est l'effectif d'UNE section (S-E03-7 / ADR-079).
+            « ÉLÈVES » reste réservé aux élèves DISTINCTS sur un ENSEMBLE de
+            classes ; laisser les deux mots se croiser sur un même écran est
+            exactement ce qui a rendu PF-36 invisible pendant si longtemps. */}
+        <KpiCard icon={Users} tone="blue" label="EFFECTIF" value={studentCount}>
           {studentsWithAverage.length === studentCount
             ? 'Tous évalués'
             : `${studentsWithAverage.length} avec moyenne · ${

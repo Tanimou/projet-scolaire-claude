@@ -10,6 +10,17 @@ the snapshot drain can now reach a terminal state on the *second* recompute of a
 can stop pinning true. **Nothing has been executed against Postgres** (Docker was down for the whole run),
 the slice ships **no story spec and no ADR** (`PF-386`/`PF-387`), and the fix removes the table’s only —
 accidental — retention bound (`PF-380`). Renumbered from `S-E03-6`, which run 91 took for `PF-20`).
+
+`S-E03-7` (run 93 — **claims `PF-36` as the CLASS of derivations converted**, `ADR-079`; « combien d’élèves dans
+cette classe » cesse d’avoir quatre réponses, et la somme d’effectifs cesse d’être présentable comme un nombre
+d’élèves. **`PF-410`, `PF-412` et `PF-418` fermées ; `PF-409`, `PF-411`, `PF-413`…`PF-417` enregistrées ;
+`PF-361` annotée, id conservé.** La tranche avait posé sa revendication `PF-36` comme CONDITIONNELLE et **la
+passe de land a levé les conditions plutôt que de les reporter** : `PF-412` est corrigée pour de bon (la ligne
+affirmait un remède absent du diff), l’éventail de lignes que la tranche avait introduit est revenu à des
+agrégats SQL (`PF-418`), et le septième nombre changé — le `studentCount` par cycle d’`admin/dashboard` — est
+déclaré. **Ce qui reste vrai et n’est PAS revendiqué : les 43 / 46 / 48 et 25 / 26 de l’audit ne sont pas
+re-mesurés** — Docker à l’arrêt, `enrollment = 0` en local — et l’accord `AC-4` est prouvé sur l’axe de la
+dé-duplication seulement, la fixture étant mono-année (`PF-413` porte l’axe de l’année). Voir § `S-E03-7`).
 `S-E03-8` (run 92 — **claims `PF-40`**, `ADR-078`; the school calendar stops counting the same events four
 different ways, and a counter stops changing after page load. **The claim is CONDITIONAL and the condition is
 written down:** the escalation panel returned **NO-GO** on three executed RED tests inside the slice's *own*
@@ -57,7 +68,7 @@ Three consequences a later run must not rediscover:
    *findings the epic owns*, not of slices, and the mapping is not 1:1 (`S-E03-4` alone touches three of them).
 2. **Slice ids come from `docs/daily-improvement-v3/traceability/OPEN.md`, not from a `tasks.md`.** `S-E03-4` is
    named there (`OPEN.md:117` — `PF-15 stale active academic year | V3-E03 | S-E03-4 | open`). The ids `S-E03-1`,
-   `S-E03-2`, `S-E03-3`, `S-E03-5`… existed as matrix rows only *(all three have since been authored and landed — runs 81, 82 and 86, joined by `S-E03-6` at run 91 and `S-E03-8` at run 92; `S-E03-1` and `S-E03-7` still have not)* and are **not implementable without an authoring
+   `S-E03-2`, `S-E03-3`, `S-E03-5`… existed as matrix rows only *(all three have since been authored and landed — runs 81, 82 and 86, joined by `S-E03-6` at run 91, `S-E03-8` at run 92 and `S-E03-7` at run 93; only `S-E03-1` still has not)* and are **not implementable without an authoring
    pass of their own** — the same posture the `V3-E05` ledger records for its six unenumerated rows.
 3. **An `epic-spec` run for `V3-E03` is still owed and is still the highest-leverage thing available for this
    epic.** `S-E03-4` deliberately did not do it: writing a spec-kit is an `epic-spec` run, not a slice, and
@@ -84,7 +95,8 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-6`** — « Alertes configurées » stops being the length of a constant, and that constant had already drifted (4 codes against the enum's 8) | **closes `PF-20`** (entire — the epic's second finding and its first closed *whole*), **`PF-378`**, **`PF-63`**; `ADR-077` rules « configured » = the rules **enabled in this school**, a persisted collection, with the KPI going 4 → 0 as an owned consequence; raises `PF-398` | ⚠️ **2026-08-27, run 91 — landed needing human review, P1 `[truth]` (PR #281)** |
 | **`S-E03-8`** — the school calendar stops counting the same events four different ways, and a counter stops changing after page load | **claims `PF-40`** (A1 divergent month predicate per portal · A2 KPI band ignoring the active filter · A3 a truncated `.length` rendered as a total · A4 the clock read *during render* of server-rendered client components); `ADR-078` rules D1–D4 + the `FreshnessChip` non-transfer test; **`PF-406` volet 1 found by the panel and fixed in-slice** (the anchor was carrying the *process* zone, UTC in the shipped container, against a `Europe/Paris` school); raises `PF-399`…`PF-406` | ⚠️ **2026-08-27, run 92 — NEEDS HUMAN REVIEW, do NOT auto-merge. Panel verdict NO-GO: three executed RED tests in the slice's own gates, none at baseline; `OPEN.md` untouched. Conditions in § `S-E03-8`** |
 | **`S-E03-10`** — a snapshot recompute trigger can reach a terminal state on the **second** recompute of a scope | **advances `PF-24`** — NOT closed (no executed proof against Postgres); raises `PF-380`…`PF-388` | ⚠️ **2026-08-26, run 89 — needs human review, P1 `[truth][worker][schema-adjacent]`. NOT auto-merge: `PF-380` is a blocking merge condition.** (`PF-381`, the test-architect's NO-GO, was raised AND closed inside the run: the mechanism evidence it prescribed was built at the land pass, a fourth conflict site — the claim — was found and fixed there, and the test excess is back to zero.) |
-| `S-E03-1`, `S-E03-7`… | `PF-50` | **matrix rows only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86, `S-E03-6` at run 91 and `S-E03-8` at run 92: all four were authored and landed, and their stories live under `docs/spec/features/v3-e03/stories/`. `PF-40` left this row with `S-E03-8`.) |
+| **`S-E03-7`** — une classe n'a qu'UN effectif : « combien d'élèves dans cette classe » cesse d'avoir quatre réponses, et la somme d'effectifs cesse d'être présentable comme un nombre d'élèves | **claims `PF-36`** as the CLASS of derivations converted; **closes `PF-410`** (structure header counted tenant-wide) and **`PF-412`** (count without `tenantId`); **annotates `PF-361`** (id preserved, live-database re-measurement); raises `PF-409`, `PF-411`, `PF-413`, `PF-414`, `PF-415`; `ADR-079` | ⚠️ **2026-08-27, run 93 — NEEDS HUMAN REVIEW, do NOT auto-merge. P0 `[truth][tenant][contracts][cross-portal]`.** Landing conditions in § `S-E03-7`: the `PF-36` and `PF-362` rows of `OPEN.md` are still `open`, and the `PF-412` row asserts a remedy that is not in the diff |
+| `S-E03-1`… | `PF-50` | **matrix row only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86, `S-E03-6` at run 91, `S-E03-8` at run 92 and **`S-E03-7` at run 93**: all five were authored and landed, so the habit is holding.) |
 
 ---
 
@@ -1445,6 +1457,14 @@ dans la diligence de quiconque.
 
 ---
 
+## ~~Next slice → terminer `S-E03-8`, puis l'`epic-spec`~~ — POINTEUR SUPERSÉDÉ au run 93 par un OVERRIDE opérateur, et **non sur le fond**
+
+Ce pointeur rangeait `PF-36` parmi les constatations « jamais commencées » et recommandait `S-E03-8` puis
+l'`epic-spec`. L'override du run 93 a désigné `S-E03-7` / `PF-36`. **L'override gagne** — c'est écrit dans
+`S-E03-7.md` §0.1 — mais les deux arguments ci-dessous restent vrais et n'ont PAS été traités : les conditions de
+land de `S-E03-8` et l'`epic-spec`, désormais **en retard de DIX tranches**. Le pointeur vivant est à la FIN de ce
+fichier. Bloc conservé inédit ci-dessous comme trace de son raisonnement.
+
 ## Next slice → terminer `S-E03-8`, puis l'`epic-spec` (en retard de NEUF tranches)
 
 **1. Les conditions de land de `S-E03-8` d'abord, et ce n'est pas de la cosmétique.** Les trois rouges, `OPEN.md`,
@@ -1469,3 +1489,167 @@ constatation — mais **lire `ci/2026-08-26-v3-e03-snapshot-terminal-conflict` a
 deux sites vivants et dont le mécanisme de cliquet est déjà construit.
 
 *(Écrit le 2026-08-27, passe de land de `S-E03-8`, run 92. Tranches ultérieures : annoter, ne pas supprimer.)*
+
+---
+
+## `S-E03-7` (run 93, 2026-08-27) — une classe n'a qu'UN effectif, et la somme d'effectifs cesse d'être présentable comme un nombre d'élèves
+
+Story : [`docs/spec/features/v3-e03/stories/S-E03-7.md`](./stories/S-E03-7.md).
+ADR : [`docs/adr/ADR-079-canonical-class-roster-size.md`](../../../adr/ADR-079-canonical-class-roster-size.md).
+Branche : `ci/2026-08-27-v3-e03-roster-size-canonical`. **Sélection : OVERRIDE opérateur** — le pointeur de ce
+fichier nommait autre chose (§0.1 de la story).
+
+### Ce qui était faux
+
+« Combien d'élèves dans cette classe ? » avait **quatre** réponses vivantes, et **deux d'entre elles vivaient dans
+le même endpoint** :
+
+| forme | population | où |
+|---|---|---|
+| **V-A** `_count: { enrollments: true }` | **les SIX** valeurs d'`EnrollmentStatus` | `classes.controller.ts:171` (détail) · `assessments.controller.ts:123` |
+| **V-B** `_count: { enrollments: { where: { status: 'active' } } }` | `active` seule | ~13 sites, 4 fichiers |
+| **V-C** `new Set(rows.map(e => e.studentId)).size` | élèves distincts, année épinglée | `teachers.controller.ts` (`GET /teachers/:id/load`) |
+| **V-D** somme d'une `Map<classSectionId, size>` | classes dé-dupliquées, **élèves non dé-dupliqués** | `apps/web/.../teacher/settings/page.tsx` (client) |
+
+`GET /classes` comptait `active`, `GET /classes/:id` comptait **tous les statuts** : la même classe s'affichait
+**25 dans la liste et 26 dans le détail**. C'est, à la lettre, le *« one class alternates between 25 and 26 »* de
+l'audit (`02_Internal_Platform_Audit.md:140`). L'écart 43 / 46 / 48 est la même chaîne, un cran plus haut : le
+tableau de bord enseignant **sommait** des effectifs par affectation (l'enseignant physique-chimie voyait sa classe
+deux fois) là où `/load` dé-dupliquait les élèves.
+
+**Docker était à l'arrêt et `pilotage@5432` rend `enrollment = 0` : aucun des chiffres 43 / 46 / 48 / 25 / 26 n'a
+été re-mesuré, et aucun n'est revendiqué.** Ce qui est mesuré, c'est la SOURCE — et la chaîne de populations est
+monotone, donc elle IMPOSE l'ordre des magnitudes sans données. C'est le tier de preuve B, dit comme tel.
+
+### Le remède, et pourquoi il a cette forme
+
+- **Un foyer, hors `@prisma/client`** : `packages/contracts/src/roster/class-roster-size.ts` (564 l.), frère de
+  `academic-year/`, `enrollment/`, `guardianship/`, `calendar/`, `school-time/`. L'adaptateur Prisma
+  (`apps/api/src/shared/roster/prisma-roster-reader.ts`, 33 l., `Pick<PrismaClient, 'enrollment'>`) **ne prend
+  aucune décision de portée** : il transmet le `where` construit par le contrat, verbatim.
+- **Le TYPE fait le travail, pas le commentaire.** `ClassRosterSize`, `DistinctStudentCount` et
+  `SummedRosterSizes` sont *branded* : présenter une somme d'effectifs comme un nombre d'élèves est **inexprimable**
+  côté serveur (`AC-2`, prouvé par `@ts-expect-error`). `DistinctStudentsWhere.tenantId: string` est **requis par le
+  type** plus un garde runtime : une lecture directe sans tenant est inexprimable (`PF-412`).
+- **Une année déclarée, jamais supposée.** Chaque appel passe un `RosterYearScope` — soit `{ academicYearId }`, soit
+  le marqueur explicite `ROSTER_YEAR_IMPLIED_BY_SECTION`. Ce marqueur existe parce que **rien dans la base ne lie
+  `Enrollment.academicYearId` à `ClassSection.academicYearId`** (`PF-409`, mesuré sur `pg_constraint`) : la tranche
+  ne corrige pas ce trou, elle l'empêche d'être silencieux.
+- **Les gardes d'ÉCRITURE ne sont pas converties** (`AC-9`) : `attendance.controller.ts:533`,
+  `grades.controller.ts:138`, `enrollments.controller.ts:726` / `:936`, `students.controller.ts:546` sont
+  **ÉPINGLÉES avec la raison écrite**. La seule garde convertie (`classes.controller.ts` `@Delete`) l'est en
+  **forme uniquement** : `seated === ['active']`, verdict identique.
+- **Les renommages sont l'acte honnête.** `studentCount → distinctStudentCount`, `totalStudents →
+  totalEnrolments`, `ÉLÈVES → EFFECTIF`, `Élèves suivis → Inscriptions`. Un `number` ne peut pas dire à quelle
+  question il répond ; son nom le peut.
+- **Le cliquet** : `apps/api/src/shared/quality/class-roster-size-derivation-gate.spec.ts` (1 140 l.) — corpus
+  dérivé par MARCHE (jamais énuméré), `MANUAL_ALLOWLIST` vide et une assertion qui le prouve, aucun `SKIP_*` /
+  `ALLOW_*` / `NODE_ENV` (`DNC-10`), et un **contrôle POSITIF** qui assied que les sites `ADR-072` ancrés sur
+  l'ÉLÈVE PASSENT — sans lui, le cliquet exigerait de casser `ADR-072`.
+
+### Preuve exécutée
+
+| contrôle | résultat |
+|---|---|
+| `pnpm typecheck` (une fois, ~1 m 45) | **13/13 vert**, `grep -c "error TS"` = **0** (57 au premier passage — voir « la variance ») |
+| `git diff HEAD --check` / `--cached --check` | exit 0 |
+| 4 suites de la story + la suite de conformité ajoutée au gate | **112 / 112** |
+| cliquet voisin `enrollment-activity-derivation-gate.spec.ts` (`AC-6`) | **37 passés** — le plancher `ADR-072` survit |
+| `students-aggregate-active-share.spec.ts` (écrite au gate, **contrôle ROUGE exécuté puis arbre restauré**) | l'ancienne dérivation rendait **« 133,3 % des 3 élèves … »** ; 6 tests verts sur la nouvelle |
+
+**La variance — la leçon durable de cette tranche.** Le module typait toutes les listes de filtres en `readonly` ;
+Prisma 5.22 déclare `EnumEnrollmentStatusFilter.in?: EnrollmentStatus[]` **mutable**. Résultat : **57 erreurs TS**
+sur 5 fichiers et 3 portails, dont ~40 en cascade (l'inférence de payload s'effondre dès que le littéral `include`
+est rejeté). **Aucune des trois specs neuves ne pouvait le voir** : `ts-jest` transpile sans vérifier les types —
+`landed ≠ typechecked`. Corrigé **en UN endroit**, à la frontière du contrat (copie mutable fraîche par appel,
+listes sources `as const` intactes), **jamais par un `as` par site d'appel**, et **aucun `as unknown as` n'a été
+ajouté**. Enregistré ici parce que c'est une lacune de barre de preuve, pas un défaut de code.
+
+### `AC-7` — les nombres qui CHANGENT
+
+Six énumérés par la story (détail `_count` 26→25 · % de saisie `teacher/assessments` · en-tête `admin/structure` ·
+`studentCount` par matière du tableau de bord enseignant · roll-up par cycle · `activePct`). **Un SEPTIÈME a été
+trouvé en revue et n'est PAS dans l'énumération : `activeStudents`**, la grande valeur de la carte « ÉLÈVES ACTIFS »
+de `/admin/students`, qui change pour **deux** causes indépendantes (lignes → têtes, et tenant → école). Par la
+règle de la story elle-même — *« un changement de valeur non listé est un échec de la tranche »* — c'est une
+condition de land, pas une surprise.
+
+### Constatations
+
+| id | état |
+|---|---|
+| **`PF-36`** | **revendiquée comme la CLASSE des dérivations converties** (`ADR-079` §D7) — **la ligne `OPEN.md:119` est encore `open` et n'a pas été mise à jour** |
+| **`PF-410`** | **fermée** — l'en-tête `/admin/school/structure` comptait tout le tenant sous un arbre entièrement clé par école |
+| **`PF-412`** | **enregistrée fermée, et elle ne l'est PAS** — voir conditions ci-dessous |
+| `PF-361` | **annotée, id conservé** (re-mesure sur la base vivante : `pg_indexes` rend 5 index sur `enrollment`, aucun partiel) |
+| `PF-409`, `PF-411`, `PF-413`, `PF-414`, `PF-415` | **enregistrées, non corrigées** (RECORD, DON'T FIX) |
+| `PF-416`, `PF-417` | contraste de gradients de matières : 13 des 16 passent désormais, **3 résiduels mesurés** |
+| **`PF-362`** | `AC-10` la déclarait fermée par §3 D2 ; **la ligne `OPEN.md:171` est encore `open`** |
+
+### Conditions de land — écrites pour ne pas être re-découvertes
+
+1. **`PF-412` est enregistrée `closed` et ne l'est pas.** `apps/api/src/modules/school-structure/classes.controller.ts:355`
+   est byte-identique à `main` : `this.prisma.enrollment.count({ where: { classSectionId: id } })` — **aucun
+   `tenantId`**. Le `_count` au-dessus a bien été converti, mais vers `rosterCountArg`, qui par son propre docblock
+   **ne peut pas porter de tenant**. Le risque de fuite réel est nul (`cls.tenantId !== me.tenantId` lève en
+   amont), mais **une ligne `[security][tenant]` quitte le backlog sur la foi d'un remède absent, et rien ne la
+   re-détectera jamais**. Corriger le site, ou rouvrir la ligne et dire ce qui a réellement été livré.
+2. **`PF-36` et `PF-362` : les lignes `OPEN.md` contredisent l'ADR.** `PF-36` reste `open` avec la mention *« no
+   teacher count has been re-measured across portals »* pendant que `ADR-079` la déclare fermée comme classe.
+   Trancher : soit la ligne dit « fermée comme la classe convertie, contre-mesure de portail non faite », soit
+   l'ADR retire la revendication.
+3. **`activeStudents` — le septième nombre**, à ajouter à `AC-7` avec son avant/après et son sens, et à documenter
+   sur le champ côté FE (le docblock ajouté ne documente que `activePct`).
+4. **Trois `COUNT` devenus des `findMany` non bornés** sur des chemins admin chauds (`structure.controller.ts:148`,
+   `analytics.service.ts:3571`, `:2827`). Correct sur le fond, invisible sur une base vide, **O(élèves) lignes
+   matérialisées par requête** en production. Les deux qui ne veulent qu'un scalaire doivent passer par
+   `groupBy({ by: ['studentId'] }).length` — la dérivation reste identique, la dé-duplication redescend dans
+   Postgres.
+5. **`teacher/assessments` : numérateur et dénominateur comptent désormais des populations différentes.** Le
+   dénominateur est passé à `seated` ; le numérateur `_count.grades` compte **toutes** les notes, y compris celles
+   d'élèves depuis `dropped`. `fullyGraded` peut donc virer au vert avec 22 élèves notés sur 24 assis.
+6. **`ADR-079` §D1 a été réécrit au gate** : il enregistrait — et REJETAIT explicitement — l'option qui a été
+   livrée. Corrigé, avec l'argument de partition (`ADR-072` = ancré ÉLÈVE → état ; `ADR-079` = ancré SECTION →
+   nombre) remonté du docblock vers le registre architectural.
+7. **`PF-409`…`PF-412` désignaient deux jeux de faits différents** entre l'ADR et la source. Renumérotés **par le
+   SENS** (l'allocation de la source gagne : sept ids sont déjà gravés dans des docblocks livrés), avec un **§7a**
+   qui enregistre la renumérotation elle-même. Les lignes `OPEN.md` existent désormais et arbitrent.
+8. **`AC-4` est prouvé sur une fixture MONO-ANNÉE.** Les deux surfaces déclarées « d'accord » lisent avec des
+   portées d'année différentes (`ROSTER_YEAR_IMPLIED_BY_SECTION` contre `{ academicYearId }`) ; la fixture ne peut
+   pas exhiber la divergence que `PF-409` dit que rien n'empêche. La décision conservatrice est défendable ; la
+   phrase « les deux s'accordent désormais » est plus forte que la preuve.
+9. **Accessibilité, deux lignes NEUVES** : la sous-ligne de portée 10 px `text-slate-400` est à **2,56 : 1**
+   (3 sites) — la maison a déjà la réponse une couche plus loin (`KpiCard.tsx:263`, `text-xs text-slate-600`,
+   7,4 : 1) ; et `focus-visible:outline-white` sur `SubjectKpiCard` est peint **hors** de la carte, sur
+   `--surface-page`, à **1,09 : 1** (SC 2.4.11).
+
+*(Écrit le 2026-08-27, passe de land de `S-E03-7`, run 93. Tranches ultérieures : annoter, ne pas supprimer.)*
+
+---
+
+## Next slice → **lever les conditions de land de `S-E03-7` et de `S-E03-8`**, puis l'`epic-spec` (en retard de DIX tranches)
+
+**1. Les conditions d'abord, et une seule d'entre elles est vraiment urgente.** Sur les neuf ci-dessus, **la n° 1
+est la seule qu'aucun gate, aucun typecheck et aucune exécution ultérieure ne rattrapera jamais** : une ligne de
+traçabilité `[security][tenant]` marquée `closed` sur un remède absent. C'est, d'un cran au-dessus, exactement le
+défaut que la tranche corrige — un nombre (ici : un état de ligne) qui prétend répondre à une question à laquelle
+il ne répond pas. Les n° 2, 3 et 6 sont des minutes ; les n° 4, 5 et 9 sont de petites tranches propres.
+
+**2. La tranche la moins chère qui ferme quelque chose : `PF-24`.** Inchangé depuis le run 92 — mais **lire
+`ci/2026-08-26-v3-e03-snapshot-terminal-conflict` avant de commencer** (`project_midrun_merge_hazard`).
+
+**3. Candidate strictement contenue, et elle vient d'être outillée : `PF-417`.** Poser dans
+`apps/api/src/shared/quality/` le cliquet qui assied
+`subjectColor(code).onGradientContrast >= WCAG_AA_NORMAL_TEXT` pour tout code hors du résiduel enregistré. La
+dérivation de contraste existe déjà (`packages/ui/src/lib/subject-color.ts`, mesurée et non tenue à la main) ; il
+ne manque que la barrière, et sans elle la prochaine matière ajoutée peut ré-arriver à 1,5 : 1.
+
+**4. Puis l'`epic-spec`, dont l'argument s'est encore renforcé.** Il y a maintenant **huit** modules contractuels
+frères, et la huitième story a dû **arbitrer son propre foyer dans son §D1** — puis se faire corriger au gate parce
+que l'ADR enregistrait l'option rejetée. Deux runs de suite, une tranche d'implémentation a payé le prix d'un
+spec-kit absent. `PF-365` / `PF-370` attendent depuis sept runs.
+
+**5. Chiffres de l'épic après dix tranches : 2 fermées sur 9 fermement** (`PF-15` sur un axe, `PF-20` entière),
+**`PF-40` revendiquée sous conditions (run 92)** et **`PF-36` revendiquée sous conditions (run 93)**. Les cinq
+restantes : bloquées sur des **arbitrages sémantiques** (`PF-12` deux axes survivants, `PF-04`) ; **jamais
+commencées** (`PF-24`, `PF-50`, `PF-05`).

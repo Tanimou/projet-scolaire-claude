@@ -1,6 +1,7 @@
 import {
   ActivityTimeline,
   EmptyState,
+  ErrorState,
   QuickActionsList,
   SectionHeader,
   Stagger,
@@ -55,7 +56,22 @@ interface TeacherDashboardResponse {
     subjectName: string;
     subjectColor: string | null;
     classCount: number;
-    studentCount: number;
+    /**
+     * Élèves DISTINCTS sur l'ensemble des sections où l'enseignant intervient
+     * pour cette matière (S-E03-7 / ADR-079).
+     *
+     * Le nom porte la question. L'ancien `studentCount` était une **somme
+     * cumulative** d'effectifs (`analytics.service.ts` : `+= _count.enrollments`)
+     * rendue sous le mot « élèves » : un élève inscrit dans deux des classes de
+     * l'enseignant y valait deux. C'est l'écart 46-vs-43 de PF-36, et c'est
+     * pourquoi le champ est RENOMMÉ plutôt que corrigé en silence — un `number`
+     * nu ne dit pas laquelle des deux questions il répond, le nom si.
+     *
+     * Ne JAMAIS reconstruire cette valeur en sommant des effectifs de section :
+     * la somme ne serait juste que sous l'invariant « au plus une inscription
+     * active par élève et par année », qui n'existe pas en base (PF-361/PF-409).
+     */
+    distinctStudentCount: number;
   }>;
   upcomingAssessments: UpcomingItem[];
   recentActivity: Array<{
@@ -123,6 +139,11 @@ export default async function TeacherDashboardPage({
     safe(api<{ data: PortalCalendarEvent[] }>('/api/v1/calendar/events', { cache: 'no-store' })),
   ]);
 
+  // `safe()` rend `null` quand la lecture échoue — ce qui est une phrase
+  // différente de « la lecture a réussi et il n'y a rien ». Les deux menaient
+  // jusqu'ici au MÊME écran (« Pas encore d'affectation »), donc une panne se
+  // lisait comme un fait sur l'enseignant.
+  const dashboardUnavailable = dashboard === null;
   const subjectStats = dashboard?.subjectStats ?? [];
   const upcoming = dashboard?.upcomingAssessments ?? [];
   const assignments = mine?.data ?? [];
@@ -209,7 +230,15 @@ export default async function TeacherDashboardPage({
     },
   ];
 
-  // Group classes by class section for the "Classes enseignées" list
+  // Group classes by class section for the "Classes enseignées" list.
+  //
+  // `rosterSize` — et non `studentCount` — parce que c'est l'EFFECTIF d'UNE
+  // section, pas un nombre d'élèves distincts sur un ENSEMBLE de sections
+  // (S-E03-7 / ADR-079). Les deux questions se ressemblent au point d'avoir
+  // porté le même nom sur cette page même : la carte matière au-dessus répond à
+  // la seconde. Le regroupement est clé-par-section, donc les valeurs de cette
+  // liste ne se somment JAMAIS pour obtenir « mes élèves » — un élève présent
+  // dans deux de ces classes apparaîtrait deux fois.
   const classesByGroupKey = new Map<
     string,
     {
@@ -217,7 +246,7 @@ export default async function TeacherDashboardPage({
       assignmentId: string;
       name: string;
       gradeLevel: string;
-      studentCount: number;
+      rosterSize: number;
       subjects: string[];
     }
   >();
@@ -228,7 +257,7 @@ export default async function TeacherDashboardPage({
       assignmentId: a.id,
       name: a.classSection.name,
       gradeLevel: a.classSection.gradeLevel?.name ?? '',
-      studentCount: a.classSection._count.enrollments,
+      rosterSize: a.classSection._count.enrollments,
       subjects: [],
     };
     if (!entry.subjects.includes(a.subject.name)) entry.subjects.push(a.subject.name);
@@ -268,7 +297,19 @@ export default async function TeacherDashboardPage({
 
       {/* ──────── Row 1 : 4 subject KPI cards (cascade entrance) ──────── */}
       <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {subjectStats.length === 0 ? (
+        {dashboardUnavailable ? (
+          // « Nous n'avons pas pu lire » ≠ « nous avons lu, il n'y a rien ».
+          // Rendre l'échec de lecture comme « pas encore d'affectation » serait
+          // une AFFIRMATION sur la carrière de l'enseignant produite par une
+          // panne réseau — la classe de défaut que S-E03-3d a fermée côté
+          // parent. Les deux phrases sont désormais distinctes.
+          <div className="sm:col-span-2 lg:col-span-4">
+            <ErrorState
+              title="Vos matières sont momentanément indisponibles"
+              description="La lecture de vos affectations a échoué. Ce n'est pas une absence d'affectation : aucun chiffre n'est affiché tant que la mesure n'a pas été lue. Rechargez la page dans un instant."
+            />
+          </div>
+        ) : subjectStats.length === 0 ? (
           <div className="sm:col-span-2 lg:col-span-4">
             <EmptyState
               icon={ClipboardCheck}
@@ -288,7 +329,16 @@ export default async function TeacherDashboardPage({
                   label={s.subjectName}
                   icon={icon}
                   classCount={s.classCount}
-                  studentCount={s.studentCount}
+                  studentCount={s.distinctStudentCount}
+                  // La PORTÉE du nombre, rendue sous lui — jamais un tooltip
+                  // (invisible au doigt, peu fiable pour les technologies
+                  // d'assistance). Ce chiffre CHANGE de dérivation dans cette
+                  // tranche (somme cumulative d'effectifs → élèves distincts) :
+                  // le laisser bouger en silence aurait été pire que la
+                  // divergence qu'il corrige.
+                  scope={`Élèves distincts sur vos ${s.classCount} classe${
+                    s.classCount > 1 ? 's' : ''
+                  } de ${s.subjectName} — un élève présent dans deux d'entre elles n'est compté qu'une fois.`}
                   href={`/teacher/classes?subject=${s.subjectCode}`}
                 />
               </StaggerItem>
@@ -354,7 +404,7 @@ export default async function TeacherDashboardPage({
                     </div>
                   </div>
                   <span className="font-mono text-xs font-bold tabular-nums text-slate-700">
-                    {c.studentCount} élève{c.studentCount > 1 ? 's' : ''}
+                    {c.rosterSize} élève{c.rosterSize > 1 ? 's' : ''}
                   </span>
                 </li>
               ))}

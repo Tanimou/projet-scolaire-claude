@@ -9,6 +9,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  ROSTER_YEAR_IMPLIED_BY_SECTION,
+  distinctStudentsWhere,
+  readDistinctStudentsAcrossSections,
+  rosterCountArg,
+} from '@pilotage/contracts';
 import { IsOptional, IsString, MaxLength, IsBoolean, IsDateString } from 'class-validator';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -18,6 +24,7 @@ import { PermissionsGuard } from '../../shared/auth/permissions.guard';
 import { RequiresPermission } from '../../shared/auth/requires-permission.decorator';
 import { UserSyncService } from '../../shared/auth/user-sync.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { prismaRosterReader } from '../../shared/roster/prisma-roster-reader';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
 import { TeacherProfileService } from './teacher-profile.service';
@@ -144,7 +151,19 @@ export class TeachersController {
         classSection: {
           include: {
             gradeLevel: { include: { cycle: true } },
-            _count: { select: { enrollments: { where: { status: 'active' } } } },
+            // S-E03-7 / ADR-079 — EFFECTIF d'UNE section (« N élèves » sous
+            // chaque classe de la liste « Classes enseignées »). Le portail lit
+            // ce champ sous le nom `rosterSize`, jamais `studentCount` : ces
+            // valeurs ne se somment PAS pour obtenir « mes élèves ». Conversion
+            // de FORME, la valeur ne change pas.
+            _count: {
+              select: {
+                enrollments: rosterCountArg({
+                  population: 'seated',
+                  yearScope: ROSTER_YEAR_IMPLIED_BY_SECTION,
+                }),
+              },
+            },
           },
         },
         subject: { select: { id: true, code: true, name: true, color: true, icon: true, defaultCoefficient: true } },
@@ -183,14 +202,25 @@ export class TeachersController {
     const classIds = [...new Set(assignments.map((a) => a.classSectionId))];
     if (classIds.length === 0) return { data: [], count: 0, classesSummary: [] };
 
-    // 2. Pull enrollments + students for those classes
+    /**
+     * 2. Les inscriptions + élèves de ces classes.
+     *
+     * S-E03-7 / ADR-079 — la PAGE « Mes élèves » posait déjà la QUESTION 2
+     * (elle regroupe par élève juste en dessous), mais avec un `where` de
+     * population écrit à la main. Le prédicat vient désormais du module ;
+     * population et portée d'année sont INCHANGÉES à l'identique, donc aucun
+     * nombre affiché ne bouge. Le regroupement par élève reste ici : la lecture
+     * porte les jointures (`student`, `classSection`) dont cette page a besoin,
+     * et ADR-062 §D3 INTERDIT de partager une forme de `select`/`include` entre
+     * modules — on partage le PRÉDICAT, jamais la projection.
+     */
     const enrollments = await this.prisma.enrollment.findMany({
-      where: {
+      where: distinctStudentsWhere({
         tenantId: me.tenantId,
-        academicYearId: activeAcademicYearId,
-        status: 'active',
-        classSectionId: { in: classIds },
-      },
+        classSectionIds: classIds,
+        population: 'seated',
+        yearScope: { academicYearId: activeAcademicYearId },
+      }),
       include: {
         student: {
           select: { id: true, firstName: true, lastName: true, photoUrl: true, externalRef: true, gender: true },
@@ -398,20 +428,31 @@ export class TeachersController {
 
     const classIds = [...new Set(assignments.map((a) => a.classSectionId))];
 
-    // 2. Compter les élèves uniques suivis par cet enseignant
-    //    (inscrits et actifs dans l'une de ses classes)
+    /**
+     * 2. Les élèves DISTINCTS suivis par cet enseignant.
+     *
+     * S-E03-7 / ADR-079 — c'est LA VARIANTE C de l'audit (le « 43 »), et elle
+     * était déjà la bonne réponse : elle dé-duplique par `studentId` depuis
+     * toujours. Elle passe désormais par le module canonique, non pour changer
+     * son résultat — il ne change pas — mais pour qu'elle cesse d'être une
+     * QUATRIÈME dérivation écrite à la main. Ce site est la référence contre
+     * laquelle `teacherDashboard` s'accorde enfin (AC-4, assertion 1).
+     *
+     * Portée d'année et population INCHANGÉES, à l'identique : année canonique
+     * explicite, assis. `tenantId` est exigé PAR LE TYPE du contrat.
+     */
     let uniqueStudents = 0;
-    if (classIds.length > 0 && activeAcademicYearId) {
-      const enrollments = await this.prisma.enrollment.findMany({
-        where: {
+    if (activeAcademicYearId) {
+      const { distinctStudents } = await readDistinctStudentsAcrossSections(
+        prismaRosterReader(this.prisma),
+        {
           tenantId: me.tenantId,
-          academicYearId: activeAcademicYearId,
-          status: 'active',
-          classSectionId: { in: classIds },
+          classSectionIds: classIds,
+          population: 'seated',
+          yearScope: { academicYearId: activeAcademicYearId },
         },
-        select: { studentId: true },
-      });
-      uniqueStudents = new Set(enrollments.map((e) => e.studentId)).size;
+      );
+      uniqueStudents = distinctStudents;
     }
 
     // 3. Compter le total des élèves actifs de l'établissement
