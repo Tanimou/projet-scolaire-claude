@@ -3565,20 +3565,38 @@ export class AnalyticsService {
      * courante. Il BAISSE ou reste égal, et il ne peut plus dépasser 100 %.
      * La portée d'année reste EXACTEMENT celle d'avant (l'année canonique quand
      * elle se résout) : aucune clause n'est ajoutée ni retirée sur cet axe.
+     *
+     * ⚠ IL COMPTE DES TÊTES **EN SQL**. La passe de land de S-E03-7 a remplacé
+     * ici un `enrollment.findMany({ select: { studentId } })` suivi d'un `Set`
+     * en JavaScript : identique sur une base vide, mais en production ce site
+     * tirait TOUTE inscription assise de l'école à chaque chargement du tableau
+     * de bord admin. Une ligne `student` EST une tête, donc `student.count`
+     * avec `enrollments: { some }` compte déjà des élèves DISTINCTS par
+     * construction — et il devient de surcroît DIRECTEMENT COMPARABLE à
+     * `totalStudents`, qui est le même agrégat sur la même table. Le
+     * dénominateur et le numérateur ne sont plus seulement « des têtes toutes
+     * les deux » : ils sont la MÊME requête, à une clause près.
+     *
+     * Ajouter un éventail de lignes dans la tranche qui prétend canoniser les
+     * comptes aurait aggravé `PF-50` (« unpaginated / fan-out hotspots »), une
+     * finding de CE MÊME épic.
      */
     const activeStudents = activeYear
-      ? countDistinctStudents(
-          await this.prisma.enrollment.findMany({
-            where: {
-              tenantId,
-              // Population NOMMÉE, jamais un `status:` écrit à la main (FR-3).
-              status: { in: rosterStatusesFor('seated') },
-              academicYearId: activeYear.id,
-              student: { status: 'active', schoolId },
+      ? await this.prisma.student.count({
+          where: {
+            tenantId,
+            schoolId,
+            status: 'active',
+            enrollments: {
+              some: {
+                tenantId,
+                // Population NOMMÉE, jamais un `status:` écrit à la main (FR-3).
+                status: { in: rosterStatusesFor('seated') },
+                academicYearId: activeYear.id,
+              },
             },
-            select: { studentId: true },
-          }),
-        )
+          },
+        })
       : totalStudents;
 
     const activePct = totalStudents === 0 ? 0 : (activeStudents / totalStudents) * 100;

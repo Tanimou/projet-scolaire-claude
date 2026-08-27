@@ -61,7 +61,7 @@ export class StructureController {
     const { schoolId, activeAcademicYearId } = await this.ctx.forUser(me);
     const yearId = academicYearId ?? activeAcademicYearId;
 
-    const [school, cycles, classes, subjects, totals, seatedStudentsInSchool] = await Promise.all([
+    const [school, cycles, classes, subjects, totals] = await Promise.all([
       this.prisma.school.findUniqueOrThrow({
         where: { id: schoolId },
         select: {
@@ -123,39 +123,52 @@ export class StructureController {
       this.prisma.$transaction([
         this.prisma.student.count({ where: { schoolId } }),
         this.prisma.guardian.count({ where: { schoolId } }),
-      ]),
-      /**
-       * ⚠ AC-7 #3 — LE NOMBRE QUI CHANGE : total d'en-tête de
-       * `/admin/school/structure`, « X élèves ».
-       *
-       * AVANT : le TENANT ENTIER, en LIGNES d'inscription. Ce compte ne portait
-       * aucune clause d'école alors que ses deux voisins immédiats
-       * (`student.count`, `guardian.count`) portent `schoolId`, et alors que
-       * l'arbre affiché juste en dessous ne montre QUE l'école courante. Dans un
-       * tenant multi-écoles, l'en-tête annonçait donc plus d'élèves que la somme
-       * des classes visibles — PF-410, FERMÉE ici.
-       *
-       * APRÈS : l'école courante, et des TÊTES et non des LIGNES. Le nombre
-       * BAISSE ou reste égal et s'accorde enfin avec la somme de l'arbre. La
-       * portée d'année est INCHANGÉE (celle du sélecteur, exactement comme
-       * avant) ; aucune clause n'est ajoutée sur cet axe.
-       *
-       * Il sort du `$transaction` parce qu'il n'est plus un `count` : le tableau
-       * de `$transaction` n'accepte que des `PrismaPromise`. Il reste dans le
-       * `Promise.all` parent, donc le site garde son parallélisme.
-       */
-      this.prisma.enrollment
-        .findMany({
+        /**
+         * ⚠ AC-7 #3 — LE NOMBRE QUI CHANGE : total d'en-tête de
+         * `/admin/school/structure`, « X élèves ».
+         *
+         * AVANT : le TENANT ENTIER, en LIGNES d'inscription. Ce compte ne
+         * portait aucune clause d'école alors que ses deux voisins immédiats
+         * (`student.count`, `guardian.count`) portent `schoolId`, et alors que
+         * l'arbre affiché juste en dessous ne montre QUE l'école courante. Dans
+         * un tenant multi-écoles, l'en-tête annonçait donc plus d'élèves que la
+         * somme des classes visibles — PF-410, FERMÉE ici.
+         *
+         * APRÈS : l'école courante, et des TÊTES et non des LIGNES. Le nombre
+         * BAISSE ou reste égal et s'accorde enfin avec la somme de l'arbre. La
+         * portée d'année est INCHANGÉE (celle du sélecteur, exactement comme
+         * avant) ; aucune clause n'est ajoutée sur cet axe.
+         *
+         * ⚠ IL COMPTE DES TÊTES **EN SQL**, il ne transporte pas de lignes.
+         * La passe de land de S-E03-7 a remplacé ici un
+         * `enrollment.findMany({ select: { studentId } })` suivi d'un `Set` en
+         * JavaScript : sur une base vide les deux rendent le même nombre, mais
+         * en production ce site tirait TOUTE inscription assise de l'école À
+         * CHAQUE chargement de page. Une ligne `student` EST une tête, donc
+         * `student.count` avec `enrollments: { some }` compte déjà des élèves
+         * DISTINCTS par construction — la dé-duplication n'a pas à voyager
+         * jusqu'au processus Node. Ajouter un éventail de lignes dans la
+         * tranche qui prétend canoniser les comptes aurait aggravé `PF-50`
+         * (« unpaginated / fan-out hotspots »), une finding de CE MÊME épic.
+         *
+         * Restant un `count`, il rejoint le `$transaction` de ses deux voisins :
+         * les trois totaux d'en-tête sont désormais lus dans UN SEUL instantané.
+         */
+        this.prisma.student.count({
           where: {
             tenantId: me.tenantId,
-            // Population NOMMÉE, jamais un `status:` écrit à la main (FR-3).
-            status: { in: rosterStatusesFor('seated') },
-            student: { schoolId },
-            ...(yearId ? { academicYearId: yearId } : {}),
+            schoolId,
+            enrollments: {
+              some: {
+                tenantId: me.tenantId,
+                // Population NOMMÉE, jamais un `status:` écrit à la main (FR-3).
+                status: { in: rosterStatusesFor('seated') },
+                ...(yearId ? { academicYearId: yearId } : {}),
+              },
+            },
           },
-          select: { studentId: true },
-        })
-        .then((rows) => countDistinctStudents(rows)),
+        }),
+      ]),
     ]);
 
     // attach classes under their gradeLevel
@@ -210,7 +223,7 @@ export class StructureController {
       }),
     }));
 
-    const [studentCount, guardianCount] = totals;
+    const [studentCount, guardianCount, seatedStudentsInSchool] = totals;
     return {
       school,
       activeAcademicYearId,

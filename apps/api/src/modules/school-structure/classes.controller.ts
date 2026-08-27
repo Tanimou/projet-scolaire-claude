@@ -352,7 +352,31 @@ export class ClassesController {
       );
     }
     // Soft alternative: close it rather than hard-delete if it has historical enrollments.
-    const historical = await this.prisma.enrollment.count({ where: { classSectionId: id } });
+    //
+    // PF-412 — `tenantId` est ÉNONCÉ, il n'est plus seulement impliqué.
+    //
+    // La passe de land de S-E03-7 a trouvé ce site inchangé alors que le ledger
+    // le déclarait fermé « par le type de `distinctStudentsWhere` » : c'était
+    // faux, et il fallait choisir entre corriger le site et corriger la ligne.
+    // Le site est corrigé, parce que la ligne avait raison sur le FOND.
+    //
+    // Ce n'est PAS une lecture d'effectif — c'est « reste-t-il la moindre trace
+    // d'inscription, TOUS statuts et TOUTES années confondus ? », donc elle ne
+    // passe légitimement pas par le module canonique : `rosterCountArg` filtre
+    // par population, et ce garde-fou doit justement ne rien filtrer. Le module
+    // ne pouvait donc pas la couvrir, et prétendre qu'il le faisait masquait la
+    // seule chose à faire ici : nommer le tenant.
+    //
+    // La fuite était déjà nulle en pratique — `cls.tenantId !== me.tenantId`
+    // lève trois lignes plus haut, et `classSectionId` est une clé d'une section
+    // déjà prouvée du tenant. Mais `enrollment.tenant_id` ne porte NI clé
+    // étrangère NI contrainte (PF-415, mesuré) : la base ne rattrapera pas une
+    // ligne mal rattachée, et la sûreté de ce compte reposait entièrement sur un
+    // garde situé ailleurs dans la fonction. Une clause explicite coûte zéro et
+    // survit au prochain refactor qui déplacera ce garde.
+    const historical = await this.prisma.enrollment.count({
+      where: { tenantId: me.tenantId, classSectionId: id },
+    });
     if (historical > 0) {
       return this.prisma.classSection.update({ where: { id }, data: { status: 'closed' } });
     }
