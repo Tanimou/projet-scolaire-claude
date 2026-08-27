@@ -15,7 +15,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ALERT_STATUS } from '@pilotage/contracts';
-import type { AlertRuleCode, AlertStatus } from '@prisma/client';
+import { $Enums } from '@prisma/client';
+import type { AlertRuleCode, AlertSeverity, AlertStatus } from '@prisma/client';
 
 import { deriveAlertActorProvenance } from '../../shared/audit/provenance';
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -46,6 +47,15 @@ import { EvaluateAlertsDto, RULE_CODES, UpdateAlertRuleDto } from './alerts.type
  * notifications.
  */
 const ALERT_STATUSES: ReadonlyArray<AlertStatus> = ALERT_STATUS;
+
+/**
+ * S-E03-6 / ADR-077 §D3 — les severites, DERIVEES de l'enum Prisma et non
+ * recopiees. `@pilotage/contracts` n'expose pas de liste de severites ; en
+ * ecrire une a la main ici serait exactement la derive de listes jumelles que
+ * le docblock ci-dessus decrit, et que `PF-20` vient de faire payer au KPI du
+ * tableau de bord. `$Enums.AlertSeverity` est la meme source que la colonne.
+ */
+const ALERT_SEVERITIES: ReadonlyArray<AlertSeverity> = Object.values($Enums.AlertSeverity);
 
 @ApiTags('alerts')
 @ApiBearerAuth()
@@ -103,6 +113,13 @@ export class AlertsController {
       }),
     )
     status: AlertStatus | undefined,
+    @Query(
+      'severity',
+      new ParseEnumPipe(ALERT_SEVERITIES as unknown as { [k: string]: AlertSeverity }, {
+        optional: true,
+      }),
+    )
+    severity: AlertSeverity | undefined,
     @Query('studentId') studentId: string | undefined,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
@@ -113,6 +130,7 @@ export class AlertsController {
       tenantId: me.tenantId,
       schoolId,
       status,
+      severity,
       studentId,
       limit: Math.min(200, Math.max(1, limit)),
       offset: Math.max(0, offset),

@@ -230,26 +230,44 @@ describe('GET /api/v1/students — AC-11/AC-12: the scope INTERSECTS, it is neve
 
     await controller.list(jwt);
 
-    expect(whereOf()).toMatchObject({ tenantId: TENANT, schoolId: SCHOOL, id: { in: [] } });
+    // S-E03-3d / `PF-356` / `ADR-076` — MISE À JOUR DÉLIBÉRÉE, PAS UNE
+    // SUPPRESSION. Le jeu VIDE est un jeu EXPLICITE, il perd donc lui aussi la
+    // clé `schoolId` : ce cas assertait `schoolId: SCHOOL` avant la tranche.
+    // La claim de CE test n'a pas bougé d'un pouce — `[]` doit produire
+    // `id: { in: [] }`, jamais une clé absente — et ce refus est IMPOSSIBLE à
+    // satisfaire avec ou sans clé d'école. On assert désormais l'ABSENCE de
+    // `schoolId` en plus, pour que le retrait soit lui-même sous cliquet.
+    expect(whereOf()).toMatchObject({ tenantId: TENANT, id: { in: [] } });
+    expect(whereOf()).not.toHaveProperty('schoolId');
+    expect(SCHOOL).toBe('school-1');
     // `count` must carry the SAME where — a total computed without the scope
     // leaks the size of the school.
     expect(count).toHaveBeenCalledWith({ where: whereOf() });
   });
 
-  it('a BOUNDED scope narrows to exactly those ids', async () => {
+  it('a BOUNDED scope narrows to exactly those ids, and carries NO school key (ADR-076)', async () => {
     const { controller, jwt, whereOf } = build(['s1', 's2']);
 
     await controller.list(jwt);
 
     expect(whereOf().id).toEqual({ in: ['s1', 's2'] });
+    // Le jeu d'ids EST l'autorité et il est déjà tenant-keyé ; l'intersecter
+    // avec « la plus grosse école » ne refusait aucun accès illégitime, elle
+    // faisait disparaître des enfants légitimes (`PF-356`).
+    expect(whereOf()).not.toHaveProperty('schoolId');
+    // G-TENANT — la clé retirée n'est PAS celle du tenant.
+    expect(whereOf().tenantId).toBe(TENANT);
   });
 
-  it('the `null` sentinel (admins only) omits the `id` key entirely', async () => {
+  it('the `null` sentinel (admins only) omits the `id` key entirely AND keeps the school working scope', async () => {
     const { controller, jwt, whereOf } = build(null);
 
     await controller.list(jwt);
 
     expect(whereOf()).not.toHaveProperty('id');
+    // `AC-3` — la branche NON RESTREINTE est inchangée : son école de travail
+    // est un choix délibéré de l'admin, pas une heuristique subie.
+    expect(whereOf().schoolId).toBe(SCHOOL);
   });
 
   it('a caller-supplied `classSectionId` cannot CLOBBER the scope — both survive under AND', async () => {
@@ -342,10 +360,37 @@ describe('S-E05-16 — DNC-10: no replacement bypass on the teacher axis', () =>
     expect(CODE).toMatch(/tenantId: user\.tenantId,\s*status: 'active'/);
   });
 
-  it('the controller folds the scope on `=== null`, never on truthiness or `.length` (AC-12)', () => {
-    expect(CTRL).toMatch(/scope\.studentIds === null \? \{\} :/);
-    expect(CTRL).not.toMatch(/scope\.studentIds\?\.length/);
-    expect(CTRL).not.toMatch(/scope\.studentIds \? \{/);
+  it('the scope is folded on `=== null`, never on truthiness or `.length` (AC-12) — at its NEW single home', () => {
+    // S-E03-3d / `ADR-076` — la discrimination a DÉMÉNAGÉ, elle n'a pas
+    // disparu : `student-scope-where.ts` la porte désormais, et le contrôleur
+    // en est un appelant unique. Cette claim est la MÊME (`PF-288` /
+    // `ADR-065 §D5` : jamais la truthiness, JAMAIS `.length`) ; ce qui change
+    // est le fichier où elle est vérifiée. Les DEUX fichiers sont lus, pour
+    // qu'un retour de la composition en ligne rougisse ici.
+    const SCOPE = stripComments(
+      readFileSync(join(__dirname, 'student-scope-where.ts'), 'utf8'),
+    );
+    expect(SCOPE).toMatch(/studentIds === null/);
+    for (const src of [SCOPE, CTRL]) {
+      expect(src).not.toMatch(/studentIds\?\.length/);
+      expect(src).not.toMatch(/studentIds \? \{/);
+    }
+    expect(CTRL).toMatch(/\.\.\.studentScopeWhere\(\{/);
+  });
+
+  it('S-E03-3d — the list `where` no longer makes `schoolId` and an ABAC id set CO-OCCUR (PF-356)', () => {
+    // La forme pré-tranche, littéralement : `tenantId: me.tenantId,` suivi de
+    // `schoolId,` nu, puis du pli du sentinel. Son retour est ce que le cliquet
+    // `student-school-scope-gate.spec.ts` refuse à l'échelle du dépôt ; ici on
+    // le refuse au site nommé, en clair, pour le relecteur.
+    // Le motif est ANCRÉ sur la DÉCLARATION du `where` : un motif nu
+    // `tenantId: me.tenantId, schoolId,` serait un FAUX POSITIF sur l'ARGUMENT
+    // que le handler passe désormais à `studentScopeWhere(…)` — lequel est une
+    // entrée de dérivation, pas une clause. Mesurer, pas supposer.
+    expect(CTRL).not.toMatch(
+      /const where: Prisma\.StudentWhereInput = \{\s*tenantId: me\.tenantId,\s*schoolId,/,
+    );
+    expect(CTRL).not.toMatch(/scope\.studentIds === null \? \{\} :/);
   });
 
   it('the clobbering `where.enrollments = …` ASSIGNMENT is gone from the list handler (AC-11)', () => {

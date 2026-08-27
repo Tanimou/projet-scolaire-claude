@@ -94,6 +94,22 @@ x-app-env: &app-env
   # pour octet dans `api` et dans `web`, et deux déclarations divergent.
   # JAMAIS `NEXT_PUBLIC_*` — Next inline ces variables dans le bundle navigateur.
   AUDIT_FORWARD_TOKEN: ${AUDIT_FORWARD_TOKEN:-}
+  # ---- Fuseau DÉCLARÉ de l'établissement (S-E03-8 / PF-406, ADR-078 §D3) -----
+  #
+  # Le conteneur `web` est en UTC (`node:22-alpine`, aucun `TZ` posé nulle part),
+  # l'école est à `Europe/Paris` : tant que l'ancre calendrier dérivait son
+  # décalage de `getTimezoneOffset()`, TOUTES les bornes glissaient d'une heure
+  # et un congé « toute la journée » s'affichait la veille sur les trois
+  # portails. Le fuseau est donc lu ici, PAS deviné du processus.
+  #
+  # Permissif (`:-`) : le code porte le même défaut nommé que `School.timezone`
+  # et `Tenant.timezone` dans `schema.prisma`. Ce n'est PAS `TZ` — on ne change
+  # pas l'horloge du processus, on déclare celle de l'école ; et ce n'est PAS
+  # `NEXT_PUBLIC_*` — la valeur est lue au runtime, côté serveur uniquement.
+  #
+  # Réglage de DÉPLOIEMENT, pas de locataire : la source multi-tenant correcte
+  # est `Tenant.timezone` renvoyé par une lecture portail (PF-406, volet 2).
+  SCHOOL_TIMEZONE: ${SCHOOL_TIMEZONE:-Europe/Paris}
   S3_ENDPOINT: http://minio:9000
   S3_REGION: us-east-1
   S3_BUCKET: pilotage

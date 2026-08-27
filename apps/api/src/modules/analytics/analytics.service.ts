@@ -21,6 +21,10 @@ import {
   selectActiveEnrollment,
   selectReportingWindowEnrollment,
 } from '@pilotage/contracts';
+import {
+  ALERT_RULES_SCOPE_LABEL,
+  countEnabledAlertRules,
+} from '../alerts/alert-rule-population';
 import type {
   EnrollmentActivityProjection,
   RemediationProgressDto,
@@ -2409,48 +2413,6 @@ export class AnalyticsService {
   }
 
   /**
-   * Default alert rules (until R6 introduces the `AlertRule` model).
-   * Shown on the admin dashboard so the visual block is meaningful even before
-   * the alert engine ships.
-   */
-  private static DEFAULT_ALERT_RULES: ReadonlyArray<{
-    code: string;
-    label: string;
-    condition: string;
-    severity: string;
-    status: string;
-  }> = [
-    {
-      code: 'LOW_SUBJECT_AVG',
-      label: 'Moyenne faible matière',
-      condition: 'Moyenne < 10/20',
-      severity: 'high',
-      status: 'active',
-    },
-    {
-      code: 'NEGATIVE_TREND',
-      label: 'Tendance négative',
-      condition: 'Baisse 2 périodes',
-      severity: 'medium',
-      status: 'active',
-    },
-    {
-      code: 'HIGH_ABSENCE',
-      label: 'Absences élevées',
-      condition: 'Absence > 20%',
-      severity: 'high',
-      status: 'active',
-    },
-    {
-      code: 'BEHAVIOR_ALERT',
-      label: 'Alerte comportement',
-      condition: 'Signalements ≥ 3',
-      severity: 'medium',
-      status: 'active',
-    },
-  ];
-
-  /**
    * Computes the full admin dashboard payload.
    */
   async adminDashboard(opts: { tenantId: string; schoolId: string }): Promise<AdminDashboardResponse> {
@@ -2467,6 +2429,7 @@ export class AnalyticsService {
       classesCurrent,
       classesLastMonth,
       pendingRequests,
+      configuredAlerts,
     ] = await Promise.all([
       this.prisma.student.count({ where: { tenantId, schoolId, status: 'active' } }),
       this.prisma.student.count({
@@ -2495,6 +2458,14 @@ export class AnalyticsService {
       this.prisma.guardianship.count({
         where: guardianshipPendingRequestWhere({ tenantId, schoolId }),
       }),
+      // S-E03-6 / PF-20 / ADR-077 — LA MÊME POPULATION QUE CELLE QUE COMPTE
+      // `/admin/alerts` sous « Règles activées ». Ce KPI valait
+      // `DEFAULT_ALERT_RULES.length` : la longueur d'une constante privée, donc
+      // un nombre qu'AUCUNE lecture ne pouvait contredire — le moteur du « 4
+      // alertes vs 0 règles ». Cette constante était de surcroît une SECONDE
+      // liste du catalogue, et elle avait déjà dérivé : quatre codes contre les
+      // huit de l'enum. Elle est supprimée, pas corrigée.
+      countEnabledAlertRules(this.prisma, { tenantId, schoolId }),
     ]);
 
     // ============ Sparklines ============
@@ -2896,8 +2867,12 @@ export class AnalyticsService {
         },
         configuredAlerts: {
           label: 'Alertes configurées',
-          value: AnalyticsService.DEFAULT_ALERT_RULES.length,
-          formatted: AnalyticsService.DEFAULT_ALERT_RULES.length.toLocaleString('fr-FR'),
+          value: configuredAlerts,
+          formatted: configuredAlerts.toLocaleString('fr-FR'),
+          // La portée est ÉNONCÉE, sinon deux nombres honnêtes se contredisent
+          // encore : « configurées » = ACTIVÉES dans cette école, pas « connues
+          // du produit » (ADR-077 §D1).
+          scope: ALERT_RULES_SCOPE_LABEL.enabled,
         },
       },
       schoolStructure,

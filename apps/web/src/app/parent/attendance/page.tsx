@@ -36,7 +36,9 @@ import type {
 } from './types';
 
 import { PortalShell } from '@/components/PortalShell';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, ApiError } from '@/lib/api-client';
+import { readParentChildren } from '@/lib/parent-children';
 
 export const metadata: Metadata = { title: 'Absences et retards' };
 export const dynamic = 'force-dynamic';
@@ -184,10 +186,38 @@ export default async function ParentAttendancePage({
       : '';
   const search = (sp.q ?? '').trim().toLowerCase();
 
-  const studentsResp = await safe(
-    api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' }),
-  );
-  const children = studentsResp?.data ?? [];
+  // ─────────────────────────────────────────────────────────────────────────
+  // S-E03-3d / `PF-363` — la lecture des enfants passe par `read()`.
+  //
+  // L'ancien `safe()` renvoyait `null` sur toute `ApiError`, et `?? []` faisait
+  // du 403 / 404 / 500 le MÊME état qu'un compte réellement sans enfant : la
+  // page affirmait alors « Aucun enfant rattaché » à un parent dont la lecture
+  // venait simplement d'échouer. La branche d'échec est évaluée AVANT le test
+  // de vacuité, donc un vide mérité ne peut pas être rendu comme une panne, ni
+  // l'inverse.
+  // ─────────────────────────────────────────────────────────────────────────
+  const childrenRead = await readParentChildren<StudentSummary>('parent-attendance/children');
+
+  if (!childrenRead.ok) {
+    return (
+      <PortalShell portal="parent">
+        <PageHeader
+          breadcrumb={[
+            { label: 'Tableau de bord', href: '/parent/dashboard' },
+            { label: 'Absences et retards' },
+          ]}
+          title="Absences et retards"
+        />
+        <ChildrenReadError
+          className="mt-6"
+          failure={childrenRead}
+          domain="Les absences et retards de votre enfant ne sont pas perdus."
+        />
+      </PortalShell>
+    );
+  }
+
+  const children = childrenRead.data.data;
 
   if (children.length === 0) {
     return (

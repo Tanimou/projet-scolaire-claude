@@ -43,6 +43,7 @@ import { PortalShell } from '@/components/PortalShell';
 import type { PortalCalendarEvent } from '@/components/calendar/PortalCalendarView';
 import { api, isNextNavigationSignal } from '@/lib/api-client';
 import { fetchMe } from '@/lib/me';
+import { resolveSchoolCalendarAnchor } from '@/lib/school-calendar-anchor';
 
 export const metadata: Metadata = { title: 'Tableau de bord professeur' };
 export const dynamic = 'force-dynamic';
@@ -126,6 +127,21 @@ export default async function TeacherDashboardPage({
   const upcoming = dashboard?.upcomingAssessments ?? [];
   const assignments = mine?.data ?? [];
   const schoolEvents = calendar?.data ?? [];
+  // Instant de référence unique de la requête (S-E03-8 / PF-40 / ADR-078),
+  // résolu UNE fois, côté serveur, dans le fuseau DÉCLARÉ de l'école.
+  //
+  // Qui le reçoit, exactement — et la précision EST le sujet. Le panneau « Vie
+  // de l'école » (:318) le reçoit. Le mini-calendrier des ÉVALUATIONS
+  // (`CalendarPanel`, :313) NE LE REÇOIT PAS : il est `'use client'` et lit
+  // encore `new Date()` au rendu. C'est la dette `PF-403`, déclarée par le
+  // cliquet du MÊME diff ; sa population est celle des évaluations, donc un
+  // autre invariant et une autre tranche.
+  //
+  // Une version antérieure de ce commentaire affirmait que les deux panneaux se
+  // partageaient l'ancre. C'était faux — et un commentaire qui affirme plus que
+  // le code ne fait est exactement la classe que cette tranche corrige ailleurs,
+  // avec ceci de pire qu'il survit aux relectures et devient la référence.
+  const calendarAnchor = resolveSchoolCalendarAnchor();
 
   // Pick the active assignment for the inline gradebook
   const assignmentOptions: AssignmentOption[] = assignments.map((a) => ({
@@ -310,7 +326,7 @@ export default async function TeacherDashboardPage({
       </div>
 
       {/* ──────── Row 2.5 : school calendar events (only when upcoming exist) ──────── */}
-      <SchoolEventsPanel events={schoolEvents} />
+      <SchoolEventsPanel events={schoolEvents} anchor={calendarAnchor} />
 
       {/* ──────── Row 3 : bottom panels — classes / activity / tools ──────── */}
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">

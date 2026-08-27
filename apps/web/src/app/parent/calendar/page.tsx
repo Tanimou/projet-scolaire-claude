@@ -1,5 +1,5 @@
 import { EmptyState, PageHeader } from '@pilotage/ui';
-import { CalendarRange, GraduationCap, PartyPopper, School, Sun, Users } from 'lucide-react';
+import { CalendarRange, GraduationCap, Info, PartyPopper, School, Sun, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { PortalShell } from '@/components/PortalShell';
@@ -7,7 +7,10 @@ import {
   PortalCalendarView,
   type PortalCalendarEvent,
 } from '@/components/calendar/PortalCalendarView';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, ApiError } from '@/lib/api-client';
+import { readParentChildren } from '@/lib/parent-children';
+import { resolveSchoolCalendarAnchor } from '@/lib/school-calendar-anchor';
 
 export const metadata: Metadata = { title: 'Calendrier scolaire' };
 export const dynamic = 'force-dynamic';
@@ -109,11 +112,23 @@ export default async function ParentCalendarPage({
 }) {
   const sp = await searchParams;
 
+  // ─────────────────────────────────────────────────────────────────────────
   // 1) Enfants du parent — sert à choisir l'enfant actif pour les évaluations.
-  const studentsResp = await safe(
-    api<{ data: StudentSummary[] }>('/api/v1/students', { cache: 'no-store' }),
-  );
-  const children = studentsResp?.data ?? [];
+  //
+  // S-E03-3d / `PF-363` — cette page était le cas le plus retors du lot, et
+  // corriger la seule phrase n'aurait pas suffi. La chaîne mesurée : un
+  // `/students` en échec donnait `children = []`, donc `activeChild = null`,
+  // donc la lecture 3 (`/analytics/parent-upcoming/:id`) était **sautée**,
+  // donc `evaluationEvents = []` — et la bande de synthèse affichait la tuile
+  // « Évaluations à venir · 0 · Contrôles & devoirs » à côté du message
+  // d'erreur. Un zéro chiffré est une affirmation aussi forte que la phrase :
+  // le mensonge n'aurait fait que descendre d'une ligne (c'est exactement le
+  // piège documenté dans `parent/grades/page.tsx`). La tuile est donc RETIRÉE
+  // — pas rendue à `0`, pas rendue à « — » dans une rangée de nombres.
+  // ─────────────────────────────────────────────────────────────────────────
+  const childrenRead = await readParentChildren<StudentSummary>('parent-calendar/children');
+  const childrenFailure = childrenRead.ok ? null : childrenRead;
+  const children = childrenRead.ok ? childrenRead.data.data : [];
   const activeChild =
     (sp.studentId && children.find((c) => c.id === sp.studentId)) || children[0] || null;
   const activeChildName = activeChild
@@ -142,6 +157,11 @@ export default async function ParentCalendarPage({
 
   const allEvents = [...officialEvents, ...evaluationEvents];
 
+  // L'instant de référence de TOUTE la surface calendrier de cette page, résolu
+  // une fois par requête (`force-dynamic`) et passé en prop. Voir ADR-078 :
+  // aucun composant client calendrier ne lit plus d'horloge.
+  const anchor = resolveSchoolCalendarAnchor();
+
   // Comptes par grande catégorie pour la bande de synthèse (sections claires).
   const count = (predicate: (e: PortalCalendarEvent) => boolean) => allEvents.filter(predicate).length;
   const sections = [
@@ -161,14 +181,21 @@ export default async function ParentCalendarPage({
       tone: 'bg-blue-50 text-blue-700 ring-blue-200',
       value: count((e) => e.type !== 'evaluation' && e.scope === 'class_section_scope'),
     },
-    {
-      key: 'evaluations',
-      label: 'Évaluations à venir',
-      hint: activeChildName ? `Pour ${activeChildName}` : 'Contrôles & devoirs',
-      icon: GraduationCap,
-      tone: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-      value: count((e) => e.type === 'evaluation'),
-    },
+    // La tuile « Évaluations à venir » n'existe que si la lecture des enfants a
+    // ABOUTI : sans elle, son compteur ne mesurerait pas « zéro évaluation »,
+    // il mesurerait notre propre panne.
+    ...(childrenFailure
+      ? []
+      : [
+          {
+            key: 'evaluations',
+            label: 'Évaluations à venir',
+            hint: activeChildName ? `Pour ${activeChildName}` : 'Contrôles & devoirs',
+            icon: GraduationCap,
+            tone: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+            value: count((e) => e.type === 'evaluation'),
+          },
+        ]),
     {
       key: 'vacation',
       label: 'Vacances & jours fériés',
@@ -198,8 +225,51 @@ export default async function ParentCalendarPage({
         subtitle="Planning de l'école, événements de la classe de votre enfant, évaluations à venir, vacances et réunions parents / professeurs"
       />
 
-      {/* Bande de synthèse — repère d'un coup d'œil les grandes catégories. */}
-      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+      {/*
+        L'échec est annoncé AVANT la bande de synthèse : le parent lit d'abord
+        « ce qui suit est incomplet », puis les chiffres qui restent vrais.
+        Le planning de l'école, lui, est conservé — cette lecture-là a abouti,
+        et la page promet explicitement qu'il reste consultable.
+      */}
+      {childrenFailure ? (
+        <ChildrenReadError
+          className="mt-6"
+          failure={childrenFailure}
+          domain="Le calendrier de l'établissement ci-dessous reste exact ; seules les évaluations de votre enfant en sont absentes."
+        />
+      ) : null}
+
+      {/*
+        Bande de synthèse — repère d'un coup d'œil les grandes catégories.
+
+        Ses cinq comptes ne sont PAS filtrés par la vue calendrier située en
+        dessous, et c'est légitime : leurs libellés sont explicites et distincts,
+        aucun ne porte le mot nu « événements ». Elle n'est donc pas une instance
+        de `DNC-01` et ne doit pas être « corrigée » en la branchant sur le filtre
+        du `PortalCalendarView` (S-E03-8, résiduel déclaré).
+
+        En revanche, cinq tuiles alignées se LISENT comme une partition
+        exhaustive, et elles n'en sont pas une : un événement de portée cycle ou
+        niveau n'est compté par aucune tuile, et une même vacance apparaît dans
+        « Planning de l'école » ET dans « Vacances & jours fériés ». Le titre et
+        la note ci-dessous existent pour que la rangée cesse de promettre une
+        arithmétique qu'elle ne tient pas — sans changer un seul chiffre.
+      */}
+      <div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+          Répartition par portée
+        </h2>
+        <p className="inline-flex items-center gap-1 text-[11px] text-slate-600">
+          <Info className="h-3 w-3 shrink-0 text-slate-500" aria-hidden />
+          Un même événement peut compter dans plusieurs lignes ; ces totaux ne
+          s&apos;additionnent pas.
+        </p>
+      </div>
+      <div
+        className={`mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 ${
+          childrenFailure ? 'lg:grid-cols-4' : 'xl:grid-cols-5'
+        }`}
+      >
         {sections.map((s) => {
           const Icon = s.icon;
           return (
@@ -222,7 +292,11 @@ export default async function ParentCalendarPage({
         })}
       </div>
 
-      {children.length === 0 ? (
+      {/*
+        Vide MÉRITÉ — copie inchangée. Il n'est atteignable que sur une lecture
+        RÉUSSIE, puisque `childrenFailure` a sa propre branche ci-dessus.
+      */}
+      {!childrenFailure && children.length === 0 ? (
         <EmptyState
           icon={CalendarRange}
           title="Aucun enfant rattaché"
@@ -232,7 +306,19 @@ export default async function ParentCalendarPage({
         />
       ) : null}
 
-      <PortalCalendarView portal="parent" events={allEvents} />
+      {/*
+        La grille mensuelle n'a AUCUN moyen de signaler ce qu'elle ne contient
+        pas : sans cette ligne, un mois sans évaluation visible se lit comme un
+        mois sans évaluation. Elle ne s'affiche que sur l'échec.
+      */}
+      {childrenFailure ? (
+        <p className="mt-6 text-sm text-slate-500">
+          Les évaluations de votre enfant ne figurent pas ci-dessous : leur chargement a
+          échoué.
+        </p>
+      ) : null}
+
+      <PortalCalendarView portal="parent" events={allEvents} anchor={anchor} />
     </PortalShell>
   );
 }

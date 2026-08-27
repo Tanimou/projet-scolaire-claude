@@ -7,7 +7,10 @@ import Link from 'next/link';
 import { ThreadList } from './ThreadList';
 
 import { PortalShell } from '@/components/PortalShell';
+import { ReadErrorState } from '@/components/ReadErrorState';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
 import { api, ApiError } from '@/lib/api-client';
+import { readParentChildren } from '@/lib/parent-children';
 
 
 export const metadata: Metadata = { title: 'Messages' };
@@ -56,10 +59,24 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
 export default async function ParentMessagesPage() {
   // Does the parent guard any child? (drives the "no child" EmptyState — same
   // scoped `/students` aggregate the children page reads, no client N+1).
-  const studentsResp = await safe(
-    api<{ data: Child[] }>('/api/v1/students', { cache: 'no-store' }),
-  );
-  const hasChild = (studentsResp?.data ?? []).length > 0;
+  // ─────────────────────────────────────────────────────────────────────────
+  // S-E03-3d / `PF-363` — deux défauts sur cette page, et le second était
+  // invisible depuis la phrase.
+  //
+  // 1. `hasChild` valait `false` sur un 403 / 500, donc la page rendait
+  //    « Aucun enfant rattaché » : une lecture ratée présentée comme un fait
+  //    sur la famille. `hasChild` n'est plus dérivable que d'une lecture
+  //    RÉUSSIE.
+  // 2. `hasChild` gouverne aussi le CTA principal « Nouveau message » : sur un
+  //    échec, la commande disparaissait **sans explication**. Elle reste
+  //    absente (elle mènerait à un formulaire dont le sélecteur d'enfant est
+  //    précisément ce qu'on n'a pas pu lire), mais l'absence est désormais
+  //    EXPLIQUÉE juste en dessous, et l'action de repli — contacter
+  //    l'établissement — est portée par l'état d'erreur lui-même.
+  // ─────────────────────────────────────────────────────────────────────────
+  const childrenRead = await readParentChildren<Child>('parent-messages/children');
+  const childrenFailure = childrenRead.ok ? null : childrenRead;
+  const hasChild = childrenRead.ok && childrenRead.data.data.length > 0;
 
   const inbox = await safe(
     api<ConversationInboxResponse>('/api/v1/conversations', { cache: 'no-store' }),
@@ -97,7 +114,18 @@ export default async function ParentMessagesPage() {
           </p>
         </section>
 
-        {!hasChild ? (
+        {childrenFailure ? (
+          <ChildrenReadError
+            failure={childrenFailure}
+            domain="Vos conversations existantes ne sont pas supprimées."
+            // Le défaut par défaut (« Contacter l'établissement » →
+            // `/parent/messages/new`) mènerait ici à la page voisine, qui lit
+            // la MÊME liste d'enfants et échouerait pour la même raison : une
+            // boucle. On renvoie donc vers les rattachements, seul endroit où
+            // un problème de tutelle est visible et actionnable.
+            secondaryAction={{ label: 'Voir mes rattachements', href: '/parent/children' }}
+          />
+        ) : !hasChild ? (
           <EmptyState
             icon={UserRoundX}
             tone="slate"
@@ -105,12 +133,20 @@ export default async function ParentMessagesPage() {
             description="La messagerie s'ouvre une fois un enfant rattaché à votre compte. Contactez l'administration de l'établissement pour rattacher le dossier de votre enfant."
           />
         ) : loadFailed ? (
-          <p
-            role="alert"
-            className="rounded-lg bg-rose-100/80 px-3 py-2 text-sm font-medium text-rose-800"
-          >
-            Vos conversations n’ont pas pu être chargées. Veuillez réessayer dans un instant.
-          </p>
+          /*
+            S-E03-3d — ce `<p role="alert">` nu était un SECOND vocabulaire
+            d'échec sur une page qui en porte maintenant un autre : pas
+            d'icône, pas de « Réessayer », pas d'action secondaire. Deux
+            grammaires d'erreur sur un même écran, c'est la dérive que cette
+            tranche ferme ailleurs ; il passe par le composant partagé.
+          */
+          <ReadErrorState
+            variant="failure"
+            title="Vos conversations n’ont pas pu être chargées."
+            description="Vos échanges avec les enseignant·e·s ne sont pas perdus : c'est l'affichage qui a échoué. Réessayez dans un instant."
+            retryable
+            secondaryAction={{ label: 'Nouveau message', href: '/parent/messages/new' }}
+          />
         ) : conversations.length === 0 ? (
           <EmptyState
             icon={MessagesSquare}

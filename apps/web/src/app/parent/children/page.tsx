@@ -21,7 +21,8 @@ import type { ChildLinksView, ParentChildLinksResponse } from './claim-types';
 import { PortalShell } from '@/components/PortalShell';
 import { ChildClaimDrawer } from '@/components/parent/ChildClaimDrawer';
 import { ChildLinksPanel } from '@/components/parent/ChildLinksPanel';
-import { api, ApiError } from '@/lib/api-client';
+import { ChildrenReadError } from '@/components/parent/ChildrenReadError';
+import { api } from '@/lib/api-client';
 import {
   enrollmentDecor,
   isActivelyEnrolled,
@@ -31,6 +32,7 @@ import {
   type EnrollmentDecorRow,
   type EnrollmentDisplay,
 } from '@/lib/enrollment-activity';
+import { readParentChildren } from '@/lib/parent-children';
 import { isAccessDenied, read } from '@/lib/read-result';
 
 
@@ -66,15 +68,6 @@ interface Child extends CarriesEnrollmentActivity {
   externalRef: string | null;
   gender: string | null;
   enrollments: EnrollmentDecorRow[];
-}
-
-async function safe<T>(p: Promise<T>): Promise<T | null> {
-  try {
-    return await p;
-  } catch (err) {
-    if (err instanceof ApiError) return null;
-    throw err;
-  }
 }
 
 /**
@@ -158,11 +151,18 @@ function initials(first?: string | null, last?: string | null): string {
 }
 
 export default async function ParentChildrenPage() {
-  const [resp, linksView] = await Promise.all([
-    safe(api<{ data: Child[]; total: number }>('/api/v1/students', { cache: 'no-store' })),
+  // ─────────────────────────────────────────────────────────────────────────
+  // S-E03-3d / `PF-363` — cette page était **à moitié** convertie, et c'est le
+  // cas le plus trompeur : elle importait déjà `@/lib/read-result` et
+  // l'utilisait pour `/parent/child-claims`, tandis que `/students` restait sur
+  // le `safe()` local. Deux projections du MÊME fait (`Guardianship`) sur un
+  // seul écran, avec deux politiques d'échec opposées — l'import n'est pas le
+  // test, la lecture l'est.
+  // ─────────────────────────────────────────────────────────────────────────
+  const [childrenRead, linksView] = await Promise.all([
+    readParentChildren<Child>('parent-children/children'),
     readChildLinks(),
   ]);
-  const children = resp?.data ?? [];
 
   // The submit drawer is disabled ONLY when the route family genuinely is not
   // there yet. A 403 / 422 / 5xx leaves it ENABLED: disabling it would print
@@ -170,6 +170,36 @@ export default async function ParentChildrenPage() {
   // rendered as a fact about the school, which is `ADR-071 §D5` at the
   // inverse polarity `PF-346` already cost a land pass.
   const attachFormAvailable = linksView.kind !== 'unavailable';
+
+  if (!childrenRead.ok) {
+    // Les quatre KPI sont RETIRÉS, pas remis à zéro : « ENFANTS 0 · CLASSES
+    // ACTIVES 0 · ÂGE MOYEN — · CYCLES SUIVIS 0 » est la même contre-vérité que
+    // la phrase, en chiffres. Le panneau « Rattachements et demandes » RESTE :
+    // c'est une autre lecture, elle porte son propre état discriminé, et c'est
+    // la seule surface encore actionnable pour un parent dont la tutelle vient
+    // d'être refusée.
+    return (
+      <PortalShell portal="parent">
+        <PageHeader
+          breadcrumb={[
+            { label: 'Tableau de bord', href: '/parent/dashboard' },
+            { label: 'Mes enfants' },
+          ]}
+          title="Mes enfants"
+          subtitle="Tous les enfants rattachés à votre compte parent — cliquez pour voir le profil complet"
+          actions={<ChildClaimDrawer available={attachFormAvailable} />}
+        />
+        <ChildrenReadError
+          className="mt-6"
+          failure={childrenRead}
+          domain="Vos rattachements figurent ci-dessous."
+        />
+        <ChildLinksPanel view={linksView} />
+      </PortalShell>
+    );
+  }
+
+  const children = childrenRead.data.data;
 
   const total = children.length;
 

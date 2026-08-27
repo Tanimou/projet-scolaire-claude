@@ -46,19 +46,13 @@ import {
 } from './types';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { ReadErrorState } from '@/components/ReadErrorState';
+import { api } from '@/lib/api-client';
+import { isAccessDenied, read } from '@/lib/read-result';
 
 export const metadata: Metadata = { title: 'Alertes' };
 export const dynamic = 'force-dynamic';
 
-async function safe<T>(p: Promise<T>): Promise<T | null> {
-  try {
-    return await p;
-  } catch (err) {
-    if (err instanceof ApiError) return null;
-    throw err;
-  }
-}
 
 const RULE_ICON: Record<AlertRuleCode, typeof AlertTriangle> = {
   LOW_SUBJECT_AVG: TrendingDown,
@@ -105,49 +99,127 @@ export default async function AlertsPage({
   const sp = await searchParams;
   const currentTab: AlertsTabKey = parseTab(sp.tab);
 
-  const [rulesResp, openResp, ackResp, resolvedResp, dismissedResp] = await Promise.all([
-    safe(api<{ data: AlertRule[] }>('/api/v1/alerts/rules', { cache: 'no-store' })),
-    safe(
+  // ───────────────────────────────────────────────────────────────────────
+  // S-E03-6 / PF-20 / PF-346 / ADR-071 — `read()`, PLUS un `safe()` local.
+  //
+  // La copie locale de `safe()` rendait `null` sur toute `ApiError`, et les
+  // cinq lectures retombaient ensuite sur `?? []`. Un 403, un 404 ou un 500
+  // devenaient donc l'ensemble VIDE, que la page rendait deux écrans plus bas
+  // en « Aucune règle configurée » — une panne présentée à l'administrateur
+  // comme un fait sur son établissement. C'est la forme exacte de `PF-346`.
+  // ───────────────────────────────────────────────────────────────────────
+  const [rulesResp, openResp, ackResp, resolvedResp, dismissedResp, highOpenResp] =
+    await Promise.all([
+    read(
+      'admin-alerts/rules',
+      api<{ data: AlertRule[] }>('/api/v1/alerts/rules', { cache: 'no-store' }),
+    ),
+    read(
+      'admin-alerts/instances:open',
       api<{ data: AlertInstance[]; total: number }>(
         '/api/v1/alerts/instances?status=open&limit=100',
         { cache: 'no-store' },
       ),
     ),
-    safe(
+    read(
+      'admin-alerts/instances:acknowledged',
       api<{ data: AlertInstance[]; total: number }>(
         '/api/v1/alerts/instances?status=acknowledged&limit=100',
         { cache: 'no-store' },
       ),
     ),
-    safe(
+    read(
+      'admin-alerts/instances:resolved',
       api<{ data: AlertInstance[]; total: number }>(
         '/api/v1/alerts/instances?status=resolved&limit=100',
         { cache: 'no-store' },
       ),
     ),
-    safe(
+    read(
+      'admin-alerts/instances:dismissed',
       api<{ data: AlertInstance[]; total: number }>(
         '/api/v1/alerts/instances?status=dismissed&limit=100',
         { cache: 'no-store' },
       ),
     ),
+    // S-E03-6 / ADR-077 §D3 — « critiques » est désormais un TOTAL SERVI et non
+    // plus le décompte d'une page de 100. `limit=1` parce que seul le `total`
+    // est lu : la page n'a jamais eu besoin des lignes, seulement du nombre.
+    read(
+      'admin-alerts/instances:open-high',
+      api<{ data: AlertInstance[]; total: number }>(
+        '/api/v1/alerts/instances?status=open&severity=high&limit=1',
+        { cache: 'no-store' },
+      ),
+    ),
   ]);
 
-  const rules = rulesResp?.data ?? [];
-  const openRows = openResp?.data ?? [];
-  const ackRows = ackResp?.data ?? [];
-  const resolvedRows = resolvedResp?.data ?? [];
-  const dismissedRows = dismissedResp?.data ?? [];
+  // ───────────────────────────────────────────────────────────────────────
+  // Voie d'échec. AUCUN chiffre n'est rendu ici : ni KPI à `0`, ni badge
+  // d'onglet, ni « Aucune règle configurée ». « Nous n'avons pas pu lire » et
+  // « nous avons lu, il n'y a rien » sont deux phrases différentes ; les
+  // confondre transforme une panne en fait sur l'établissement (PF-05/PF-346).
+  //
+  // Les six lectures sont traitées ENSEMBLE parce que les quatre KPI de cette
+  // page se lisent côte à côte sur une seule grille : en rendre trois et
+  // remplacer le quatrième par `0` fabriquerait précisément le désaccord
+  // numérique que `PF-20` décrit, à l'intérieur d'un même écran.
+  // ───────────────────────────────────────────────────────────────────────
+  const reads = [rulesResp, openResp, ackResp, resolvedResp, dismissedResp, highOpenResp];
+  const failure = reads.find((r) => !r.ok);
+  if (failure && !failure.ok) {
+    const denied = isAccessDenied(failure);
+    return (
+      <PortalShell portal="admin">
+        <PageHeader
+          breadcrumb={[
+            { label: 'Tableau de bord', href: '/admin/dashboard' },
+            { label: 'Alertes' },
+          ]}
+          title="Alertes"
+          subtitle="Configurez les règles, lancez l'évaluation, traitez les alertes ouvertes"
+        />
+        <ReadErrorState
+          className="mt-6"
+          variant={denied ? 'denied' : 'failure'}
+          title={
+            denied
+              ? 'Les alertes ne vous sont pas accessibles'
+              : "Nous n'avons pas pu charger les alertes"
+          }
+          description={
+            denied
+              ? "Votre rôle ne donne pas accès aux règles et alertes de cet établissement. Contactez un administrateur du réseau."
+              : "Le service n'a pas répondu. Réessayez dans quelques instants — les règles configurées et les alertes existantes ne sont pas affectées."
+          }
+          retryable={!denied}
+          secondaryAction={{ label: 'Retour au tableau de bord', href: '/admin/dashboard' }}
+        />
+      </PortalShell>
+    );
+  }
+
+  const rules = rulesResp.ok ? rulesResp.data.data : [];
+  const openRows = openResp.ok ? openResp.data.data : [];
+  const ackRows = ackResp.ok ? ackResp.data.data : [];
+  const resolvedRows = resolvedResp.ok ? resolvedResp.data.data : [];
+  const dismissedRows = dismissedResp.ok ? dismissedResp.data.data : [];
 
   const allRows: AlertInstance[] = [...openRows, ...ackRows, ...resolvedRows, ...dismissedRows];
   const activeRows: AlertInstance[] = [...openRows, ...ackRows];
   const historyRows: AlertInstance[] = [...resolvedRows, ...dismissedRows];
 
+  // S-E03-6 / ADR-075 / ADR-077 §D3 — LES TOTAUX SERVIS, pas la longueur des
+  // pages. `openCount` lisait déjà `total` ; `highOpen` et le compte des
+  // ignorées comptaient une page `limit=100` DEUX LIGNES PLUS BAS, donc dès la
+  // 101e alerte ouverte la même carte affichait un total exact au-dessus d'un
+  // échantillon présenté comme un décompte.
   const enabledRules = rules.filter((r) => r.enabled).length;
-  const openCount = openResp?.total ?? openRows.length;
-  const ackCount = ackResp?.total ?? ackRows.length;
-  const highOpen = openRows.filter((a) => a.severity === 'high').length;
-  const resolvedCount = resolvedResp?.total ?? resolvedRows.length;
+  const openCount = openResp.ok ? openResp.data.total : 0;
+  const ackCount = ackResp.ok ? ackResp.data.total : 0;
+  const highOpen = highOpenResp.ok ? highOpenResp.data.total : 0;
+  const resolvedCount = resolvedResp.ok ? resolvedResp.data.total : 0;
+  const dismissedCount = dismissedResp.ok ? dismissedResp.data.total : 0;
 
   // ── filter options derived from the full dataset so dropdowns stay stable
   //    across tabs.
@@ -279,8 +351,8 @@ export default async function AlertsPage({
           label="RÉSOLUES"
           value={resolvedCount}
         >
-          {dismissedRows.length > 0
-            ? `+ ${dismissedRows.length} ignorée${dismissedRows.length > 1 ? 's' : ''}`
+          {dismissedCount > 0
+            ? `+ ${dismissedCount} ignorée${dismissedCount > 1 ? 's' : ''}`
             : 'Historique des interventions'}
         </KpiCard>
       </div>

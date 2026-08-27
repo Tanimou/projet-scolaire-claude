@@ -186,6 +186,24 @@ function zoneOffsetMs(instant: Date, timeZone: string): number {
   return asUtc - Math.floor(instant.getTime() / 1000) * 1000;
 }
 
+/**
+ * Décalage du fuseau à cet instant précis, en MINUTES (`local - UTC` : Paris en
+ * hiver ⇒ `+60`, en été ⇒ `+120`).
+ *
+ * Public depuis S-E03-8 / ADR-078 §D3 : l'ancre calendrier a besoin de la MÊME
+ * lecture IANA que les bornes d'audit. Deux implémentations du décalage d'un
+ * fuseau, ce sont deux réponses possibles à « quelle heure est-il à l'école » —
+ * exactement la classe de défaut que ces deux tranches ferment. La lecture est
+ * faite **à l'instant demandé** (double lecture `Intl`), donc l'heure d'été est
+ * respectée sans table codée en dur.
+ *
+ * Lève `UnknownTimezoneError` si le fuseau est inconnu du runtime : jamais de
+ * repli muet sur UTC (DNC-08).
+ */
+export function zoneOffsetMinutes(instant: Date, timeZone: string): number {
+  return zoneOffsetMs(instant, timeZone) / 60_000;
+}
+
 const YMD_LEADING = /^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/;
 
 /**
