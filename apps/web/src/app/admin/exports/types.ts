@@ -1,3 +1,6 @@
+import { pageEnvelope, unvalidatedItem } from '@pilotage/contracts';
+import type { z } from 'zod';
+
 export type ExportKind =
   | 'grades_xlsx'
   | 'attendance_xlsx'
@@ -28,10 +31,21 @@ export interface ExportRow {
   finishedAt: string | null;
 }
 
-export interface ExportsListResp {
-  data: ExportRow[];
-  total: number;
-}
+/**
+ * L'enveloppe servie par `GET /api/v1/exports` — S-E03-11 / PF-427 / ADR-081.
+ *
+ * DÉRIVÉE du cadre canonique, plus transcrite à la main. Le cadre est vérifié
+ * (`data` est un tableau, `total` un entier >= 0) ; les LIGNES ne le sont pas
+ * (`unvalidatedItem<ExportRow>()`) : `ExportRow` est écrit à la main et n'a jamais
+ * été confronté au serveur, donc en faire une assertion d'exécution
+ * transformerait un défaut de type silencieux en page morte.
+ *
+ * `.passthrough()` est hérité de la fabrique : une clé que le serveur
+ * ajouterait n'est jamais SUPPRIMÉE à l'exécution.
+ */
+export const exportsEnvelope = pageEnvelope(unvalidatedItem<ExportRow>());
+
+export type ExportsListResp = z.infer<typeof exportsEnvelope>;
 
 export interface RequesterOption {
   id: string;

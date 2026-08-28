@@ -1,3 +1,4 @@
+import { pageEnvelope, requiredKey, unvalidatedItem } from '@pilotage/contracts';
 import {
   EmptyState,
   KpiCard,
@@ -44,7 +45,7 @@ import {
 } from './audit-labels';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { api, apiEnvelope, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Audit' };
 export const dynamic = 'force-dynamic';
@@ -62,18 +63,36 @@ export const dynamic = 'force-dynamic';
  * dériveraient sans qu'aucun test ne rougisse — c'est la classe de défaut que
  * « ACTIONS AUJOURD'HUI » posée au-dessus d'un compteur *de toute l'histoire*
  * illustrait exactement.
+ *
+ * ## S-E03-11 / PF-427 — ce n'est plus une DÉCLARATION, c'est un CONTRAT
+ *
+ * Cette forme était écrite à la main ici et, indépendamment, côté API : deux
+ * transcriptions d'une même enveloppe dans deux paquets, sans rien qui les
+ * relie. Elle est désormais DÉRIVÉE du cadre canonique
+ * (`@pilotage/contracts` · `pageEnvelope`), et la réponse est ANALYSÉE au lieu
+ * d'être affirmée.
+ *
+ * ⚠ `.extend()` conserve `passthrough` (mesuré) : `kpis` et `filters` sont
+ * TYPÉS ici **et** aucune clé envoyée par le serveur n'est supprimée. Le cadre
+ * nu `{data,total}` les aurait EFFACÉES à l'exécution, tous types verts, et la
+ * page aurait affiché quatre cartes « Indisponible » — indiscernable d'une
+ * panne d'API à l'œil nu.
+ *
+ * ⚠ `unvalidatedItem<AuditEntry>()` : les LIGNES ne sont pas analysées en
+ * profondeur, délibérément. `AuditEntry` est écrit à la main et n'a jamais été
+ * confronté au serveur ; en faire une assertion d'exécution ferait de la
+ * surface d'audit RGPD une page capable de s'éteindre sur un `null` mal typé.
+ * Le CADRE est vérifié, les lignes ne le sont pas.
  */
-interface AuditResponse {
-  data: AuditEntry[];
-  total: number;
-  kpis: {
+const auditEnvelope = pageEnvelope(unvalidatedItem<AuditEntry>()).extend({
+  kpis: requiredKey<{
     eventsInRange: AuditKpiPayload;
     criticalChanges: AuditKpiPayload;
     sensitiveExports: AuditKpiPayload;
     distinctActors: AuditKpiPayload;
-  };
-  filters: AuditAppliedFilters;
-}
+  }>(),
+  filters: requiredKey<AuditAppliedFilters>(),
+});
 
 interface AuditFacetsResponse {
   resourceTypes: string[];
@@ -258,7 +277,7 @@ export default async function AuditPage({
   // depuis `Tenant.timezone` côté serveur et seulement **renvoyé**.
 
   const [resp, facets] = await Promise.all([
-    safe(api<AuditResponse>(`/api/v1/analytics/audit?${qs.toString()}`, { cache: 'no-store' })),
+    safe(apiEnvelope(auditEnvelope, `/api/v1/analytics/audit?${qs.toString()}`, { cache: 'no-store' })),
     safe(api<AuditFacetsResponse>(`/api/v1/analytics/audit-facets`, { cache: 'no-store' })),
   ]);
 

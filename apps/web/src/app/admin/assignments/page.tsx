@@ -3,14 +3,14 @@ import { BookOpen, ClipboardCheck, GraduationCap, UserX } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { AssignmentsManager } from '@/app/admin/teaching-assignments/AssignmentsManager';
+import { teachingAssignmentsEnvelope } from '@/app/admin/teaching-assignments/types';
 import type {
   ClassOption,
   SubjectOption,
   TeacherOption,
-  TeachingAssignmentsResponse,
 } from '@/app/admin/teaching-assignments/types';
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { api, apiEnvelope, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Affectations' };
 export const dynamic = 'force-dynamic';
@@ -70,8 +70,13 @@ export default async function AssignmentsPage({
   if (filterTeacher) qs.set('teacherProfileId', filterTeacher);
 
   const [assignmentsResp, teachersResp, classesResp, subjectsResp] = await Promise.all([
+    // S-E03-11 / AC-3 — ANALYSÉE, plus affirmée. C'est précisément ici que le
+    // renommage `totals` → `summary` du run 94 devient une erreur nommée au
+    // lieu d'un `undefined` rendu en tirets cadratins. `ResponseShapeError`
+    // n'est PAS une `ApiError`, donc `safe()` la re-jette vers
+    // `app/admin/error.tsx` au lieu de la déguiser en panne d'API.
     safe(
-      api<TeachingAssignmentsResponse>(`/api/v1/teaching-assignments?${qs.toString()}`, {
+      apiEnvelope(teachingAssignmentsEnvelope, `/api/v1/teaching-assignments?${qs.toString()}`, {
         cache: 'no-store',
       }),
     ),

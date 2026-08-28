@@ -1,0 +1,56 @@
+// FIXTURE — NOT COMPILED, NOT LINTED, NOT SHIPPED.
+//
+// S-E03-10 / ADR-081 §D5 — LE DÉFAUT, RÉINTRODUIT SOUS SES DEUX FORMES, DANS UNE
+// SEULE SOURCE. Elle passe au MÊME classifieur que l'arbre réel : si ce fichier
+// ne rougissait pas, « zéro contravention » sur l'arbre ne voudrait rien dire.
+//
+// Deux déclarations NOMMÉES (R1) + deux transtypages EN LIGNE (R2).
+// La source est volontairement écrite comme une VRAIE page admin.
+
+import { api } from '@/lib/api-client';
+
+/** R1 #1 — la transcription à la main, sous sa forme minimale. */
+interface ExportsListResp {
+  data: ExportRow[];
+  total: number;
+}
+
+/** R1 #2 — la même, en alias de type, avec des clés en plus. */
+type AuditResponse = {
+  data: AuditRow[];
+  total: number;
+  kpis: Record<string, { value: number; label: string }>;
+  filters: { timezone: string };
+};
+
+/**
+ * CONTRÔLE INTERNE À LA FIXTURE — ceci ne DOIT PAS compter : il n'y a pas de
+ * clé `total`. C'est la classe `PF-431` (88 occurrences), un cran en dessous,
+ * et la mêler à celle-ci gonflerait le plafond avec du travail hors périmètre.
+ */
+interface FacetsResponse {
+  data: string[];
+}
+
+export async function loadExports(): Promise<ExportsListResp> {
+  // R2 #1 — le transtypage en ligne, tel qu'il vit dans `admin/alerts/page.tsx`.
+  return api<{ data: ExportRow[]; total: number }>('/api/v1/exports?limit=50');
+}
+
+export async function loadUsers() {
+  // R2 #2 — idem, tel qu'il vit dans `admin/users/page.tsx:38`.
+  const users = await api<{ data: UserListItem[]; total: number }>('/api/v1/users');
+  return users;
+}
+
+export async function loadFacets() {
+  // NE DOIT PAS COMPTER — pas de `total`. Compté comme témoin `bareDataCasts`.
+  return api<{ data: string[] }>('/api/v1/analytics/audit-facets');
+}
+
+export async function loadAudit(): Promise<AuditResponse> {
+  // NE DOIT PAS COMPTER en R2 — l'argument de type est NOMMÉ, pas un littéral ;
+  // sa déclaration est déjà comptée en R1. Compter les deux serait compter deux
+  // fois la même transcription.
+  return api<AuditResponse>('/api/v1/analytics/audit');
+}
