@@ -26,6 +26,7 @@ import { ExportDownloadButton } from './ExportDownloadButton';
 import { ExportLauncher } from './ExportLauncher';
 import { ExportsFilters } from './ExportsFilters';
 import { ExportsRefresher } from './ExportsRefresher';
+import { exportsEnvelope } from './types';
 import type {
   ExportKind,
   ExportKindFilter,
@@ -33,12 +34,11 @@ import type {
   ExportRow,
   ExportStatus,
   ExportStatusFilter,
-  ExportsListResp,
   RequesterOption,
 } from './types';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { api, apiEnvelope, ApiError } from '@/lib/api-client';
 
 export const metadata: Metadata = { title: 'Exports' };
 export const dynamic = 'force-dynamic';
@@ -254,8 +254,14 @@ export default async function ExportsPage({
   const requesterId = (sp.requesterId ?? '').trim();
   const search = (sp.q ?? '').trim().toLowerCase();
 
+  // S-E03-11 / AC-3 — la réponse est ANALYSÉE, plus affirmée. Une rupture de
+  // contrat jette une `ResponseShapeError`, qui n'est PAS une `ApiError` :
+  // `safe()` la RE-JETTE au lieu de l'avaler en `null`, donc elle atteint la
+  // frontière d'erreur existante du portail (`app/admin/error.tsx`) au lieu
+  // d'être présentée comme « aucun export » — un échec de lecture n'est jamais
+  // un fait sur l'établissement (PF-05 / G-TRUTH).
   const resp = await safe(
-    api<ExportsListResp>(`/api/v1/exports?limit=${FETCH_LIMIT}&offset=0`, {
+    apiEnvelope(exportsEnvelope, `/api/v1/exports?limit=${FETCH_LIMIT}&offset=0`, {
       cache: 'no-store',
     }),
   );

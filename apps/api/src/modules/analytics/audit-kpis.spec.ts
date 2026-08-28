@@ -250,7 +250,7 @@ function tableWhere(h: Harness): Where {
   return hit;
 }
 
-function ids(data: Array<{ id: string }>): string[] {
+function ids(data: ReadonlyArray<{ id: string }>): string[] {
   return data.map((d) => d.id).sort();
 }
 

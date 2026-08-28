@@ -1,0 +1,42 @@
+// FIXTURE — NOT COMPILED, NOT LINTED, NOT SHIPPED.
+//
+// S-E03-10 / ADR-081 §D5 — LE CONTRÔLE NÉGATIF : la forme CONVERTIE.
+//
+// Sans lui, « zéro contravention » ne se distinguerait pas d'un classifieur
+// cassé qui ne trouve jamais rien. Ce fichier DOIT rester VERT sur R1 et R2, et
+// DOIT être vu comme DÉLÉGUANT au contrat canonique.
+//
+// Il montre aussi les trois propriétés que la tranche revendique :
+//   — la forme est DÉRIVÉE du schéma (`z.infer`), jamais transcrite ;
+//   — les clés supplémentaires passent par `.extend()`, pas par une seconde
+//     déclaration ;
+//   — l'item est TYPÉ sans être VÉRIFIÉ profondément (`unvalidatedItem`), pour
+//     qu'une ligne inattendue ne tue pas la page.
+
+import { pageEnvelope, unvalidatedItem } from '@pilotage/contracts';
+import { z } from 'zod';
+
+import { apiEnvelope } from '@/lib/api-client';
+
+interface AuditRow {
+  id: string;
+  action: string;
+}
+
+const AUDIT_ENVELOPE = pageEnvelope(unvalidatedItem<AuditRow>()).extend({
+  kpis: z.record(z.object({ value: z.number(), label: z.string() })),
+  filters: z.object({ timezone: z.string() }),
+});
+
+/** DÉRIVÉ, jamais transcrit : renommer une clé du schéma casse ce type. */
+export type AuditResponse = z.infer<typeof AUDIT_ENVELOPE>;
+
+export async function loadAudit(): Promise<AuditResponse> {
+  return apiEnvelope(AUDIT_ENVELOPE, '/api/v1/analytics/audit?limit=50');
+}
+
+const EXPORTS_ENVELOPE = pageEnvelope(unvalidatedItem<{ id: string }>());
+
+export async function loadExports() {
+  return apiEnvelope(EXPORTS_ENVELOPE, '/api/v1/exports?limit=50');
+}

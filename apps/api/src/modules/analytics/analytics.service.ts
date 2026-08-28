@@ -23,6 +23,7 @@ import {
   readDistinctStudentsAcrossSections,
   resolveActiveAcademicYear,
   resolveAuditWindow,
+  resultTotal,
   rosterCountArg,
   rosterStatusesFor,
   selectActiveEnrollment,
@@ -35,6 +36,7 @@ import {
 } from '../alerts/alert-rule-population';
 import type {
   EnrollmentActivityProjection,
+  PageEnvelope,
   RemediationProgressDto,
   SnapshotFreshness,
 } from '@pilotage/contracts';
@@ -188,12 +190,35 @@ export interface AuditListRow {
   after: unknown;
 }
 
-export interface AuditListResult {
-  data: AuditListRow[];
-  total: number;
-  kpis: Record<AuditKpiKey, AuditKpi>;
-  filters: AuditAppliedFilters;
-}
+/**
+ * S-E03-11 / PF-427 / ADR-081 §D2 — RE-LOGÉ sur l'enveloppe canonique.
+ *
+ * ⚠ CE QUI CHANGE, ET CE QUI NE CHANGE PAS. Aucune VALEUR rendue par
+ * `auditList()` ne bouge : mêmes clés, mêmes octets. Ce qui change est
+ * l'ORIGINE de deux d'entre elles. `data` et `total` ne sont plus TRANSCRITS
+ * ici — ils sont HÉRITÉS de `PageEnvelope`, dans `packages/contracts`, le même
+ * module que `apps/web` lit. `kpis` et `filters` restent propres à ce point
+ * d'entrée et sont exprimés comme une EXTENSION, exactement comme le schéma zod
+ * côté client (`pageEnvelope(item).extend({ kpis, filters })`).
+ *
+ * LE DÉFAUT QUE CELA FERME, ET IL EST PLUS SUBTIL QUE « PAS DE TYPE DÉCLARÉ » :
+ * le brief annonçait que les deux handlers d'enveloppe « ne déclarent AUCUN type
+ * de retour ». C'est vrai pour `teaching-assignments.controller.ts`, FAUX ici —
+ * `auditList()` déclarait déjà `): Promise<AuditListResult>`. Le problème
+ * n'était donc pas un type MANQUANT mais un SECOND type écrit à la main :
+ * `AuditListResult` ici et `AuditResponse` (`admin/audit/page.tsx:66`) étaient
+ * DEUX transcriptions indépendantes d'UNE forme, dans DEUX paquets, sans rien
+ * qui les relie structurellement. Une déclaration de plus n'aurait rien réparé ;
+ * une déclaration COMMUNE, si. (Enregistré : `PF-430`.)
+ *
+ * `total` devient un `ResultTotal` marqué. C'est la moitié G-DNC de la tranche :
+ * `total: data.length` CESSE DE COMPILER ici, et le seul chemin vers ce champ
+ * est `resultTotal(count)` — voir le site de construction dans `auditList()`.
+ */
+export type AuditListResult = PageEnvelope<AuditListRow> & {
+  readonly kpis: Record<AuditKpiKey, AuditKpi>;
+  readonly filters: AuditAppliedFilters;
+};
 
 /**
  * Les titres des cartes, servis par le serveur.
@@ -3863,7 +3888,7 @@ export class AnalyticsService {
       ...(createdAt ? { createdAt } : {}),
     };
 
-    const [rows, total] = await Promise.all([
+    const [rows, totalRows] = await Promise.all([
       this.prisma.auditLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -3872,6 +3897,15 @@ export class AnalyticsService {
       }),
       this.prisma.auditLog.count({ where }),
     ]);
+
+    /**
+     * S-E03-11 / ADR-081 §D2 — le SEUL chemin vers `total`. `count(where)` est
+     * la taille de l'ensemble FILTRÉ, jamais `rows.length` (qui est la taille de
+     * la PAGE). `resultTotal()` le marque, et c'est ce marquage qui rend
+     * `total: rows.length` non compilable. Aucune valeur ne change : c'est
+     * exactement le nombre déjà rendu, sous un type qui interdit sa confusion.
+     */
+    const total = resultTotal(totalRows);
 
     // Batch-resolve actor names
     const actorIds = Array.from(

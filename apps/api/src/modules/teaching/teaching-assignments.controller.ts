@@ -16,6 +16,10 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   ASSIGNMENT_ROLES,
   type AssignmentRole,
+  type PageEnvelope,
+  type PageOffset,
+  type PageSize,
+  type ResultTotal,
   distinctGroupCount,
   pageWindow,
   pageWindowOf,
@@ -63,6 +67,46 @@ class UpdateAssignmentDto {
  * page rétrécir sous ce qu'il affichait déjà.
  */
 const TEACHING_ASSIGNMENTS_PAGE_WINDOW = pageWindow({ def: 100, max: 500 });
+
+/**
+ * S-E03-11 / PF-427 / ADR-081 §D2 — LA FORME DE LA RÉPONSE, DÉCLARÉE.
+ *
+ * Ce que ce type change : RIEN de ce que le handler RENVOIE. Les six clés, leurs
+ * valeurs et leurs octets sont exactement ceux d'avant la tranche. Ce qui change
+ * est que la forme est désormais DITE, sur le socle canonique `PageEnvelope` de
+ * `packages/contracts` — celui-là même que `apps/web` analyse.
+ *
+ * POURQUOI, MESURÉ : dans le run 94, ce handler émettait `totals` pendant que
+ * `admin/assignments/page.tsx` lisait `summary`. Les deux moitiés ont typé VERT,
+ * parce que ce handler n'annonçait AUCUNE forme et que le client AFFIRMAIT la
+ * sienne. Sur l'arbre fusionné, les quatre KPI de `/admin/assignments` seraient
+ * partis en tirets et le panneau de couverture serait resté « indisponible ». Un
+ * humain a comparé deux fichiers ; aucun test ne l'a vu. Depuis cette
+ * déclaration, renommer `totals` en `summary` ICI NE COMPILE PLUS.
+ *
+ * POURQUOI L'ITEM EST `unknown` (ADR-081 §D3) : le CADRE est le contrat, la
+ * LIGNE ne l'est pas. Figer ici le payload Prisma des quatre `include`
+ * imbriqués transformerait chaque évolution de relation en rupture de contrat
+ * déclarée, sans rien protéger : aucun consommateur TypeScript ne lit ce type de
+ * ligne — `apps/web` écrit le sien. `data` reste NON VIDE-INTERDIT et `total`
+ * reste un `ResultTotal`, donc `total: data.length` continue de ne pas compiler.
+ */
+type TeachingAssignmentsListEnvelope = PageEnvelope<unknown> & {
+  readonly limit: PageSize;
+  readonly offset: PageOffset;
+  readonly totals: {
+    readonly assignments: ResultTotal;
+    readonly teachers: ResultTotal;
+    readonly classes: ResultTotal;
+    readonly subjectsWithoutTeacher: ResultTotal;
+  };
+  readonly coverage: {
+    readonly scope: 'establishment';
+    readonly classSectionIdsWithPrincipal: readonly string[];
+    readonly classSectionIdsWithAssistant: readonly string[];
+    readonly subjectIdsWithTeacher: readonly string[];
+  };
+};
 
 @ApiTags('teaching')
 @ApiBearerAuth()
@@ -145,7 +189,7 @@ export class TeachingAssignmentsController {
     @Query('academicYearId') academicYearId?: string,
     @Query('limit') limitRaw?: string,
     @Query('offset') offsetRaw?: string,
-  ) {
+  ): Promise<TeachingAssignmentsListEnvelope> {
     const parsedWindow = TEACHING_ASSIGNMENTS_PAGE_WINDOW.safeParse({
       limit: limitRaw,
       offset: offsetRaw,

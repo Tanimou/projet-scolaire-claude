@@ -1,3 +1,4 @@
+import { pageEnvelope, unvalidatedItem } from '@pilotage/contracts';
 import {
   AvatarNameCell,
   DonutChart,
@@ -14,11 +15,12 @@ import {
 import { Plus, UserCheck, UserPlus, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { z } from 'zod';
 
 import { StudentsPageFilters } from './StudentsPageFilters';
 
 import { PortalShell } from '@/components/PortalShell';
-import { api, ApiError } from '@/lib/api-client';
+import { api, apiEnvelope, ApiError } from '@/lib/api-client';
 
 
 export const metadata: Metadata = { title: 'Élèves' };
@@ -50,12 +52,22 @@ interface StudentSummary {
   _count: { guardianships: number };
 }
 
-interface ListResponse {
-  data: StudentSummary[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+/**
+ * L'enveloppe servie par `GET /api/v1/students` — S-E03-11 / PF-427 / ADR-081.
+ *
+ * ⚠ Cet appel n'est PAS enveloppé dans `safe()` : une rupture de contrat se
+ * propage donc directement jusqu'à `app/admin/error.tsx`, la frontière
+ * d'erreur existante du portail. C'est le comportement voulu — la page ne peut
+ * rien rendre d'honnête sans sa liste, et un repli `?? []` afficherait
+ * « aucun élève » pour un établissement qui en compte.
+ *
+ * `limit`/`offset` sont vérifiés comme entiers (scalaires de notre propre
+ * contrat, sans risque) ; les LIGNES ne sont pas analysées en profondeur.
+ */
+const studentsEnvelope = pageEnvelope(unvalidatedItem<StudentSummary>()).extend({
+  limit: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative(),
+});
 
 interface SimpleClass {
   id: string;
@@ -155,7 +167,7 @@ export default async function StudentsPage({
   qs.set('offset', String(offset));
 
   const [students, aggregate, classes, years] = await Promise.all([
-    api<ListResponse>(`/api/v1/students?${qs.toString()}`, { cache: 'no-store' }),
+    apiEnvelope(studentsEnvelope, `/api/v1/students?${qs.toString()}`, { cache: 'no-store' }),
     safe(
       api<StudentsAggregateResponse>('/api/v1/analytics/students-aggregate', { cache: 'no-store' }),
     ),

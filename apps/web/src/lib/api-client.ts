@@ -1,5 +1,6 @@
 import { headers as incomingHeaders } from 'next/headers';
 import { redirect } from 'next/navigation';
+import type { z, ZodTypeAny } from 'zod';
 
 import { auth } from '@/auth';
 import { ApiError, apiErrorMessage } from '@/lib/api-error-message';
@@ -8,6 +9,7 @@ import {
   stripClientProvenanceHeaders,
   type ClientProvenanceSource,
 } from '@/lib/client-provenance';
+import { ResponseShapeError, responseShapeIssues } from '@/lib/response-shape-error';
 
 /**
  * ⚠️ **Module serveur.** Il importe `next/headers` (`:1`) et `@/auth` (`:4`).
@@ -124,6 +126,69 @@ export async function api<T = unknown>(
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/**
+ * S-E03-11 / PF-427 / ADR-081 — `api()` qui **VÉRIFIE** au lieu d'AFFIRMER.
+ *
+ * `api<T>()` finit par `return (await res.json()) as T` : `T` est ce que le
+ * site d'appel a écrit à la main, et rien ne le compare à ce que le serveur a
+ * envoyé. Pendant le run 94 l'API émettait `totals` et `/admin/assignments`
+ * lisait `summary` ; les deux moitiés ont typé VERT et les quatre KPI seraient
+ * partis en tirets cadratins. `apiEnvelope()` analyse la réponse avec le
+ * schéma canonique de `@pilotage/contracts` et **nomme la clé en désaccord**.
+ *
+ * ⚠ `api()` N'EST PAS MODIFIÉE. Sa signature reste identique pour les ~207
+ * autres sites d'appel : les convertir n'est pas dans cette tranche et
+ * produirait un diff non relisable. `apiEnvelope()` s'ajoute À CÔTÉ.
+ *
+ * **Ce qu'un échec d'analyse fait, précisément** (ADR-081 §D3) :
+ *   - il jette une `ResponseShapeError`, qui n'est **pas** une `ApiError` —
+ *     donc les copies locales de `safe()` la RE-JETTENT au lieu de l'avaler en
+ *     `null` ; elle atteint la frontière d'erreur existante du portail ;
+ *   - il n'y a **jamais** de repli silencieux : pas de `?? []`, pas de
+ *     `catch → enveloppe vide`. Une enveloppe remplacée en douce par une
+ *     enveloppe vide est **DNC-08** — un « 0 » rendu sans avoir lu ;
+ *   - le détail par clé part dans le **journal serveur**, jamais dans la
+ *     charge rendue, et ne porte **aucune valeur de réponse** (§4 du contrat).
+ *
+ * **Le 204 est traité à part, et pas par confort.** `api()` rend
+ * `undefined as T` sur un 204 (plus haut). `schema.safeParse(undefined)`
+ * produit un unique problème de chemin VIDE, c'est-à-dire le message le moins
+ * diagnostiquable possible pour le cas le plus banal. Il est donc nommé.
+ *
+ * @example
+ *   const students = await apiEnvelope(studentsEnvelope, `/api/v1/students?${qs}`, {
+ *     cache: 'no-store',
+ *   });
+ */
+export async function apiEnvelope<TSchema extends ZodTypeAny>(
+  schema: TSchema,
+  path: string,
+  init: Parameters<typeof api>[1] = {},
+): Promise<z.infer<TSchema>> {
+  const payload = await api<unknown>(path, init);
+
+  // Le gabarit de route, jamais la chaîne de requête : ses valeurs de filtre
+  // peuvent désigner un enfant (`?studentId=…`, `?actorId=…`).
+  const endpoint = path.split('?')[0] ?? path;
+
+  if (payload === undefined) {
+    throw new ResponseShapeError(endpoint, [
+      { path: '(enveloppe)', code: 'no_content', expected: 'une enveloppe data+total' },
+    ]);
+  }
+
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    const issues = responseShapeIssues(parsed.error);
+    // Le détail reste ici, côté serveur, où il est réellement lisible : en
+    // production Next masque le message d'une erreur de composant serveur et
+    // ne transmet qu'un `digest` (enregistré, non corrigé par cette tranche).
+    console.error(`[apiEnvelope] contrat de réponse rompu sur ${endpoint}`, issues);
+    throw new ResponseShapeError(endpoint, issues);
+  }
+  return parsed.data;
 }
 
 /**

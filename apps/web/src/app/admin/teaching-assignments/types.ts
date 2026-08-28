@@ -1,3 +1,6 @@
+import { pageEnvelope, requiredKey, unvalidatedItem } from '@pilotage/contracts';
+import { z } from 'zod';
+
 /**
  * Shared types for the Teaching-Assignments UI.
  * Imported by both the legacy `/admin/teaching-assignments` route and the new
@@ -112,15 +115,31 @@ export interface AssignmentsCoverage {
   subjectIdsWithTeacher: string[];
 }
 
-/** Réponse de `GET /api/v1/teaching-assignments` après S-E03-9. */
-export interface TeachingAssignmentsResponse {
-  /** La **page** courante. Jamais l'ensemble. */
-  data: Assignment[];
-  /** `count(where)` sur l'ensemble filtré — la seule source d'un total. */
-  total: number;
+/**
+ * Réponse de `GET /api/v1/teaching-assignments` — S-E03-9, puis S-E03-11.
+ *
+ * ⚠⚠ C'EST L'ENVELOPPE QUI A PRESQUE CASSÉ EN PRODUCTION AU RUN 94. L'API
+ * émettait `totals` et `/admin/assignments` lisait `summary` ; les DEUX
+ * moitiés ont typé VERT, parce qu'`api<T>()` AFFIRMAIT `T` au lieu de le
+ * vérifier. Les quatre KPI seraient partis en tirets cadratins et le panneau
+ * de couverture serait resté « indisponible ». Un humain l'a attrapé ; aucun
+ * test ne l'a fait.
+ *
+ * Elle est maintenant DÉRIVÉE du cadre canonique et ANALYSÉE. Les clés
+ * DÉCLARÉES sont OBLIGATOIRES : le même renommage produit désormais une
+ * `ResponseShapeError` nommant `totals`, au lieu d'un `undefined` silencieux.
+ *
+ * ⚠ `requiredKey<T>()` porte un `.refine` rejetant `undefined`, et ce n'est pas
+ * cosmétique : `z.unknown()` nu est FACULTATIF pour zod, donc une enveloppe à
+ * laquelle il manque `totals` serait passée VERTE et le défaut du run 94
+ * aurait survécu au contrat censé l'attraper.
+ */
+export const teachingAssignmentsEnvelope = pageEnvelope(unvalidatedItem<Assignment>()).extend({
   /** La fenêtre effectivement servie (ADR-080 §D4). */
-  limit: number;
-  offset: number;
-  totals: AssignmentsTotals;
-  coverage: AssignmentsCoverage;
-}
+  limit: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative(),
+  totals: requiredKey<AssignmentsTotals>(),
+  coverage: requiredKey<AssignmentsCoverage>(),
+});
+
+export type TeachingAssignmentsResponse = z.infer<typeof teachingAssignmentsEnvelope>;

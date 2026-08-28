@@ -4,7 +4,28 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-27)** `in-progress` — **ELEVEN slices landed, and there was none before 2026-08-25.**
+**Status (2026-08-28)** `in-progress` — **THIRTEEN slices landed, and there was none before 2026-08-25.**
+
+> **Third ledger correction, 2026-08-28 (`S-E03-11` land pass) — the count, not the rows.** This line read
+> *"ELEVEN slices landed"* while the **Slice status** table below already carried **twelve** rows
+> (`S-E03-4`, `2`, `3`, `3b`, `3c`, `5`, `3d`, `6`, `8`, `10`, `7`, `9`). `bmad/roadmap.md` read *"12 slices
+> landed"* and was right. Same class as the two corrections recorded further down, one axis over: the rows were
+> maintained, the **prose count above them was not**, and the two files disagreed by one for a full run. Corrected
+> here to **thirteen** (twelve + `S-E03-11`) rather than silently bumped by one, so the discrepancy is on the record.
+
+`S-E03-11` (run 95, 2026-08-28 — **`PF-50` and `PF-427` both ADVANCED, neither closed**, `ADR-081`; the page
+envelope becomes a CONTRACT and the client stops ASSERTING the shape it reads. `api<T>()` ended in
+`return (await res.json()) as T` — an **assertion**, never a check — so a paginated response contract was
+hand-written twice, once in the server's `return` and once in the page's `interface`. Measured: **211 `api<…>(`
+call sites over 117 files**, **ten** of them hand-declaring a `data` + `total` envelope. Run 94 had already
+committed and repaired exactly that defect **inside one run** — `totals` emitted, `summary` read, both halves
+typechecking green, four KPIs rendering `—`. One `pageEnvelope()` factory now lives in
+`packages/contracts/src/pagination/page-envelope.ts` beside `pageWindow`; two API emitters **declare** their
+return shape and four admin readers **parse** it, raising a `ResponseShapeError` that **names the offending key**
+instead of rendering a wrong number. Records **`PF-428`…`PF-433`**. **NEEDS HUMAN REVIEW, and the first landing
+condition is not a code fix:** `packages/contracts` must be **rebuilt** before the app runs, or all four converted
+pages throw at module load while every gate stays green. **Zero live probes** — Docker down a **sixth**
+consecutive run. See § `S-E03-11`).
 
 `S-E03-9` (run 94 — **`PF-50` ADVANCED and explicitly NOT closed**, `ADR-080`; one page window, one cap, one
 place, and a negative `limit` stops silently inverting the result set. Thirteen hand-rolled
@@ -110,6 +131,7 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-10`** — a snapshot recompute trigger can reach a terminal state on the **second** recompute of a scope | **advances `PF-24`** — NOT closed (no executed proof against Postgres); raises `PF-380`…`PF-388` | ⚠️ **2026-08-26, run 89 — needs human review, P1 `[truth][worker][schema-adjacent]`. NOT auto-merge: `PF-380` is a blocking merge condition.** (`PF-381`, the test-architect's NO-GO, was raised AND closed inside the run: the mechanism evidence it prescribed was built at the land pass, a fourth conflict site — the claim — was found and fixed there, and the test excess is back to zero.) |
 | **`S-E03-7`** — une classe n'a qu'UN effectif : « combien d'élèves dans cette classe » cesse d'avoir quatre réponses, et la somme d'effectifs cesse d'être présentable comme un nombre d'élèves | **claims `PF-36`** as the CLASS of derivations converted; **closes `PF-410`** (structure header counted tenant-wide) and **`PF-412`** (count without `tenantId`); **annotates `PF-361`** (id preserved, live-database re-measurement); raises `PF-409`, `PF-411`, `PF-413`, `PF-414`, `PF-415`; `ADR-079` | ⚠️ **2026-08-27, run 93 — NEEDS HUMAN REVIEW, do NOT auto-merge. P0 `[truth][tenant][contracts][cross-portal]`.** Landing conditions in § `S-E03-7`: the `PF-36` and `PF-362` rows of `OPEN.md` are still `open`, and the `PF-412` row asserts a remedy that is not in the diff |
 | **`S-E03-9`** — one page window, one cap, one place; and a negative limit stops silently inverting the result set | **advances `PF-50`** — explicitly **NOT closed** (`AC-7`, named residual = `PF-426`); **fixes `PF-421`, `PF-422`, `PF-423`** in-slice; raises `PF-419`, `PF-420`, `PF-424`, `PF-425`, `PF-426`; `ADR-080` | ⚠️ **2026-08-27, run 94 — DONE, needs human review, do NOT auto-merge. P1 `[api-contract][truth][breaking-change]`** (re-tiered from P2 at the gate: thirteen endpoints now **reject** an over-cap `limit` instead of clamping it). Story `docs/daily-improvement-v3/stories/S-E03-9.md`; ADR `docs/adr/ADR-080-canonical-page-window.md`; canon `packages/contracts/src/pagination/page-window.ts`; ratchet `apps/api/src/shared/quality/page-window-derivation-gate.spec.ts` (`CENSUS_CEILING = 151`). **Evidence tier B — no live probe was possible** (Docker down for a fifth consecutive run, local DB empty): `pnpm typecheck` 13/13 green **only after** the two halves were consolidated into one checkout, the ratchet spec passes, and `page-window.spec.ts` still has **one RED test** (`AC-8 / G-TENANT` hard-codes SEVEN reads; the handler now issues EIGHT, all tenant-keyed). Landing conditions in § `S-E03-9`. |
+| **`S-E03-11`** — the page envelope becomes a CONTRACT, and the client stops ASSERTING the shape it reads | **advances `PF-50`** and **advances `PF-427`** (`S-E03-9`'s own named residual) — **neither closed**; raises `PF-428`…`PF-433`; `ADR-081` | ⚠️ **2026-08-28, run 95 — DONE, needs human review, do NOT auto-merge. P1 `[api-contract][truth][admin-portal]`** (re-tiered from the story's P2 at the panel: the client half turns four tolerant casts into **throwing** validation on live admin reads). Story `docs/daily-improvement-v3/stories/S-E03-11.md`; ADR `docs/adr/ADR-081-canonical-page-envelope.md`; canon `packages/contracts/src/pagination/page-envelope.ts`; ratchet `apps/api/src/shared/quality/page-envelope-boundary-gate.spec.ts` (`R1_CEILING = 1`, `R2_CEILING = 6`). **Evidence tier B — no live probe was possible** (Docker down a **sixth** consecutive run, local DB empty). Landing conditions in § `S-E03-11`; the first of them — `pnpm --filter @pilotage/contracts build` — is a **merge precondition**, not an optimisation. **Slice id renumbered `S-E03-10` → `S-E03-11` at the land pass**: `S-E03-10` was already taken by the run-89 snapshot slice, and the collision had been stamped into fourteen shipped docblocks |
 | `S-E03-1` | — | **matrix row only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86, `S-E03-6` at run 91, `S-E03-8` at run 92, `S-E03-7` at run 93 and **`S-E03-9` at run 94**: all six were authored, so the habit is holding. `PF-50` moved off this row at run 94 — it is `S-E03-9`'s, not `S-E03-1`'s.) |
 
 ---
@@ -1792,7 +1814,7 @@ ne doit être lue comme « vérifié contre la pile ».
 
 ---
 
-## Next slice → **lever les trois conditions de land de `S-E03-9`**, puis l'`epic-spec` (en retard de ONZE tranches)
+## ~~Next slice → **lever les trois conditions de land de `S-E03-9`**, puis l'`epic-spec` (en retard de ONZE tranches)~~ — **point 1 LIVRÉ au run 95 par `S-E03-11`** (`ADR-081`). Les points 2 à 5 sont intacts et tiennent toujours. Conservé tel quel ; **le pointeur vivant est à la FIN de ce fichier**
 
 **1. La condition la plus urgente n'est pas le test rouge, c'est le cast non validé.** `AC-5a` / `AC-5b` sont
 « corrigées mais non prouvées » : le contrat de réponse de `GET /teaching-assignments` est écrit **deux fois à la
@@ -1824,4 +1846,223 @@ tranche d'implémentation a payé le prix d'un spec-kit absent. `PF-365` / `PF-3
 (`PF-426`, run 94). Les quatre restantes : bloquées sur des **arbitrages sémantiques** (`PF-12` deux axes
 survivants, `PF-04`) ; **jamais commencées** (`PF-24` — mais voir `ci/2026-08-26-v3-e03-snapshot-terminal-conflict`
 avant de démarrer —, `PF-05`).
+
+---
+
+## `S-E03-11` — l'enveloppe de page devient un CONTRAT, et le client cesse d'AFFIRMER la forme qu'il lit (run 95, 2026-08-28) — ⚠️ revue humaine requise
+
+**Statut : implémentée et livrée dans ce même run.** Story `docs/daily-improvement-v3/stories/S-E03-11.md` ;
+ADR `docs/adr/ADR-081-canonical-page-envelope.md`. **Portée : 19 fichiers, +2710 / −47.** Aucune migration, aucun
+changement de `schema.prisma`, aucun octet de payload modifié, aucun `where` / `take` / `skip` déplacé, aucune
+surface d'autorisation ni d'audit touchée.
+
+### Ce qui était faux, mesuré sur l'arbre le 2026-08-28
+
+`apps/web/src/lib/api-client.ts:124` finissait sur `return (await res.json()) as T`. Ce `as T` est une
+**affirmation**, jamais une vérification : `T` est ce que le site d'appel a écrit à la main, et **rien dans le
+processus ne le compare à ce que le serveur envoie réellement**. Recensement exécuté (382 fichiers parcourus) :
+**211 sites `api<…>(` sur 117 fichiers**, dont **dix** déclarent à la main une enveloppe `data` + `total` — le
+brief en annonçait quatre, et la story corrige le chiffre au lieu de l'absorber.
+
+**Ce n'est pas un risque théorique : le run 94 a commis puis réparé ce défaut exact à l'intérieur d'un seul run.**
+Les deux moitiés de `S-E03-9` ont été écrites dans deux checkouts ; l'API émettait `totals`, la page lisait
+`summary` ; **les deux typecheckaient au vert** et l'arbre fusionné rendait les quatre KPI à `—` avec un panneau de
+couverture définitivement « indisponible ». C'est `PF-427`, et sa ligne `OPEN.md:337` porte l'ordre que cette
+tranche exécute : *« Do NOT close this by adding one assertion to one page. »*
+
+### Le remède, et pourquoi il a cette forme
+
+Une fabrique `pageEnvelope()` dans `packages/contracts/src/pagination/page-envelope.ts`, **à côté de
+`pageWindow`** (`ADR-081 §D1` : `apps/web` importe déjà `@pilotage/contracts` en valeur à une vingtaine
+d'endroits, et les trois paquets épinglent `zod ^3.23.8`). Deux faces d'un seul objet : le serveur **déclare** sa
+forme de retour, le client la **parse**.
+
+- **Deux émetteurs déclarent** : `teaching-assignments.controller.ts` et `analytics.service.ts` (`AuditListResult`
+  re-basée sur `PageEnvelope<AuditListRow>`). Renommer `totals` en `summary` *dans `apps/api`* ne compile plus.
+- **Quatre lecteurs analysent** : `/admin/audit`, `/admin/exports`, `/admin/students`, `/admin/assignments`, via un
+  `apiEnvelope()` **additif** posé à côté d'`api()` — les 205 autres sites d'appel sont intacts et le diff reste
+  relisable.
+- **`.passthrough()` est le choix load-bearing du schéma.** Un `z.object({ data, total })` nu aurait **retiré**
+  `kpis` / `filters` à l'exécution, tous types au vert — un défaut pire que celui qu'on corrige, et sur la surface
+  d'audit RGPD.
+- **`ResponseShapeError` n'étend délibérément PAS `ApiError`.** Les cinq copies locales de `safe()` re-lèvent tout
+  ce qui n'est pas une `ApiError`, donc une rupture de contrat atteint `app/admin/error.tsx` **au lieu d'être
+  blanchie en « lecture indisponible »**. C'est `G-TRUTH` : mieux vaut une page en erreur qu'un nombre faux
+  présenté comme vrai.
+- **`requiredKey<T>()` existe parce que `z.unknown().isOptional()` vaut `true`** — une clé déclarée `z.unknown()`
+  aurait laissé le défaut du run 94 traverser le contrat intact.
+- **La fuite de PII a été anticipée structurellement** : `responseShapeIssues()` ne projette que `path` / `code` /
+  `expected` (les trois dérivés du **schéma**, jamais de la réponse), la `ZodError` n'est pas attachée à l'erreur,
+  et la chaîne de requête est retirée du libellé d'endpoint. Vérifié maillon par maillon par la lentille sécurité.
+
+### Preuve, et son palier
+
+**Palier B. Aucune sonde live, et aucune n'était possible** — Docker Desktop refuse de démarrer pour le
+**sixième run consécutif**, `pilotage@5432` est vide. Tout est mesuré en source ou exécuté dans un `node` nu.
+
+- `apps/api/src/shared/pagination/page-envelope.spec.ts` (398 l.) — la preuve rouge-avant / vert-après de la
+  fabrique : le payload exact du run 94 est rejeté, et le schéma **NOMME** la clé fautive.
+- `apps/api/src/shared/quality/page-envelope-boundary-gate.spec.ts` (544 l.) — le cliquet à sens unique :
+  `R1_CEILING = 1` (déclarations nommées `data`+`total` dans `apps/web/src`), `R2_CEILING = 6` (transtypages
+  `api<{ data … total … }>` en ligne), quatre planchers d'anti-vacuité, **allowlist vide**, et deux fixtures
+  `__fixtures__/page-envelope/` qui prouvent que le classifieur mord indépendamment de l'arbre vivant.
+- `pnpm --filter @pilotage/api run typecheck` **exit 0** après le correctif d'une ligne du gate
+  (`audit-kpis.spec.ts:253`, `Array<{id}>` → `ReadonlyArray<{id}>` : le `readonly` de `PageEnvelope.data` porte la
+  garantie `G-DNC` et ne devait pas être retiré). `@pilotage/contracts` et `@pilotage/web` étaient déjà verts.
+
+### `PF-50` et `PF-427` sont AVANCÉES, aucune n'est fermée
+
+`PF-50` : quatre lecteurs convertis sur ~150 que le §SEQUENCING de la story anticipe. `PF-427` : `data` et `total`
+sont désormais réellement communs, **mais les clés d'EXTENSION restent deux listes écrites à la main dans deux
+paquets** — `totals` / `coverage` / `limit` / `offset` côté assignments, `kpis` / `filters` côté audit. C'est
+exactement là que vivait le défaut du run 94. Le progrès est réel (un `undefined` silencieux devient une erreur
+runtime nommée) mais **c'est un garde-fou d'exécution, pas la clôture à la compilation** que la prose des
+docblocks laisse entendre côté client.
+
+### Conditions de land — écrites pour ne pas être re-découvertes
+
+1. **`pnpm --filter @pilotage/contracts build` — condition de MERGE, pas une optimisation.** Le paquet résout
+   `types → ./src/index.ts` mais `main → ./dist/index.js`, et `dist/pagination/` ne contient aujourd'hui que
+   `page-window.*`. Les quatre pages importent `pageEnvelope` / `requiredKey` / `unvalidatedItem` **en valeur** :
+   tant que le build n'a pas tourné, `/admin/audit`, `/admin/students`, `/admin/exports` et `/admin/assignments`
+   lèvent au chargement du module — **pendant que le typecheck reste vert**, parce que les types viennent de la
+   source et le runtime du `dist`. C'est la classe même de défaut que la tranche ferme, reproduite un étage plus
+   bas, et aucun gate de l'arbre ne peut la voir. Cette tranche n'avait pas le droit de construire (`GUARDRAILS §4`).
+2. **`OPEN.md` est INTACT, et c'est la moitié manquante des critères d'acceptation.** `PF-50` et `PF-427` ne sont
+   pas écrites `ADVANCED` (la ligne `PF-427:337` dit encore *« no story yet »* et *« a response-shape test was
+   prescribed and was not written »* — les deux sont désormais fausses), et `PF-428`…`PF-433` n'ont **aucune
+   ligne** : les six findings que la tranche existe pour ENREGISTRER ne vivent que dans un `const` TypeScript. Le
+   `routine-governance-gate` ne rattrapera pas ça (il n'exige des lignes que pour `PF-01`…`57`). C'est la forme
+   `project_held_pr_causes_duplicate_work` : le run suivant lit `PF-427` comme intacte et ré-implémente la tranche.
+3. **`PF-428`…`PF-433` désignent des choses différentes dans TROIS fichiers livrés** — la story `§11`,
+   `PAGE_ENVELOPE_DEFINITION.inheritedFindings` dans `page-envelope.ts`, et le cliquet. `ADR-081 §D6` enregistre la
+   divergence au lieu de la trancher en silence. **Trancher sur le registre de la story avant d'écrire `OPEN.md`,
+   et renuméroter PAR LE SENS, jamais par motif** — les ids sont déjà cités depuis des docblocks de production
+   (`project_parallel_runs_collide_on_ids`).
+4. **Le test que la tranche n'a pas écrit, et que trois lentilles ont réclamé indépendamment.** Rien ne prouve que
+   les **octets** qu'un endpoint émet satisfont le schéma qu'une page parse : le spec prouve la *fabrique*, le
+   cliquet prouve un *recensement de source*, et `apps/web` n'a aucun runner unitaire. Un test d'aller-retour fil
+   dans `apps/api` (`JSON.parse(JSON.stringify(res))` contre la trame canonique — le round-trip compte, il efface
+   la marque `ResultTotal` et exerce donc la valeur non typée que le navigateur reçoit) plus un contrôle négatif
+   sur une clé renommée fermerait l'axe qui a réellement cassé. **Avec lui, l'assertion
+   `ResponseShapeError instanceof ApiError === false` ET son contrôle positif** : ce prédicat est la charnière de
+   tout le routage d'erreur et il n'est aujourd'hui garanti que par de la prose. S'il cède un jour, une rupture de
+   contrat redevient `null` et les quatre pages affichent « Indisponible » — visuellement identique au défaut du
+   run 94, et pire que lui.
+5. **La garantie « aucune valeur de réponse dans le diagnostic » n'a pas de test qui l'exerce.**
+   `page-envelope.spec.ts:161` assère sur des `issue.path` bruts — or un `path` zod est une liste de noms de clés,
+   il ne peut **jamais** contenir une valeur : l'assertion est vraie à vide et passerait même si
+   `responseShapeIssues()` n'existait pas. L'amélioration évidente du run suivant — *« rendons le diagnostic plus
+   utile, ajoutons ce qu'on a reçu »* — est **une ligne** (`received: issue.received`) qui rouvre toute la classe
+   et laisse tous les tests verts. Poser l'invariant au niveau source dans le cliquet, avec une sentinelle PII
+   nichée en `data.0.guardians.0.email`.
+6. **`requiredKey()` laisse passer `null`.** Le refinement teste `v !== undefined` seulement : un serveur qui émet
+   `totals: null` ou `kpis: null` (la forme que produit un `?? null` défensif ou un sous-agrégat échoué) traverse
+   le contrat au **vert**, et la page meurt au rendu sur `resp.totals.assignments` avec un `TypeError` qui ne nomme
+   aucune clé et ne porte aucun chemin de requête. Correctif : `v !== undefined && v !== null`.
+7. **`.passthrough()` affaiblit la vérification à la COMPILATION côté client.** `z.infer` d'un objet passthrough
+   porte `& { [k: string]: unknown }` (vérifié dans `zod@3.25.76`, `v3/types.d.ts:507,521`). `TeachingAssignmentsResponse`
+   et `ExportsListResp`, jadis des `interface` exactes, gagnent donc une signature d'index : `resp.summary` compile
+   en `unknown` là où c'était une erreur. Le parse runtime rattrape le vrai défaut, donc le net reste positif —
+   mais **c'est un échange, pas un gain pur, et rien dans le diff ne le dit**. Piste : exporter le type depuis la
+   forme déclarée plutôt que depuis l'inférence brute.
+8. **Deux planchers du cliquet sont épinglés sur des classes de défauts que la feuille de route s'engage à réduire
+   à zéro.** `MIN_API_TYPED_CALL_SITES = 190` contre 205 mesurés (≈16 conversions de plus le rougissent) et
+   surtout `MIN_BARE_DATA_CASTS = 50` contre 88 — or ce compte **EST** `PF-431` : le réduire rougit le plancher par
+   construction. Un cliquet à sens unique dont les planchers sont franchis par la feuille de route qu'il séquence
+   cliquette dans le mauvais sens. La compétence du classifieur est déjà prouvée par les fixtures : déplacer le
+   témoin dans une fixture et supprimer le plancher.
+9. **L'interlock R1 assère que TOUT délégataire vit sous `apps/web/src/app/admin/`.** Son domaine n'est pas les
+   quatre fichiers convertis, c'est tout fichier qui adoptera jamais le contrat. La tranche suivante visée est
+   `PF-429` = `apps/web/src/lib/parent-children.ts` — **pas sous `app/admin/`, et sur une surface de données
+   enfant**. L'adopter rougit le gate, et le seul « correctif » disponible est d'affaiblir l'assertion. Aggravant :
+   la détection est un `source.includes('pageEnvelope(')`, donc un simple commentaire mentionnant la fabrique
+   ailleurs suffit à rougir un gate de correction.
+10. **Le libellé d'endpoint ne retire que la chaîne de requête, pas les identifiants de CHEMIN.** Les deux
+    docstrings justifient le retrait par *« une chaîne de requête porte des valeurs de filtre qui peuvent désigner
+    un enfant »* — mais `/api/v1/students/<uuid>/…` en désigne un tout aussi directement, et la valeur part dans un
+    `console.error` serveur. **Pas une fuite aujourd'hui** (les quatre endpoints convertis sont des collections
+    sans identifiant de chemin, vérifié) ; latente dès la première conversion par ressource, et cet helper est
+    explicitement conçu comme le point d'entrée des ~150 suivantes.
+11. **`zod` entre dans le bundle client de `AssignmentsManager`.** Ce n'est **pas** `PF-133` — `@pilotage/contracts`
+    est isomorphe et le module server-only reste `api-client.ts`, et les imports sont bien `import type` — mais
+    `admin/teaching-assignments/types.ts` exporte désormais des **valeurs** à côté d'un composant `'use client'`.
+    Personne n'a mesuré la taille. Le prochain `import {}` non-`type` depuis ce fichier tire zod dans le graphe.
+12. **L'id de tranche a été renuméroté `S-E03-10` → `S-E03-11` à la passe de land.** `S-E03-10` était déjà pris par
+    la tranche snapshot du run 89 (`PROGRESS.md:110`, `OPEN.md`, `bmad/roadmap.md`), et la collision avait été
+    gravée dans **quatorze docblocks livrés** plus le nom du fichier de story. Renumérotée dans les seuls fichiers
+    de cette tranche ; les vingt-et-une occurrences de l'ancienne `S-E03-10` dans `OPEN.md`, `roadmap.md` et
+    ci-dessus sont intactes et continuent de désigner la tranche snapshot.
+
+*(Écrit le 2026-08-28, run 95, passe de land. Tranches ultérieures : annoter, ne pas supprimer.)*
+
+### Ce que la passe de land a RÉELLEMENT fait de ces onze conditions
+
+**Six corrigées, cinq enregistrées.** Le partage n'est pas arbitraire : ont été CORRIGÉES les conditions qui
+auraient soit cassé une page en production, soit **bloqué la tranche suivante**. Ont été ENREGISTRÉES celles qui
+demandent une tranche à part entière (`RULE 0` clause 6, RECORD-DON'T-FIX).
+
+| nº | Verdict | Ce qui a été fait |
+|---|---|---|
+| 1 | ✅ **CORRIGÉE, preuve exécutée** | `pnpm build` a produit `dist/pagination/page-envelope.{js,d.ts}`. La vérification ne s'arrête PAS à l'existence du fichier — ce serait exactement la classe de défaut de cette tranche : `require('./packages/contracts/dist/index.js')` rend `pageEnvelope`, `requiredKey`, `unvalidatedItem`, `pageWindow`, `resultTotal` **tous `function`**, la fabrique s'exécute, et le **passthrough survit à la compilation** (`{extra:'kept'}` préservé). C'était la condition de MERGE. |
+| 2 | ✅ **CORRIGÉE** | `OPEN.md` : `PF-427` passe `open` → `in-progress` **AVANCÉE, NON FERMÉE**, et ses deux clauses devenues FAUSSES sont corrigées (il y a une story ; le test de forme A été écrit). `PF-50` gagne sa seconde avancée. **Quinze lignes** écrites. |
+| 3 | ✅ **CORRIGÉE, arbitrée PAR LE SENS** | Les ids désignaient bien deux choses selon le fichier. Règle retenue : garder l'id que la **source livrée** cite le plus. `PF-428` = les six transtypages en ligne (cliquet ×3 + story) ; `PF-430` = le second type écrit à la main du handler d'audit (`analytics.service.ts:212` + story) ; `PF-429`/`PF-431`/`PF-432`/`PF-433` inchangés. Les sens qui perdaient leur place reçoivent des ids NEUFS : **`PF-439`** (`users.controller` `total: items.length`), **`PF-440`** (~9 autres émetteurs), **`PF-441`** (`/users`+alertes sans type de retour déclaré), **`PF-442`** (le « rouge hérité du run 94 »). `page-envelope.ts` corrigé en conséquence. **⚠ `PF-442` a ensuite été MESURÉ FAUX et la ligne est inversée** : `page-window.spec.ts` rend **48/48**, dont le cas `AC-8 / G-TENANT` nommé, et les deux passes de gate donnent **0 excédent** (les 4 lignes de base sont `PF-64`). La réclamation était vraie quand le run 94 l'a ÉCRITE et fausse quand la story l'a CITÉE — le même run l'avait corrigée dans la foulée, en DÉRIVANT le compte des mocks (`page-window.spec.ts:500-512`). Troisième fois que cette maison paie un verdict hérité plutôt que mesuré (`PF-374`, `PF-388`). |
+| 4 | ⚠️ **PARTIELLE — et la moitié non faite est nommée** | Le test d'aller-retour FIL (`JSON.parse(JSON.stringify(res))`) n'a **pas** été écrit : c'est une tranche de test à part, et le prétendre fait serait `landed ≠ ran`. Il reste la meilleure prochaine amélioration de preuve de cette classe. |
+| 5 | ✅ **CORRIGÉE, avec contrôle positif** | L'assertion PII était **vraie à vide** — un `issue.path` zod est une liste de NOMS DE CLÉS et ne peut jamais porter une valeur. Le piège est réel et **mesuré** : `zod@3` met la VALEUR BRUTE dans `issue.received` pour `invalid_literal`/`invalid_enum_value`, et l'enveloppe assignments porte exactement un tel littéral (`coverage.scope`). Invariant réécrit en « la projection ne porte QUE trois clés », précédé d'un **contrôle positif** prouvant que la sentinelle est atteignable dans l'issue brute. **Rouge-avant exécuté** : ajouter `received:` rougit exactement ce test. `PF-438`. |
+| 6 | ✅ **CORRIGÉE, rouge-avant exécuté** | `requiredKey()` acceptait `null`. Mesuré des deux côtés avant correction ; corrigé en `v !== undefined && v !== null` ; test ajouté ; **revenir au garde d'origine rougit exactement ce test** (1 échec / 24 succès) et le restaurer rend 25/25. `PF-434`. |
+| 7 | 📝 **ENREGISTRÉE** | Le `.passthrough()` affaiblit bien la vérification à la COMPILATION côté client (signature d'index). C'est un ÉCHANGE, pas un gain pur, et cela reste vrai. Non corrigé : dériver le type depuis la forme déclarée est une tranche de contrat. |
+| 8 | ✅ **CORRIGÉE** | Deux planchers rougissaient **quand la feuille de route avançait** — dont un posé sur `PF-431` lui-même. Témoin d'anti-vacuité **déplacé dans la fixture** (et renforcé : il assère aussi que le classifieur DISCRIMINE, R2 restant à 2 et non 3), puis planchers retirés. Le recensement est désormais **publié, pas planché**. `PF-435`. |
+| 9 | ✅ **CORRIGÉE — P1, parce qu'elle bloquait l'épic** | L'interverrouillage exigeait que **tout** délégataire vive sous `app/admin/`. La tranche suivante visée (`PF-429`, `lib/parent-children.ts`) l'aurait fait rougir en faisant précisément le travail prévu. Séparé en deux tests : un plancher de délégation (R1 ne peut pas être satisfait par une SUPPRESSION) et un **ensemble fermé** nommant les quatre fichiers de cette tranche. `PF-436` ; la détection par sous-chaîne subsiste, enregistrée en `PF-437`. |
+| 10 | 📝 **ENREGISTRÉE** | Le libellé d'endpoint ne retire que la chaîne de requête, pas les identifiants de CHEMIN. **Pas une fuite aujourd'hui** (les quatre endpoints convertis sont des collections sans id de chemin) ; latente dès la première conversion par ressource. |
+| 11 | 📝 **ENREGISTRÉE** | `zod` dans le graphe client d'`AssignmentsManager`. Les imports sont bien `import type`, donc ce n'est pas `PF-133` ; personne n'a mesuré la taille et cette passe ne le prétend pas. |
+
+**Ce que la passe de land N'A PAS fait, dit franchement.** Aucune sonde vivante : Docker Desktop refuse de démarrer
+pour le **sixième** run consécutif (sondé à ce run, pas hérité) et `pilotage@5432` est vide. Les magnitudes de
+l'audit ne sont pas re-dérivées ; seuls les MÉCANISMES sont prouvés, dans un `node` nu et dans jest.
+
+**La leçon durable de ce run, parce qu'elle se répète.** Pour le **quatrième run consécutif**, la tranche a rendu
+`landed: true` **en nommant elle-même ce qui n'allait pas dans sa propre livraison** — et pour la quatrième fois,
+ses notes valaient davantage que son diff. Deux de ses onze conditions (nº 8 et nº 9) décrivaient un cliquet qui
+**punissait le travail qu'il séquence** : les corriger n'a rien changé au produit et a débloqué la tranche
+suivante. Traiter le résultat du sprint comme une HYPOTHÈSE et la passe de land comme l'EXPÉRIENCE reste la bonne
+lecture (`feedback_landed_is_not_ran`).
+
+*(Écrit le 2026-08-28, run 95, passe de land.)*
+
+---
+
+## Next slice → **lever les conditions de land de `S-E03-11`** (elles sont de la TENUE DE REGISTRE, et l'une d'elles est une condition de merge), puis l'`epic-spec` (en retard de DOUZE tranches)
+
+**1. D'abord, et ce n'est pas une tranche : reconstruire `packages/contracts`.** Condition n° 1 ci-dessus. Tant
+qu'elle n'est pas levée, la valeur de la tranche est **non prouvée** et quatre pages admin sont mortes au
+chargement. Aucun vert de gate ne doit être lu comme une preuve du contraire.
+
+**2. Puis `OPEN.md`, et c'est la seule chose qu'aucun gate ne rattrapera.** Conditions n° 2 et n° 3 : écrire
+`PF-50` / `PF-427` en `in-progress — ADVANCED, NOT CLOSED` en nommant cette story et ses deux gates, puis créer
+`PF-428`…`PF-433` **après** avoir tranché la divergence de numérotation sur le registre de la story. Sans ça, le
+run suivant ré-implémente cette tranche.
+
+**3. La tranche la moins chère qui prouve quelque chose : le test d'aller-retour fil.** Condition n° 4, plus les
+deux assertions de charnière (`instanceof ApiError === false` + contrôle positif) et un contrôle positif sur les
+quatre formes réelles copiées des `return` des contrôleurs. `/admin/students` est le seul lecteur converti **non**
+enveloppé dans `safe()` : un scalaire faux y est un 500 immédiat, pas une carte dégradée.
+
+**4. Candidate strictement contenue, et elle ferme un trou que cette tranche a laissé ouvert : `requiredKey()`
+accepte `null`.** Condition n° 6, une ligne, et l'`isOptional()` reste `false`.
+
+**5. La tranche suivante qui compte vraiment, et elle est sur une surface ENFANT : `PF-429`.**
+`apps/web/src/lib/parent-children.ts:44` déclare `total?` **optionnel** côté portail parent alors que l'API l'envoie
+toujours — une seconde liste écrite à la main sur la route `/students`, lue par le portail parent. Attention : la
+convertir rougit l'interlock R1 (condition n° 9), qu'il faut donc corriger **dans la même tranche**.
+
+**6. Puis l'`epic-spec`.** Il y a maintenant **dix** modules contractuels frères, et la dixième story a dû, comme
+la huitième et la neuvième, **arbitrer son propre foyer dans son `§D1`**. Trois runs de suite. `PF-365` / `PF-370`
+attendent depuis neuf runs.
+
+**7. Chiffres de l'épic après treize tranches : 2 fermées sur 9 fermement** (`PF-15` sur un axe, `PF-20` entière),
+**`PF-40` et `PF-36` revendiquées sous conditions** (runs 92 et 93), **`PF-50` avancée DEUX fois avec un résidu
+nommé à chaque fois** (`PF-426` au run 94, `PF-427` au run 95 — et `PF-427` est elle-même avancée, non fermée).
+Les quatre restantes : bloquées sur des **arbitrages sémantiques** (`PF-12` deux axes survivants, `PF-04`) ;
+**jamais commencées** (`PF-24` — voir `ci/2026-08-26-v3-e03-snapshot-terminal-conflict` avant de démarrer —,
+`PF-05`).
 
