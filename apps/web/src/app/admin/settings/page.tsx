@@ -163,8 +163,27 @@ export default async function SettingsPage() {
               title="Sécurité"
               description="MFA, sessions et politiques de mot de passe (gérées par Keycloak)"
             >
-              <Field label="MFA pour admins" value="Obligatoire (à configurer dans Keycloak)" />
-              <Field label="MFA pour enseignants" value="Recommandé" />
+              {/* S-E05-8 / PF-445 — static prose, corrected because this slice
+                  makes it FALSE, not because the page was in scope. « MFA pour
+                  enseignants — Recommandé » is contradicted by
+                  `apps/api/src/modules/identity/invite.controller.ts:230-232`,
+                  which pushes `CONFIGURE_TOTP` for every invited `teacher` (and
+                  `school_admin`) — the very rule `/me`'s new `mfaRequired`
+                  derives from. Left alone, the admin page would assert the
+                  opposite of the endpoint and of the teacher's own settings
+                  page. « à configurer dans Keycloak » went for the same reason:
+                  it read as an operator to-do, when the invite already posts
+                  the required action. Prose only, zero blast radius (PF-267
+                  posture). The three rows below are realm policy this slice
+                  does not touch. */}
+              <Field
+                label="MFA pour admins"
+                value="Obligatoire · action requise à la première connexion"
+              />
+              <Field
+                label="MFA pour enseignants"
+                value="Obligatoire · action requise à la première connexion"
+              />
               <Field label="Longueur min. mot de passe" value="12 caractères (policy realm)" />
               <Field label="Verrouillage automatique" value="5 tentatives" />
               <Field label="Durée session" value="8 h (refresh token : 30 j)" />

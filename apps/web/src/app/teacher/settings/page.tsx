@@ -1,6 +1,10 @@
 import {
   Avatar,
   EmptyState,
+  MfaStatusBadge,
+  mfaAssuranceHint,
+  mfaAssuranceLabel,
+  mfaAssuranceState,
   PageHeader,
   Tabs,
   TabsContent,
@@ -270,12 +274,24 @@ function ProfilePanel({ me, summary }: { me: MeResponse | null; summary: Teachin
                     Professeur principal · {summary.mainClassCount}
                   </HeroBadge>
                 )}
-                {me.mfaEnabled && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-400/20 px-2.5 py-1 text-[11px] font-bold text-emerald-50 ring-1 ring-emerald-300/30 backdrop-blur-sm">
-                    <ShieldCheck className="h-3 w-3" />
-                    MFA actif
-                  </span>
-                )}
+                {/* S-E05-8 / PF-25 half (b). This was `{me.mfaEnabled && …}`
+                    over a field the API hard-coded to `false`, so the badge was
+                    unreachable for EVERY user — and now that the field is
+                    `null` ("never measured"), a truthiness read would keep it
+                    unreachable while silently meaning something else. The
+                    verdict is derived once, by the shared rule, from the POLICY
+                    (`mfaRequired`, always known) crossed with the FACT
+                    (`mfaEnabled`, `null` = unmeasured); the badge renders
+                    « MFA requis · non vérifié » for a teacher, which is the
+                    user the audit complained about. */}
+                <MfaStatusBadge
+                  state={mfaAssuranceState({
+                    mfaRequired: me.mfaRequired,
+                    mfaEnabled: me.mfaEnabled,
+                  })}
+                  surface="on_gradient"
+                  size="sm"
+                />
               </div>
             </div>
           </div>
@@ -355,6 +371,16 @@ function ProfilePanel({ me, summary }: { me: MeResponse | null; summary: Teachin
 // =============================================================================
 
 function SecurityPanel({ me }: { me: MeResponse | null }) {
+  // TWO different unknowns, deliberately not collapsed into one string:
+  //  - `me === null` (401 / network — `fetchMe()` swallows a 401) → « Non
+  //    disponible », the pattern the email row already uses. Something is wrong
+  //    with the session.
+  //  - `me.mfaEnabled === null` → « statut non vérifié ». Nothing is wrong; the
+  //    platform simply never asked Keycloak (PF-443). Rendering the same words
+  //    for both would be PF-25 reintroduced one field over.
+  const assurance = me
+    ? mfaAssuranceState({ mfaRequired: me.mfaRequired, mfaEnabled: me.mfaEnabled })
+    : null;
   return (
     <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/60">
       <div className="flex items-start gap-3">
@@ -369,10 +395,17 @@ function SecurityPanel({ me }: { me: MeResponse | null }) {
           </p>
           <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field icon={Lock} label="Mot de passe" value="Modifiable via le portail compte" />
+            {/* Was `me?.mfaEnabled ? 'Activée' : 'Recommandée'` — a two-branch
+                ternary over a THREE-state field, which told 100 % of teachers
+                that MFA was merely « Recommandée » while `invite.controller`
+                pushes `CONFIGURE_TOTP` for every one of them. The wording now
+                comes from the shared table, so « Obligatoire · statut non
+                vérifié » is derived, never hand-written here. */}
             <Field
               icon={ShieldCheck}
               label="Double authentification"
-              value={me?.mfaEnabled ? 'Activée' : 'Recommandée'}
+              value={assurance ? mfaAssuranceLabel(assurance) : 'Non disponible'}
+              hint={assurance ? mfaAssuranceHint(assurance) : null}
             />
             <Field
               icon={UserCircle2}
@@ -447,10 +480,16 @@ function Field({
   icon: Icon,
   label,
   value,
+  hint,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: string;
+  /** One VISIBLE sentence under the value. Visible, not a `title`: help that
+   *  exists only on hover is unreachable by touch and by keyboard, and « statut
+   *  non vérifié » without it reads as an app defect rather than as an honest
+   *  "we never asked". slate-500 on slate-50 ≈ 7:1. */
+  hint?: string | null;
 }) {
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-3">
@@ -459,6 +498,7 @@ function Field({
         {label}
       </dt>
       <dd className="mt-1 text-sm font-semibold text-slate-900">{value}</dd>
+      {hint ? <dd className="mt-1 text-xs font-normal text-slate-500">{hint}</dd> : null}
     </div>
   );
 }

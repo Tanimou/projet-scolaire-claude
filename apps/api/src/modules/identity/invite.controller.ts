@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { isMfaEnrolledRealmRole } from '@pilotage/contracts';
 import { UserStatus } from '@prisma/client';
 import { IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
@@ -226,9 +227,20 @@ export class InviteController {
     //     (ADR-015, `S-E05-2` D8), not an oversight: realm-role provisioning is
     //     a delegation question (§2.4 option 2), not a subset question.
 
-    // 2. Required actions — MFA enforced for admin/teacher per ADR-004
+    // 2. Required actions — MFA enforced for admin/teacher per ADR-004.
+    //
+    //    S-E05-8 / ADR-082 §D2 — CE SITE NE PORTE PLUS LA RÈGLE, IL LA CONSOMME.
+    //    Le littéral `=== 'school_admin' || === 'teacher'` qui vivait ici est
+    //    désormais l'UNIQUE déclaration du dépôt, dans
+    //    `packages/contracts/src/security/mfa-enrolment-policy.ts`, parce que
+    //    `me.controller.ts` doit dériver `mfaRequired` de LA MÊME règle : l'y
+    //    recopier aurait fondé la seconde liste tenue à la main, c'est-à-dire la
+    //    dérive que la tranche ferme. Table de vérité IDENTIQUE — aucun rôle ne
+    //    gagne ni ne perd `CONFIGURE_TOTP` (`school_admin`/`teacher` oui,
+    //    `parent` non ; le canal n'admet pas d'autre valeur). R4 du cliquet gèle
+    //    qu'il n'existe pas de troisième copie.
     const requiredActions = ['UPDATE_PASSWORD'];
-    if (body.realmRole === 'school_admin' || body.realmRole === 'teacher') {
+    if (isMfaEnrolledRealmRole(body.realmRole)) {
       requiredActions.push('CONFIGURE_TOTP');
     }
 

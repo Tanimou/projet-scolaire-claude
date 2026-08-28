@@ -419,6 +419,123 @@ async function main() {
             'infra/kc-prod-redirects.mjs (it PUTs back the representation it fetched, secret included), not a test bug.',
         );
       }
+
+      /* ---- STEP 6 — S-E05-8 / PF-444: the two phrases, MINTED not remembered - */
+      step('STEP 6 — S-E05-8 / PF-444: the two direct-grant failure phrases, MINTED rather than remembered (mints A, B, C)');
+      // WHY THIS STEP EXISTS. `packages/contracts/src/security/direct-grant-failure.ts`
+      // separates a rejected credential from a pending account setup, and the login
+      // form says something different for each. It rests on two fixture strings and
+      // one PREMISE:
+      //   a) "Invalid user credentials"   — MEASURED once, at run 63, and recorded in
+      //      CLOSED-L0.md:123. A cited measurement is a CLAIM, not a measurement
+      //      (PF-374, PF-388, PF-442), so mint A re-derives it here.
+      //   b) "Account is not fully set up" — NEVER measured by this routine; it comes
+      //      from a comment at register.controller.ts:241. Mint B measures it.
+      //   P-1) Keycloak answers (b) only AFTER the password validates. If P-1 is
+      //      FALSE, the « terminez votre activation » message is reachable WITHOUT
+      //      proving a password — an account-state oracle, i.e. precisely the leak
+      //      this slice removed on the other branch. Mint C is the discriminator,
+      //      and it is the whole reason PF-444 is open.
+      //
+      // The probe asserts the CLASSIFICATION, never the phrase: it feeds the live
+      // response to the shipped classifier. Comparing a re-typed phrase here would
+      // be a second hand-kept copy of a value that already has one home — the exact
+      // defect S-E05-8 exists to remove.
+      let classify = null;
+      let codeNames = null;
+      try {
+        ({ classifyDirectGrantFailure: classify, DIRECT_GRANT_FAILURE_CODES: codeNames } = require(
+          resolve(REPO_ROOT, 'packages/contracts/dist/index.js'),
+        ));
+      } catch (error) {
+        bad(
+          'packages/contracts/dist is not built, so the SHIPPED classifier could not judge the live ' +
+            `responses (${error.message}). Run \`pnpm build\` and re-run — do NOT re-type the phrases here.`,
+        );
+      }
+      // The two code names below ARE a small hand-kept copy of the union. Bounded
+      // rather than tolerated: if the union renames a member, this fails LOUDLY
+      // here instead of silently never matching and reporting a green mint A.
+      const EXPECTED_CODES = ['credentials-or-otp-rejected', 'account-setup-pending'];
+      if (Array.isArray(codeNames)) {
+        const missing = EXPECTED_CODES.filter((c) => !codeNames.includes(c));
+        if (missing.length > 0) {
+          bad(
+            `this step names ${JSON.stringify(missing)}, which the shipped union no longer contains ` +
+              `(${JSON.stringify(codeNames)}). Re-align STEP 6 with direct-grant-failure.ts — the union is the source.`,
+          );
+          classify = null;
+        }
+      }
+      if (typeof classify === 'function') {
+        const verdict = (m) =>
+          classify({
+            status: m.status,
+            error: m.body && m.body.error,
+            errorDescription: m.body && m.body.error_description,
+          });
+        const wrongPassword = `Wr${randomBytes(9).toString('base64url')}#7aZ`;
+
+        // MINT A — right user, WRONG password, NO required action pending.
+        const mintA = await mint('portal-student', username, wrongPassword);
+        const codeA = verdict(mintA);
+        if (codeA === 'credentials-or-otp-rejected') {
+          ok(`mint A (wrong password, no required action) → "${mintA.body && mintA.body.error_description}" → ${codeA} — run 63's measurement RE-DERIVED, not inherited`);
+        } else {
+          bad(`mint A (wrong password) classified as ${codeA}, expected credentials-or-otp-rejected. Live phrase: "${mintA.body && mintA.body.error_description}"`);
+        }
+
+        // Plant the pending required action the invite flow posts for admin/teacher.
+        await fetch(admin(`/users/${userId}`), {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ requiredActions: ['CONFIGURE_TOTP'] }),
+        });
+
+        // MINT B — right user, CORRECT password, CONFIGURE_TOTP pending.
+        const mintB = await mint('portal-student', username, password);
+        const codeB = verdict(mintB);
+        if (codeB === 'account-setup-pending') {
+          ok(`mint B (correct password, CONFIGURE_TOTP pending) → "${mintB.body && mintB.body.error_description}" → ${codeB} — fixture (b) MEASURED for the first time`);
+        } else {
+          bad(
+            `mint B (correct password, CONFIGURE_TOTP pending) classified as ${codeB}, expected ` +
+              `account-setup-pending. Live phrase: "${mintB.body && mintB.body.error_description}". ` +
+              'Fixture (b) came from a COMMENT (register.controller.ts:241) and this is the first time it was ' +
+              'measured — correct the classifier to what Keycloak actually says, never the reverse.',
+          );
+        }
+
+        // MINT C — right user, WRONG password, CONFIGURE_TOTP pending. THE PREMISE.
+        const mintC = await mint('portal-student', username, wrongPassword);
+        const codeC = verdict(mintC);
+        if (codeC === 'credentials-or-otp-rejected') {
+          ok(
+            `mint C (WRONG password, CONFIGURE_TOTP pending) → "${mintC.body && mintC.body.error_description}" → ${codeC} — ` +
+              'P-1 HOLDS: the password is validated BEFORE the required action is reported, so ' +
+              'account-setup-pending is unreachable without a correct password and leaks no account state. PF-444 discharged.',
+          );
+        } else {
+          bad(
+            `mint C (WRONG password, CONFIGURE_TOTP pending) classified as ${codeC} — P-1 IS FALSE. ` +
+              `Live phrase: "${mintC.body && mintC.body.error_description}". Keycloak reports the pending ` +
+              'setup to a caller who did NOT prove the password, so the « terminez votre activation » ' +
+              'message is an ACCOUNT-STATE ORACLE on an unauthenticated endpoint. This is the outcome ' +
+              'PF-444 was opened for; apply the pre-decided contingency — collapse account-setup-pending ' +
+              'into the credentials-or-otp-rejected message in PortalLoginForm.tsx — and re-scope PF-444 as a ' +
+              'defect rather than a premise.',
+          );
+        }
+
+        // Leave the fixture as STEP 5 found it. CLEANUP deletes the user anyway;
+        // this keeps the step re-runnable in isolation and non-ordering-dependent.
+        await fetch(admin(`/users/${userId}`), {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ requiredActions: [] }),
+        });
+        ok('required actions reset to [] — STEP 6 leaves the ephemeral identity as it found it');
+      }
     }
   } finally {
     /* ---- the ephemeral identity leaves no trace, and that is verified ------ */
@@ -445,6 +562,10 @@ async function main() {
       '  · azp is OBSERVABLE, not ENFORCED: apps/api validates neither azp nor aud. Tracked as PF-224.',
       '  · the live realm no longer matches realm-export.json after STEP 4 — expected (the provisioner',
       '    rewrote it). The file is NOT regenerated from the realm: that would commit the ephemeral student.',
+      '  · STEP 6 (S-E05-8 / PF-444) is the ONLY discharge of premise P-1 and it requires this probe to',
+      '    have actually RUN. It was shipped by run 96 and NOT executed: Docker Desktop had failed to',
+      '    start for a seventh consecutive run. Until STEP 6 prints its mint C line, PF-444 is UNPROVEN —',
+      '    not verified-safe. `landed: true` is not `ran: true`.',
     ].join('\n'),
   );
   for (const note of notes) console.log(`  · ${note}`);

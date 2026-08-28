@@ -1,4 +1,8 @@
-import NextAuth, { type DefaultSession, type User } from 'next-auth';
+import {
+  classifyDirectGrantFailure,
+  type DirectGrantFailureCode,
+} from '@pilotage/contracts';
+import NextAuth, { CredentialsSignin, type DefaultSession, type User } from 'next-auth';
 import 'next-auth/jwt';
 import Credentials from 'next-auth/providers/credentials';
 import Keycloak from 'next-auth/providers/keycloak';
@@ -124,11 +128,40 @@ function rolesFromAccessToken(accessToken: string | undefined): string[] {
 }
 
 /**
- * Login errors are surfaced via NextAuth's `error` URL param so the UI can switch UX.
- * The `code` (kept as the Error message) is what NextAuth re-emits.
+ * Login outcomes the browser is allowed to see.
+ *
+ * The three failure members come from the ONE canonical taxonomy
+ * (`classifyDirectGrantFailure`, `packages/contracts/src/security/`); only
+ * `wrong_portal` is added here, on purpose: it is decided AFTER a successful
+ * mint, from decoded realm-role claims, so it is not a direct-grant failure and
+ * must never enter that union (its input contract would become a lie).
+ *
+ * `otp_required` and `invalid_credentials` are DELETED, not renamed. Keycloak
+ * cannot tell a wrong password from a wrong/missing TOTP in the ROPC grant, so
+ * no honest code path can produce `otp_required`, and `invalid_credentials`
+ * over-claimed the same way in the opposite direction.
  */
-class CredentialsLoginError extends Error {
-  constructor(public readonly code: 'invalid_credentials' | 'otp_required' | 'wrong_portal' | 'unknown') {
+type CredentialsLoginCode = DirectGrantFailureCode | 'wrong_portal';
+
+/**
+ * Login errors travel to the browser through NextAuth's `?code=` parameter.
+ *
+ * S-E05-8 — this class used to extend plain `Error`, and that made every branch
+ * below invisible: `@auth/core` wraps a non-`AuthError` thrown from `authorize`
+ * in a `CallbackRouteError`, which is NOT in its client-safe list, so the
+ * browser received `?error=Configuration` and no `code` at all — every arm of
+ * the login form's error handler missed and the user read « Connexion
+ * impossible : Configuration » whatever had actually happened. Extending
+ * `CredentialsSignin` is what puts `this.code` on the redirect URL
+ * (`@auth/core/index.js`: `if (error instanceof CredentialsSignin) params.set('code', …)`),
+ * i.e. it is the transport, not decoration. `signIn(…, {redirect:false})` then
+ * surfaces it as `res.code`, which is what `PortalLoginForm` reads.
+ *
+ * Nothing here is more permissive: this class is only ever thrown, never
+ * returned, so no failure can become a session.
+ */
+class CredentialsLoginError extends CredentialsSignin {
+  constructor(public override readonly code: CredentialsLoginCode) {
     super(code);
     this.name = 'CredentialsLoginError';
   }
@@ -147,8 +180,17 @@ const REALM_ROLES_FOR_PORTAL: Record<Portal, string[]> = {
 
 /**
  * Resource Owner Password Credentials grant against Keycloak.
- * Passes optional `totp` — Keycloak only validates it when its direct-grant flow
- * has the OTP step enabled (we leave it conditional so MFA users must supply theirs).
+ *
+ * `totp` is forwarded when the caller supplied one; Keycloak validates it only
+ * when its direct-grant flow has the OTP step enabled.
+ *
+ * S-E05-8 / DNC-06 — the previous docblock claimed « we leave it conditional so
+ * MFA users must supply theirs », which promised behaviour this function does
+ * not deliver: it cannot require an OTP, it cannot detect that one is required,
+ * and it cannot even tell whether a rejection was about the password or the
+ * code. Failure classification is NOT decided here any more: it is delegated,
+ * unchanged and in one place, to `classifyDirectGrantFailure`. This function
+ * only carries the verdict.
  */
 async function directGrantLogin(args: {
   portal: Portal;
@@ -177,10 +219,17 @@ async function directGrantLogin(args: {
   });
   if (args.otp) params.set('totp', args.otp);
 
+  // A transport failure (Keycloak down, DNS, TLS) used to throw a raw `Error`
+  // out of `authorize`, which `@auth/core` wraps into a non-client-safe
+  // `CallbackRouteError` — the browser then saw `?error=Configuration` and no
+  // code at all. It is mapped to the taxonomy's `unclassified` member instead,
+  // so an outage can never be rendered as a password verdict.
   const res = await fetch(`${KEYCLOAK_ISSUER}/protocol/openid-connect/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params,
+  }).catch(() => {
+    throw new CredentialsLoginError('unclassified');
   });
   const body = (await res.json().catch(() => null)) as
     | {
@@ -193,20 +242,23 @@ async function directGrantLogin(args: {
     | null;
 
   if (!res.ok || !body?.access_token) {
-    const desc = (body?.error_description ?? '').toLowerCase();
-    // Keycloak signals "missing OTP" with various phrasings depending on flow config
-    if (
-      desc.includes('otp') ||
-      desc.includes('totp') ||
-      desc.includes('credential') ||
-      desc.includes('verification')
-    ) {
-      throw new CredentialsLoginError('otp_required');
-    }
-    if (res.status === 401 || body?.error === 'invalid_grant') {
-      throw new CredentialsLoginError('invalid_credentials');
-    }
-    throw new CredentialsLoginError('unknown');
+    // S-E05-8 / PF-25 half (a). What stood here was a four-needle substring
+    // cascade (`'otp' | 'totp' | 'credential' | 'verification'`) tested BEFORE
+    // the 401/`invalid_grant` branch. `'credential'` is a proper substring of
+    // Keycloak's measured wrong-password answer `"Invalid user credentials"`,
+    // so an ordinary typo was classified `otp_required` and the login page
+    // announced « Authentification à deux facteurs requise » — an MFA claim
+    // about an account whose password had not been proven — while the correct
+    // message was unreachable. The remedy is NOT a reordering: the taxonomy is
+    // declared once, as a pure closed union, in `@pilotage/contracts`, and this
+    // seam does nothing but pass the observable response to it.
+    throw new CredentialsLoginError(
+      classifyDirectGrantFailure({
+        status: res.status,
+        error: body?.error ?? null,
+        errorDescription: body?.error_description ?? null,
+      }),
+    );
   }
 
   const claims = decodeJwtClaims(body.access_token) as
@@ -219,7 +271,9 @@ async function directGrantLogin(args: {
         realm_access?: { roles?: string[] };
       }
     | null;
-  if (!claims?.sub) throw new CredentialsLoginError('unknown');
+  // A mint that carries no `sub` is not a credential verdict — it is an
+  // unusable response, so it degrades to the taxonomy's closed-failure member.
+  if (!claims?.sub) throw new CredentialsLoginError('unclassified');
 
   const roles = claims.realm_access?.roles ?? [];
   const required = REALM_ROLES_FOR_PORTAL[args.portal];
@@ -252,7 +306,7 @@ const credentialsProvider = Credentials({
   },
   authorize: async (raw): Promise<User | null> => {
     const portalRaw = String(raw?.portal ?? '').toLowerCase();
-    if (!PORTALS.includes(portalRaw as Portal)) throw new CredentialsLoginError('unknown');
+    if (!PORTALS.includes(portalRaw as Portal)) throw new CredentialsLoginError('unclassified');
     const portal = portalRaw as Portal;
 
     const result = await directGrantLogin({

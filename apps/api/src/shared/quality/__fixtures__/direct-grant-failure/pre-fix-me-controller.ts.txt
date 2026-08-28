@@ -1,0 +1,25 @@
+// FIXTURE — S-E05-8 / PF-25 half (b). NOT executable code, NOT part of any build.
+// The shape of apps/api/src/modules/identity/me.controller.ts:85 as it stood at
+// HEAD (6163920): a boolean LITERAL assigned to `mfaEnabled`, asserting a device
+// fact nobody measured. R3's negative control — the live residual is 0, so
+// without this fixture "zero offenders" would be indistinguishable from "the
+// detector is broken".
+// Two offenders on purpose: the property-assignment form AND the later
+// re-assignment form, so R3 is proven on both shapes it must catch.
+
+export class PreFixMeController {
+  async me(jwt: KeycloakJwtPayload) {
+    const user = await this.users.ensureUser(jwt);
+    const realmRoles = jwt.realm_access?.roles ?? [];
+    const payload = {
+      id: user.id,
+      email: user.email,
+      roles: realmRoles,
+      schoolId: null,
+      mfaEnabled: false,
+      photoUrl: user.photoUrl,
+    };
+    payload.mfaEnabled = true;
+    return payload;
+  }
+}
