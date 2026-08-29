@@ -1150,8 +1150,15 @@ export class AnalyticsService {
         grades: Array<{ onTwenty: number; coef: number; termId: string | null; termOrder: number }>;
       }
     >();
+    // `value` est `Decimal?` : une note de ZÉRO est une note. `if (!g.value)`
+    // la gardait par ACCIDENT — un `Prisma.Decimal(0)` est un objet, donc vrai —
+    // et cette sûreté tenait à un invariant que rien n'énonçait : que la valeur
+    // arrive brute. Les sites voisins font déjà `Number(g.value)` (l. 834, 1297) ;
+    // le jour où une valeur numérisée traverse cette boucle, `!0` supprime le
+    // zéro en silence. Prédicat explicite, comme aux quatre sites frères.
+    // `PF-339` (falsifié, pas corrigé) / `PF-05` — voir `ADR-084`.
     for (const g of grades) {
-      if (!g.value) continue;
+      if (g.value === null || g.value === undefined) continue;
       const subj = g.assessment.teachingAssignment.subject;
       const onTwenty = (Number(g.value) / Number(g.assessment.maxScore)) * 20;
       const coef = resolveCoef(subj.id, Number(subj.defaultCoefficient), g.assessment.coefficientOverride);
@@ -1226,7 +1233,7 @@ export class AnalyticsService {
     // Term evolution (group by term order)
     const termGroups = new Map<number, { label: string; student: number[]; class: number[] }>();
     for (const g of grades) {
-      if (!g.value) continue;
+      if (g.value === null || g.value === undefined) continue;
       const t = g.assessment.term;
       const order = t?.orderIndex ?? 0;
       const label = t?.name ?? '—';
@@ -1603,7 +1610,7 @@ export class AnalyticsService {
     // Cumul par (élève × matière) pour calculer rang par matière + rang général.
     const perStudentSubject = new Map<string, Map<string, { sum: number; n: number }>>();
     for (const g of classGrades) {
-      if (!g.value) continue;
+      if (g.value === null || g.value === undefined) continue;
       const sId = g.assessment.teachingAssignment.subject.id;
       const onTwenty = (Number(g.value) / Number(g.assessment.maxScore)) * 20;
       const agg = classSubjectAgg.get(sId) ?? { sum: 0, n: 0, studentIds: new Set() };
@@ -3406,7 +3413,7 @@ export class AnalyticsService {
 
     for (const g of grades) {
       const cy = g.assessment.teachingAssignment.classSection.gradeLevel.cycle;
-      if (!cy || !g.value) continue;
+      if (!cy || g.value === null || g.value === undefined) continue;
       const onTwenty = (Number(g.value) / Number(g.assessment.maxScore)) * 20;
       const isSuccess = onTwenty >= 10;
 
