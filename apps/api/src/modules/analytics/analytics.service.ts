@@ -4200,7 +4200,20 @@ export class AnalyticsService {
       where: {
         tenantId,
         teacherProfileId,
-        ...(academicYearId ? { academicYearId } : {}),
+        // S-E03-14 / `PF-36` / `ADR-088` — NEUVIÈME lecture d'affectations
+        // portée par un enseignant, et la SEULE que `S-E03-13` (run 103) a
+        // manquée. Elle portait encore le littéral d'axe COLONNE
+        // `...(academicYearId ? { academicYearId } : {})` là où les huit
+        // autres dérivent déjà l'année de la SECTION.
+        //
+        // Conséquence MESURÉE par HTTP sur la pile locale, avec une ligne dont
+        // la colonne contredit sa propre section (que la base ACCEPTE, faute de
+        // clé étrangère composite — `PF-473`) : `/teacher/reports` rendait UN
+        // ensemble de classes et `/teacher/dashboard` un AUTRE. Deux surfaces
+        // du MÊME portail en désaccord sur « quelles classes j'enseigne cette
+        // année » — littéralement la forme de `PF-36`.
+        // Sonde : `scripts/teacher-year-axis-agreement-probe.js`.
+        ...assignmentYearScopeWhere(academicYearId),
       },
       include: {
         subject: { select: { id: true, code: true, name: true, color: true } },

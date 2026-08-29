@@ -2546,3 +2546,65 @@ contrôle rouge discriminant), `185/185` (`modules/teaching` + `modules/analytic
 
 **Résidu énoncé :** aucune passe de gate PROPRE sur cette branche. L'étage `test:api (ratchet)` n'a pas été
 rejoué après diagnostic, faute de verrou. C'est `PF-475`, et c'est la raison — pas une omission.
+
+---
+
+## `S-E03-14` — l'axe d'année ferme comme une CLASSE, et il est MESURÉ sur la pile qui tourne (run 104, 2026-08-29)
+
+**Findings :** `PF-36` avancée (3ᵉ fois) · `PF-476`, `PF-477`, `PF-478` levées · `PF-63` constatée déjà close
+**ADR :** `ADR-088` · **Palier de preuve :** B (+ cliquet, parce que la fermeture est revendiquée comme une CLASSE)
+
+### Ce que la tranche corrige, en une phrase
+
+`S-E03-13` (run 103) a converti huit lectures d'affectations vers l'axe SECTION et les a prouvées par huit tests
+nommant chacun son endpoint. **Une neuvième existait** — `analytics.service.ts` / `teacherReports` /
+`GET /analytics/teacher-reports` — et une suite qui énumère des sites **ne peut pas, par construction, échouer
+sur le site qu'elle a omis**.
+
+### Le défaut, observé et non déduit
+
+Avec une affectation dont la colonne `academic_year_id` contredit celle de sa propre section — que la base
+**accepte**, faute de clé étrangère composite (`PF-473`) — `/teachers/me/assignments` et
+`/analytics/teacher-reports` renvoyaient **des ensembles de classes différents au même enseignant**. Deux
+surfaces d'un même portail en désaccord sur « quelles classes j'enseigne cette année ».
+
+### Ce qui a été EXÉCUTÉ
+
+| Preuve | Résultat |
+|---|---|
+| Contrôle de divergence en base (`BEGIN … ROLLBACK`, conteneur) | cumul **58** vs distinct **57** après injection d'un élève bi-section ; 2463 inscriptions retrouvées après annulation |
+| Mesure de la graine, quatre dérivations | **57 / 57 / 57 / 57** — la graine ne discrimine RIEN (`PF-478`) |
+| Contrôle ROUGE du cliquet, contre la vraie source d'avant-correctif restaurée depuis l'index git | R1 nomme **exactement** `analytics.service.ts:4199 (findMany)`, rien d'autre |
+| Contrôle ROUGE de la spec behavioural, même méthode | 1 échec sur 3, sur l'assertion d'axe |
+| Cliquet, arbre corrigé | **13/13** |
+| Spec behavioural, arbre corrigé | **3/3** |
+| Recensement R2 (plafond forcé à 0, liste LUE) | **6** sites, nommés |
+| Sonde HTTP live, jetons Keycloak réels | voir ci-dessous |
+
+### Le fait le plus important de ce run, et il est désagréable
+
+**L'image `pilotage-scolaire-api` qui répondait sur `localhost:4000` datait du 2026-08-25 — quatre jours AVANT la
+fusion de `S-E03-13`** (2026-08-29 19:18), tout en affichant `Up 16 hours (healthy)`. *Healthy* est un signal de
+vivacité et ne dit **rien** du commit qu'il y a dedans. La première passe de la sonde a rendu un résultat que ni
+l'ancien ni le nouveau code n'expliquait ; la lecture honnête n'était pas « le code est faux » mais **« l'artefact
+n'est pas le code »**, et cela n'a été attrapé que parce que la sonde portait un **contrôle POSITIF** dont l'échec
+était lisible. Levé en `PF-476`. `landed: true` n'est pas `deployed: true`.
+
+### Deux corrections apportées au registre lui-même
+
+- **`PF-63` était déjà close** (run 91, `S-E03-6`) : la ligne `PF-36` l'a portée comme bloqueur pendant **treize
+  runs**. « Fermer `PF-36` suppose de fermer `PF-63` d'abord » est périmé.
+- **Le plafond R2 a d'abord été écrit à `14`**, chiffre repris de la prose de `PF-474` sans être confronté à
+  l'arbre. Mesuré : **6**. Un plafond au-dessus de la population réelle aurait laissé passer huit récidives en
+  silence. **Un plafond se mesure.**
+
+### Ce qui n'est PAS fait, dit plutôt que glosé
+
+- `PF-36` **reste `open`**. Les valeurs littérales 43/46/48 et 25/26 de l'audit ne sont **pas présentes dans la
+  graine et ne peuvent pas l'être** (toutes les inscriptions sont `active`, aucun élève bi-section) ; fabriquer des
+  données pour les faire réapparaître serait inventer la preuve.
+- Les ~15 lectures **imbriquées** (`PF-474`) ne sont pas converties : ce sont des gardes d'appartenance, donc un
+  rayon Tier A dans une tranche Tier B. Elles sont **comptées, jamais exemptées**.
+- Le cliquet ne lit que les `where` de **premier niveau** — limite **déclarée à l'écriture**, `PF-477`.
+- La clé étrangère composite (`PF-473`) n'est pas posée : la convergence retire la divergence des **nombres**,
+  jamais celle des **données**.
