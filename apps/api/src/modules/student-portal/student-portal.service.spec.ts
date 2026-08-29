@@ -10,6 +10,17 @@ const ME = { id: 'profile-1', tenantId: TENANT };
 const OWN_ID = 'student-self-id';
 const JWT = { sub: 'kc', realm_access: { roles: ['student'] } } as unknown as KeycloakJwtPayload;
 
+/** S-E03-15 — l'année canonique que le résolveur rendra par défaut. */
+const YEAR_ID = 'year-current';
+const ACTIVE_YEAR = {
+  id: YEAR_ID,
+  schoolId: SCHOOL,
+  name: '2025-2026',
+  startDate: new Date('2025-09-01T00:00:00Z'),
+  endDate: new Date('2026-07-05T00:00:00Z'),
+  status: 'active',
+};
+
 /**
  * Builds the service with hand-mocked collaborators. `linked` controls
  * `resolveSelf` (the `student.findFirst` lookup): the own Student row or null.
@@ -28,6 +39,14 @@ function makeService(opts: {
   remediationRows?: unknown[];
   remediationThrows?: boolean;
   upcomingThrows?: boolean;
+  /**
+   * S-E03-15 — les années que le résolveur canonique verra. Le DÉFAUT est UNE
+   * année active, parce que c'est l'état de la seed et l'état nominal d'une
+   * école ; un défaut vide aurait fait rendre `[]` à `subjectTrends` dans
+   * chaque test existant, ce qui les aurait faits passer pour de mauvaises
+   * raisons.
+   */
+  academicYears?: unknown[];
 }) {
   const studentFindFirst = jest
     .fn()
@@ -40,7 +59,9 @@ function makeService(opts: {
   const subjectFindMany = jest.fn().mockResolvedValue(opts.subjectRows ?? []);
   const gradeFindMany = jest.fn().mockResolvedValue(opts.gradeRows ?? []);
   const enrollmentFindFirst = jest.fn().mockResolvedValue(opts.enrollment ?? null);
+  const academicYearFindMany = jest.fn().mockResolvedValue(opts.academicYears ?? [ACTIVE_YEAR]);
   const prisma = {
+    academicYear: { findMany: academicYearFindMany },
     student: { findFirst: studentFindFirst },
     attendanceRecord: { findMany: attendanceFindMany },
     announcementReceipt: {
@@ -102,6 +123,7 @@ function makeService(opts: {
     service,
     scopeRun,
     scopeTenants,
+    academicYearFindMany,
     studentFindFirst,
     attendanceFindMany,
     receiptFindMany,
@@ -427,7 +449,17 @@ describe('StudentPortalService.dashboard — composed, best-effort, peer-free', 
     const res = await service.dashboard(ME, JWT, SCHOOL);
 
     expect(snapshotFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { tenantId: TENANT, studentId: OWN_ID, termId: null } }),
+      // `academicYearId` AJOUTÉ par S-E03-15 : cette assertion épinglait
+      // jusqu'ici une lecture d'instantanés SANS année, qui rendait le dernier
+      // instantané calculé quelle que soit son année.
+      expect.objectContaining({
+        where: {
+          tenantId: TENANT,
+          studentId: OWN_ID,
+          academicYearId: YEAR_ID,
+          termId: null,
+        },
+      }),
     );
     expect(res.firstName).toBe('Lina');
     expect(res.classSectionName).toBe('4e B');

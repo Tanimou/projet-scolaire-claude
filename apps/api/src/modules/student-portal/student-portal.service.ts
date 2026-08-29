@@ -11,7 +11,14 @@ import type {
   StudentMeResponse,
   StudentUpcomingResponse,
 } from '@pilotage/contracts';
+import type { PublishedGradeStatus } from '@pilotage/contracts';
+import {
+  gradeRecordWhere,
+  PUBLISHED_GRADE_STATUSES,
+  resolveActiveAcademicYear,
+} from '@pilotage/contracts';
 
+import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { type KeycloakJwtPayload } from '../../shared/auth/jwt.strategy';
 import { TenantScopeService } from '../../shared/prisma/tenant-scope.service';
 import { AnalyticsService } from '../analytics/analytics.service';
@@ -193,12 +200,20 @@ export class StudentPortalService {
     // `APP_ROLE_REQUIRED_PRIVILEGES` (PF-246).
     const grades = await this.scope.run(me.tenantId, async (tx) =>
       tx.grade.findMany({
-        where: {
-          studentId: self.id,
-          tenantId: me.tenantId,
-          // Published-only for the learner: never a draft (the non-staff posture).
-          status: { in: ['published', 'revised'] },
-        },
+        // S-E03-15 / `PF-338` — LE RELEVÉ, DÉRIVÉ et non plus réépelé ici.
+        //
+        // `/student/grades` est le pendant élève de `/parent/grades` : il
+        // LISTE, il ne NOTE pas. Il garde donc les absences — `isAbsent`
+        // descend d'ailleurs dans la ligne juste en dessous — et ne se fenêtre
+        // sur AUCUNE année, parce qu'un relevé tronqué à l'année courante n'est
+        // plus un relevé. C'est exactement le jeu B de
+        // `published-grades-where.ts`, dont c'est ici la TROISIÈME adoption.
+        //
+        // `includeUnpublished` est laissé à son défaut, qui est le plus
+        // restrictif : la posture non-staff ne voit jamais un brouillon. Le
+        // littéral `['published', 'revised']` qui vivait ici est supprimé, pas
+        // déplacé — c'était la copie que `DNC-01` interdit.
+        where: gradeRecordWhere({ tenantId: me.tenantId, studentId: self.id }),
         select: {
           id: true,
           value: true,
@@ -246,10 +261,13 @@ export class StudentPortalService {
         assessmentId: a.id,
         assessmentTitle: a.title,
         kind: a.kind,
-        // Narrowed at the source by the `status: { in: ['published','revised'] }`
-        // where-clause above, so this cast can never widen past what reaches the
-        // learner (never a draft).
-        status: g.status as 'published' | 'revised',
+        // Rétréci à la source par le `where` du contrat ci-dessus, donc cette
+        // conversion ne peut jamais élargir au-delà de ce qui atteint l'élève
+        // (jamais un brouillon). S-E03-15 : le type vient du contrat au lieu
+        // d'être une union réécrite ici — c'était la DERNIÈRE copie du couple
+        // de statuts dans ce fichier, et une union recopiée dérive tout aussi
+        // silencieusement qu'un littéral de `where`.
+        status: g.status as PublishedGradeStatus,
         value: g.value === null ? null : Number(g.value),
         maxScore: Number(a.maxScore),
         isAbsent: g.isAbsent,
@@ -569,7 +587,7 @@ export class StudentPortalService {
     // Block A — per-subject trend (self-only, snapshot-first / live fall-through).
     let subjects: StudentDashboardSubject[] = [];
     try {
-      subjects = await this.subjectTrends(me.tenantId, self.id);
+      subjects = await this.subjectTrends(me.tenantId, self.id, schoolId);
     } catch (err) {
       this.logger.debug(`dashboard subjects block degraded to []: ${String(err)}`);
       subjects = [];
@@ -637,20 +655,63 @@ export class StudentPortalService {
   private async subjectTrends(
     tenantId: string,
     studentId: string,
+    schoolId: string,
   ): Promise<StudentDashboardSubject[]> {
     const IMPROVEMENT = 1.5; // the shared E3/E7 IMPROVEMENT delta threshold.
 
-    // TROIS PORTÉES SÉQUENTIELLES, UNE INSTRUCTION CHACUNE, et jamais imbriquées :
-    // le `map`/`Map` qui les relie est du calcul PUR et n'a rien à faire dans une
-    // transaction interactive à 5 s.
+    // S-E03-15 / `PF-338` / `PF-04` — L'ANNÉE, RÉSOLUE ICI POUR LA PREMIÈRE FOIS.
+    //
+    // Ce producteur calcule des MOYENNES PAR MATIÈRE et n'a jamais porté la
+    // moindre notion d'année : ni la branche snapshot, ni la retombée vive. Le
+    // portail PARENT, lui, fenêtre les siennes depuis toujours
+    // (`scoringWindowGradesWhere`, `academicYearId` REQUIS). Deux portails
+    // affichaient donc une moyenne différente pour le MÊME élève dès qu'il
+    // possédait des notes sur deux années — la forme même de `PF-04`.
+    //
+    // Mesuré au Step 2 : `resolveActiveAcademicYear` n'avait AUCUN site dans
+    // `student-portal`, alors qu'`alerts`, `analytics`, `imports`,
+    // `integrations`, `school-structure` et `students` y passent tous. Le
+    // portail élève était le seul des quatre sans conscience d'année. Noter que
+    // `academic-year-resolution-gate.spec.ts` ne pouvait pas l'attraper : il
+    // prouve qu'aucune lecture ne résout l'année HORS du résolveur canonique,
+    // ce qui est VACUEMENT vrai d'une lecture qui n'en résout AUCUNE (`PF-480`).
+    //
+    // `onAbsent: 'nullWhenNoActiveYear'` puis `[]` : c'est la posture de A
+    // (`analytics.service.ts` n'émet pas la requête quand l'année ne se résout
+    // pas). Rendre le paramètre facultatif pour « retomber sur toutes années »
+    // fabriquerait la cinquième projection que le contrat refuse d'exprimer.
+    // TROIS PORTÉES SÉQUENTIELLES et jamais imbriquées : le `map`/`Map` qui les
+    // relie est du calcul PUR et n'a rien à faire dans une transaction
+    // interactive à 5 s.
+    //
+    // La résolution d'année est APPARIÉE à la lecture d'instantanés dans UNE
+    // SEULE portée plutôt que placée dans la sienne, et c'est un choix mesuré :
+    // une portée de plus est une transaction interactive de plus sur le chemin
+    // chaud du tableau de bord, alors que ces deux instructions répondent à UNE
+    // question (« les figures par matière de cet élève, pour l'année en
+    // cours »). Deux instructions restent sous le budget de trois d'ADR-049 §D4.
     //
     // Snapshot-first: one findMany over the year-level per-subject snapshot rows.
-    const snaps = await this.scope.run(tenantId, async (tx) =>
-      tx.studentSubjectSnapshot.findMany({
-        where: { tenantId, studentId, termId: null },
+    const canonical = await this.scope.run(tenantId, async (tx) => {
+      const resolved = await resolveActiveAcademicYear(prismaAcademicYearReader(tx), {
+        tenantId,
+        schoolId,
+        referenceDate: new Date(),
+        onAbsent: 'nullWhenNoActiveYear',
+      });
+      if (resolved === null) return null;
+      const rows = await tx.studentSubjectSnapshot.findMany({
+        // `academicYearId` AJOUTÉ (S-E03-15) : sans lui cette lecture rendait
+        // le dernier instantané CALCULÉ, quelle que soit son année. La table
+        // porte pourtant la colonne, et son index `[tenantId, studentId,
+        // academicYearId]` était donc à moitié inutilisé.
+        where: { tenantId, studentId, academicYearId: resolved.id, termId: null },
         select: { subjectId: true, average: true, trendDelta: true },
-      }),
-    );
+      });
+      return { yearId: resolved.id, snaps: rows };
+    });
+    if (canonical === null) return [];
+    const { yearId, snaps } = canonical;
 
     if (snaps.length > 0) {
       const subjectIds = snaps.map((s) => s.subjectId);
@@ -680,12 +741,47 @@ export class StudentPortalService {
     // No class scan, no peer figure. Trend is `unknown` (live has no delta here).
     const grades = await this.scope.run(tenantId, async (tx) =>
       tx.grade.findMany({
+        // S-E03-15 / `PF-338` — LE JEU DE NOTATION, FENÊTRÉ SUR L'ANNÉE pour la
+        // première fois, et tenu au contrat par une assertion exécutée.
+        //
+        // `value: { not: null }` n'est PAS repris dans le `where`, et ce n'est
+        // pas un oubli : le contrat ne l'exprime pas (axe (c) — les deux jeux
+        // GARDENT le zéro, `PF-339` ayant été falsifiée par exécution), et la
+        // boucle juste en dessous porte déjà `if (!subj || g.value == null)
+        // continue`. La garde survit donc là où elle discrimine, sans réintroduire
+        // un cinquième axe dans le `where` que le contrat vient d'unifier.
+        //
+        // ┌────────────────────────────────────────────────────────────────────┐
+        // │ POURQUOI CE `where` EST ÉCRIT EN CLAIR ALORS QUE C APPELLE LE      │
+        // │ CONTRAT — le gate a REFUSÉ l'appel, et il avait RAISON             │
+        // └────────────────────────────────────────────────────────────────────┘
+        //
+        // Première écriture : `where: scoringWindowGradesWhere({ … })`, comme
+        // l'adoptant A. `tenant-adversarial-check.js` a REFUSÉ, avec
+        // `[unknown-field-in-argument] where.academicYearId n'est ni un champ de
+        // Grade ni un opérateur Prisma`. Ce n'est PAS un faux rouge et le
+        // contourner aurait été une faute : la clôture de privilèges du
+        // boot-probe est DÉRIVÉE en marchant les relations que chaque lecture
+        // SOUS PORTÉE traverse, or sous RLS `assessment` et `teaching_assignment`
+        // sont deux tables LUES. Derrière un appel de fonction le marcheur ne
+        // peut pas les voir, donc la clôture partirait SANS ces deux paires et le
+        // boot-probe cesserait de couvrir ce que cette requête lit réellement.
+        //
+        // L'adoptant A échappe au refus pour une raison qui n'est pas à son
+        // crédit : il lit sur `this.prisma`, donc HORS portée, et seules les
+        // lectures attribuées `scoped` sont marchées.
+        //
+        // Le contrat reste la source de vérité de ce `where` : la spec d'accord
+        // ASSERTE son égalité avec `scoringWindowGradesWhere({ … })`, donc une
+        // dérive d'un côté OU de l'autre rougit. Ce qui est perdu est
+        // l'impossibilité STRUCTURELLE de diverger ; ce qui la remplace est une
+        // assertion EXÉCUTÉE. Le point aveugle du marcheur est `PF-483`.
         where: {
           tenantId,
           studentId,
-          status: { in: ['published', 'revised'] },
+          status: { in: [...PUBLISHED_GRADE_STATUSES] },
           isAbsent: false,
-          value: { not: null },
+          assessment: { teachingAssignment: { academicYearId: yearId } },
         },
         select: {
           value: true,

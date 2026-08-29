@@ -2652,3 +2652,102 @@ inchangées : la fixture de la sonde a été retirée et le compte re-vérifié 
 `bash scripts/ci-gate.sh` (rapide, sans drapeau) → **`GATE: PASS (fast)`**, 822 s, **11 étages verts**, 2 sautés
 (`schema drift` et `rls isolation`, aucun changement prisma). Lu sur la **DERNIÈRE** ligne `GATE:` (1395) : la
 ligne 84 porte un `GATE: PASS` nu qui est le leurre de `PF-325`.
+
+---
+
+## `S-E03-15` (run 105) — le portail ÉLÈVE rejoint le contrat des notes, et son jeu de NOTATION gagne sa fenêtre d'année
+
+**Findings** : `PF-338` **fermée** · `PF-05` avancée · `PF-04` avancée · `PF-480`, `PF-481`, `PF-482`, `PF-483` levées
+**ADR** : `ADR-089` · **Palier de preuve** : **B** (projection de lecture ; aucune autorisation, aucun code de réponse)
+
+### Ce que la ligne `PF-05` demandait, et ce qui restait
+
+Depuis le run 102, `PF-05` ne tenait plus que sur un résidu nommé : « six projections restent six », soit
+`PF-337` (l'axe des permissions) et `PF-338` (les deux projections du portail élève). Cette tranche prend
+`PF-338`, la moitié tractable — deux `where` dans UN fichier, contre un arbitrage de surface d'autorisation
+à travers les portails.
+
+### Le défaut, plus large que ce que la ligne enregistrait
+
+La ligne `PF-338` décrivait deux sites et se trompait sur l'un d'eux (`:195` y est appelé « the snapshot
+path » ; c'est en réalité `grades()`, le RELEVÉ). Il y en avait **trois**, et ils partageaient un défaut que
+la ligne ne nommait pas du tout :
+
+```
+grep -rn "resolveActiveAcademicYear(" apps/api/src --include=*.ts | grep -v spec
+```
+
+→ des sites dans `alerts`, `analytics`, `imports`, `integrations`, `school-structure`, `students`,
+`school-performance-drilldown`, et **AUCUN** dans `student-portal`.
+
+Le portail élève était **le seul des quatre sans conscience d'année scolaire**. Il calculait donc ses moyennes
+par matière toutes années confondues pendant que le portail parent fenêtrait les siennes — deux portails, deux
+moyennes pour le **même** enfant. C'est la forme de `PF-04`, d'où l'avancée de cette ligne aussi.
+
+### La décision
+
+| site | avant | après |
+|---|---|---|
+| `:195` `grades()` — LE RELEVÉ | littéral recopié, aucune année | `gradeRecordWhere` |
+| `:682` retombée vive — LE JEU DE NOTATION | littéral recopié, aucune année | fenêtre d’année, `where` ASSERTÉ ÉGAL au contrat |
+| `:648` branche instantané | aucune année | `academicYearId` de l'année résolue |
+
+Sans année active, `subjectTrends` rend `[]` et n'émet aucune lecture — la posture de l'adoptant A.
+
+**Une assertion existante a corrigé la conception.** La résolution d'année a d'abord été écrite dans sa propre
+portée ; le test `G-TENANT` a compté **5 ouvertures au lieu de 4**. Elle est désormais appariée à la lecture
+d'instantanés dans une seule portée (2 instructions, sous le budget de 3 d'`ADR-049 §D4`) et le compte est
+resté à **4**.
+
+### Preuve — exécutée, et sa limite énoncée
+
+- **Contrôle ROUGE exécuté** : les deux `where` remis à leur forme d'avant → **5 tests rouges**, nommant les
+  assertions d'année. Restauré ensuite.
+- `35/35` sur `src/modules/student-portal` · `2554/2554` sur `analytics`, `grades`, `teaching`,
+  `shared/quality` (68 suites, tous les cliquets du dépôt) · `typecheck` **13/13** · un `pnpm build` **exit 0**.
+- **La limite :** le contrôle rouge n'a PAS rougi les assertions de C, et c'est un fait sur l'instrument — un
+  littéral correctement recopié produit une valeur *égale* à celle du contrat. La preuve que la COPIE a disparu
+  est donc au niveau de la SOURCE, et cette assertion a immédiatement trouvé une **troisième copie** invisible
+  à la comparaison de valeurs (l'union `as 'published' | 'revised'` du mappeur). Elle est bornée à CE fichier :
+  la tranche revendique **deux sites nommés, pas une classe**.
+- **Sonde live NON EXÉCUTÉE**, pour une raison mesurée et non supposée : `PF-478` établit que la seed ne porte
+  qu'**une seule** année scolaire, donc une sonde y serait un vert vacant (le faux-vert du run 81). Suivi comme
+  résidu de `PF-478`.
+
+### Ce que la tranche ne ferme pas
+
+`PF-05` reste `open` sur `PF-337` — trois noms de permission pour un datum, une surface d'AUTORISATION, donc
+Tier A. **La prochaine tranche sur `PF-05` doit être une tranche de permission, pas de projection.**
+`PF-04` reste `open` : un mécanisme de divergence retiré, mais aucun compte comparé à travers les quatre portails.
+
+### Le gate a refusé la première écriture, et il avait raison (`PF-483`)
+
+D appelait d'abord `scoringWindowGradesWhere({ … })`, comme l'adoptant A. `tenant adversarial` a
+refusé : `[unknown-field-in-argument] where.academicYearId n'est ni un champ de Grade ni un
+opérateur Prisma`. **Ce n'était pas un faux rouge.** `AC-9 S-E01-1k` DÉRIVE la clôture de
+privilèges du boot-probe en marchant les relations que chaque lecture **sous portée** traverse ;
+sous RLS `assessment` et `teaching_assignment` sont des tables LUES, et derrière un appel de
+fonction le marcheur ne peut pas les voir — la clôture serait partie sans ces deux paires.
+
+L'adoptant A y échappe parce qu'il lit sur `this.prisma`, **hors portée** : son appel n'est pas
+plus lisible, il n'est simplement pas regardé.
+
+**Diagnostic exécuté, pas supposé** : `node scripts/tenant-adversarial-check.js` rend **exit 2**
+sur la branche et **exit 0** sur `main`, deux fois chacun — donc attribuable au diff et non à
+l'état de la base. Les compteurs `AC-9 CUTOVER READINESS` étaient par ailleurs **identiques**
+(`100 scoped + 128 enumerated / 832`), ce qui écarte d'emblée l'hypothèse d'un mouvement de
+couverture.
+
+**Rung 2 (réduire), et son coût dit plutôt que tu** : le `where` de D est écrit en clair au site
+sous portée pour que la traversée redevienne visible, et son égalité avec le contrat est
+**assertée** par la spec d'accord. D perd donc l'impossibilité *structurelle* de diverger et la
+remplace par une assertion *exécutée* — un affaiblissement réel, accepté parce que l'alternative
+(rendre une traversée de tables invisible au gate sous RLS) est pire. **Aucune exception réclamée,
+aucune ligne du gate touchée.** Après réduction : **exit 0**, et le log est identique à celui de
+`main` à l'octet près hormis le nom horodaté de la base scratch.
+
+Le vrai remède — résoudre un helper pur, ou à défaut REFUSER tout `where` non littéral plutôt que
+d'en deviner un — est `PF-483`, en **P1** : le faux refus rencontré ici est bénin, mais la même
+heuristique produit un **faux accord silencieux** dès que les options d'un helper coïncident avec
+des champs du modèle, et c'est un chemin par lequel la clôture de privilèges devient incomplète
+sans que rien ne rougisse.
