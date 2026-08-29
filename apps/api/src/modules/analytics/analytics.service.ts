@@ -47,6 +47,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { prismaRosterReader } from '../../shared/roster/prisma-roster-reader';
 import { GradesService } from '../grades/grades.service';
 import { RemediationService } from '../remediation/remediation.service';
+import { assignmentYearScopeWhere } from '../teaching/assignment-year-scope';
 
 export interface SparklinePoint {
   x: string; // ISO date
@@ -1689,7 +1690,7 @@ export class AnalyticsService {
     academicYearId: string,
   ): Promise<Map<string, { teacherId: string; teacherName: string }>> {
     const assignments = await this.prisma.teachingAssignment.findMany({
-      where: { tenantId, classSectionId, academicYearId },
+      where: { tenantId, classSectionId, ...assignmentYearScopeWhere(academicYearId) },
       include: {
         teacherProfile: {
           select: {
@@ -1865,7 +1866,7 @@ export class AnalyticsService {
       where: {
         tenantId,
         teacherProfileId,
-        ...(academicYearId ? { academicYearId } : {}),
+        ...assignmentYearScopeWhere(academicYearId),
       },
       include: {
         subject: { select: { id: true, code: true, name: true, color: true } },
@@ -2011,7 +2012,7 @@ export class AnalyticsService {
     const inDays = (d: Date): number =>
       Math.max(0, Math.floor((d.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
 
-    const assignmentScope = academicYearId ? { academicYearId } : {};
+    const assignmentScope = assignmentYearScopeWhere(academicYearId);
     const assignments = await this.prisma.teachingAssignment.findMany({
       where: { tenantId, teacherProfileId, ...assignmentScope },
       select: { id: true },

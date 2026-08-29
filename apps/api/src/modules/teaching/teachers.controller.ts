@@ -30,6 +30,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { prismaRosterReader } from '../../shared/roster/prisma-roster-reader';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
+import { assignmentYearScopeWhere } from './assignment-year-scope';
 import { TeacherProfileService } from './teacher-profile.service';
 
 class UpdateTeacherDto {
@@ -156,7 +157,7 @@ export class TeachersController {
       where: {
         tenantId: me.tenantId,
         teacherProfileId: teacher.id,
-        ...(yearId ? { academicYearId: yearId } : {}),
+        ...assignmentYearScopeWhere(yearId),
       },
       include: {
         classSection: {
@@ -206,7 +207,7 @@ export class TeachersController {
       where: {
         tenantId: me.tenantId,
         teacherProfileId: teacher.id,
-        academicYearId: activeAcademicYearId,
+        ...assignmentYearScopeWhere(activeAcademicYearId),
       },
       select: { classSectionId: true, subject: { select: { id: true, code: true, name: true } } },
     });
@@ -430,7 +431,7 @@ export class TeachersController {
           where: {
             tenantId: me.tenantId,
             teacherProfileId: id,
-            academicYearId: activeAcademicYearId,
+            ...assignmentYearScopeWhere(activeAcademicYearId),
           },
           select: {
             classSectionId: true,

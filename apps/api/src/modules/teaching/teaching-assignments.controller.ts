@@ -38,6 +38,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { SchoolContextService } from '../school-structure/school-context.service';
 
 import { resolveRoleSync } from './assignment-role.util';
+import { assignmentYearScopeWhere } from './assignment-year-scope';
 
 class CreateAssignmentDto {
   @IsUUID() teacherProfileId!: string;
@@ -212,7 +213,7 @@ export class TeachingAssignmentsController {
       ...(teacherProfileId ? { teacherProfileId } : {}),
       ...(classSectionId ? { classSectionId } : {}),
       ...(subjectId ? { subjectId } : {}),
-      ...(academicYearId ? { academicYearId } : {}),
+      ...assignmentYearScopeWhere(academicYearId),
     };
 
     /**
@@ -232,7 +233,7 @@ export class TeachingAssignmentsController {
      */
     const coverageWhere: Prisma.TeachingAssignmentWhereInput = {
       tenantId: me.tenantId,
-      ...(academicYearId ? { academicYearId } : {}),
+      ...assignmentYearScopeWhere(academicYearId),
     };
 
     const [
