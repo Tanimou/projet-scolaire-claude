@@ -26,6 +26,7 @@ import {
   resultTotal,
   rosterCountArg,
   rosterStatusesFor,
+  scoringWindowGradesWhere,
   selectActiveEnrollment,
   selectReportingWindowEnrollment,
   sumRosterSizes,
@@ -1097,16 +1098,14 @@ export class AnalyticsService {
     const classSectionId = windowEnrollment?.classSectionId;
     const gradeLevelId = windowEnrollment?.classSection.gradeLevelId;
 
-    // Fetch all published/revised grades for this student in this year
+    // S-E03-3 / `PF-05` — LE JEU DE NOTATION, DÉRIVÉ et non recopié. La portée
+    // est identique, à l'octet de sémantique près, à la clause qu'elle remplace ;
+    // ce qui change est qu'elle est NOMMÉE et qu'elle partage son axe STATUT avec
+    // `/parent/grades`, dont elle diffère sur deux axes désormais DÉCLARÉS
+    // (année de reporting, absences). Voir `published-grades-where.ts`.
     const grades = academicYearId
       ? await this.prisma.grade.findMany({
-          where: {
-            tenantId,
-            studentId,
-            status: { in: ['published', 'revised'] },
-            isAbsent: false,
-            assessment: { teachingAssignment: { academicYearId } },
-          },
+          where: scoringWindowGradesWhere({ tenantId, studentId, academicYearId }),
           include: {
             assessment: {
               include: {

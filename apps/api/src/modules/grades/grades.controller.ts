@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { snapshotCoalesceKey } from '@pilotage/contracts';
+import { gradeRecordWhere, snapshotCoalesceKey } from '@pilotage/contracts';
 import { Prisma } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
@@ -425,13 +425,19 @@ export class GradesController {
     const roles = jwt.realm_access?.roles ?? [];
     const seePrivate = roles.includes('super_admin') || roles.includes('school_admin') || roles.includes('teacher');
 
+    // S-E03-3 / `PF-05` — LE RELEVÉ, DÉRIVÉ et non recopié. Portée inchangée :
+    // toutes années, absences COMPRISES (le badge « Abs » de `GradeRow.tsx:87` et
+    // le filtre `performance === 'absent'` de `page.tsx:321` en dépendent — les
+    // écarter pour « converger » avec le tableau de bord supprimerait une
+    // fonctionnalité vivante). Les deux spreads conditionnels sont remplacés par
+    // les paramètres explicites du contrat (`ADR-065 §D5`).
     const grades = await this.prisma.grade.findMany({
-      where: {
-        studentId,
+      where: gradeRecordWhere({
         tenantId: me.tenantId,
-        ...(termId ? { assessment: { termId } } : {}),
-        ...(seePrivate ? {} : { status: { in: ['published', 'revised'] } }),
-      },
+        studentId,
+        termId,
+        includeUnpublished: seePrivate,
+      }),
       include: {
         assessment: {
           include: {

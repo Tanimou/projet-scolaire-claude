@@ -2376,3 +2376,75 @@ travail.** La divergence A/B non démontrée et « six projections restent six �
 
 *(Comme tout pointeur de ce fichier : une recommandation, pas un ordre de mission. Une désignation opérateur la
 surclasse.)*
+
+---
+
+## `S-E03-3` — les deux projections parent deviennent DEUX PORTÉES NOMMÉES, et le résidu (i) tombe par MESURE (run 102, 2026-08-29)
+
+**Findings :** `PF-05` *(avancée — résidu (i) DÉCHARGÉ, résidu (ii) avancé ; **NON fermée**)* · `PF-471`, `PF-472` *(relevées)*
+**ADR :** `ADR-086` · **Palier de preuve : B** *(refactor à sémantique constante sur deux sites ; pas de
+cliquet, parce que la fermeture est réclamée comme DEUX SITES et non comme une CLASSE)*
+
+### Ce que trois runs cherchaient, et pourquoi ils ne pouvaient pas le trouver
+
+Le résidu (i) de `PF-05` — *« la divergence de comptage A/B est non démontrée sur la seed »* — a survécu
+quatre runs. Il n'était pas en attente d'effort : **il est indémontrable.** La seed porte **420 notes pour
+420 élèves distincts — exactement une note chacun**, **zéro** absence, **zéro** `draft`, et **une seule**
+année scolaire pour la totalité des 2463 inscriptions et des 16 évaluations. Les quatre axes de divergence
+sont **structurellement inexerçables**.
+
+Et le zéro a été prouvé non vide : le **contrôle négatif** injecte une absence et une note d'une autre
+année dans une transaction, re-mesure avec la même arithmétique, et **annule** — `b=3, a=1, axe_absence=1,
+axe_année=1`, puis état vérifié identique après `ROLLBACK`. La sonde discrimine. Le zéro est un fait sur la
+**seed**, pas sur l'instrument. C'est `PF-471`, et c'est un fait sur la capacité de preuve de **tout**
+l'épique, pas sur cette tranche.
+
+### La prémisse du run 81 était fausse, et c'est pour ça qu'`AC-5` avait calé
+
+`AC-5` voulait UN `where` canonique pour les deux projections et a pris sa branche STOP — livré nulle
+part. La raison : **les deux répondent à deux questions différentes.** A note (donc écarte les absences et
+se fenêtre sur l'année) ; B relève (donc garde tout). Et B garde les absences **délibérément** :
+`GradeRow.tsx:87` leur affiche un badge « Abs », `page.tsx:321` offre un filtre `performance === 'absent'`.
+Converger aurait supprimé une fonctionnalité vivante. Le contrôle qui manquait était de **lire ce que la
+page fait des lignes** avant de vouloir unifier la requête.
+
+La tranche livre donc **deux portées nommées** plutôt qu'une fusion : `scoringWindowGradesWhere` et
+`gradeRecordWhere`, dérivées d'une seule `PUBLISHED_GRADE_STATUSES`, adoptées **aux deux sites de
+production**. La divergence devient **déclarée au lieu qu'accidentelle** — deux littéraux recopiés
+pouvaient dériver en silence, c'était `DNC-01` dans sa forme la plus banale.
+
+### La preuve, et son axe faible
+
+`49/49` sur les deux specs, `188/188` en régression sur `modules/grades` + `modules/analytics`, typecheck
+`13/13`. **Le contrôle qui compte :** une dérive d'UNE ligne (`where.isAbsent = false`) injectée dans le
+contrat rend **6 tests rouges**, dont `parent-grade-projection-agreement.spec.ts` — qui capture les clauses
+**depuis la production** en exécutant le vrai code. La spec voit donc bien le site, pas une copie.
+
+**Axe faible, nommé :** aucun test d'intégration ne distingue A de B et aucun ne le peut (`PF-471`).
+L'équivalence est prouvée au niveau du `where`, jamais au niveau d'une réponse HTTP.
+
+### Relevé en passant, NON corrigé (RULE 0 clause 6)
+
+**`PF-472`** — `teaching_assignment` est UNIQUE sur `(teacher_profile_id, class_section_id, subject_id)`
+**sans** `academic_year_id`. Le même enseignant ne peut donc pas enseigner la même matière à la même classe
+sur deux années : la continuité inter-années est **inexprimable**. Découvert parce que le contrôle négatif
+n'arrivait pas à insérer sa propre fixture. C'est très probablement **la cause de `PF-471`** (la seed n'a
+qu'une année parce que le schéma ne permet pas la seconde), et ça sape le fenêtrage par année sur lequel
+l'épique est bâti. Le remède est une migration expand/contract — `G-MIGRATION`, sa propre tranche.
+
+### État de l'épique après seize tranches
+
+**4 fermées sur 9** (`PF-15` sur un axe, `PF-20`, `PF-40`, `PF-24`) — inchangé. `PF-05` reste `open` sur
+**un** résidu au lieu de deux : « six projections restent six » (`PF-337`, `PF-338`). `PF-36` réclamée sous
+conditions, `PF-50` avancée deux fois, `PF-12` et `PF-04` bloquées sur des arbitrages sémantiques.
+
+## Next slice → **`PF-472`, puis l'`epic-spec`**
+
+1. **`PF-472` d'abord**, parce qu'il débloque la preuve du reste : tant qu'une seconde année scolaire est
+   inexprimable, `PF-471` ne se lève pas, et tant que `PF-471` tient, **aucune** revendication d'accord
+   entre projections ne sera prouvable autrement que par des doubles jest. Migration expand/contract,
+   rollback énoncé, entrée obligatoire dans `scripts/restore-drill-baseline.json`.
+2. **Puis l'`epic-spec`, en retard de QUINZE tranches** — `docs/spec/features/v3-e03/` n'a toujours ni
+   `spec.md` ni `tasks.md` (`PF-387`), et `PF-365` / `PF-370` attendent depuis douze runs.
+
+*(Comme tout pointeur de ce fichier : une recommandation, pas un ordre de mission.)*

@@ -1,5 +1,6 @@
 export * from './academic-year';
 export * from './enrollment';
+export * from './grades';
 export * from './guardianship';
 export * from './enums';
 export * from './audit';
