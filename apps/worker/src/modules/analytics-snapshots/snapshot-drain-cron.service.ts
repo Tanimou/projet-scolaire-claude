@@ -57,6 +57,92 @@ const REBUILD_FANOUT_TAKE = Number(process.env.SNAPSHOT_REBUILD_FANOUT_TAKE ?? 2
 const SNAPSHOT_REVISION_FLOOR = Number(process.env.SNAPSHOT_REVISION_FLOOR ?? 1);
 
 /**
+ * `S-E03-10b` — a knob that MUST be a positive whole number, or the sweep it governs
+ * fails SILENTLY rather than loudly.
+ *
+ * The file's older knobs are plain `Number(process.env.X ?? D)`, which passes a bad
+ * value straight through: `SNAPSHOT_TERMINAL_RETENTION_DAYS=0` would put the cutoff
+ * at `now` and delete terminal rows seconds old; a non-numeric value yields `NaN`,
+ * then `new Date(NaN)`, then a Prisma throw that `safe()` swallows — retention would
+ * never run again, with no signal; `..._EVERY_TICKS=0` makes `tickCount % 0` be `NaN`,
+ * so the cadence gate is never true and the sweep never fires. Clamp instead: an
+ * unusable value falls back to the documented default.
+ *
+ * Deliberately NOT retrofitted onto `ORPHAN_PRUNE_EVERY_TICKS` — that pre-existing
+ * instance of the same class is RECORDED as a finding by this slice, not fixed here.
+ */
+function positiveKnob(raw: string | undefined, fallback: number): number {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
+
+/**
+ * PF-380 / `S-E03-10b` — retention window, in DAYS, for TERMINAL (`done` / `failed`)
+ * `snapshot_recompute_trigger` rows.
+ *
+ * Why a knob and not a constant: `S-E03-10` removed the table's only bound. Before
+ * it, `@@unique([tenantId, coalesceKey, status])` held terminal rows at one `done`
+ * plus one `failed` per scope forever — the bug and the ceiling were the SAME
+ * mechanism. Giving terminal rows a per-row key (ADR-083 §D1) fixed the bug and
+ * removed the ceiling, so the table grows one permanent row per recompute per scope.
+ * This env var is where the human retention decision now lives (ADR-083 §D2);
+ * `OPEN.md` had recorded the TTL as "a decision a human owns, not a code choice", and
+ * this slice reverses that by picking a default and NAMING the override rather than
+ * leaving the table unbounded.
+ *
+ * Default 30 days: a `failed` row that has survived 30 days has survived roughly
+ * `30 * 24 * 60 / FAILED_RETRY_AFTER_MIN` ~= 720 revive passes at the 60-minute
+ * default — it is dead, not awaiting triage. A `done` row is pure history; the only
+ * reader of a terminal row anywhere in the repo is the admin ops feed (see
+ * `sweepTerminalTriggers`).
+ */
+const TERMINAL_RETENTION_DAYS = positiveKnob(process.env.SNAPSHOT_TERMINAL_RETENTION_DAYS, 30);
+/**
+ * PF-380 — per-tick budget of terminal rows deleted, SHARED across tenants. This is a
+ * RETENTION bound, not back-pressure. Capacity is
+ * `TAKE * (1440 / interval_minutes) / EVERY_TICKS` = `500 * 1440 / 10` = **72 000
+ * rows/day**, against a growth model of one row per *(class x subject x term)*
+ * publish — trigger scopes are class-keyed, never per-pupil (`grades.controller.ts`
+ * and `assessments.controller.ts` both enqueue with no `studentId`; only the admin
+ * `manual_rebuild` can set one). A first run against an aged table therefore
+ * converges over `backlog / 72000` days rather than instantly, which is the intended
+ * shape: a sweep able to clear an arbitrary backlog in one tick would be an unbounded
+ * delete.
+ */
+const TERMINAL_SWEEP_TAKE = positiveKnob(process.env.SNAPSHOT_TERMINAL_SWEEP_TAKE, 500);
+/**
+ * PF-380 — coarse cadence for the retention sweep (every Nth tick), matching
+ * `ORPHAN_PRUNE_EVERY_TICKS`. Retention is a hygiene concern measured in days;
+ * running it every tick would buy nothing and cost a scan.
+ */
+const TERMINAL_SWEEP_EVERY_TICKS = positiveKnob(
+  process.env.SNAPSHOT_TERMINAL_SWEEP_EVERY_TICKS,
+  10,
+);
+/**
+ * `PF-459` / ADR-083 §D8 — the OFF switch, and why it had to be added explicitly.
+ *
+ * This sweep is the first DESTRUCTIVE delete in this file, and `positiveKnob` clamps an
+ * out-of-range cadence back to the default — so with it alone there was no value of
+ * `SNAPSHOT_TERMINAL_SWEEP_EVERY_TICKS` that could stop the sweep. That is a trap rather
+ * than merely a gap: the sibling idiom two lines away, `ORPHAN_PRUNE_EVERY_TICKS=0`,
+ * DOES disable its prune (`tickCount % 0` is `NaN`, never `0`), so an operator reaching
+ * for the one lever this file already taught them would have silently kept deleting.
+ *
+ * `SNAPSHOT_TERMINAL_SWEEP_EVERY_TICKS=0` therefore means DISABLED, matching the sibling.
+ * Matched on the RAW string, not on `Number(...) === 0`, because `Number('')` is `0` and
+ * an empty value in a compose file means "unset", which must never disable retention.
+ */
+const TERMINAL_SWEEP_DISABLED =
+  (process.env.SNAPSHOT_TERMINAL_SWEEP_EVERY_TICKS ?? '').trim() === '0';
+/**
+ * PF-380 — the two TERMINAL statuses, named ONCE. Every clause of the retention sweep
+ * pins this list; a row outside it is never a delete candidate, which is the invariant
+ * three portal-visible freshness reads depend on (see `sweepTerminalTriggers`).
+ */
+const TERMINAL_STATUSES: ('done' | 'failed')[] = ['done', 'failed'];
+
+/**
  * PF-24 — duck-typed unique-violation predicate. Prisma raises
  * `PrismaClientKnownRequestError` with `code: 'P2002'`; matching on the code alone
  * keeps this a type-only dependency on `@prisma/client` (the worker imports Prisma
@@ -126,6 +212,7 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
     let failed = 0;
     let revived = 0;
     let pruned = 0;
+    let sweptTerminal = 0;
     let backfilled = 0;
     let parked = 0;
     let failedBacklog = 0;
@@ -137,6 +224,15 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       // Orphan prune runs on a coarser cadence (every Nth tick) — best-effort.
       if (this.tickCount % ORPHAN_PRUNE_EVERY_TICKS === 0) {
         pruned = await this.safe('orphanPrune', () => this.pruneOrphanSnapshots(), 0);
+      }
+      // PF-380 — terminal-row retention, also on a coarse cadence. It sits with the
+      // PRE-loop sweeps deliberately: `tenantsWithPending()` below is the one call in
+      // this tick NOT wrapped in `safe()`, so anything sequenced after it is skipped
+      // whenever that scan throws. Retention placed after the drain loop would be
+      // silently disabled by a transient scan failure — the exact shape of the finding
+      // it exists to fix.
+      if (!TERMINAL_SWEEP_DISABLED && this.tickCount % TERMINAL_SWEEP_EVERY_TICKS === 0) {
+        sweptTerminal = await this.safe('terminalSweep', () => this.sweepTerminalTriggers(), 0);
       }
 
       const tenants = await this.tenantsWithPending();
@@ -168,6 +264,7 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
             parked,
             revived,
             pruned,
+            sweptTerminal,
             backfilled,
             failedBacklog,
             durationMs,
@@ -240,7 +337,12 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
     // every OTHER stale row — crash recovery wedged for the whole deployment.
     let reclaimed = 0;
     for (const row of stale) {
-      if (await this.requeueCanonical(row)) reclaimed += 1;
+      // PF-382 — `expectedStatus: 'processing'` is the predicate this loop's own
+      // `where` carried before the per-row rewrite. Without it, a row that settled to
+      // `done` between the `findMany` above and this write is RESURRECTED to `pending`
+      // with its canonical key restored — a spurious recompute, and a `FreshnessChip`
+      // that announces "Recomputing…" on a dashboard that is already current.
+      if (await this.requeueCanonical(row, 'processing')) reclaimed += 1;
     }
     if (reclaimed > 0) {
       this.logger.warn(`Reclaimed ${reclaimed} stale processing trigger(s) → pending`);
@@ -270,7 +372,11 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
     // per row (an `updateMany` would abort the whole batch on the first collision).
     let revived = 0;
     for (const row of stale) {
-      if (await this.requeueCanonical(row, { attempts: 0, lastError: null })) revived += 1;
+      // PF-382 — `expectedStatus: 'failed'` restores the predicate the pre-rewrite
+      // `updateMany({ where: { id: { in: … }, status: 'failed' } })` carried.
+      if (await this.requeueCanonical(row, 'failed', { attempts: 0, lastError: null })) {
+        revived += 1;
+      }
     }
     if (revived > 0) {
       this.logger.warn(`Revived ${revived} parked (failed) trigger(s) → pending (retry)`);
@@ -349,6 +455,137 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
     }
     if (deleted > 0) {
       this.logger.warn(`Pruned ${deleted} orphan snapshot row(s) (hard-deleted student/class)`);
+    }
+    return deleted;
+  }
+
+  /**
+   * PF-380 / `S-E03-10b` — bounded, tenant-scoped, coarse-cadence RETENTION sweep over
+   * TERMINAL `snapshot_recompute_trigger` rows. Returns the deleted row count.
+   *
+   * ## Why this exists
+   *
+   * `@@unique([tenantId, coalesceKey, status])` used to hold terminal rows at one
+   * `done` + one `failed` per scope forever. That ceiling was an ACCIDENT of the bug
+   * `PF-24` fixed, and `S-E03-10` removed both together: every terminal row now carries
+   * `terminalCoalesceKey(key, id)`, so nothing bounds the table any more. This sweep is
+   * the explicit replacement (ADR-083 §D2). The trigger table is transient bookkeeping,
+   * not a domain aggregate (ADR-019 §Non-goals) — deleting a settled row is
+   * no-op-correct and carries no audit obligation, which is exactly why the append-only
+   * audit log is NOT touched here.
+   *
+   * ## G-TRUTH — why only TERMINAL rows may ever be deleted
+   *
+   * `recomputing` is derived in THREE places, and every one of them filters
+   * `status: { in: ['pending','processing'] }`:
+   *   - `apps/api/src/modules/analytics/analytics.service.ts:1473-1482` (the inline
+   *     probe on the child/student-rank path);
+   *   - `apps/api/src/modules/analytics/analytics.service.ts:4480-4492`
+   *     (`resolveTeacherReportsFreshness`);
+   *   - `apps/api/src/modules/analytics/school-performance-drilldown.service.ts:241`
+   *     (`resolveFreshness`).
+   * All three feed `FreshnessChip` (`apps/web/src/components/freshness/FreshnessChip.tsx`),
+   * rendered by the parent dashboard, the teacher reports page and the admin
+   * drilldown. A sweep restricted to `status IN ('done','failed')` cannot change any of
+   * those result sets, so every chip state is bit-identical before and after, and no
+   * `aria-live` transition is announced that did not happen. Deleting a `pending` or
+   * `processing` row would instead flip a chip out of "Recomputing…" while the
+   * recompute is still in flight AND drop queued work — the KPI/ledger divergence
+   * `DNC-01` forbids. The `status` pin below is therefore a UI-facing invariant, not
+   * merely data hygiene; test (3) of `snapshot-trigger-conflict.spec.ts` is its
+   * measurement.
+   *
+   * ## G-PORTAL — the one surface that DOES change (accepted, ADR-083 §D4)
+   *
+   * `SnapshotOpsService.getRecomputeStatus` (`apps/api/src/modules/analytics/
+   * snapshot-ops.service.ts:38-80`, admin ops, `schools.read`) reads this table: its
+   * `failed` count (`:45`) now excludes rows older than the TTL — a correct number
+   * whose growth stops — and its `recent` feed (`:51-65`, the 20 newest by
+   * `enqueuedAt desc`, ALL statuses) is unchanged on an active tenant but can empty out
+   * on a tenant dormant longer than the TTL. No `apps/web` file reads that endpoint, so
+   * there is no UI change; there IS an API-visible one.
+   *
+   * ## Shape — ONE bounded read, then one `deleteMany` per tenant present in it
+   *
+   * `PF-457`. The first cut of this sweep enumerated tenants first
+   * (`findMany({ where: { status IN TERMINAL }, distinct: ['tenantId'] })`) and then read
+   * each tenant's candidates under its own key, to supply the `(tenant_id, status)` prefix
+   * of `@@index([tenantId, status, enqueuedAt])`. The escalation panel measured that the
+   * enumeration was **itself unbounded and unindexed**: it carries no `take` and no
+   * `tenant_id`, so it sequential-scanned — with no ceiling — exactly the population this
+   * finding says grows without bound, on EVERY sweep tick, whether or not anything was due.
+   * A `safe()`-swallowed statement timeout there disables retention silently, so the
+   * control could switch itself off on the first aged table it met.
+   *
+   * The candidate read is now the ONLY read, and it is bounded by `TERMINAL_SWEEP_TAKE`.
+   * That is strictly cheaper than what it replaces: the old shape paid one unbounded scan
+   * PLUS N indexed reads; this pays one scan that Postgres stops early once `LIMIT` is
+   * satisfied. The residual is real and recorded rather than hidden: with nothing past the
+   * TTL, `LIMIT` cannot short-circuit and the scan runs to completion once every
+   * `TERMINAL_SWEEP_EVERY_TICKS` ticks. `processed_at` is in no index under any shape, so
+   * the fix is the composite `@@index([tenantId, status, processedAt])` — which needs a
+   * migration, deliberately out of scope here, and rides the first migration that touches
+   * this table (`PF-451`).
+   *
+   * **G-TENANT stays structural, and gets stronger.** Candidates are grouped by the
+   * `tenantId` each row itself carries, and a group's `deleteMany` is keyed on that same
+   * value, so every id in the call provably belongs to the tenant in its `where` — the
+   * grouping key IS the row's own tenant, not a value carried from an outer loop. Do NOT
+   * flatten this into one `deleteMany({ where: { id: { in: allIds } } })`.
+   *
+   * It also cannot starve: it is driven by rows that are TERMINAL and past the TTL, never
+   * by `tenantsWithPending()` — a tenant whose queue is entirely terminal is the exact
+   * steady state this finding describes and would otherwise never be swept. The budget is
+   * shared across tenants and the read carries no `orderBy`, so a single huge tenant can
+   * crowd out others on a given tick; retention is measured in days and converges over
+   * later ticks, but the unfairness is real and recorded (`PF-458`, the `PF-385` shape).
+   *
+   * The `deleteMany` RE-ASSERTS the full predicate rather than trusting the ids, because
+   * terminal-ness FLIPS: `reviveFailedTriggers` (`:257-275`) selects `status: 'failed'`
+   * in the same tick and returns rows to `pending` under the canonical key, onto which a
+   * fresh dirty immediately folds. Deleting by id alone could therefore erase queued
+   * work with no error. Postgres re-checks a DELETE's predicate at write time under read
+   * committed, which closes that window.
+   *
+   * `processedAt: { lt: cutoff }` already excludes `processedAt: null`: SQL `NULL < x`
+   * is `NULL`, never `true`. No `not: null` clause is needed — and none is added, so the
+   * predicate stays within the operators the spec's fake table implements. There is no
+   * `orderBy`: it would force a top-N sort of the whole terminal population for no
+   * benefit, since retention does not care WHICH rows past the TTL go first.
+   */
+  private async sweepTerminalTriggers(): Promise<number> {
+    const cutoff = new Date(Date.now() - TERMINAL_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    // The ONE read, bounded (PF-457). Every row it returns is already a delete
+    // candidate: terminal AND past the TTL. Nothing else is read.
+    const doomed = await this.prisma.snapshotRecomputeTrigger.findMany({
+      where: { status: { in: TERMINAL_STATUSES }, processedAt: { lt: cutoff } },
+      select: { id: true, tenantId: true },
+      take: TERMINAL_SWEEP_TAKE,
+    });
+    // Grouped by the tenant each row CARRIES, so the `tenantId` in a group's `where` and
+    // the ids in the same call cannot disagree. This is the G-TENANT argument, in code.
+    const idsByTenant = new Map<string, string[]>();
+    for (const row of doomed) {
+      const bucket = idsByTenant.get(row.tenantId);
+      if (bucket) bucket.push(row.id);
+      else idsByTenant.set(row.tenantId, [row.id]);
+    }
+    let deleted = 0;
+    for (const [tenantId, ids] of idsByTenant) {
+      const removed = await this.prisma.snapshotRecomputeTrigger.deleteMany({
+        where: {
+          tenantId,
+          id: { in: ids },
+          status: { in: TERMINAL_STATUSES },
+          processedAt: { lt: cutoff },
+        },
+      });
+      deleted += removed.count;
+    }
+    if (deleted > 0) {
+      this.logger.warn(
+        `Retention sweep removed ${deleted} terminal trigger row(s) older than ${TERMINAL_RETENTION_DAYS}d`,
+      );
     }
     return deleted;
   }
@@ -559,7 +796,15 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
         // status])` against the `done` row left by the FIRST recompute of the same
         // scope: every second recompute of every scope threw P2002, the row stayed
         // `processing` forever and the freshness read pinned `recomputing: true`.
-        await this.settleTrigger(trigger, 'done');
+        //
+        // PF-383 (G-AUDIT) — `lastError: null`. A row that failed, retried and then
+        // SUCCEEDED kept the text its failure wrote: `(err as Error).message.slice(0,
+        // 500)`, i.e. raw Prisma output, which can quote names and identifiers. With
+        // terminal rows no longer bounded by the unique constraint that used to cap
+        // them, that was permanent retention of raw error text on a settled row. The
+        // success write clears it. `attempts` is deliberately NOT cleared — the retry
+        // counter's semantics are a separate recorded finding.
+        await this.settleTrigger(trigger, 'done', { lastError: null });
         recomputed += 1;
       } catch (err) {
         const attempts = trigger.attempts + 1;
@@ -607,6 +852,34 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
    *   - `pending` (retry) → the row must take the CANONICAL key back, which CAN
    *     legitimately collide with a live pending row for the same scope; that case
    *     is handled in `requeueCanonical`.
+   *
+   * PF-382 — the `pending` (retry) branch, and ONLY that branch, carries
+   * `expectedStatus: 'processing'`, READ rather than assumed: the sole caller of that
+   * branch is `drainTenant`'s catch block, on a row THIS tick claimed at the atomic
+   * `updateMany({ where: { id, tenantId, status: 'pending' }, data: { status:
+   * 'processing', … } })`. Without the predicate a row that reached a terminal state
+   * under us is dragged back to `pending` and stamped with raw error text.
+   *
+   * The TERMINAL branch deliberately keeps `where: { id, tenantId }` and NO status
+   * predicate. S-E03-10b §7 puts it out of scope, and measuring it rather than assuming
+   * symmetry shows the predicate would be a REGRESSION, not a guard:
+   * `reclaimStaleProcessing` returns a `processing` row to `pending` once its claim is
+   * older than `STALE_PROCESSING_MIN`, so a recompute that outlives that window would
+   * settle ZERO rows. The success path would then never record `done` — `status IN
+   * ('pending','processing')` stays true, so `recomputing` reads true forever on the
+   * parent dashboard while the same fan-out is redone every tick — and the park path
+   * would never persist `attempts`, so `MAX_ATTEMPTS` is never reached and the retry
+   * loop is unbounded. Re-writing `done` over `done` is harmless by comparison, and the
+   * predicate would also change the `recomputed` count. The unguarded terminal settle is
+   * RECORDED as a finding, not fixed here.
+   *
+   * NOT race-free on the retry branch either, and the docblock says so rather than
+   * overclaiming: the guard closes the recorded defect (a settled row resurrected), not
+   * ABA. A row reclaimed to `pending` and then re-claimed by a second drain is
+   * `processing` again, so the predicate matches the WRONG claim — and a row still
+   * sitting at `pending` after that reclaim loses this attempt's `attempts` bump, which
+   * is `PF-384`'s territory (§7 — record, do not touch). Closing either needs the claim
+   * instant compared as well as the status, which is out of scope for this slice.
    */
   private async settleTrigger(
     trigger: { id: string; tenantId: string; coalesceKey: string },
@@ -614,7 +887,7 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
     extra: { attempts?: number; lastError?: string | null } = {},
   ): Promise<void> {
     if (status === 'pending') {
-      await this.requeueCanonical(trigger, extra);
+      await this.requeueCanonical(trigger, 'processing', extra);
       return;
     }
     const { id, tenantId, coalesceKey } = trigger;
@@ -641,15 +914,27 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
    * trigger table is transient bookkeeping, not a domain aggregate — no audit
    * concern, ADR-019 §Non-goals) rather than left wedged in a non-terminal status
    * forever, which is the failure this whole finding is about.
+   *
+   * PF-382 — `expectedStatus` is the status the CALLER read this row at, and it is
+   * carried in the `where` of both writes. Each of the three call sites had that
+   * predicate before the per-row rewrite dropped it: the stale reclaim read
+   * `'processing'`, the parked revive read `'failed'`, and `settleTrigger`'s retry path
+   * settles a row this tick claimed, so it too is `'processing'`. Without it, a row
+   * that reached a terminal state between its caller's `findMany` and this write is
+   * resurrected to `pending` — spurious work, and a `FreshnessChip` announcing a
+   * recompute that is not happening. It also guards the DELETE below, which would
+   * otherwise be the last write here able to remove a row that has since become the
+   * live `pending` row holding the canonical slot.
    */
   private async requeueCanonical(
     trigger: { id: string; tenantId: string; coalesceKey: string },
+    expectedStatus: 'processing' | 'failed',
     extra: { attempts?: number; lastError?: string | null } = {},
   ): Promise<boolean> {
     const { id, tenantId } = trigger;
     try {
       const updated = await this.prisma.snapshotRecomputeTrigger.updateMany({
-        where: { id, tenantId },
+        where: { id, tenantId, status: expectedStatus },
         data: {
           ...extra,
           status: 'pending',
@@ -660,8 +945,13 @@ export class SnapshotDrainCronService implements OnApplicationBootstrap, OnModul
       return updated.count > 0;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
-      await this.prisma.snapshotRecomputeTrigger.deleteMany({ where: { id, tenantId } });
-      this.logger.debug(
+      await this.prisma.snapshotRecomputeTrigger.deleteMany({
+        where: { id, tenantId, status: expectedStatus },
+      });
+      // PF-382 — `warn`, not `debug`: `debug` is suppressed in production, so work
+      // being discarded (however correctly) had ZERO signal on the surface an operator
+      // actually reads.
+      this.logger.warn(
         `Trigger ${id} (tenant=${tenantId}) dropped as redundant — a pending row already covers its scope`,
       );
       return false;
