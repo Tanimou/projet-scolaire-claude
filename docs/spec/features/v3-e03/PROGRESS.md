@@ -2608,3 +2608,47 @@ n'est pas le code »**, et cela n'a été attrapé que parce que la sonde portai
 - Le cliquet ne lit que les `where` de **premier niveau** — limite **déclarée à l'écriture**, `PF-477`.
 - La clé étrangère composite (`PF-473`) n'est pas posée : la convergence retire la divergence des **nombres**,
   jamais celle des **données**.
+
+### Passe de LAND — ce que la reconstruction a révélé, et la correction d'une phrase de cette page
+
+**La sonde live est PASSÉE, sur une pile reconstruite et vérifiée.** Les deux surfaces rendent le même ensemble
+de **deux** classes, **la ligne dérivée comprise** (`assignments=true reports=true`) — or un filtre d'axe COLONNE
+*perdrait* cette ligne. Instrument bilatéral : `PASS` en mode accord, `FAIL (1)` en `--expect-divergence`, zéro
+ligne de fixture restante dans les deux cas.
+
+**⚠ Correction d'une phrase écrite plus haut dans ce fichier, et de `ADR-088 §2` :** l'état *divergent*
+— axe section sur `/teachers/me/assignments` ET axe colonne sur `/analytics/teacher-reports` — **n'a jamais été
+observé sur un artefact qui tourne.** Aucune image n'a été construite depuis cet état : il n'a existé dans `main`
+qu'entre la fusion de `S-E03-13` et ce correctif. La première passe de sonde, contre l'image périmée, a vu les
+**deux** surfaces sur l'axe colonne : elles s'accordaient, à la **mauvaise** valeur. La divergence est donc
+établie par le **contrôle ROUGE unitaire**, pas par une observation live. Le dire autrement serait revendiquer
+une preuve non produite.
+
+**`PF-479` (P0) — découverte en reconstruisant, et prouvée par exécution.** L'image api neuve a REFUSÉ de
+démarrer contre la base qu'un migrator « réussi » venait de quitter :
+
+| Conteneur | Ce qu'il a dit | Sortie |
+|---|---|---|
+| `pilotage_migrator` (image d'avant le run 101) | « **7 migrations found** … No pending migrations to apply … migrations appliquées » | **0** — donc `service_completed_successfully` |
+| `pilotage_api` (image construite ce run) | « Preflight migrations ÉCHEC : **8 livrées, 7 appliquées** » | refus de démarrer |
+
+Migrator **reconstruit**, même commande, même base : « **8 migrations found** … Applying migration
+`20260829120000_academic_year_one_active_per_school` … All migrations have been successfully applied. » Le
+diagnostic est donc confirmé **par exécution** et non par lecture : la seule variable changée est l'âge de
+l'image. La migration du run 101 n'avait **jamais** été appliquée à la base locale — `landed` n'est pas
+`applied`.
+
+**Ce qui a rendu la dérive visible** est `assertMigrationsClean` (`migration-preflight.ts:54`) : le refus de
+démarrer de l'API. Sans lui, l'API aurait tourné sur un schéma incomplet et toute sonde l'aurait cru sain.
+
+### État de la pile laissé derrière ce run
+
+`api` **healthy** sur l'image `462d0019b3b5` (construite ce run), `migrator` reconstruit et sorti en succès avec
+les 8 migrations appliquées, les dix autres conteneurs inchangés et sains. La base porte **2463** inscriptions,
+inchangées : la fixture de la sonde a été retirée et le compte re-vérifié à **0** ligne résiduelle.
+
+### Verdict du gate
+
+`bash scripts/ci-gate.sh` (rapide, sans drapeau) → **`GATE: PASS (fast)`**, 822 s, **11 étages verts**, 2 sautés
+(`schema drift` et `rls isolation`, aucun changement prisma). Lu sur la **DERNIÈRE** ligne `GATE:` (1395) : la
+ligne 84 porte un `GATE: PASS` nu qui est le leurre de `PF-325`.

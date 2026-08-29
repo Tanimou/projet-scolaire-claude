@@ -34,10 +34,22 @@ Les deux axes peuvent diverger : il n'existe aucune clé étrangère composite
 `(class_section_id, academic_year_id)` — `PF-473`, mesuré au run 103 et re-vérifié ici par exécution.
 
 `scripts/teacher-year-axis-agreement-probe.js` installe une affectation dont la colonne contredit sa propre
-section, mint de vrais jetons Keycloak et interroge l'API. **Avant la conversion**, `/teachers/me/assignments`
-(axe section) et `/analytics/teacher-reports` (axe colonne) rendaient des **ensembles de classes différents** au
-même enseignant. Deux surfaces d'un même portail en désaccord sur *« quelles classes j'enseigne cette année »* :
-la forme exacte de `PF-36`.
+section, mint de vrais jetons Keycloak et interroge l'API.
+
+**APRÈS la conversion, et exécuté :** les deux surfaces rendent le **même** ensemble de deux classes, **la ligne
+dérivée comprise** (`assignments=true reports=true`). C'est le fait qui compte : un filtre d'axe COLONNE
+*perdrait* cette ligne, puisque sa colonne nomme une autre année. Aucune des deux surfaces n'est donc plus sur
+l'axe colonne, et c'est **mesuré**, pas déduit. La sonde est bilatérale : `PASS` en mode accord, `FAIL (1)` en
+mode `--expect-divergence`, zéro ligne de fixture restante dans les deux cas.
+
+> **⚠ CE QUI N'A PAS ÉTÉ OBSERVÉ, ET IL FAUT LE DIRE PRÉCISÉMENT.** L'état *divergent* — axe section sur
+> `/teachers/me/assignments` ET axe colonne sur `/analytics/teacher-reports` — **n'a jamais été observé sur un
+> artefact qui tourne**, parce qu'aucune image n'a jamais été construite depuis cet état : il n'a existé dans
+> `main` qu'entre la fusion de `S-E03-13` et ce correctif, et l'image qui tournait était antérieure aux deux
+> (§5). La première passe de sonde, contre cette image périmée, a vu les **deux** surfaces sur l'axe colonne :
+> elles s'accordaient, à la **mauvaise** valeur. **La divergence est donc établie par le contrôle ROUGE unitaire
+> exécuté contre la vraie source d'avant-correctif, et non par une observation live.** Écrire l'inverse serait
+> revendiquer une preuve qui n'a pas été produite.
 
 ## 3. La décision
 
