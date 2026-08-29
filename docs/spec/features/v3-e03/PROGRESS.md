@@ -2448,3 +2448,101 @@ conditions, `PF-50` avancée deux fois, `PF-12` et `PF-04` bloquées sur des arb
    `spec.md` ni `tasks.md` (`PF-387`), et `PF-365` / `PF-370` attendent depuis douze runs.
 
 *(Comme tout pointeur de ce fichier : une recommandation, pas un ordre de mission.)*
+
+---
+
+## `S-E03-13` — l'année d'une affectation se lit sur sa SECTION, et `PF-472` tombe par EXÉCUTION (run 103, 2026-08-29)
+
+**Findings :** `PF-36`, `PF-04` *(avancées — **NON fermées**)* · `PF-472` **FALSIFIÉE** · `PF-473`, `PF-474` *(relevées)*
+**ADR :** `ADR-087` · **Palier de preuve : B** *(conversion à sémantique constante sur huit sites,
+mesurée identique avant bascule ; pas de cliquet, parce que la fermeture est réclamée comme HUIT SITES et
+non comme une CLASSE)*
+
+### Le pointeur du run 102 était faux, et c'est la mesure qui l'a dit
+
+Le run 102 désignait `PF-472` comme la tranche débloquante : la clé d'unicité
+`(teacher_profile_id, class_section_id, subject_id)`, sans `academic_year_id`, rendrait « la continuité
+inter-années inexprimable ». **Contrôle exécuté contre le Postgres du conteneur, transaction annulée : les
+deux insertions passent.** `ClassSection` est elle-même épinglée à une année
+(`@@unique([academicYearId, gradeLevelId, name])`), donc « la même classe » sur deux années sont **deux
+lignes**, deux `classSectionId`, et la clé ne les oppose jamais. Le run 102 avait réutilisé la MÊME section
+au lieu de créer celle de l'année suivante : la collision qu'il a rencontrée était sa propre fixture.
+
+Conséquence à ne pas hériter : **`PF-471` n'est pas causée par le schéma.** La seconde année est
+exprimable ; la seed mono-année a une autre cause, encore inconnue.
+
+### Ce que la même sonde a trouvé, et qui est le vrai défaut
+
+`TeachingAssignment` porte **deux** axes d'année — sa colonne `academic_year_id` et celle de sa section —
+et **aucune clé étrangère composite** ne les lie. La base **accepte** une ligne dont les deux se
+contredisent (`INSERT 0 1`, puis `ROLLBACK`, dérive revenue à 0). `teaching-wall.where.ts` l'affirmait déjà
+en prose depuis `ADR-063 §D1` ; personne ne l'avait exécuté.
+
+Huit lectures de production filtraient sur l'axe COLONNE — dont
+`teachers.controller.ts:434`, `GET /teachers/:id/load`, qui est **la VARIANTE C de l'audit, le « 43 » de
+`PF-36`**. Elles dérivent désormais toutes l'année de la SECTION, par un prédicat nommé unique,
+`assignmentYearScopeWhere`.
+
+### L'ordre de la preuve, qui est le seul ordre honnête
+
+**Mesurer d'abord.** Les deux axes ont été comptés par année sur la base du conteneur **avant** toute
+conversion : 286 contre 286 affectations, 186 contre 186 enseignants distincts, delta **0** sur les quatre
+années. La bascule est donc à sémantique constante sur les données réelles, et corrigée dès qu'une dérive
+existerait.
+
+`8/8` sur la spec neuve, `185/185` en régression sur `modules/teaching` + `modules/analytics`, typecheck
+`10/10` projets. **Le contrôle qui compte :** une ligne remise à `academicYearId: activeAcademicYearId`
+sur `teachers.controller.ts:434` rend ROUGE le test `GET /teachers/:id/load`, et lui seul — la spec exécute
+les vrais contrôleurs et lit les `where` de la production, elle ne relit pas un littéral.
+
+**Axe faible, nommé :** aucune assertion HTTP, pour la raison de `PF-471` — une seule année est peuplée,
+donc aucun test d'intégration ne peut distinguer les deux axes sur les données livrées.
+
+### Relevé en passant, NON corrigé (RULE 0 clause 6)
+
+- **`PF-473`** — la clé étrangère composite absente. Faire converger les lectures retire la divergence des
+  NOMBRES ; seule la contrainte retire celle des DONNÉES. `G-MIGRATION`, expand/contract, entrée obligatoire
+  dans `scripts/restore-drill-baseline.json`. **`enrollment` porte la forme identique** et doit être tranché
+  dans la même tranche.
+- **`PF-474`** — ~15 lectures IMBRIQUÉES restent sur l'axe colonne (18 occurrences / 12 fichiers, dont 3
+  specs), dans `analytics/`, `alerts/rules/` et `grades/`. Séquencer **après** `PF-473`, qui peut les rendre
+  inutiles.
+
+### État de l'épique après dix-sept tranches
+
+**4 fermées sur 9** (`PF-15` sur un axe, `PF-20`, `PF-40`, `PF-24`) — inchangé. `PF-36` avancée une seconde
+fois (un mécanisme de divergence retiré par construction, les comptes toujours pas re-mesurés). `PF-04`
+avancée sur le substrat de son résidu (iii), pas sur (iii). `PF-05` inchangée, `PF-12` et `PF-50` inchangées.
+
+## Next slice → **`PF-473`**, puis l'`epic-spec`
+
+1. **`PF-473`** — la clé étrangère composite `(class_section_id, academic_year_id)` → `class_section(id,
+   academic_year_id)`, qui exige d'abord `UNIQUE (id, academic_year_id)` sur `class_section`. Dérive
+   actuelle **0** sur `teaching_assignment` ET `enrollment` : la contrainte est posable sans backfill, ce
+   qui ne sera plus vrai indéfiniment. Trancher `enrollment` dans la même tranche.
+2. **Puis l'`epic-spec`, en retard de SEIZE tranches** — `docs/spec/features/v3-e03/` n'a toujours ni
+   `spec.md` ni `tasks.md` (`PF-387`), et `PF-365` / `PF-370` attendent depuis treize runs.
+
+*(Comme tout pointeur de ce fichier : une recommandation, pas un ordre de mission.)*
+
+### Addendum au land (run 103) — le gate a mesuré le MAUVAIS ARBRE, et c'est `PF-475`
+
+La première passe de `scripts/ci-gate.sh` a rendu `GATE: FAIL (3 stage(s))` — `prisma generate`,
+`typecheck`, `test:api (ratchet)`. **Aucun des trois ne porte sur ce diff.** Le reaper de verrou périmé a
+fait `git checkout main` **pendant** la passe (`runs.log` : `18:42:49 reaped` → `18:42:55 salvaged` →
+`18:44:21` un second run acquiert), si bien que le gate a typé un arbre d'où les fichiers neufs de la
+tranche avaient disparu. L'empreinte est explicite : `error TS6053: File '…/assignment-year-axis.spec.ts'
+not found` — un fichier **présent dans le commit testé**. `prisma generate` rejoué à la main ensuite :
+**exit 0**.
+
+**Ce run ne détient plus le verrou** (réquisitionné à 18:42). Il n'a donc **pas** relancé de passe de gate —
+deux écrivains dans un même checkout est la seule condition d'arrêt inconditionnelle — et il n'a **pas**
+appelé `release`, qui libérerait le verrou d'un AUTRE run.
+
+**Preuve retenue à la place, toute exécutée sur la branche, arbre intact :** typecheck `10/10` projets,
+build `@pilotage/api` exit 0, `prisma generate` exit 0, et **318 tests verts** — `8/8` (spec neuve, avec son
+contrôle rouge discriminant), `185/185` (`modules/teaching` + `modules/analytics`), `125/125`
+(`modules/alerts`, module adjacent au site `analytics.service.ts:2015`).
+
+**Résidu énoncé :** aucune passe de gate PROPRE sur cette branche. L'étage `test:api (ratchet)` n'a pas été
+rejoué après diagnostic, faute de verrou. C'est `PF-475`, et c'est la raison — pas une omission.
