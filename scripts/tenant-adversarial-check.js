@@ -501,12 +501,24 @@ const PLAN = Object.freeze([
     table: 'academic_year',
     key: 'id',
     slot: SLOT.academicYear,
+    // UNIQUE(school_id) WHERE status='active' — `academic_year_one_active_per_school`,
+    // migration 20260829120000, S-E03-12 / PF-328 — vary the status enum, exactly as
+    // `conversation_report` below varies its own to dodge UNIQUE(conversation_id,
+    // reported_by, status).
+    //
+    // WHY THIS IS NOT A WEAKENED CONTROL. AC-3's assertion is « an OWN-tenant INSERT
+    // into academic_year is ACCEPTED under GUC = A » — an RLS claim. The seed row
+    // (`v === 0`) stays `active`, so the fixture keeps a realistic school with a live
+    // year; only the PROBE row varies. Without this, AC-3 failed with SQLSTATE 23505
+    // and the positive control would have been reporting a UNIQUENESS refusal as an
+    // RLS refusal — a false signal about tenancy, which is worse than either defect.
     columns: (c) => [
       ['tenant_id', c.t],
       ['school_id', c.id('school')],
       ['name', lit(`Year ${c.tag}${c.sfx}`)],
       ['start_date', "DATE '2026-09-01'"],
       ['end_date', "DATE '2027-06-30'"],
+      ['status', lit(c.probe ? 'closed' : 'active')],
       ['updated_at', 'now()'],
     ],
   },

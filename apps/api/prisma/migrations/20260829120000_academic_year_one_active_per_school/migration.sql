@@ -1,0 +1,92 @@
+-- S-E03-12 — UNE SEULE année scolaire `active` par école, garantie par la BASE.
+--
+-- Migration RELUE À LA MAIN (ADR-027, G-MIGRATION). Ni `prisma migrate dev` ni
+-- `prisma db push` n'apparaissent dans ce diff. Prisma ne sait pas modéliser un
+-- index unique PARTIEL (`WHERE status = 'active'`), donc ce fichier n'est
+-- dérivable d'aucun schéma et `schema.prisma` n'est PAS touché. Le piège P-05
+-- (`prisma generate` ROUGE sur une modification additive du schéma) n'est donc
+-- pas armé ici.
+--
+-- LES DÉCISIONS SONT DANS `docs/adr/ADR-085-one-active-academic-year.md`.
+--
+-- ============================================================================
+-- CE QUE CETTE MIGRATION FERME — ET CE QU'ELLE NE FERME PAS
+-- ============================================================================
+--
+-- ELLE FERME la moitié MULTIPLICITÉ de `PF-328` : « rien n'interdit deux années
+-- `active` par école ». C'est le résidu (ii) nommé par `PF-04`, où le constat
+-- exact est que le résolveur de `S-E03-4` choisit désormais parmi plusieurs
+-- années actives « de façon DÉTERMINISTE, ce qui n'est pas la même chose que
+-- CORRECTE ». Après cette migration il n'y a plus rien parmi quoi choisir.
+--
+-- ELLE NE FERME PAS la moitié CONTENANCE de `PF-328` : « rien n'exige que
+-- l'année active contienne aujourd'hui ». Cette moitié-là échoue réellement sur
+-- les données (les deux années `active` mesurées sont TERMINÉES — 2026-07-05 et
+-- 2024-07-05) et demande une décision de donnée : que veut dire `active` pour
+-- une année finie. Elle reste OUVERTE, intacte, et cette migration ne la
+-- préjuge en rien. Ne pas lire ce fichier comme ayant clos `PF-328`.
+--
+-- ============================================================================
+-- POURQUOI C'EST SÛR — MESURÉ, PAS SUPPOSÉ (run 101, 2026-08-29)
+-- ============================================================================
+--
+-- Le registre `OPEN.md` affirme que « les DEUX invariants candidats ÉCHOUENT
+-- sur les données existantes ». C'est vrai pour la contenance et FAUX pour
+-- l'unicité. Exécuté contre le Postgres du CONTENEUR (`docker exec`, jamais
+-- `localhost:5432` qui est une AUTRE base, native Windows), dans BEGIN..ROLLBACK :
+--
+--   (a) aucune école n'a plus d'une année `active` — 0 ligne en violation ;
+--   (b) l'index se CRÉE ; il ne peut donc pas être refusé par les données ;
+--   (c) CONTRÔLE NÉGATIF — une seconde année `active` insérée est REFUSÉE
+--       (`duplicate key value violates unique constraint`). L'index n'est donc
+--       pas vide de sens ;
+--   (d) une seconde année `closed` reste ACCEPTÉE. L'index n'est donc pas trop
+--       serré — `seed-demo.ts` crée deux années `closed` pour une `active`.
+--
+-- Rayon d'action mesuré, pas supposé : les DEUX seuls écrivains applicatifs
+-- (`academic-years.controller.ts` `create` et `update`) basculent déjà les
+-- autres années en `closed` DANS LA MÊME TRANSACTION avant de poser l'active,
+-- et les deux semences (`seed.ts`, `seed-demo.ts`) créent exactement une année
+-- `active` par école. Cette migration n'INVENTE donc aucune règle : elle porte
+-- une règle métier DÉJÀ voulue et DÉJÀ implémentée à la seule couche qui ne
+-- puisse pas être contournée.
+--
+-- ============================================================================
+-- CE QUE ÇA DÉSAMORCE EN AMONT — LE NOMBRE QUI PORTE LA TRANCHE
+-- ============================================================================
+--
+-- `PF-329` : le tableau de bord parent fenêtre ses chiffres sur l'année de
+-- l'INSCRIPTION, tandis que tout autre portail lit l'année `active` de l'ÉCOLE.
+-- Mesuré ce jour, la divergence est de **0 enfant sur 2464** — le mécanisme est
+-- LATENT, pas actif. Mesuré sous contrôle négatif (injection d'une seconde
+-- année `active` postérieure dans l'école peuplée, puis ROLLBACK), la même
+-- requête rend **2463 enfants sur 2463** : la divergence ne monte pas
+-- progressivement, elle bascule d'un coup sur TOUTE la population.
+--
+-- Autrement dit la seconde année active est le DÉTONATEUR de `PF-329`, et cet
+-- index est ce qui le rend inatteignable par construction. `PF-329` reste
+-- ouverte — son mécanisme à deux axes est toujours dans le code — mais elle
+-- n'est plus déclenchable par cette voie.
+--
+-- ============================================================================
+-- EXPAND/CONTRACT ET RETOUR ARRIÈRE (G-MIGRATION)
+-- ============================================================================
+--
+-- EXPAND uniquement : cette migration n'ajoute qu'un index. Elle ne supprime
+-- aucune colonne, n'en renomme aucune, ne réécrit aucune donnée. Il n'y a donc
+-- pas de phase CONTRACT à planifier, et aucune fenêtre de double écriture.
+--
+-- RETOUR ARRIÈRE, en une commande, sans perte :
+--     DROP INDEX IF EXISTS academic_year_one_active_per_school;
+--
+-- `CONCURRENTLY` est délibérément ABSENT : Prisma enveloppe chaque migration
+-- dans une transaction et `CREATE INDEX CONCURRENTLY` ne peut pas s'y exécuter.
+-- La table compte 4 lignes et il n'existe aucun déploiement de production
+-- (Step -1 : la cible est la pile Docker locale), donc le verrou est sans objet.
+
+CREATE UNIQUE INDEX IF NOT EXISTS academic_year_one_active_per_school
+  ON academic_year (school_id)
+  WHERE status = 'active';
+
+COMMENT ON INDEX academic_year_one_active_per_school IS
+  'S-E03-12 / PF-328 (moitie multiplicite) / PF-04 residu (ii) : au plus UNE annee active par ecole. La moitie CONTENANCE de PF-328 reste ouverte.';

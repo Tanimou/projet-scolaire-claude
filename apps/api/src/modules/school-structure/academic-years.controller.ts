@@ -30,6 +30,29 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 
 import { SchoolContextService } from './school-context.service';
 
+/**
+ * S-E03-12 — does this error mean « someone else already has an active year
+ * for this school »? Exported, and therefore testable, on purpose: the whole
+ * value of this predicate is that it FIRES, and a private method whose shape
+ * nobody can witness is how a mapping silently becomes vacuous.
+ *
+ * THE SHAPE IS MEASURED, NOT GUESSED (run 101, against a real PostgreSQL):
+ * Prisma reports a violation of the partial unique index
+ * `academic_year_one_active_per_school` as `P2002` with
+ * `meta.target = ['school_id']` — the COLUMN LIST, never the index name. A
+ * branch keyed on the index name compiles, reads plausibly, and never fires.
+ *
+ * The other unique index on this table, `academic_year_school_id_name_key`
+ * over `(school_id, name)`, reports a TWO-element target, so requiring
+ * EXACTLY ONE element discriminates the two without stealing that one's 409.
+ */
+export function isOneActiveYearViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code !== 'P2002') return false;
+  const target = (err.meta as { target?: unknown } | undefined)?.target;
+  return Array.isArray(target) && target.length === 1 && target[0] === 'school_id';
+}
+
 class CreateAcademicYearDto {
   @IsString() @MinLength(4) @MaxLength(40) name!: string;
   @IsDateString() startDate!: string;
@@ -114,6 +137,44 @@ export class AcademicYearsController {
     return { data: years };
   }
 
+  /**
+   * S-E03-12 — migration `20260829120000_academic_year_one_active_per_school`
+   * makes « au plus UNE année `active` par école » a DATABASE fact
+   * (`PF-328` multiplicity half, `PF-04` residual (ii)).
+   *
+   * Both write paths in this controller already close the other active years
+   * inside the same transaction, so the index cannot fire on a well-formed
+   * sequential request. It fires on a RACE: two concurrent writers each read
+   * « no other active year », each close nothing, and each insert one.
+   *
+   * Before the index that race produced two active years SILENTLY — and a
+   * second active year is the measured detonator for `PF-329`: it moves the
+   * parent-vs-admin academic-year divergence from 0 children to 2463 of 2463
+   * in a single step. After the index the loser of the race gets a unique
+   * violation, which surfaces as a 500 unless it is named here. It is not a
+   * server fault, so it is mapped to the 409 it actually is.
+   *
+   * THE PREDICATE IS MEASURED, NOT GUESSED. Prisma reports this violation as
+   * `code P2002` with `meta.target = ['school_id']` — the COLUMN LIST, never
+   * the index name. Keying this branch on the index name would have compiled,
+   * read plausibly, and never once fired. The other unique index on this table
+   * is `academic_year_school_id_name_key` over `(school_id, name)`, which
+   * reports a TWO-element target, so requiring exactly one element
+   * discriminates the two without over-matching.
+   */
+  private async guardOneActiveYear<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (err) {
+      if (isOneActiveYearViolation(err)) {
+        throw new ConflictException(
+          'Une autre année scolaire de cette école vient de devenir « active ». Rechargez la page puis réessayez.',
+        );
+      }
+      throw err;
+    }
+  }
+
   @Post()
   @RequiresPermission('academic_years.write')
   async create(@Body() body: CreateAcademicYearDto, @CurrentJwt() jwt: KeycloakJwtPayload) {
@@ -128,7 +189,7 @@ export class AcademicYearsController {
 
     // Only one 'active' year at a time — flip others to closed automatically
     const status = body.status ?? AcademicYearStatus.active;
-    return this.prisma.$transaction(async (tx) => {
+    return this.guardOneActiveYear(() => this.prisma.$transaction(async (tx) => {
       if (status === AcademicYearStatus.active) {
         await tx.academicYear.updateMany({
           where: { schoolId, status: AcademicYearStatus.active },
@@ -155,7 +216,7 @@ export class AcademicYearsController {
         { name: body.name, status },
       );
       return created;
-    });
+    }));
   }
 
   @Patch(':id')
@@ -171,7 +232,7 @@ export class AcademicYearsController {
     if (year.tenantId !== me.tenantId) throw new ForbiddenException();
     if (body.startDate && body.endDate) this.assertDateOrder(body.startDate, body.endDate);
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.guardOneActiveYear(() => this.prisma.$transaction(async (tx) => {
       if (body.status === AcademicYearStatus.active) {
         // Close any other active year first
         await tx.academicYear.updateMany({
@@ -198,7 +259,7 @@ export class AcademicYearsController {
         updated,
       );
       return updated;
-    });
+    }));
   }
 
   @Delete(':id')
