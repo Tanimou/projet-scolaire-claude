@@ -60,12 +60,15 @@ import { AnalyticsService } from './analytics.service';
  *
  * CE QUE CE FICHIER NE PROUVE PAS
  * -------------------------------
- * Il juge les `where`. L'axe (c) — `if (!g.value) continue`, qui écarte une note
- * de ZÉRO — vit dans la BOUCLE de regroupement de A, pas dans son `where` ; il
- * est donc porté ici par un ÉPINGLAGE DE SOURCE doublé d'une démonstration
- * exécutable du prédicat. `PF-339` reste ouvert : le corriger naïvement est
- * faux deux fois (`value` est un `Decimal`, et `Number(0)` est falsy — le
- * prédicat juste est `g.value == null`).
+ * Il juge les `where`. L'axe (c) — le sort d'une note de ZÉRO — vit dans la
+ * BOUCLE de regroupement de A, pas dans son `where` ; il est donc porté ici par
+ * un ÉPINGLAGE DE SOURCE doublé d'une démonstration exécutable du prédicat.
+ *
+ * `PF-339` a été FALSIFIÉE par `S-E03-2b` : `value` est un `Prisma.Decimal`,
+ * donc un objet, donc `!Decimal(0)` vaut `false` et le zéro était gardé — par
+ * ACCIDENT, puisque la sûreté tenait au seul fait que la valeur arrive brute.
+ * Les quatre sites portent depuis le prédicat explicite, et l'épinglage
+ * ci-dessous s'est inversé en garde de non-régression. Voir `ADR-084`.
  */
 
 const TENANT = 'tenant-a';
@@ -395,22 +398,52 @@ describe('AC-5 — les axes de divergence sont ÉPINGLÉS, un cas exécutable pa
     expect(withYear?.['assessment']).toBeDefined();
   });
 
-  it('AXE (c) — le rejet du ZÉRO est dans la BOUCLE de A, pas dans son `where`', () => {
-    // ÉPINGLAGE DE SOURCE. Il n'est pas capturable par le harnais (il vit après
-    // la requête), et il est réel : `PF-339`.
+  it('AXE (c) — la BOUCLE de A porte le prédicat NULL-SÛR, et plus la truthiness', () => {
+    // ÉPINGLAGE DE SOURCE, RETOURNÉ PAR `S-E03-2b`.
+    //
+    // Cette assertion épinglait `if (!g.value) continue` — la PRÉSENCE du défaut,
+    // parce que `PF-339` était alors ouvert et que le pin servait à dire OÙ il
+    // vivait (dans la boucle de regroupement de A, pas dans son `where`, donc
+    // hors de portée du harnais qui capture les `where`).
+    //
+    // `S-E03-2b` a remplacé les quatre sites par le prédicat explicite. Le pin
+    // ne disparaît pas pour autant : il s'INVERSE en garde de NON-RÉGRESSION,
+    // ce qui est strictement plus fort que ce qu'il affirmait avant — il
+    // interdit désormais le retour de l'idiome au lieu de constater sa présence.
+    // Voir `ADR-084`.
     const SOURCE = readFileSync(join(__dirname, 'analytics.service.ts'), 'utf8');
-    expect(SOURCE).toContain('if (!g.value) continue');
+    expect(SOURCE).not.toContain('if (!g.value) continue');
+    expect(SOURCE).not.toContain('if (!cy || !g.value) continue');
 
-    // DÉMONSTRATION EXÉCUTABLE du prédicat épinglé ci-dessus : la note de ZÉRO
-    // franchit le `where` de A puis se fait écarter par lui, tandis que B la
-    // rend au parent. Le prédicat JUSTE — celui que `S-E03-3` devra poser — est
-    // `g.value == null`, et il GARDE le zéro.
+    // NON-VACUITÉ : le prédicat de remplacement est bien LÀ, sans quoi les deux
+    // assertions ci-dessus passeraient tout aussi bien sur un fichier où la
+    // boucle entière aurait disparu.
+    //
+    // DÉLIBÉRÉMENT UN TÉMOIN, PAS UN PLANCHER DE COMPTE. Le fichier porte huit
+    // sites au prédicat sûr (quatre d'avant la tranche, quatre qu'elle a
+    // convertis), et épingler `>= 8` — ou même `>= 4` — plancherait sur une
+    // classe que la roadmap fait BAISSER : `S-E03-3` converge ces projections et
+    // supprimera légitimement des boucles. Un tel plancher rougirait alors sur
+    // du travail correct, ce qui est précisément le piège que documente
+    // `ADR-068`. La garde qui porte la classe est l'assertion UNIVERSELLE
+    // ci-dessus (« aucun site n'emploie l'idiome truthiness », ensemble fermé) ;
+    // celle-ci ne fait qu'attester que le sujet n'a pas disparu.
+    const safe = SOURCE.split('g.value === null || g.value === undefined').length - 1;
+    expect(safe).toBeGreaterThanOrEqual(1);
+
+    // DÉMONSTRATION EXÉCUTABLE de ce que le changement achète. La note de ZÉRO
+    // franchit le `where` de A ; ce qui décidait ensuite de son sort, c'était le
+    // prédicat. Sur la valeur NUMÉRISÉE — la forme que produit tout `Number()`
+    // en amont, et le seul axe où la truthiness était atteignable — l'ancien
+    // prédicat la supprime et le nouveau la garde.
     const zero = GRADES.find((g) => g.id === 'g-zero');
     expect(zero).toBeDefined();
-    const droppedByA = !zero!['value'];
-    const keptByCorrectPredicate = zero!['value'] != null;
-    expect(droppedByA).toBe(true);
-    expect(keptByCorrectPredicate).toBe(true);
+    const numeric = Number(zero!['value']);
+    expect(numeric).toBe(0);
+    const droppedByOldPredicate = !numeric;
+    const keptByNewPredicate = !(numeric === null || numeric === undefined);
+    expect(droppedByOldPredicate).toBe(true);
+    expect(keptByNewPredicate).toBe(true);
   });
 });
 

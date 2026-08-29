@@ -83,8 +83,10 @@ describe('S-E03-2b — `schoolPerformance` compte une note de zéro (PF-05 / PF-
     });
 
     expect(out.byCycle).toHaveLength(1);
-    expect(out.byCycle[0].sampleSize).toBe(2);
-    expect(out.byCycle[0].successRate).toBe(50);
+    const [cycle] = out.byCycle;
+    expect(cycle).toBeDefined();
+    expect(cycle!.sampleSize).toBe(2);
+    expect(cycle!.successRate).toBe(50);
   });
 
   it("le KPI d'établissement `overall` est dilué lui aussi — c'est la surface admin", async () => {
@@ -109,8 +111,10 @@ describe('S-E03-2b — `schoolPerformance` compte une note de zéro (PF-05 / PF-
       academicYearId: YEAR,
     });
 
-    expect(out.byCycle[0].sampleSize).toBe(1);
-    expect(out.byCycle[0].successRate).toBe(100);
+    const [cycle] = out.byCycle;
+    expect(cycle).toBeDefined();
+    expect(cycle!.sampleSize).toBe(1);
+    expect(cycle!.successRate).toBe(100);
   });
 
   it("le zéro survit aussi sous sa représentation Decimal — l'ancien prédicat le gardait déjà par accident", async () => {
@@ -128,7 +132,9 @@ describe('S-E03-2b — `schoolPerformance` compte une note de zéro (PF-05 / PF-
       academicYearId: YEAR,
     });
 
-    expect(out.byCycle[0].sampleSize).toBe(2);
+    const [cycle] = out.byCycle;
+    expect(cycle).toBeDefined();
+    expect(cycle!.sampleSize).toBe(2);
     expect(!(decimalZero as unknown as number)).toBe(false); // l'accident, énoncé
   });
 });
