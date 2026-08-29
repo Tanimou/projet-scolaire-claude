@@ -1,3 +1,88 @@
+# NEXT — written by run 104 (`S-E03-14`), 2026-08-29 — **this section supersedes every section below**
+
+> **The section beneath this one is dated run 78 (2026-08-23) and was stale for twenty-six runs.** It still
+> ranks `PF-294`, `PF-287`, `PF-284`/`PF-285` inside `V3-E05`. That ranking is not wrong, but it is no longer
+> the critical path: the `V3-E03` standing directive was issued at run 77 and every run since 100 has worked
+> `V3-E03`. Read the `V3-E03` block first; the `V3-E05` ranking below is the queue to return to once the
+> directive is discharged.
+
+## Where `V3-E03` actually stands: **3 of 9 closed**
+
+Closed: `PF-20`, `PF-24`, `PF-40`. Open: `PF-04`, `PF-05`, `PF-12`, `PF-15`, `PF-36`, `PF-50`.
+
+The standing directive asks for **four**. One more closure discharges it — so the next run should pick the
+finding with the shortest honest path to `closed`, not the most interesting one.
+
+## ⚠ Read this before running ANY live probe — `PF-476`
+
+**The `pilotage_api` image serving `localhost:4000` was FOUR DAYS OLDER than `main` when run 104 began**
+(image `2026-08-25T18:29Z`; `S-E03-13` merged `2026-08-29 19:18`), while reporting `Up 16 hours (healthy)`.
+*Healthy* is a liveness signal and says **nothing** about which commit is inside.
+
+Run 104's first probe pass returned a result that **neither the old nor the new code explained**, and the
+correct reading was not "the code is wrong" but **"the artefact is not the code."** It was only caught because
+the probe carried a positive control whose failure was legible.
+
+**So: `docker inspect pilotage_api --format '{{.Created}}'` before you believe a single live number, and write
+the image age beside the measurement.** `landed: true` is not `deployed: true`.
+
+## ⚠ And this before writing any probe over the seed — `PF-478`
+
+The demo seed **cannot discriminate a correct roster projection from a broken one**. Measured 2026-08-29:
+
+- all four teacher-count derivations agree — **57 / 57 / 57 / 57** — because no pupil sits in two of one
+  teacher's sections;
+- **all 2463 enrollments carry `status = 'active'`**, one single value, so every population predicate selects
+  the identical set and the status axis is invisible;
+- `teacher@pilotage.local`, the realm's only teacher user, holds **zero** assignments, so a `me`-scoped probe
+  returns `[]` on correct and broken code alike.
+
+A probe that merely queries this seed is **vacuously green** — the run-81 false-green, one layer up. Build the
+divergent condition, assert a **positive control**, then remove it.
+
+## ➡️ Next: `PF-15` — the shortest honest path to a fourth closure
+
+`PF-15`'s row already reads *"`closed` on one axis of two"*. The resolution axis closed at run 80. The
+remaining axis was the **invariant** axis, recorded as `PF-328`, which had two halves:
+
+- **multiplicity** — "at most one active year per school": **closed at run 101** by migration
+  `20260829120000`;
+- **containment** — "the active year contains today": **still open**, and it is the one to examine.
+
+So `PF-15` is one ruling away from closing, and that ruling is small and local. **Check the data first** — at
+run 80 *no* year contained today for either tenant, so preferring containment would have blanked all four
+portals. That fact is why staleness is *exposed* (`isStale`, `staleByDays`, `containsReferenceDate`) and never
+*selected on*. If it still holds, the honest close is: containment stays a reported property, the row closes
+on that decision, and the residual gets its own id. **Confirm by measurement, not by re-reading `ADR-070`.**
+
+### Behind it, in order
+
+1. **`PF-36`** — advanced three times (runs 80, 103, 104) and now the closest it has been. What blocks it is
+   **`PF-473`**, the composite FK `(class_section_id, academic_year_id)`: read convergence removes the
+   divergence from the **numbers**, only the constraint removes it from the **data**. That is a
+   `G-MIGRATION` slice with an expand/contract plan and an entry in `scripts/restore-drill-baseline.json`
+   (`PF-80` — four runs in a row have forgotten it). Note the drifted rows must be reconciled *before* the
+   constraint, and run 103 measured the live drift at **zero** (286/286, 186/186), so the reconciliation is
+   currently a no-op — that will not stay true forever.
+2. **`PF-474` + `PF-477`** — the ~15 nested column-axis reads. Tier A: they are membership guards
+   (messaging, remediation, alerts, lessons, announcements, attendance), so converting them changes an
+   authorization population. Do it as its own slice, never folded into a truth slice.
+3. **`PF-50`** — `PF-426`'s 151 unbounded `findMany` reads, frozen by the ratchet. Mechanical, high volume.
+4. **`PF-12`** — do **not** select expecting an implementation slice: its two remaining axes (`PF-359`,
+   `PF-360`) wait on rulings, not effort. It wants an `epic-spec`.
+
+## What run 104 corrected in the register itself
+
+- **`PF-63` was already closed** (run 91), yet `PF-36`'s row carried it as a blocker — *"closing `PF-36`
+  almost certainly means closing `PF-63` first"* — for **thirteen runs**. When a row names a blocker, check
+  the blocker's own row before inheriting it.
+- **A ceiling was written from prose instead of from the tree.** The new ratchet's `R2_CEILING` was first set
+  to `14`, taken from `PF-474`'s wording. Measured by forcing it to `0` and reading the printed list: **6**.
+  A ceiling above the real population is a **decorative** ratchet — it would have absorbed eight recurrences
+  in silence. **Measure a ceiling; never inherit one.**
+
+---
+
 # NEXT — written by run 78 (`S-E05-4`), 2026-08-23 — **this section supersedes every section below**
 
 > **Allocation note (run 78, at land — supersedes every note below).** This run took **`ADR-068`** and

@@ -2546,3 +2546,109 @@ contrôle rouge discriminant), `185/185` (`modules/teaching` + `modules/analytic
 
 **Résidu énoncé :** aucune passe de gate PROPRE sur cette branche. L'étage `test:api (ratchet)` n'a pas été
 rejoué après diagnostic, faute de verrou. C'est `PF-475`, et c'est la raison — pas une omission.
+
+---
+
+## `S-E03-14` — l'axe d'année ferme comme une CLASSE, et il est MESURÉ sur la pile qui tourne (run 104, 2026-08-29)
+
+**Findings :** `PF-36` avancée (3ᵉ fois) · `PF-476`, `PF-477`, `PF-478` levées · `PF-63` constatée déjà close
+**ADR :** `ADR-088` · **Palier de preuve :** B (+ cliquet, parce que la fermeture est revendiquée comme une CLASSE)
+
+### Ce que la tranche corrige, en une phrase
+
+`S-E03-13` (run 103) a converti huit lectures d'affectations vers l'axe SECTION et les a prouvées par huit tests
+nommant chacun son endpoint. **Une neuvième existait** — `analytics.service.ts` / `teacherReports` /
+`GET /analytics/teacher-reports` — et une suite qui énumère des sites **ne peut pas, par construction, échouer
+sur le site qu'elle a omis**.
+
+### Le défaut, observé et non déduit
+
+Avec une affectation dont la colonne `academic_year_id` contredit celle de sa propre section — que la base
+**accepte**, faute de clé étrangère composite (`PF-473`) — `/teachers/me/assignments` et
+`/analytics/teacher-reports` renvoyaient **des ensembles de classes différents au même enseignant**. Deux
+surfaces d'un même portail en désaccord sur « quelles classes j'enseigne cette année ».
+
+### Ce qui a été EXÉCUTÉ
+
+| Preuve | Résultat |
+|---|---|
+| Contrôle de divergence en base (`BEGIN … ROLLBACK`, conteneur) | cumul **58** vs distinct **57** après injection d'un élève bi-section ; 2463 inscriptions retrouvées après annulation |
+| Mesure de la graine, quatre dérivations | **57 / 57 / 57 / 57** — la graine ne discrimine RIEN (`PF-478`) |
+| Contrôle ROUGE du cliquet, contre la vraie source d'avant-correctif restaurée depuis l'index git | R1 nomme **exactement** `analytics.service.ts:4199 (findMany)`, rien d'autre |
+| Contrôle ROUGE de la spec behavioural, même méthode | 1 échec sur 3, sur l'assertion d'axe |
+| Cliquet, arbre corrigé | **13/13** |
+| Spec behavioural, arbre corrigé | **3/3** |
+| Recensement R2 (plafond forcé à 0, liste LUE) | **6** sites, nommés |
+| Sonde HTTP live, jetons Keycloak réels | voir ci-dessous |
+
+### Le fait le plus important de ce run, et il est désagréable
+
+**L'image `pilotage-scolaire-api` qui répondait sur `localhost:4000` datait du 2026-08-25 — quatre jours AVANT la
+fusion de `S-E03-13`** (2026-08-29 19:18), tout en affichant `Up 16 hours (healthy)`. *Healthy* est un signal de
+vivacité et ne dit **rien** du commit qu'il y a dedans. La première passe de la sonde a rendu un résultat que ni
+l'ancien ni le nouveau code n'expliquait ; la lecture honnête n'était pas « le code est faux » mais **« l'artefact
+n'est pas le code »**, et cela n'a été attrapé que parce que la sonde portait un **contrôle POSITIF** dont l'échec
+était lisible. Levé en `PF-476`. `landed: true` n'est pas `deployed: true`.
+
+### Deux corrections apportées au registre lui-même
+
+- **`PF-63` était déjà close** (run 91, `S-E03-6`) : la ligne `PF-36` l'a portée comme bloqueur pendant **treize
+  runs**. « Fermer `PF-36` suppose de fermer `PF-63` d'abord » est périmé.
+- **Le plafond R2 a d'abord été écrit à `14`**, chiffre repris de la prose de `PF-474` sans être confronté à
+  l'arbre. Mesuré : **6**. Un plafond au-dessus de la population réelle aurait laissé passer huit récidives en
+  silence. **Un plafond se mesure.**
+
+### Ce qui n'est PAS fait, dit plutôt que glosé
+
+- `PF-36` **reste `open`**. Les valeurs littérales 43/46/48 et 25/26 de l'audit ne sont **pas présentes dans la
+  graine et ne peuvent pas l'être** (toutes les inscriptions sont `active`, aucun élève bi-section) ; fabriquer des
+  données pour les faire réapparaître serait inventer la preuve.
+- Les ~15 lectures **imbriquées** (`PF-474`) ne sont pas converties : ce sont des gardes d'appartenance, donc un
+  rayon Tier A dans une tranche Tier B. Elles sont **comptées, jamais exemptées**.
+- Le cliquet ne lit que les `where` de **premier niveau** — limite **déclarée à l'écriture**, `PF-477`.
+- La clé étrangère composite (`PF-473`) n'est pas posée : la convergence retire la divergence des **nombres**,
+  jamais celle des **données**.
+
+### Passe de LAND — ce que la reconstruction a révélé, et la correction d'une phrase de cette page
+
+**La sonde live est PASSÉE, sur une pile reconstruite et vérifiée.** Les deux surfaces rendent le même ensemble
+de **deux** classes, **la ligne dérivée comprise** (`assignments=true reports=true`) — or un filtre d'axe COLONNE
+*perdrait* cette ligne. Instrument bilatéral : `PASS` en mode accord, `FAIL (1)` en `--expect-divergence`, zéro
+ligne de fixture restante dans les deux cas.
+
+**⚠ Correction d'une phrase écrite plus haut dans ce fichier, et de `ADR-088 §2` :** l'état *divergent*
+— axe section sur `/teachers/me/assignments` ET axe colonne sur `/analytics/teacher-reports` — **n'a jamais été
+observé sur un artefact qui tourne.** Aucune image n'a été construite depuis cet état : il n'a existé dans `main`
+qu'entre la fusion de `S-E03-13` et ce correctif. La première passe de sonde, contre l'image périmée, a vu les
+**deux** surfaces sur l'axe colonne : elles s'accordaient, à la **mauvaise** valeur. La divergence est donc
+établie par le **contrôle ROUGE unitaire**, pas par une observation live. Le dire autrement serait revendiquer
+une preuve non produite.
+
+**`PF-479` (P0) — découverte en reconstruisant, et prouvée par exécution.** L'image api neuve a REFUSÉ de
+démarrer contre la base qu'un migrator « réussi » venait de quitter :
+
+| Conteneur | Ce qu'il a dit | Sortie |
+|---|---|---|
+| `pilotage_migrator` (image d'avant le run 101) | « **7 migrations found** … No pending migrations to apply … migrations appliquées » | **0** — donc `service_completed_successfully` |
+| `pilotage_api` (image construite ce run) | « Preflight migrations ÉCHEC : **8 livrées, 7 appliquées** » | refus de démarrer |
+
+Migrator **reconstruit**, même commande, même base : « **8 migrations found** … Applying migration
+`20260829120000_academic_year_one_active_per_school` … All migrations have been successfully applied. » Le
+diagnostic est donc confirmé **par exécution** et non par lecture : la seule variable changée est l'âge de
+l'image. La migration du run 101 n'avait **jamais** été appliquée à la base locale — `landed` n'est pas
+`applied`.
+
+**Ce qui a rendu la dérive visible** est `assertMigrationsClean` (`migration-preflight.ts:54`) : le refus de
+démarrer de l'API. Sans lui, l'API aurait tourné sur un schéma incomplet et toute sonde l'aurait cru sain.
+
+### État de la pile laissé derrière ce run
+
+`api` **healthy** sur l'image `462d0019b3b5` (construite ce run), `migrator` reconstruit et sorti en succès avec
+les 8 migrations appliquées, les dix autres conteneurs inchangés et sains. La base porte **2463** inscriptions,
+inchangées : la fixture de la sonde a été retirée et le compte re-vérifié à **0** ligne résiduelle.
+
+### Verdict du gate
+
+`bash scripts/ci-gate.sh` (rapide, sans drapeau) → **`GATE: PASS (fast)`**, 822 s, **11 étages verts**, 2 sautés
+(`schema drift` et `rls isolation`, aucun changement prisma). Lu sur la **DERNIÈRE** ligne `GATE:` (1395) : la
+ligne 84 porte un `GATE: PASS` nu qui est le leurre de `PF-325`.
