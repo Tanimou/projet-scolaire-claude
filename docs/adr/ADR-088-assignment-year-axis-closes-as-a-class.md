@@ -110,6 +110,25 @@ datait du **2026-08-25**, soit **quatre jours avant** la fusion de `S-E03-13` (2
 résultat que ni l'ancien ni le nouveau code n'expliquait. **`landed: true` n'est pas `deployed: true` ;
 l'âge de l'image est une donnée de la preuve, pas un détail d'intendance.** Levé en `PF-476`.
 
+**Et en reconstruisant, une seconde couche du même défaut est apparue — pire, parce qu'elle touche l'écriture du
+schéma et non la lecture.** L'image reconstruite a **REFUSÉ DE DÉMARRER** :
+
+- `pilotage_migrator` : *« état = BASELINED … **7 migrations found** … No pending migrations to apply …
+  migrations appliquées »*, **exit 0**, donc `service_completed_successfully` et Compose enchaîne ;
+- `pilotage_api`, image construite quelques minutes plus tôt sur le même arbre : *« Preflight migrations ÉCHEC
+  (pending) : **8 livrées, 7 appliquées** »*, et refus de démarrer.
+
+Les deux ont raison **sur eux-mêmes** : l'image du migrator est antérieure au run 101, sept migrations était bien
+tout ce qu'elle contenait. **Le défaut est que « toutes les migrations que je contiens » et « toutes les
+migrations que le code exige » sont deux ensembles différents, et que seul le second compte — or le migrator
+affirme le premier et rapporte un succès.** Levé en `PF-479`, `P0`, parce que le même entrypoint et la même arête
+`depends_on` sont ce que décrit `infra/docker-compose.prod.yml` : la *description du déploiement* contient une
+étape capable de sous-appliquer un schéma en annonçant l'avoir appliqué.
+
+**Ce qui a sauvé la situation est `assertMigrationsClean`** (`shared/migrations/migration-preflight.ts:54`) : le
+refus de démarrer de l'API est la SEULE raison pour laquelle la dérive a été visible. À garder en tête avant que
+quiconque soit tenté de l'assouplir.
+
 ## 6. Ce que cette tranche ne prouve pas
 
 - Elle ne rend pas la dérive **inexprimable en base** : c'est la clé étrangère composite `PF-473`, sa propre
