@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -164,7 +165,9 @@ function repoRoot(): string {
 function scanFiles(): string[] {
   // Dérivé, jamais une liste écrite à la main : une allowlist littérale se
   // périme en silence, et deux listes tenues à la main dérivent (PF-59).
-  const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
+  // `execFileSync` est importé en tête (`PF-468`) : la forme `require()` que ce
+  // site portait est interdite par `@typescript-eslint/no-require-imports` et
+  // laissait `main` ROUGE au stage `lint`.
   const out = execFileSync('git', ['ls-files', '--', ...SCAN_ROOTS], {
     cwd: repoRoot(),
     encoding: 'utf8',
