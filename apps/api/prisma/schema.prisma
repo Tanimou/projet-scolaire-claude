@@ -1917,10 +1917,19 @@ model ClassSubjectDistribution {
 /// E6 — append-enqueue "dirty" marker. The worker cron drains pending rows per
 /// tenant (FIFO, bounded batch), recomputes the affected snapshot scope, and marks
 /// the row done/failed — mirroring the alerts-cron / notifications-digest poll-drain
-/// pattern WITHOUT depending on the (unbuilt) outbox→BullMQ listener. Idempotent: a
-/// coalescing unique key collapses a burst of dirties for the same still-pending
-/// scope into ONE pending row. All scope ids are plain @db.Uuid (transient work
-/// item, not a domain aggregate — no FK relation, routinely aged out).
+/// pattern WITHOUT depending on the (unbuilt) outbox→BullMQ listener. Idempotent for
+/// PENDING rows only: `coalesceKey` is a pure function of (tenant, reason, scope)
+/// while a row is `pending` or `processing`, so a burst of dirties for the same
+/// still-pending scope collapses into ONE pending row. A row that settles to
+/// `done`/`failed` takes a per-ROW TERMINAL key instead (`terminalCoalesceKey`,
+/// ADR-083 §D1) and the canonical one is restored on every path back to `pending`;
+/// without that exception `@@unique([tenantId, coalesceKey, status])` would allow at
+/// most one `done` and one `failed` row per scope for the lifetime of the table, and
+/// the SECOND recompute of any scope could never complete (PF-24). All scope ids are
+/// plain @db.Uuid (transient work item, not a domain aggregate — no FK relation).
+/// Terminal rows are aged out by the worker's bounded, tenant-scoped retention sweep
+/// (`sweepTerminalTriggers`, TTL `SNAPSHOT_TERMINAL_RETENTION_DAYS`, default 30 days,
+/// ADR-083 §D2); NOTHING ages out a `pending` or `processing` row.
 model SnapshotRecomputeTrigger {
   id       String                @id @default(uuid()) @db.Uuid
   tenantId String                @map("tenant_id") @db.Uuid

@@ -4,7 +4,24 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-28)** `in-progress` — **THIRTEEN slices landed, and there was none before 2026-08-25.**
+**Status (2026-08-29)** `in-progress` — **FOURTEEN slices landed, and there was none before 2026-08-25.**
+
+`S-E03-10b` (run 97, 2026-08-29 — **`PF-380`, `PF-382`, `PF-383` and `PF-386` claimed `closed` on remedies that are
+IN THE DIFF; `PF-24` ADVANCED and explicitly NOT closed**, `ADR-083`; the terminal-key convention gets its retention
+bound, its ADR and its status predicate back. `S-E03-10` fixed `PF-24` by giving every settled row a per-row
+`terminalCoalesceKey` — and in doing so deleted the table's only ceiling, because
+`@@unique([tenantId, coalesceKey, status])` **was** both the bug and the bound. Measured this run: **one**
+`snapshotRecomputeTrigger.delete*` in the entire repository, and it is a race-case drop, not retention. A new
+`sweepTerminalTriggers()` runs every 10th tick, deletes at most 500 rows shared across tenants, keys every query on
+one `tenantId`, and **re-asserts the full predicate at write time** because terminal-ness flips under
+`reviveFailedTriggers`. **Two things this slice got RIGHT by measuring instead of assuming**, and both are worth
+copying: the three `expectedStatus` values were **read at their call sites**, not inferred by symmetry; and the
+terminal settle was deliberately left unguarded after measuring that the predicate would be a **regression** there
+(a recompute outliving `STALE_PROCESSING_MIN` would settle zero rows and pin `recomputing: true` forever). **NEEDS
+HUMAN REVIEW, and the two conditions are not cosmetic:** the sweep's own tenant enumeration is an unbounded,
+unindexed read of the very population it exists to bound (`PF-451`), and **no test drives `tick()`**, so the line
+that wires the sweep in is unmeasured. Records **`PF-451`…`PF-456`**. **Zero live probes** — Docker down a
+**seventh** consecutive run. See § `S-E03-10b`).
 
 > **Third ledger correction, 2026-08-28 (`S-E03-11` land pass) — the count, not the rows.** This line read
 > *"ELEVEN slices landed"* while the **Slice status** table below already carried **twelve** rows
@@ -132,6 +149,7 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-7`** — une classe n'a qu'UN effectif : « combien d'élèves dans cette classe » cesse d'avoir quatre réponses, et la somme d'effectifs cesse d'être présentable comme un nombre d'élèves | **claims `PF-36`** as the CLASS of derivations converted; **closes `PF-410`** (structure header counted tenant-wide) and **`PF-412`** (count without `tenantId`); **annotates `PF-361`** (id preserved, live-database re-measurement); raises `PF-409`, `PF-411`, `PF-413`, `PF-414`, `PF-415`; `ADR-079` | ⚠️ **2026-08-27, run 93 — NEEDS HUMAN REVIEW, do NOT auto-merge. P0 `[truth][tenant][contracts][cross-portal]`.** Landing conditions in § `S-E03-7`: the `PF-36` and `PF-362` rows of `OPEN.md` are still `open`, and the `PF-412` row asserts a remedy that is not in the diff |
 | **`S-E03-9`** — one page window, one cap, one place; and a negative limit stops silently inverting the result set | **advances `PF-50`** — explicitly **NOT closed** (`AC-7`, named residual = `PF-426`); **fixes `PF-421`, `PF-422`, `PF-423`** in-slice; raises `PF-419`, `PF-420`, `PF-424`, `PF-425`, `PF-426`; `ADR-080` | ⚠️ **2026-08-27, run 94 — DONE, needs human review, do NOT auto-merge. P1 `[api-contract][truth][breaking-change]`** (re-tiered from P2 at the gate: thirteen endpoints now **reject** an over-cap `limit` instead of clamping it). Story `docs/daily-improvement-v3/stories/S-E03-9.md`; ADR `docs/adr/ADR-080-canonical-page-window.md`; canon `packages/contracts/src/pagination/page-window.ts`; ratchet `apps/api/src/shared/quality/page-window-derivation-gate.spec.ts` (`CENSUS_CEILING = 151`). **Evidence tier B — no live probe was possible** (Docker down for a fifth consecutive run, local DB empty): `pnpm typecheck` 13/13 green **only after** the two halves were consolidated into one checkout, the ratchet spec passes, and `page-window.spec.ts` still has **one RED test** (`AC-8 / G-TENANT` hard-codes SEVEN reads; the handler now issues EIGHT, all tenant-keyed). Landing conditions in § `S-E03-9`. |
 | **`S-E03-11`** — the page envelope becomes a CONTRACT, and the client stops ASSERTING the shape it reads | **advances `PF-50`** and **advances `PF-427`** (`S-E03-9`'s own named residual) — **neither closed**; raises `PF-428`…`PF-433`; `ADR-081` | ⚠️ **2026-08-28, run 95 — DONE, needs human review, do NOT auto-merge. P1 `[api-contract][truth][admin-portal]`** (re-tiered from the story's P2 at the panel: the client half turns four tolerant casts into **throwing** validation on live admin reads). Story `docs/daily-improvement-v3/stories/S-E03-11.md`; ADR `docs/adr/ADR-081-canonical-page-envelope.md`; canon `packages/contracts/src/pagination/page-envelope.ts`; ratchet `apps/api/src/shared/quality/page-envelope-boundary-gate.spec.ts` (`R1_CEILING = 1`, `R2_CEILING = 6`). **Evidence tier B — no live probe was possible** (Docker down a **sixth** consecutive run, local DB empty). Landing conditions in § `S-E03-11`; the first of them — `pnpm --filter @pilotage/contracts build` — is a **merge precondition**, not an optimisation. **Slice id renumbered `S-E03-10` → `S-E03-11` at the land pass**: `S-E03-10` was already taken by the run-89 snapshot slice, and the collision had been stamped into fourteen shipped docblocks |
+| **`S-E03-10b`** — the terminal-key convention gets its retention bound, its ADR, and the status predicate `requeueCanonical` had dropped | **closes `PF-380`** (the retention bound), **`PF-382`** (the dropped status predicate), **`PF-383`** (`lastError` retained through fail → retry → success), **`PF-386`** (the missing ADR + the stale `schema.prisma` comment); **advances `PF-24`** — still **NOT closed**, the executed-against-Postgres half is untouched; raises `PF-451`…`PF-456`; `ADR-083` | ⚠️ **2026-08-29, run 97 — NEEDS HUMAN REVIEW, do NOT auto-merge. P1 `[worker][data-retention][rgpd][destructive-delete]`.** No migration, no contracts change, no `apps/web` file, `schema.prisma` **comment only**. Story `docs/spec/features/v3-e03/stories/S-E03-10b.md`; ADR `docs/adr/ADR-083-snapshot-trigger-terminal-key-and-retention.md`. **Evidence tier B** — `pnpm typecheck` 13/13 exit 0, twelve new jest cases with real anti-vacuity controls, **zero live probes** (Docker down a seventh consecutive run, local DB empty). Landing conditions in § `S-E03-10b`: `PF-451` (the sweep's own enumeration is unbounded and fails silently), the missing `tick()` wiring test, and `OPEN.md` untouched |
 | `S-E03-1` | — | **matrix row only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86, `S-E03-6` at run 91, `S-E03-8` at run 92, `S-E03-7` at run 93 and **`S-E03-9` at run 94**: all six were authored, so the habit is holding. `PF-50` moved off this row at run 94 — it is `S-E03-9`'s, not `S-E03-1`'s.) |
 
 ---
@@ -2031,7 +2049,7 @@ lecture (`feedback_landed_is_not_ran`).
 
 ---
 
-## Next slice → **lever les conditions de land de `S-E03-11`** (elles sont de la TENUE DE REGISTRE, et l'une d'elles est une condition de merge), puis l'`epic-spec` (en retard de DOUZE tranches)
+## ~~Next slice → **lever les conditions de land de `S-E03-11`**~~ — **POINTEUR SUPERSÉDÉ au run 97 par un OVERRIDE opérateur** qui a désigné `S-E03-10b`, et **non sur le fond**. Les points 3, 4, 5 et 6 ci-dessous sont intacts et tiennent toujours. **Le pointeur vivant est à la FIN de ce fichier.**
 
 **1. D'abord, et ce n'est pas une tranche : reconstruire `packages/contracts`.** Condition n° 1 ci-dessus. Tant
 qu'elle n'est pas levée, la valeur de la tranche est **non prouvée** et quatre pages admin sont mortes au
@@ -2063,6 +2081,190 @@ attendent depuis neuf runs.
 **`PF-40` et `PF-36` revendiquées sous conditions** (runs 92 et 93), **`PF-50` avancée DEUX fois avec un résidu
 nommé à chaque fois** (`PF-426` au run 94, `PF-427` au run 95 — et `PF-427` est elle-même avancée, non fermée).
 Les quatre restantes : bloquées sur des **arbitrages sémantiques** (`PF-12` deux axes survivants, `PF-04`) ;
-**jamais commencées** (`PF-24` — voir `ci/2026-08-26-v3-e03-snapshot-terminal-conflict` avant de démarrer —,
-`PF-05`).
+~~**jamais commencées** (`PF-24` — voir `ci/2026-08-26-v3-e03-snapshot-terminal-conflict` avant de démarrer —,
+`PF-05`)~~.
+
+> **Correction, run 97 (`S-E03-10b`, condition `§0` de la story).** *« `PF-24` jamais commencée »* était **faux au
+> moment où cette ligne a été écrite** : `S-E03-10` avait livré au run 89 (`terminalCoalesceKey` /
+> `canonicalCoalesceKey` dans `packages/contracts/src/dto/snapshot.ts`, les quatre sites de conflit du drain, sept
+> cas de spec), et `OPEN.md:118` était à jour pendant que ce fichier ne l'était pas. `S-E03-10b` (run 97) l'avance
+> une seconde fois. **`PF-24` reste `open`** et il ne lui reste **qu'une** condition : une preuve **EXÉCUTÉE contre
+> Postgres** qu'un scope recalculé deux fois finit `done` deux fois et que `recomputing` redevient `false`. Docker
+> est mort depuis sept runs ; tant qu'il l'est, cette condition n'est levable par aucune tranche. **`PF-05`, elle,
+> n'est toujours pas commencée.**
+
+---
+
+## `S-E03-10b` — the terminal-key convention gets its retention bound, its ADR, and its status predicate back (run 97, 2026-08-29)
+
+**Selected by operator designation**, not by the pointer above. The debt is `S-E03-10`'s own: that slice attached
+`PF-380` to its merge as a **blocking** condition and then merged without it.
+
+### What was actually wrong, measured in source on 2026-08-29
+
+1. **`PF-380` — the constraint that was the bug was also the only bound.** Before run 89,
+   `@@unique([tenantId, coalesceKey, status])` held terminal rows at one `done` + one `failed` per scope **for the
+   lifetime of the table**. `S-E03-10` gave terminal rows a per-row key to let a second recompute complete — and
+   removed the ceiling in the same stroke. The absence was re-measured this run, not inherited:
+   `grep -rn "snapshotRecomputeTrigger.delete" --include=*.ts apps/ packages/` returns **exactly one** hit, and it is
+   `requeueCanonical`'s redundant-row drop — a race case, not retention. `pruneOrphanSnapshots` deletes in the three
+   snapshot tables and **never** in this one, so a hard-deleted pupil's scope ids survive there indefinitely,
+   invisible to every erasure path. Not a leak and not an exploit: a **retention-limitation / minimisation** defect
+   against `GUARDRAILS §1`, on rows that live **outside** `audit_log` governance.
+2. **`PF-382` — `requeueCanonical` lost a predicate its callers carried.** The run-89 rewrite from `updateMany` to a
+   per-row loop dropped the status filter both call sites had (`status: 'processing'` on the reclaim,
+   `status: 'failed'` on the revive). A row that settled between its caller's `findMany` and this write was
+   **resurrected** to `pending` with the canonical key restored — spurious work, and a `FreshnessChip` announcing a
+   recompute that is not happening.
+3. **`PF-383` — `lastError` survived success.** `settleTrigger(trigger, 'done')` passed `extra = {}`, so a row that
+   failed, retried and then **succeeded** kept `(err as Error).message.slice(0, 500)`: raw Prisma text that can quote
+   a pupil's name. Combined with (1), that is permanent retention of raw error text. `G-AUDIT`.
+4. **`PF-386` — a cross-cutting key convention with no ADR.** `TERMINAL_COALESCE_SEPARATOR` lives in
+   `packages/contracts` and is consumed by `apps/api` at enqueue and `apps/worker` at drain. `GUARDRAILS §2` makes
+   that a blocking class; every sibling slice shipped one (`ADR-070`…`ADR-081`), this one had shipped a line of
+   `OPEN.md`. The `schema.prisma` comment still asserted the invariant **without** the terminal exception and still
+   claimed rows were *"routinely aged out"* — false until AC-1 landed.
+
+### What landed
+
+- **`sweepTerminalTriggers()`** (`snapshot-drain-cron.service.ts`): every `TERMINAL_SWEEP_EVERY_TICKS` (10) ticks,
+  at most `TERMINAL_SWEEP_TAKE` (500) rows shared across tenants, `SNAPSHOT_TERMINAL_RETENTION_DAYS` (30) TTL.
+  Per-tenant select **and** per-tenant `deleteMany`; the delete **re-asserts the whole predicate** rather than
+  trusting ids, because `reviveFailedTriggers` can flip a selected `failed` row back to `pending` in the same tick.
+  Sequenced **before** `tenantsWithPending()` on purpose: that is the one call in the tick not wrapped in `safe()`,
+  so anything after it is skipped whenever the scan throws.
+- **`positiveKnob()`** — the three new knobs clamp to their documented default instead of failing silently
+  (`0` → a cutoff at `now`; non-numeric → `NaN` → `new Date(NaN)` → a Prisma throw `safe()` swallows).
+- **`expectedStatus` on `requeueCanonical`**, at the three call sites the story names, each value **read at its call
+  site** rather than inferred. It also guards the P2002 fallback `deleteMany`, previously the one write in this file
+  able to remove the live `pending` row holding the canonical slot. `logger.debug` → `logger.warn`: work being
+  discarded had zero signal on the surface an operator reads.
+- **`settleTrigger(…, 'done', { lastError: null })`**; `attempts` deliberately NOT cleared (that is `PF-384`'s
+  territory, `§7` record-don't-fix).
+- **`ADR-083`** + the corrected `schema.prisma` `///` comment. Comment only: **no migration, no field, no index**,
+  so `PF-80` is not armed and `restore-drill-baseline.json` gains nothing.
+- **Twelve new jest cases** in `snapshot-trigger-conflict.spec.ts`, with real negative controls: a `pending`/
+  `processing` row is never deleted however ancient (G-TRUTH), a `processedAt: null` row is never deleted, every
+  `deleteMany` names one tenant and only ids selected under it (G-TENANT), the budget bounds the delete, a
+  `RETENTION_DAYS` of 0 falls back to 30, and a `flipAfterFindMany` hook that **reports whether the race actually
+  fired** rather than asserting into a vacuum.
+
+### The two things this slice got right by MEASURING, and they are the transferable lesson
+
+- **The three `expectedStatus` values were read, not assumed.** Symmetry would have been wrong.
+- **The terminal settle was left unguarded — after measuring that the "obvious" symmetric fix is a regression.**
+  A recompute outliving `STALE_PROCESSING_MIN` (15 min) has its row returned to `pending` by
+  `reclaimStaleProcessing`; a status predicate on the terminal write would then settle **zero** rows, so `done` is
+  never recorded, `status IN ('pending','processing')` stays true and `recomputing` pins **true forever** on the
+  parent dashboard while the fan-out is redone every tick — and on the park path `attempts` would never persist, so
+  `MAX_ATTEMPTS` becomes unreachable and the retry loop unbounded. The story's `§7` had fenced this off as
+  record-don't-fix; an intermediate revision had guarded it anyway, and the fix pass **reverted** it. The unguarded
+  terminal settle is now documented in the docblock and owed a finding row.
+
+### Landing conditions — written so they are not re-discovered
+
+1. **`PF-451`, and it is the one that matters: the sweep's FIRST statement is an unbounded, unindexed scan of
+   exactly the population the sweep exists to bound.** `findMany({ where: { status: { in: TERMINAL_STATUSES } },
+   select: { tenantId }, distinct: ['tenantId'] })` carries no `take` and no tenant key; `status` is not a leading
+   column of either index and Postgres 15 (`ADR-014`) has no index skip scan; `nativeDistinct` is not enabled on
+   `@prisma/client ^5.22`, so the `distinct` dedupes **after** the rows are materialised. On the aged table
+   `ADR-083 §D2` explicitly plans for, that is a multi-second seq scan plus a large transient allocation every ~10
+   minutes for the whole convergence period — to delete at most 500 rows. And it is wrapped in `safe()`, so it fails
+   **silently**: retention stops, the table keeps growing, the next sweep is worse. The docblock claims the sweep
+   "copies `pruneOrphanSnapshots`"; at the entry point it does not — the orphan prune derives its tenant set from a
+   **`take`-bounded sample** and never issues an unbounded query. **The in-slice fix needs no migration**: one
+   bounded candidate read (`{ status IN TERMINAL, processedAt < cutoff }, select: { id, tenantId }, take: TAKE`),
+   grouped by `tenantId` in memory, one `deleteMany` per group — `G-TENANT` stays structural and the re-assertion
+   survives. `ADR-083 §D5` currently concedes only that `processed_at` *"still filters in-heap"*, which understates
+   a read that has no bound at all.
+2. **Nothing exercises `tick()`.** All nine retention cases enter through
+   `service as unknown as { sweepTerminalTriggers() }`. `grep` for `.tick(` across `apps/worker/src/**/*.spec.ts`
+   finds only the two digest crons. So the suite stays green if the wiring `if` is deleted, moved below
+   `tenantsWithPending()`, or gated by a cadence that never opens — and `SNAPSHOT_TERMINAL_SWEEP_EVERY_TICKS` is the
+   one knob whose clamp is unmeasured, while `positiveKnob`'s own docblock names `tickCount % 0 === NaN` as a silent
+   never-fires failure. `PF-380` is the P1 blocking condition of this slice and its remedy is currently asserted
+   only in prose. That is `landed ≠ ran`, verbatim.
+3. **`OPEN.md` is untouched, and two of its statements are now measurably false.** `PF-380`/`382`/`383`/`386` are
+   still `open` against remedies that ARE in the diff; `PF-451`…`PF-456` live only in `ADR-083`'s front matter.
+   Worse, `OPEN.md:190` asserts that `grade_published` / `grade_revised` scopes are **per student** — measured false
+   at `grades.controller.ts:554-573` and `assessments.controller.ts`, which enqueue from the teaching assignment
+   (class × subject × term) with **no `studentId`**; only the admin `manual_rebuild` can set one. The RGPD framing of
+   `PF-380` survives, the growth model does not. And `OPEN.md:196` still points `PF-386` at `ADR-076`, taken by
+   `S-E03-3d` at run 90. This is the `project_held_pr_causes_duplicate_work` shape and no gate catches it.
+4. **`PF-385` is reproduced in new code without being recorded there.** `TERMINAL_SWEEP_TAKE` is ONE budget spent in
+   tenant-enumeration order with no `orderBy`, so a tenant with a large over-TTL backlog consumes it every sweep and
+   the tenants behind it are never swept. The story itself names *"son `take` est global, pas par tenant"* as a
+   defect of `reclaimStaleProcessing` and rules the new method out of `PF-385`'s scope — then reproduces the
+   property. Also `budget -= ids.length` charges **candidates**, not `removed.count`: harmless in direction
+   (under-deletes) but the budget stops meaning what its name says, and a revive interleave can silently evaporate
+   most of a pass. The docblock's *"It also cannot starve"* answers a different starvation and reads as a general
+   claim.
+5. **`ADR-083 §D2`'s justification for the 30-day default is mechanically wrong**, in the ADR and in the code
+   docblock. *"A `failed` row that has survived 30 days has survived ~720 revive passes"* cannot happen:
+   `requeueCanonical` stamps `processedAt: new Date()` on every requeue and the terminal settle stamps it again, so
+   a revive **resets the clock the TTL reads**. A `failed` row with a 30-day-old `processedAt` is one
+   `reviveFailedTriggers` has **never reached** — revive starvation, not a dead row. The default stays conservative
+   (`orderBy: processedAt asc`, 100/tick, plus `backfillLaggingTenants` re-enqueuing anything that actually lags),
+   so this is a **rationale** defect, not a safety one — but it is the only argument offered for the number and it
+   should not stand in an ADR uncorrected. Its practical consequence: the sweep mostly reaps `done` rows, which are
+   the genuinely unbounded class anyway.
+6. **Terminal rows with `processedAt: null` are outside the sweep by construction.** `processedAt: { lt: cutoff }`
+   excludes `NULL` by SQL three-valued logic — which test (4) correctly pins as REQUIRED — so any pre-`E6-S5` legacy
+   row that settled without a claim stamp is retained forever. The schema comment claims the table is now bounded
+   without naming the exception. **Documentation, not code**: do not add an `OR … null` clause. Measure the residue
+   with a bounded `count()` before deciding anything.
+7. **Accepted and declared, no action.** `getRecomputeStatus`'s `failed` count and `recent` feed change for tenants
+   dormant longer than the TTL (`ADR-083 §D4`), verified against `snapshot-ops.service.ts:38-80`; **no `apps/web`
+   file reads that endpoint**, so there is an API-visible change and no UI change. That reading was done in source,
+   per `PF-388`'s lesson that a no-op ruling must be measured.
+8. **Five hand-written status literals now partition a four-value enum across two apps.** The worker's new
+   `TERMINAL_STATUSES = ['done','failed']` is the exact complement of four `['pending','processing']` literals
+   (three in `apps/api`, one in the worker), with nothing linking them — the sweep's safety invariant is enforced by
+   a literal that must stay the complement of literals in another application. Known paired-lists drift class; the
+   natural home is `packages/contracts`, beside `snapshotCoalesceKey`, which both apps already import.
+
+**What this pass did NOT do, said plainly.** No live probe, and none was possible: Docker down a **seventh**
+consecutive run, `pilotage@5432` empty. Jest was **not executed** by the fix pass (resource budget); `pnpm typecheck`
+is 13/13 exit 0 and `git diff --check` is clean both ways. `PF-24`'s one remaining condition — an executed proof
+against Postgres — is therefore untouched, and is **not** claimed.
+
+*(Written 2026-08-29, run 97, land pass. Later slices: annotate, do not delete.)*
+
+---
+
+## Next slice → **`S-E03-10c` — make the retention sweep's OWN read bounded, and PROVE the sweep is reached**
+
+**1. First, and it is not a slice: `OPEN.md`.** Condition 3 above. Carry `PF-380`/`382`/`383`/`386` to `closed`
+citing the diff lines, keep `PF-24` `open` with its one named condition, add `PF-451`…`PF-456`, **and correct the two
+false statements** the `PF-380` row carries (per-student scopes; *"the existing index already supports it"*). File
+the unguarded terminal settle as a new finding — `§7` of the story required it to be recorded, and it is documented
+in code but nowhere in the matrix. Nothing later catches any of this.
+
+**2. `PF-451` — the sweep's own enumeration.** Condition 1. It is the difference between a retention control and a
+retention control that disables itself on the first aged table it meets. Fixable **in-slice, without a migration**,
+by adopting the shape `pruneOrphanSnapshots` already uses; the composite `@@index([tenantId, status, processedAt])`
+rides the first migration that touches this table and must **not** open one here.
+
+**3. The `tick()` wiring test.** Condition 2. One case, existing harness, ~20 lines: seed one aged terminal row, make
+`tenantsWithPending()` throw, drive `service.tick()` twice at `SNAPSHOT_TERMINAL_SWEEP_EVERY_TICKS=2`, assert the row
+survives tick 1 and is gone after tick 2. Non-vacuous in both directions — a hardcoded always-run fails the first
+assertion, a never-run fails the second — and it is the only assertion that can see the wiring line being moved.
+Pair it with the same 9-then-10 shape at `EVERY_TICKS=0` through the existing `sweepWithEnv` isolate-modules helper,
+which is the one clamp nothing measures.
+
+**4. Then the two rationale corrections**, cheap and worth doing in the same pass: `§D2`'s revive-count argument
+(condition 5) and the *"cannot starve"* sentence (condition 4).
+
+**5. Then the `epic-spec`, now THIRTEEN slices late.** `docs/spec/features/v3-e03/` still has no `spec.md` and no
+`tasks.md` (`PF-387`); `PF-365` / `PF-370` have waited ten runs. Eleven stories in a row have had to arbitrate their
+own home in their own `§D1`.
+
+**6. Epic figures after fourteen slices: 3 closed of 9 firmly** (`PF-15` on one axis, `PF-20` entire, `PF-40`
+entire), `PF-36` claimed under conditions, **`PF-50` advanced twice with a named residual each time**, **`PF-24`
+advanced twice and blocked on one thing only — a live Postgres**. Docker has been down for seven consecutive runs;
+until it is up, `PF-24` is not closable by any slice, and saying so is cheaper than another run discovering it.
+`PF-05` is still not started; `PF-12` (two surviving axes) and `PF-04` remain blocked on semantic rulings.
+
+*(Same caveat as every pointer in this file: a recommendation, not an order of mission. An operator designation
+outranks it — one did at run 97.)*
 
