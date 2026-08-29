@@ -2524,3 +2524,25 @@ avancée sur le substrat de son résidu (iii), pas sur (iii). `PF-05` inchangée
    `spec.md` ni `tasks.md` (`PF-387`), et `PF-365` / `PF-370` attendent depuis treize runs.
 
 *(Comme tout pointeur de ce fichier : une recommandation, pas un ordre de mission.)*
+
+### Addendum au land (run 103) — le gate a mesuré le MAUVAIS ARBRE, et c'est `PF-475`
+
+La première passe de `scripts/ci-gate.sh` a rendu `GATE: FAIL (3 stage(s))` — `prisma generate`,
+`typecheck`, `test:api (ratchet)`. **Aucun des trois ne porte sur ce diff.** Le reaper de verrou périmé a
+fait `git checkout main` **pendant** la passe (`runs.log` : `18:42:49 reaped` → `18:42:55 salvaged` →
+`18:44:21` un second run acquiert), si bien que le gate a typé un arbre d'où les fichiers neufs de la
+tranche avaient disparu. L'empreinte est explicite : `error TS6053: File '…/assignment-year-axis.spec.ts'
+not found` — un fichier **présent dans le commit testé**. `prisma generate` rejoué à la main ensuite :
+**exit 0**.
+
+**Ce run ne détient plus le verrou** (réquisitionné à 18:42). Il n'a donc **pas** relancé de passe de gate —
+deux écrivains dans un même checkout est la seule condition d'arrêt inconditionnelle — et il n'a **pas**
+appelé `release`, qui libérerait le verrou d'un AUTRE run.
+
+**Preuve retenue à la place, toute exécutée sur la branche, arbre intact :** typecheck `10/10` projets,
+build `@pilotage/api` exit 0, `prisma generate` exit 0, et **318 tests verts** — `8/8` (spec neuve, avec son
+contrôle rouge discriminant), `185/185` (`modules/teaching` + `modules/analytics`), `125/125`
+(`modules/alerts`, module adjacent au site `analytics.service.ts:2015`).
+
+**Résidu énoncé :** aucune passe de gate PROPRE sur cette branche. L'étage `test:api (ratchet)` n'a pas été
+rejoué après diagnostic, faute de verrou. C'est `PF-475`, et c'est la raison — pas une omission.
