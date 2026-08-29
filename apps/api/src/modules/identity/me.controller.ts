@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { mfaRequiredByInvitePolicy } from '@pilotage/contracts';
 import { IsIn, IsOptional } from 'class-validator';
 
 import { CurrentJwt } from '../../shared/auth/current-user.decorator';
@@ -63,6 +64,32 @@ export class MeController {
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * L'utilisateur courant — provisionné au premier appel.
+   *
+   * S-E05-8 / PF-25 half (b) / ADR-082 §D2 — LES DEUX CHAMPS MFA, ET CE QU'ILS
+   * AFFIRMENT EXACTEMENT :
+   *
+   * • `mfaEnabled: null` — « JAMAIS MESURÉ ». Ce n'est pas « désactivé ». Sur
+   *   HEAD, ce champ était le littéral `false`, ce qui rendait le bloc « MFA
+   *   actif » des pages de réglages inatteignable pour TOUT LE MONDE et
+   *   affirmait un fait d'appareil que rien n'avait observé. Le mesurer exige un
+   *   aller-retour vers l'API Admin de Keycloak SUR CE CHEMIN CHAUD (`/me` est
+   *   lu `no-store` à quasi chaque page) : un N+1 contre Keycloak et un nouveau
+   *   mode de panne pour `/me`. Délibérément non fait ici, enregistré PF-443.
+   *   Cette tranche AVANCE donc la moitié (b) ; elle ne la ferme pas.
+   *
+   * • `mfaRequired` — POLITIQUE, ZÉRO E/S. Dérivé des rôles realm DÉJÀ présents
+   *   dans le jeton de l'appelant par LA règle unique que
+   *   `invite.controller.ts` applique (ADR-004). Aucune requête ajoutée, aucune
+   *   lecture de base, aucun appel réseau : ni G-TENANT ni G-AUDIT ne sont
+   *   déclenchés par ce champ. Il dit « la politique enrôle ce rôle », jamais
+   *   « cet utilisateur a configuré son MFA » (PF-446).
+   *
+   * Aucun littéral booléen n'est assigné à l'un ou l'autre : R3 du cliquet
+   * (`apps/api/src/shared/quality/auth-failure-classification-gate.spec.ts`) le
+   * gèle à zéro sous tout `apps/api/src`.
+   */
   @Get()
   @ApiOkResponse({ description: 'Current user — provisioned on first call.' })
   async me(@CurrentJwt() jwt: KeycloakJwtPayload) {
@@ -72,6 +99,11 @@ export class MeController {
 
     const prefs = (user.preferences as Record<string, unknown> | null) ?? {};
     const display = normalizeDisplay(prefs.display);
+    // `boolean | null` est le DOMAINE du champ au contrat (`MeResponseSchema`) ;
+    // la valeur ÉMISE est `null`, « jamais mesuré ». Le type est écrit ici pour
+    // que la mesure future (PF-443) n'ait pas à élargir le type du contrôleur —
+    // et pour qu'aucun littéral booléen ne réapparaisse à cette clé (R3).
+    const mfaEnabled: boolean | null = null;
     return {
       id: user.id,
       email: user.email,
@@ -82,7 +114,8 @@ export class MeController {
       locale: user.locale,
       tenantId: user.tenantId,
       schoolId: (prefs.activeSchoolId as string | undefined) ?? null,
-      mfaEnabled: false,
+      mfaEnabled,
+      mfaRequired: mfaRequiredByInvitePolicy(realmRoles),
       photoUrl: user.photoUrl,
       preferences: { ...prefs, display },
     };

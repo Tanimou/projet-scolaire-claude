@@ -1,0 +1,16 @@
+// FIXTURE — S-E05-8 / ADR-082 §D2. NOT executable code, NOT part of any build.
+// The shape of apps/api/src/modules/identity/invite.controller.ts:230-232 as it
+// stood at HEAD (6163920), plus the ARRAY form of the same declaration. R4's
+// negative control: the rule "the MFA realm-role set is declared exactly once"
+// is only meaningful if the detector can see BOTH ways a second copy is written
+// — the `||` comparison chain and a bare array literal.
+
+const MFA_ROLES = ['school_admin', 'teacher'];
+
+export function preFixInviteRequiredActions(body: { realmRole: string }) {
+  const requiredActions = ['UPDATE_PASSWORD'];
+  if (body.realmRole === 'school_admin' || body.realmRole === 'teacher') {
+    requiredActions.push('CONFIGURE_TOTP');
+  }
+  return { requiredActions, MFA_ROLES };
+}

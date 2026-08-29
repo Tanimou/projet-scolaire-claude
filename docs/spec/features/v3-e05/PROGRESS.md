@@ -2,11 +2,21 @@
 
 **Layer** L0 · **Size** L · **Depends on** — (may run in parallel with `V3-E03`; disjoint seams: guards/DTOs vs read projections) · **Blocks** nothing
 **Owns** PF-07, PF-08, PF-09, PF-10, PF-11, PF-25, PF-26, PF-46, PF-51, PF-52, PF-53, **PF-102**, VAL-07 · **Gates** G-AUTHZ, G-TENANT, G-PORTAL, G-DNC
-**Status (2026-08-23)** `in-progress` — **thirteen slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
+**Status (2026-08-28)** `in-progress` — **fourteen slices landed**, the fourteenth being **`S-E05-8` (2026-08-28,
+run 96, this PR — `PF-25` half (a) `closed` **as a CLASS**, half (b) `advanced`; `ADR-082`; `PF-443`…`PF-446`
+recorded)**. `S-E05-8` is the **second** of the six matrix-row-only backlog allocations to be discharged, after
+`S-E05-4` (run 78), so it **leaves the "remaining three" list at line 9 below**. The epic is **NOT `shipped`**:
+four backlog rows (`S-E05-1`, `S-E05-9`, `S-E05-10`, `S-E05-2b`) plus `S-E05-18` are still unenumerated, and
+`S-E05-8` itself ships two conditions a human must rule on before merge — `PF-444`'s named discharge
+(`scripts/keycloak-live-probe.js` "STEP 6 mint C") **does not exist in the tree**, and `AC-6` is **unmet** at
+`InviteForm.tsx:299`, whose file is allowlisted inside the slice's own ratchet. The prior line is preserved verbatim
+from here: **thirteen slices landed**: `S-E05-12` (2026-08-07), `S-E05-2` (2026-08-11),
 `S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, #268 — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)** and **`S-E05-16` (2026-08-23, this PR — `PF-288` closed **at the service, not as a class**, `PF-51` clause 3 advanced on one route, `ADR-066`)** and **`S-E05-17` (2026-08-23, this PR — `PF-314` + `PF-315` closed, **`PF-51` closed: clause 3 of 3**, `ADR-067`)**. and **`S-E05-4` (2026-08-23, run 78, this PR — **`PF-11` CLOSED**, the first of the six matrix-row-only backlog allocations to be discharged since `S-E05-13`; `ADR-068`)**. **Thirteen landed rows against a twelve-row backlog is not a completion, and "12 of 12" in the roadmap table is numerically true and semantically false:** five of the thirteen (`S-E05-2c`, `S-E05-14`, `S-E05-15`, `S-E05-16`, `S-E05-17`) came from *outside* the backlog, and six backlog rows (`S-E05-1`, `S-E05-4`, `S-E05-8`, `S-E05-9`, `S-E05-10`, `S-E05-2b`) are still unenumerated — plus `S-E05-18`, the `PF-294` placeholder renumbered by run 77. Each was authored and implemented in the same
 `S-E05-11` (2026-08-12, `db2473b` / #222), `S-E05-7` (2026-08-12), **`S-E05-2c` (2026-08-12, #229)**, **`S-E05-3` (2026-08-22)**, **`S-E05-5` (2026-08-23, #264)**, **`S-E05-6` (2026-08-23, #265)** and **`S-E05-14` (2026-08-23, #266 — `PF-278` + `PF-280`, `ADR-063`)** and **`S-E05-13` (2026-08-23, #267 — `PF-51` **advanced**, not closed, `ADR-064`)** and **`S-E05-15` (2026-08-23, this PR — `PF-283` closed on both axes, `PF-51` clause (b) closed, `ADR-065`)**. Each was authored and implemented in the same
 run: the story under [`stories/`](./stories/) **is** the authoring pass this file used to say was missing. The
-remaining three (`S-E05-1`, `S-E05-8` … `S-E05-10`; **`S-E05-4` left this list on 2026-08-23, run 78**) still exist as **rows in
+remaining three (`S-E05-1`, `S-E05-9`, `S-E05-10`; **`S-E05-4` left this list on 2026-08-23, run 78**,
+and **`S-E05-8` left it on 2026-08-28, run 96** — authored and implemented in the same run, the `S-E05-2` posture:
+[`stories/S-E05-8.md`](./stories/S-E05-8.md)) still exist as **rows in
 [`docs/daily-improvement-v3/traceability-matrix.md`](../../../daily-improvement-v3/traceability-matrix.md) only** —
 `docs/daily-improvement-v3/stories/sprint-01.md` enumerates no `S-E05-*` story, so none of them is implementable
 without an authoring pass of its own. *(**`S-E05-13` left this list on 2026-08-23**: the renumbered `PF-51`
@@ -1779,3 +1789,200 @@ agents write into the main repo *or* the session worktree regardless of `args.wo
 have had to relocate by patch. The budget was spent on **executing** the evidence instead (the RED/GREEN gate pass,
 51 specs, a full typecheck), which is V3's stated premise. Recorded here rather than left for the next reader to
 infer from a missing `journal.jsonl` entry.
+
+---
+
+## `S-E05-8` (2026-08-28, run 96) — a wrong password stops announcing an MFA fact, and `mfaEnabled` stops being a hard-coded lie
+
+**Backlog row discharged.** `S-E05-8` leaves the matrix-row-only list — the second of the six such allocations to be
+discharged, after `S-E05-4` (run 78). Story authored and implemented in the same run, the `S-E05-2` posture:
+[`stories/S-E05-8.md`](./stories/S-E05-8.md). ADR:
+[`docs/adr/ADR-082-direct-grant-failure-taxonomy-and-mfa-projection.md`](../../../adr/ADR-082-direct-grant-failure-taxonomy-and-mfa-projection.md).
+
+### `PF-25` — half (a) `closed` as a CLASS, half (b) `advanced`, and why the second word is not the first
+
+**Half (a) `closed` as a CLASS.** On `HEAD`, `apps/web/src/auth.ts` tested `description.includes('credential')`
+**before** the `401`/`invalid_grant` branch. The **measured** Keycloak string is `Invalid user credentials` — it
+*contains* `credential` — so **every typo was reported to the user as « OTP requis »**. The class (substring
+classification of an auth failure anywhere under `apps/web/src`) is frozen by R1 (shape-based, zero tolerance) and
+R2 (the owning file imports the canonical classifier), each with a fixture-pinned negative control. `otp_required`
+and `invalid_credentials` are **deleted, not renamed**: Keycloak's ROPC grant answers a wrong password and a
+wrong/missing TOTP identically, so no honest code path can produce either.
+
+**Half (b) `advanced`, NOT closed.** `mfaEnabled: false` — a literal asserting a device fact nobody had observed,
+and the reason the "MFA actif" block was unreachable for *everyone* — becomes `null`, « jamais mesuré ». The new
+`mfaRequired` is derived with **zero I/O** from the caller's own realm-role claims, by the single declaration in
+`packages/contracts/src/security/mfa-enrolment-policy.ts` that `invite.controller.ts` now consumes instead of
+restating. **No account fact is measured**, so half (b) may not be written `closed` — that is run 93's
+`closed ≠ fixed`, and the residual carries an id: `PF-443`.
+
+### The three rulings that made an ADR mandatory (`GUARDRAILS.md` §2)
+
+1. a shared `security/` failure taxonomy consumed across `apps/web` **and** `apps/api` (`ADR-082 §D1`);
+2. a nullable-unknown contract-field semantic — `null` means *never measured*, **not** *false* (`§D2`);
+3. an `mfaRequired` **policy projection** derived from one rule, split from `mfaEnabled` by **name** so the two
+   kinds of claim cannot be conflated (`§D2`, reusing the `ADR-079 §D3` mechanism).
+
+`§D4` records the transport half that is easy to mistake for decoration: `CredentialsLoginError` extends
+`CredentialsSignin` because `@auth/core` wraps anything else in a `CallbackRouteError`, which is not client-safe —
+so before this slice the browser received `?error=Configuration` **with no `code` at all**, and every arm of the
+login form's handler missed, whatever had actually happened.
+
+### Residuals raised, with ids, not absorbed
+
+`PF-443` (measuring the account MFA fact needs a Keycloak Admin round trip on `/me`'s hot path — its own slice) ·
+**`PF-444`** (premise **P-1** unverified: whether Keycloak answers `Account is not fully set up` only *after* the
+password validates; discharge is `scripts/keycloak-live-probe.js` STEP 6 mint C, shipped **NOT EXECUTED**) ·
+`PF-445` (admin settings prose called teacher MFA « Recommandé » while the invite path **enforces** it — DNC-06,
+corrected in-slice) · `PF-446` (`mfaRequired` is a policy projection and can diverge today from any identity
+provisioned outside `invite.controller`; `super_admin` is the mirror case, enrolled nowhere).
+
+### EVIDENCE STATUS — read this before quoting anything green
+
+**Executed on this checkout:** `pnpm typecheck` — green after one mechanical fix (`CredentialsLoginError`'s
+parameter property needs `override`, because `CredentialsSignin` already declares `code: string` under
+`noImplicitOverride`); `git diff --check` — clean.
+
+**Authored and NOT executed in this run:** `apps/api/src/shared/quality/direct-grant-failure.spec.ts` and
+`apps/api/src/shared/quality/auth-failure-classification-gate.spec.ts` (the six-rule ratchet, five fixtures).
+**They must be run at the land pass before any reader treats `PF-25` half (a) as proven** — `landed: true` is not
+`ran: true`. `scripts/keycloak-live-probe.js` STEP 6 ships **NOT EXECUTED**; Docker is down for the seventh
+consecutive run, so **`PF-444` is UNPROVEN, not verified-safe**, and the pre-decided one-line contingency is
+documented at the constant it would collapse.
+
+> **EXECUTED AT THE LAND PASS (run 96) — which is exactly what the paragraph above demanded.** The three specs the
+> sprint shipped unexecuted were run: `direct-grant-failure.spec.ts` + `auth-failure-classification-gate.spec.ts` +
+> `credentials-signin-transport.spec.ts` → **74/74 green**; and after the `AC-6` completion described in **(B)**
+> below, the ratchet alone was re-run → **35/35 green**, including the rewritten R4 that now asserts the empty set.
+> The `landed: true ≠ ran: true` instruction was honoured rather than quoted. STEP 6 of
+> `scripts/keycloak-live-probe.js` now EXISTS (see **(A)**) and was attempted:
+> `KEYCLOAK LIVE PROBE: NOT EXECUTED — fetch failed`. **`PF-444` remains UNPROVEN**, and no live probe is claimed
+> anywhere in this slice.
+
+**Deployment note.** `apps/web/src/auth.ts` now **value**-imports from `@pilotage/contracts`, which resolves
+`main → dist/index.js`, and `auth.ts` is pulled into the edge middleware bundle. The orchestrator's single
+`pnpm build` must precede any deploy. `packages/contracts/dist/` already holding the new files on this checkout is
+**not** evidence that a deployed image holds them.
+
+### Two claims this slice made that the tree did NOT support — **both DISCHARGED at the land pass (run 96)**
+
+> **The claims are kept verbatim below, each followed by what the land pass actually did.** A self-report that
+> survives is worth more than a tidy one. This is the **fifth consecutive run** in which the sprint returned
+> `landed: true` while naming defects in its own delivery, and the fifth in which its notes were worth more than
+> its diff — the pattern is now stable enough to plan around: read `PROGRESS.md` before reading the diff.
+
+**(A) `PF-444`'s named discharge does not exist.** Six shipped files — `direct-grant-failure.ts`,
+`PortalLoginForm.tsx`, `ADR-082 §D3`, `stories/S-E05-8.md`, this file above, and the `PF-444` row of `OPEN.md` —
+cite `scripts/keycloak-live-probe.js` **"STEP 6 — mint C"** as the mechanism that would settle premise P-1. That
+script is **unmodified by this slice and stops at STEP 5**. "Shipped NOT EXECUTED" and "not shipped at all" are
+different facts and the second is the true one, so the pre-decided contingency has **no trigger**. Before merge a
+human either writes STEP 6 (a *wrong* password against a user with `CONFIGURE_TOTP` pending, asserting which of the
+two phrases returns) or restates all six citations as *the discharge is unwritten*.
+
+> **DISCHARGED (land pass, run 96) — STEP 6 is now WRITTEN, and it was ATTEMPTED.** `scripts/keycloak-live-probe.js`
+> gained **STEP 6 (mints A, B, C)** between STEP 5 and CLEANUP, so all six citations are now true. It runs three
+> ROPC mints against the ephemeral student the probe already creates: **A** wrong password with no required action
+> (re-derives run 63's measurement instead of inheriting it — a cited measurement is a claim, `PF-442`); **B**
+> correct password with `CONFIGURE_TOTP` planted (measures fixture (b) for the first time — it had only ever been a
+> *comment* at `register.controller.ts:241`); **C** wrong password with `CONFIGURE_TOTP` planted — **the P-1
+> discriminator**. It asserts the **classification**, never the phrase: it feeds each live response to the shipped
+> `classifyDirectGrantFailure` loaded from `packages/contracts/dist`, so no phrase is hand-copied into the probe,
+> and it cross-checks its two code names against `DIRECT_GRANT_FAILURE_CODES` so a renamed union member fails loudly
+> instead of silently never matching. It resets `requiredActions` to `[]` so STEP 6 leaves the fixture as it found
+> it. **It was RUN, and it did not execute:** `KEYCLOAK LIVE PROBE: NOT EXECUTED — fetch failed` (Docker Desktop
+> unable to start, seventh consecutive run). That verbatim line is the evidence, per the probe's own instruction.
+> **`PF-444` stays UNPROVEN — not verified-safe.** What changed is that its discharge now exists and takes one
+> command the day Docker returns, rather than being a citation to nothing.
+>
+> The **class** behind (A) is recorded as **`PF-448`**: *"shipped NOT EXECUTED" and "not shipped at all" are
+> different facts, and six artefacts asserted the first while the second was true.* It is the same family as
+> `PF-374` / `PF-388` / `PF-442` — a cited line number and a cited test verdict are claims, not measurements —
+> with the pointer running the other way: those cite a **result** that moved, this cites a **mechanism** that was
+> never built. A cheap detector exists and is not written: extract `scripts/<file>.js` + `STEP <n>` citations from
+> docs and source, and assert the step string occurs in the named file.
+
+**(B) `AC-6` is unmet, and the ratchet allowlists the survivor.** `InviteForm.tsx:299` still reads
+`(form.realmRole === 'school_admin' || form.realmRole === 'teacher')`, one screen below the `mfaRequired` derived at
+`:82` from the single declaration. Two of the file's three sites were converted; this one was not, and
+`apps/web/src/app/admin/users/invite/InviteForm.tsx` ships inside `R4_NAMED_RESIDUAL_FILES`
+(`auth-failure-classification-gate.spec.ts:105-107`), whose allowed target state is the **empty set** — so R4 passes
+green over exactly the paired-list drift the slice exists to remove. The gate's own census docblock (`:48-66`) is
+stale with it: it says converting `InviteForm.tsx` is "hors de la tranche", and the diff converted two of its sites.
+
+> **DISCHARGED (land pass, run 96) — `AC-6` is MET and `R4_NAMED_RESIDUAL_FILES` SHIPS EMPTY.** The remaining sites
+> were converted and the residual list emptied, so R4 now reddens on the **first** re-appearance anywhere. Two
+> things are worth carrying beyond this row:
+>
+> **The file had FOUR copies of the rule, not three, and the fourth is why a census missed it.** Alongside
+> `{(realmRole === 'school_admin' || realmRole === 'teacher') && …}` sat
+> `<Step n={form.realmRole === 'parent' ? '4' : '5'}>` — the same rule written as its **negation**, to renumber the
+> step that follows. Anyone counting occurrences of the positive form finds one fewer than exists. A derived rule
+> hides as easily in its complement as in its restatement.
+>
+> **The durable lesson is about the ratchet, and it generalises past this slice.** `R4_NAMED_RESIDUAL_FILES` was
+> populated from a census taken **before** the diff, and then the diff converted two of that file's sites — so the
+> gate shipped green *over the very drift it exists to forbid*, and its docblock explained at length why the
+> conversion was "hors de la tranche" while the conversion was in the tranche. This is **not** `PF-436` (a floor
+> pinned to a shrinking class); the floors here are fixture-pinned and correct. It is the adjacent hazard:
+> **a named-residual list is a measurement, and a measurement taken before the change it accompanies is stale by
+> construction.** A residual list must be re-derived on the POST-diff tree, or it legalises the work in flight.
+> Recorded as **`PF-447`**.
+
+> **(C) A THIRD defect, found by the LAND PASS's own gate run and recorded as `PF-449` — and it is the one that
+> should change how this routine reads a green test.** `scripts/ci-gate.sh` returned **`GATE: FAIL (1 stage)`** on
+> `test:api (ratchet)`, naming three tests: every case of this slice's own
+> `credentials-signin-transport.spec.ts`. Following the rule that an "excess" failure is diagnostic and presumed
+> yours, and confronting the names against `known-test-failures.json` first — `7 failing · 4 known-failing
+> (baseline)`, all four `PF-64`, so exactly three were mine.
+>
+> **The uncomfortable part: that spec had already been run green THREE times.** Alone, twice. And across
+> `src/shared/quality` — 49 suites, 2292 tests. All three were run with **`pnpm exec jest`**, and that is the
+> whole story: `pnpm exec` injects a `NODE_PATH` which the spawned child process inherited.
+> `scripts/test-ratchet.js` spawns jest as a bare `node <jestBin>`, the child inherited nothing, and it died on
+> **`Cannot find module '@auth/core/errors'`**.
+>
+> **Root cause: the anchor was a SYMLINK.** The spec anchored `createRequire` at
+> `apps/web/node_modules/next-auth/package.json`. Under pnpm that is a link into
+> `node_modules/.pnpm/next-auth@…/node_modules/`, where `@auth/core` is a **sibling** — it exists nowhere under
+> `apps/web/node_modules` and nowhere in the root `node_modules`. `createRequire` resolves from the path it is
+> handed, so the symlink anchor walked upward and found nothing. Fixed with `realpathSync`, which is also what Node
+> does at runtime. Verified with the gate's own invocation (bare `node <jestBin>`, `--ci --silent`): **7/7**.
+>
+> **THE EXPENSIVE PART WAS THE MIS-DIAGNOSIS, and it is the part worth carrying.** The first hypothesis was
+> TIMEOUTS, and every fact supporting it was true: no `testTimeout` in `apps/api/jest.config.js` (jest's default
+> 5000 ms), a **bare `node -e 1` spawn measured 1216 ms** under full-suite load, three spawns per file, and the
+> failure reproduced byte-identically across two ratchet runs. It cost a full ~15-minute gate cycle, and the "fix"
+> came back with **four** failures instead of three. **A plausible mechanism that predicts the symptom is not a
+> diagnosis.** The actual error text was three minutes away the whole time — `--ci --silent` on that one file, via
+> bare node. Recorded as **`PF-449`**.
+>
+> Two rules: **a green `pnpm exec jest` is evidence about `pnpm exec`, not about the gate** — reproduce with the
+> gate's own invocation before believing anything — and **read the error before modelling the cause.** Ten other
+> specs under `apps/api/src/shared/quality/` spawn processes and were **not** audited for this.
+>
+> The one-spawn-per-file change was kept anyway: the child depends on the installed library, not on the case, so it
+> has no business running per case, and one spawn cannot half-succeed across cases.
+>
+> **Verified after the real fix:** `node scripts/test-ratchet.js api` → **4373/4377 · 4 failing · all four the
+> `PF-64` baseline · `✓ no drift`.**
+
+> **OPERATIVE NEXT SLICE (2026-08-28, `S-E05-8` land pass, REVISED after (A) and (B) were discharged) →
+> `S-E05-18` / `PF-294`.** The sprint's own draft of this paragraph put `PF-444` at the head, and that ranking is
+> now **spent**: both of its actions were taken in this run. STEP 6 is written and (B) is folded in, so `PF-444` no
+> longer needs a *slice* — it needs a **Docker daemon**, and no amount of scheduling produces one. It is therefore
+> demoted to a standing item with a one-command discharge: the day Docker starts, `node
+> scripts/keycloak-live-probe.js` settles it, and only if mint C falsifies P-1 does it become a one-line edit
+> (`SETUP_PENDING_MESSAGE` → `CREDENTIALS_REJECTED_MESSAGE`). **Do not spend a run "working on `PF-444`" while the
+> daemon is down** — there is nothing left to write.
+>
+> `S-E05-18` / `PF-294` (the THIRD door of the peer-enumeration class, `GET /api/v1/classes/:id` returns any
+> class's full roster with `gender`, `birthDate` and `email` to any `classes.read` holder, which includes
+> `teacher`) is untouched by this run and resumes the head of the queue: it is a defect the product **has**, on a
+> child-data surface, and it has now been scheduled over by eleven consecutive overrides. Pick up `PF-446`'s mirror
+> case opportunistically (`super_admin` is enrolled **nowhere** yet `/admin/settings` now tells it « Obligatoire »)
+> — it is copy plus one policy decision, not a slice.
+>
+> Ranking after this run: **`S-E05-18` / `PF-294` → `PF-310` → `PF-309` → `PF-305` → `PF-287` → `PF-284` →
+> `PF-267` → `PF-277` → `PF-279` → `S-E05-2b`**, with `PF-444` parked on the daemon and `PF-443` (the only thing
+> that closes `PF-25` half (b)) waiting on the same. The `Next slice →` line at the top of this file remains the
+> standing pointer preserved by convention — **ten** overrides have now scheduled over it without refuting it.

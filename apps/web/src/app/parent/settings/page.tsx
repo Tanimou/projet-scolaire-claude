@@ -2,6 +2,8 @@ import {
   Avatar,
   EmptyState,
   EnrollmentStatusBadge,
+  MfaStatusBadge,
+  mfaAssuranceState,
   PageHeader,
   Tabs,
   TabsContent,
@@ -354,12 +356,23 @@ function ProfilePanel({
                 <Languages className="h-3 w-3" />
                 {localeLabel(me.locale)}
               </span>
-              {me.mfaEnabled && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-400/20 px-2.5 py-1 text-[11px] font-bold text-emerald-100 ring-1 ring-emerald-300/30 backdrop-blur-sm">
-                  <ShieldCheck className="h-3 w-3" />
-                  MFA actif
-                </span>
-              )}
+              {/* S-E05-8 / PF-25 half (b). Same shared verdict as the teacher
+                  hero, and for a parent it deliberately renders NOTHING today:
+                  the invite policy does not enrol `parent` in MFA and the fact
+                  was never measured, so « optional and unmeasured » is not news
+                  — and a badge that fires for everybody is not a signal. The
+                  parent hero is therefore pixel-identical to HEAD. It stops
+                  being a truthiness read all the same: `{me.mfaEnabled && …}`
+                  over a tri-state renders nothing for `null` by accident, which
+                  is the right pixel for the wrong reason. */}
+              <MfaStatusBadge
+                state={mfaAssuranceState({
+                  mfaRequired: me.mfaRequired,
+                  mfaEnabled: me.mfaEnabled,
+                })}
+                surface="on_gradient"
+                size="sm"
+              />
             </div>
           </div>
         </div>

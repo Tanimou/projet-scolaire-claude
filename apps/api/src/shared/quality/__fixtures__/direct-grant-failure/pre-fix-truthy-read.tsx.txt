@@ -1,0 +1,21 @@
+// FIXTURE — S-E05-8 / PF-25 half (b). NOT executable code, NOT part of any build.
+// The shape of apps/web/src/app/teacher/settings/page.tsx:273 and :375 and
+// apps/web/src/app/parent/settings/page.tsx:357 as they stood at HEAD (6163920):
+// `mfaEnabled` read BY ITS TRUTHINESS. R5's negative control.
+//
+// Why this is the dangerous shape once the field becomes tri-state: `null` is
+// falsy, so `{me.mfaEnabled && …}` silently renders NOTHING for a teacher whom
+// the invite policy actually enrols — the "required" signal disappears instead
+// of becoming "unknown". And had the unknown state been a string sentinel
+// instead of `null`, the same expression would have rendered « MFA actif » for
+// EVERY user: strictly worse than the lie it replaced.
+
+export function PreFixSecurityPanel({ me }: { me: MeResponse | null }) {
+  return (
+    <div>
+      {me.mfaEnabled && <Badge>MFA actif</Badge>}
+      <Field label="Double authentification" value={me?.mfaEnabled ? 'Activée' : 'Recommandée'} />
+      {!me.mfaEnabled ? <Hint>Configurez votre MFA</Hint> : null}
+    </div>
+  );
+}

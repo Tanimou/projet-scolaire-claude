@@ -1,0 +1,46 @@
+// FIXTURE — S-E05-8. NOT executable code, NOT part of any build.
+// THE POSITIVE-ACCEPT CONTROL (critic C-06): the CONVERTED shape must be SILENT
+// on all six rules while still doing every one of the things the rules police —
+// it reads `error_description`, it branches on a failure, it renders the MFA
+// state, and it names the two roles' policy. A detector that keys on the mere
+// PRESENCE of `error_description` (rather than on the classification chain)
+// would flag this file, and would then be "fixed" by relaxing the rule — the
+// wrong repair. If this fixture ever goes red, the detector regressed, not the
+// tree.
+
+import { classifyDirectGrantFailure, mfaRequiredByInvitePolicy } from '@pilotage/contracts';
+
+export async function cleanDirectGrantLogin(res: Response, body: TokenErrorBody | null) {
+  if (!res.ok || !body?.access_token) {
+    // The description is READ and FORWARDED. It is never matched here: the one
+    // classifier owns the taxonomy, and this site owns nothing.
+    const outcome = classifyDirectGrantFailure({
+      status: res.status,
+      error: body?.error,
+      errorDescription: body?.error_description,
+    });
+    throw new CredentialsLoginError(outcome);
+  }
+  return body.access_token;
+}
+
+export function cleanRenderedFailure(code: string): string {
+  switch (code) {
+    case 'credentials-or-otp-rejected':
+      return 'Email ou mot de passe incorrect.';
+    case 'account-setup-pending':
+      return 'Terminez la configuration de votre compte depuis le lien reçu par email.';
+    case 'unclassified':
+      return 'Connexion impossible pour le moment.';
+    default:
+      return 'Connexion impossible pour le moment.';
+  }
+}
+
+export function cleanMfaState(me: { mfaEnabled: boolean | null; roles: string[] }): string {
+  const required = mfaRequiredByInvitePolicy(me.roles);
+  // THREE explicit states. Never a truthiness read.
+  if (me.mfaEnabled === true) return 'Activée';
+  if (me.mfaEnabled === false) return required ? 'Obligatoire · non configurée' : 'Non activée';
+  return required ? 'Obligatoire · statut non vérifié' : 'Recommandée · statut non vérifié';
+}

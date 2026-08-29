@@ -128,6 +128,20 @@ export {
   type ChildLinkBadgeState,
   type ChildLinkStatusBadgeProps,
 } from './components/ChildLinkStatusBadge';
+// The canonical MFA-assurance rendering. FIVE states, obtained by crossing a POLICY
+// (`mfaRequired`, always known) with a measured FACT (`mfaEnabled`, `null` = never
+// measured), ONE mapping — see the component's docblock for why the tri-state may not be
+// read through `&&`, and why two of the five states deliberately render no badge at all.
+export {
+  MfaStatusBadge,
+  mfaAssuranceBadgeLabel,
+  mfaAssuranceHint,
+  mfaAssuranceLabel,
+  mfaAssuranceState,
+  type MfaAssuranceInput,
+  type MfaAssuranceState,
+  type MfaStatusBadgeProps,
+} from './components/MfaStatusBadge';
 export { DateCard, type DateCardProps, type DateCardTone } from './components/DateCard';
 export { Tabs, TabsList, TabsTrigger, TabsContent, type TabsProps } from './components/Tabs';
 export { SectionHeader, type SectionHeaderProps } from './components/SectionHeader';

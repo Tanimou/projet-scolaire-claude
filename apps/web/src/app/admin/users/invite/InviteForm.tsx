@@ -1,5 +1,6 @@
 'use client';
 
+import { mfaRequiredByInvitePolicy } from '@pilotage/contracts';
 import { ArrowRight, Check, GraduationCap, Loader2, Lock, Send, Users } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -17,13 +18,20 @@ interface CustomRole {
   portal: 'admin' | 'teacher' | 'parent' | null;
 }
 
+/**
+ * S-E05-8 / AC-6. The three cards used to carry a literal `mfaRequired: true |
+ * true | false` — a FOURTH copy of the same rule, sitting one screen away from
+ * the invite it describes. The flag is DERIVED per row from the single
+ * declaration instead, so the « MFA requis » chip and the required action
+ * Keycloak actually receives cannot disagree. Only presentation is hand-written
+ * here; policy is read.
+ */
 const REALM_ROLE_OPTIONS: {
   value: RealmRole;
   label: string;
   description: string;
   Icon: React.ComponentType<{ className?: string }>;
   gradient: string;
-  mfaRequired: boolean;
 }[] = [
   {
     value: 'school_admin',
@@ -31,7 +39,6 @@ const REALM_ROLE_OPTIONS: {
     description: "Accès complet à l'établissement et configuration.",
     Icon: Lock,
     gradient: 'from-indigo-500 via-blue-600 to-blue-700',
-    mfaRequired: true,
   },
   {
     value: 'teacher',
@@ -39,7 +46,6 @@ const REALM_ROLE_OPTIONS: {
     description: 'Planifie évaluations, saisit notes et présences.',
     Icon: GraduationCap,
     gradient: 'from-teal-400 via-teal-500 to-emerald-600',
-    mfaRequired: true,
   },
   {
     value: 'parent',
@@ -47,7 +53,6 @@ const REALM_ROLE_OPTIONS: {
     description: "Consulte l'évolution scolaire de son enfant.",
     Icon: Users,
     gradient: 'from-sky-400 via-blue-500 to-indigo-600',
-    mfaRequired: false,
   },
 ];
 
@@ -65,8 +70,16 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
   const [sentEmail, setSentEmail] = useState<string | null>(null);
   const successHeadingRef = useRef<HTMLHeadingElement>(null);
 
-  /** Roles Keycloak also asks to configure TOTP for (invite.controller.ts §2). */
-  const mfaRequired = form.realmRole === 'school_admin' || form.realmRole === 'teacher';
+  /**
+   * S-E05-8 / AC-6. This line used to be
+   * `form.realmRole === 'school_admin' || form.realmRole === 'teacher'` — a
+   * THIRD hand-written copy of the invite MFA rule (`invite.controller.ts` held
+   * one, `/me` was about to grow another). It now consumes the single
+   * declaration in `packages/contracts/src/security/mfa-enrolment-policy.ts`,
+   * so this screen cannot promise an invitee an MFA step the backend does not
+   * post, nor stay silent about one it does.
+   */
+  const mfaRequired = mfaRequiredByInvitePolicy([form.realmRole]);
 
   // WCAG 4.1.3 — the form is replaced wholesale by the success card, so without an
   // explicit focus move a keyboard/screen-reader user is left on a button that no
@@ -209,7 +222,7 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
                   </div>
                   <div className="mt-3 text-sm font-bold text-slate-900">{r.label}</div>
                   <div className="mt-1 text-xs text-slate-600">{r.description}</div>
-                  {r.mfaRequired && (
+                  {mfaRequiredByInvitePolicy([r.value]) && (
                     <div className="mt-2 inline-flex items-center gap-1 self-start rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-800">
                       MFA requis
                     </div>
@@ -283,10 +296,21 @@ export function InviteForm({ customRoles }: { customRoles: CustomRole[] }) {
             <Step n="1">Création du compte dans Keycloak.</Step>
             <Step n="2">Email envoyé à {form.email || 'l\'utilisateur'} avec un lien sécurisé.</Step>
             <Step n="3">Sur clic du lien : il définit son mot de passe.</Step>
-            {(form.realmRole === 'school_admin' || form.realmRole === 'teacher') && (
+            {/*
+              S-E05-8 / AC-6, completed at the land pass of run 96. These two lines
+              were this file's THIRD and FOURTH copies of the invite MFA rule — the
+              first spelled it out (`=== 'school_admin' || === 'teacher'`), the second
+              spelled its NEGATION (`=== 'parent'`) to renumber the step that follows,
+              which is why a reader counting occurrences of the positive form found
+              only one. Both now read the single `mfaRequired` binding derived at the
+              top of this component from `mfa-enrolment-policy.ts`, so the preview a
+              `school_admin` reads before sending an invitation cannot drift from the
+              `CONFIGURE_TOTP` the backend actually posts.
+            */}
+            {mfaRequired && (
               <Step n="4">Configuration TOTP obligatoire (Google Authenticator, etc.).</Step>
             )}
-            <Step n={form.realmRole === 'parent' ? '4' : '5'}>Redirection vers son portail.</Step>
+            <Step n={mfaRequired ? '5' : '4'}>Redirection vers son portail.</Step>
           </ol>
         </div>
 
