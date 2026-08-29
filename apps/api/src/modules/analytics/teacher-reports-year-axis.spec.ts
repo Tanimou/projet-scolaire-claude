@@ -115,6 +115,9 @@ describe('GET /analytics/teacher-reports — le NEUVIÈME site, celui que S-E03-
     // décidé dans le foyer, une fois, et non re-épelé ici.
     expect(seen).toHaveLength(1);
     expect(seen.some(usesColumnAxis)).toBe(false);
-    expect(seen[0]['classSection']).toBeUndefined();
+    // `some` sur un tableau VIDE rendrait `false` et laisserait ce test vert
+    // sans qu'aucune requête n'ait été observée ; la longueur ci-dessus est ce
+    // qui l'en empêche, et l'accès explicite au premier `where` le confirme.
+    expect(seen.every((w) => w['classSection'] === undefined)).toBe(true);
   });
 });

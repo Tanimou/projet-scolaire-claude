@@ -371,6 +371,27 @@ const FIXTURE_ENROLMENT_PAIRED = `
 const classifyFixture = (src: string, label: string) =>
   classifyAssignmentReads(src, label, NAMES, HOME_FUNCTION);
 
+/**
+ * LA construction reconnue dans une fixture — et son absence est une PANNE, pas
+ * un `undefined`.
+ *
+ * Écrit ainsi plutôt qu'avec `!` ou `?.` pour une raison de fond : si le
+ * classifieur cessait un jour de reconnaître ces formes, `site?.columnAxis`
+ * rendrait `undefined`, l'assertion lirait « faux » et le cliquet deviendrait
+ * AVEUGLE en passant pour un simple test rouge. Ici il meurt en le disant.
+ */
+function onlySite(source: string, label: string): Site {
+  const sites = classifyFixture(source, label);
+  const site = sites[0];
+  if (!site) {
+    throw new Error(
+      `le classifieur n'a RECONNU aucune lecture d'affectations dans la fixture « ${label} ». ` +
+        `Ce n'est pas un test qui échoue : c'est le cliquet devenu aveugle.`,
+    );
+  }
+  return site;
+}
+
 /* ================================================================== *
  * LES TESTS
  * ================================================================== */
@@ -400,29 +421,27 @@ describe('la marche a bien regardé l’arbre', () => {
 
 describe('ANTI-VACUITÉ — le classifieur reconnaît ce qu’il prétend juger', () => {
   it('attrape le spread CONDITIONNEL, la forme même qui a survécu à S-E03-13', () => {
-    const [site] = classifyFixture(FIXTURE_VIOLATION, 'fixture-conditional.ts');
-    expect(site).toBeDefined();
+    const site = onlySite(FIXTURE_VIOLATION, 'fixture-conditional.ts');
     expect(site.teacherScoped).toBe(true);
     expect(site.columnAxis).toBe(true);
     expect(site.delegates).toBe(false);
   });
 
   it('attrape aussi la forme NUE (`academicYearId` écrit en clair)', () => {
-    const [site] = classifyFixture(FIXTURE_PLAIN_VIOLATION, 'fixture-plain.ts');
+    const site = onlySite(FIXTURE_PLAIN_VIOLATION, 'fixture-plain.ts');
     expect(site.teacherScoped).toBe(true);
     expect(site.columnAxis).toBe(true);
   });
 
   it('n’accuse PAS une lecture qui délègue au foyer — le contrôle NÉGATIF', () => {
-    const [site] = classifyFixture(FIXTURE_DELEGATED, 'fixture-delegated.ts');
-    expect(site).toBeDefined();
+    const site = onlySite(FIXTURE_DELEGATED, 'fixture-delegated.ts');
     expect(site.teacherScoped).toBe(true);
     expect(site.columnAxis).toBe(false);
     expect(site.delegates).toBe(true);
   });
 
   it('distingue la famille APPARIÉE À UNE INSCRIPTION (R2) de la famille enseignant (R1)', () => {
-    const [site] = classifyFixture(FIXTURE_ENROLMENT_PAIRED, 'fixture-paired.ts');
+    const site = onlySite(FIXTURE_ENROLMENT_PAIRED, 'fixture-paired.ts');
     expect(site.columnAxis).toBe(true);
     expect(site.teacherScoped).toBe(false);
   });
@@ -490,7 +509,8 @@ describe('R2 — le RESTE de la classe est compté, jamais exempté (PF-474)', (
     // Anti-vacuité par FIXTURE plutôt que par plancher de production : si la
     // famille tombe à zéro c'est une VICTOIRE, et ce test doit alors être
     // supprimé avec `PF-474`, pas « réparé ».
-    const [paired] = classifyFixture(FIXTURE_ENROLMENT_PAIRED, 'fixture-paired.ts');
-    expect(paired.columnAxis && !paired.teacherScoped).toBe(true);
+    const paired = onlySite(FIXTURE_ENROLMENT_PAIRED, 'fixture-paired.ts');
+    expect(paired.columnAxis).toBe(true);
+    expect(paired.teacherScoped).toBe(false);
   });
 });
