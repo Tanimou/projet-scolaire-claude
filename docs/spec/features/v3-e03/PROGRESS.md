@@ -150,6 +150,7 @@ is the first roadmap slice selected under that ledger, and it is the first `V3-E
 | **`S-E03-9`** — one page window, one cap, one place; and a negative limit stops silently inverting the result set | **advances `PF-50`** — explicitly **NOT closed** (`AC-7`, named residual = `PF-426`); **fixes `PF-421`, `PF-422`, `PF-423`** in-slice; raises `PF-419`, `PF-420`, `PF-424`, `PF-425`, `PF-426`; `ADR-080` | ⚠️ **2026-08-27, run 94 — DONE, needs human review, do NOT auto-merge. P1 `[api-contract][truth][breaking-change]`** (re-tiered from P2 at the gate: thirteen endpoints now **reject** an over-cap `limit` instead of clamping it). Story `docs/daily-improvement-v3/stories/S-E03-9.md`; ADR `docs/adr/ADR-080-canonical-page-window.md`; canon `packages/contracts/src/pagination/page-window.ts`; ratchet `apps/api/src/shared/quality/page-window-derivation-gate.spec.ts` (`CENSUS_CEILING = 151`). **Evidence tier B — no live probe was possible** (Docker down for a fifth consecutive run, local DB empty): `pnpm typecheck` 13/13 green **only after** the two halves were consolidated into one checkout, the ratchet spec passes, and `page-window.spec.ts` still has **one RED test** (`AC-8 / G-TENANT` hard-codes SEVEN reads; the handler now issues EIGHT, all tenant-keyed). Landing conditions in § `S-E03-9`. |
 | **`S-E03-11`** — the page envelope becomes a CONTRACT, and the client stops ASSERTING the shape it reads | **advances `PF-50`** and **advances `PF-427`** (`S-E03-9`'s own named residual) — **neither closed**; raises `PF-428`…`PF-433`; `ADR-081` | ⚠️ **2026-08-28, run 95 — DONE, needs human review, do NOT auto-merge. P1 `[api-contract][truth][admin-portal]`** (re-tiered from the story's P2 at the panel: the client half turns four tolerant casts into **throwing** validation on live admin reads). Story `docs/daily-improvement-v3/stories/S-E03-11.md`; ADR `docs/adr/ADR-081-canonical-page-envelope.md`; canon `packages/contracts/src/pagination/page-envelope.ts`; ratchet `apps/api/src/shared/quality/page-envelope-boundary-gate.spec.ts` (`R1_CEILING = 1`, `R2_CEILING = 6`). **Evidence tier B — no live probe was possible** (Docker down a **sixth** consecutive run, local DB empty). Landing conditions in § `S-E03-11`; the first of them — `pnpm --filter @pilotage/contracts build` — is a **merge precondition**, not an optimisation. **Slice id renumbered `S-E03-10` → `S-E03-11` at the land pass**: `S-E03-10` was already taken by the run-89 snapshot slice, and the collision had been stamped into fourteen shipped docblocks |
 | **`S-E03-10b`** — the terminal-key convention gets its retention bound, its ADR, and the status predicate `requeueCanonical` had dropped | **closes `PF-380`** (the retention bound), **`PF-382`** (the dropped status predicate), **`PF-383`** (`lastError` retained through fail → retry → success), **`PF-386`** (the missing ADR + the stale `schema.prisma` comment); **advances `PF-24`** — still **NOT closed**, the executed-against-Postgres half is untouched; raises `PF-451`…`PF-456`; `ADR-083` | ⚠️ **2026-08-29, run 97 — NEEDS HUMAN REVIEW, do NOT auto-merge. P1 `[worker][data-retention][rgpd][destructive-delete]`.** No migration, no contracts change, no `apps/web` file, `schema.prisma` **comment only**. Story `docs/spec/features/v3-e03/stories/S-E03-10b.md`; ADR `docs/adr/ADR-083-snapshot-trigger-terminal-key-and-retention.md`. **Evidence tier B** — `pnpm typecheck` 13/13 exit 0, twelve new jest cases with real anti-vacuity controls, **zero live probes** (Docker down a seventh consecutive run, local DB empty). Landing conditions in § `S-E03-10b`: `PF-451` (the sweep's own enumeration is unbounded and fails silently), the missing `tick()` wiring test, and `OPEN.md` untouched |
+| **`S-E03-2b`** — une note de ZÉRO est une note : le prédicat de valeur cesse de dépendre d'un invariant que rien n'énonce | **advances `PF-05`** — un résidu sur trois LEVÉ (il en reste deux, tous deux du ressort de `S-E03-3`) ; **`PF-339` FALSIFIÉE** par exécution, pas corrigée ; raises `PF-463`, `PF-464` ; `ADR-084` | **2026-08-29, run 99 — MERGED.** Palier **B**, cliquet obligatoire malgré le tier (fermeture réclamée comme CLASSE). `pnpm typecheck` vert ; `grade-zero-value.spec.ts` **8/8 vert après / 3 rouges avant** sur le fichier de production réel restauré ; `scripts/grade-zero-value-probe.js` **`PROBE: PASS — 5/5`** contre le Postgres du conteneur (420 notes, transaction annulée). Aucune image reconstruite (disque hôte à 5,1 Go) — la sonde n'exerce donc pas le code applicatif modifié, et c'est pourquoi la moitié comportementale est portée par jest. Axe faible nommé : seul `schoolPerformance` est couvert en comportement ; les trois sites de `parentDashboard` le sont comme CLASSE par le cliquet |
 | `S-E03-1` | — | **matrix row only** — no story authored. (`S-E03-3` left this row at run 82, `S-E03-5` at run 86, `S-E03-6` at run 91, `S-E03-8` at run 92, `S-E03-7` at run 93 and **`S-E03-9` at run 94**: all six were authored, so the habit is holding. `PF-50` moved off this row at run 94 — it is `S-E03-9`'s, not `S-E03-1`'s.) |
 
 ---
@@ -2268,3 +2269,110 @@ until it is up, `PF-24` is not closable by any slice, and saying so is cheaper t
 *(Same caveat as every pointer in this file: a recommendation, not an order of mission. An operator designation
 outranks it — one did at run 97.)*
 
+
+---
+
+## `S-E03-2b` — une note de ZÉRO est une note, et `PF-339` est FALSIFIÉE par exécution (run 99, 2026-08-29)
+
+**Findings :** `PF-05` *(avancée — un résidu sur trois levé)* · `PF-339` *(**falsifiée**)* · `PF-463`, `PF-464` *(relevées)*
+**ADR :** `ADR-084` · **Palier de preuve : B** *(correction de forme, aucun changement de comportement sur les
+données d'aujourd'hui — mais le cliquet est **obligatoire quand même**, parce que la fermeture est réclamée comme
+CLASSE, pas comme quatre sites)*
+
+### Ce qui a été tranché
+
+Le registre portait `PF-339` en **P1** : *« `if (!g.value) continue` supprime une note légitime de ZÉRO de toutes
+les surfaces adossées à A »*. **C'est faux, et ça l'a toujours été.** `Grade.value` est `Decimal?`, Prisma rend un
+`Prisma.Decimal`, tout objet est vrai, donc `!Decimal(0)` vaut `false`.
+
+Trois runs avaient **lu** cette ligne. Ce run l'a **exécutée**, parce que c'était le premier depuis huit runs avec
+un Postgres vivant. `scripts/grade-zero-value-probe.js` → **`PROBE: PASS — 5/5`** contre
+`database=pilotage server=172.18.0.10` (le conteneur ; `localhost:5432` est l'autre base, native Windows), sur
+**420 notes réelles**, transaction **annulée** et 3/3 lignes vérifiées intactes après coup.
+
+### Pourquoi le code a changé malgré la falsification
+
+Le zéro survivait **par accident**, sur un invariant que rien n'énonçait — que la valeur atteint la boucle non
+convertie — alors que **le même fichier fait déjà `Number(g.value)` aux lignes 834 et 1297**. C'est la forme
+d'`ADR-068 §1.1`. Le fichier portait en outre **deux idiomes pour un seul test** : quatre sites `!g.value`, quatre
+sites `g.value === null || g.value === undefined`. Les quatre fautifs adoptent le prédicat de leurs frères — la
+règle du dossier d'accueil, pas un idiome de plus.
+
+Trois des quatre sont dans **`parentDashboard`**, c'est-à-dire **la projection A elle-même**, celle dont `PF-05`
+parle. Le quatrième porte le KPI `overall` de `/admin`.
+
+### Le chiffre qui justifie le tier
+
+Sur la fixture minimale — un **0** et un **20** :
+
+| | vérité | avec `!g.value` sur une valeur numérisée |
+|---|---|---|
+| `sampleSize` | 2 | 1 |
+| `successRate` | 50 % | **100 %** |
+| `overall` | 50 % | **100 %** |
+
+Le prédicat n'abîme pas le KPI, il l'**invente** — et il retire la seule note qui devrait faire *baisser* un taux
+de réussite, des **deux** côtés de la fraction. `DNC-01`.
+
+### Preuve, et son axe faible dit franchement
+
+- **RED avant / GREEN après, exécuté dans les deux sens** sur la même commande : `8/8` vert sur l'arbre corrigé ;
+  **`3 failed, 5 passed`** après restauration du prédicat d'origine dans le fichier de production réel — dont
+  `overall` à `100` au lieu de `50`. *(Piège rappelé : `jest … | tail` rend le code de sortie de `tail`. Le
+  verdict se lit dans la sortie, jamais dans `$?`.)*
+- **Cliquet de classe** : scan de `apps/api/src` + `apps/worker/src`, corpus **dérivé** de `git ls-files`, sur du
+  code **décommenté** (`PF-366` : sans ça il rougirait sur le commentaire qui cite la forme interdite). Trois
+  contrôles de non-vacuité, dont le plus fort — **il rougit sur le fichier de production réel reconstitué
+  d'avant la tranche** (≥ 4 occurrences).
+- **Axe faible, nommé :** la moitié comportementale ne couvre que `schoolPerformance`, la plus petite des deux
+  méthodes. Les **trois sites de `parentDashboard` sont couverts comme CLASSE par le cliquet, pas comme
+  comportement.** Dit plutôt que laissé à supposer.
+
+### Ce qui n'a PAS été fait
+
+**Aucune reconstruction d'image** : disque hôte à **5,1 Go libres**, et sous ~5 Go un build casse la pile — une
+pile cassée coûte plus cher qu'un rebuild non fait. La sonde tourne donc contre l'image en place via `docker cp` +
+`docker exec` : elle exerce le client Prisma et le schéma, **pas** le code applicatif modifié. C'est précisément
+pourquoi la moitié comportementale est portée par jest. La pile est laissée **debout et saine**, comme trouvée.
+
+### Deux défauts relevés en passant, non corrigés (RULE 0 clause 6)
+
+- **`PF-463`** — `schoolPerformance` accumule `sumOnTwenty` par cycle et **ne le rend jamais**. Soit une moyenne
+  qui devait être exposée et dont l'appelant n'a jamais été câblé, soit du résidu. **Ne pas « corriger » en
+  exposant le champ** : une moyenne que rien n'a jamais rendue n'a jamais été confrontée aux moyennes des autres
+  portails, et c'est exactement `DNC-01`.
+- **`PF-464`** — un résidu de `PF-05` a survécu **quatre runs** à la chose qu'il nommait : la ligne affirmait
+  *« `AC-9` UNMET, la sonde n'existe pas »* pendant que la ligne `PF-343`, quatre rangs plus bas **dans le même
+  fichier**, la portait `closed`, écrite et exécutée. Deux lignes d'un même fichier en désaccord sur un fait, et
+  la périmée était sur **l'entrée de sélection**. Corrigé en ligne ; la dérive de classe est enregistrée.
+
+### État de l'épique après quinze tranches
+
+**4 fermées sur 9** (`PF-15` sur un axe, `PF-20`, `PF-40`, `PF-24`) — le seuil de la directive permanente est
+atteint. `PF-05` reste `open` avec **deux** résidus au lieu de trois : la divergence de comptage A/B toujours non
+démontrée sur la seed, et six projections toujours six. **Les deux appellent la même tranche : `S-E03-3`**,
+l'unification réelle des deux requêtes. `PF-36` reste réclamée sous conditions, `PF-50` avancée deux fois avec un
+résidu nommé, `PF-12` et `PF-04` bloquées sur des arbitrages sémantiques.
+
+*(Écrit le 2026-08-29, run 99, passe de land. Tranches ultérieures : annoter, ne pas supprimer.)*
+
+---
+
+## Next slice → **`S-E03-3` — unifier les deux projections « les notes de cet enfant », et fermer `PF-05`**
+
+Ce n'est plus un choix entre plusieurs candidats : **les deux résidus survivants de `PF-05` sont le même
+travail.** La divergence A/B non démontrée et « six projections restent six » se lèvent ensemble, ou pas.
+
+1. **La spec de convergence existe déjà et attend** — `parent-grade-projection-agreement.spec.ts` épingle la
+   divergence **axe par axe** et dit explicitement que ses cas d'axe doivent être **RETIRÉS** quand `S-E03-3`
+   atterrit, jamais « corrigés » en abaissant une assertion. C'est un plan de tranche déjà écrit.
+2. **`AC-5` de `S-E03-2` avait pris sa branche STOP** : `published-grades.where.ts` n'a pu être adopté ni à A ni
+   à B, donc il n'a été livré **nulle part**. Reprendre par là : le `where` canonique est le pivot.
+3. **Démontrer la divergence de comptage sur la seed pendant que Docker est debout.** 420 notes réelles sont
+   disponibles ; le compte A et le compte B pour un même enfant se mesurent en une sonde. **Ne pas hériter d'un
+   « deferred — needs Docker » :** sonder au Step 1, l'état change d'un run à l'autre.
+4. **Puis l'`epic-spec`, en retard de QUATORZE tranches** — `docs/spec/features/v3-e03/` n'a toujours ni
+   `spec.md` ni `tasks.md` (`PF-387`), et `PF-365` / `PF-370` attendent depuis onze runs.
+
+*(Comme tout pointeur de ce fichier : une recommandation, pas un ordre de mission. Une désignation opérateur la
+surclasse.)*
