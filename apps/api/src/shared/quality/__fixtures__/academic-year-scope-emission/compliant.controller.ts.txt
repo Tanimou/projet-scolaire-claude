@@ -1,0 +1,47 @@
+// FIXTURE — S-E03-16 / AC-4. Source SYNTHÉTIQUE, jamais un site réel.
+//
+// LE CONTRÔLE NÉGATIF, et c'est lui qui empêche le comparateur d'être
+// TOUJOURS-ROUGE. Sans une fixture qui doit PASSER, un classifieur qui
+// signalerait tout satisferait chaque cas rouge et ne prouverait rien
+// (run 45 / TOOL-13).
+//
+// Il porte aussi les QUATRE formes voisines mesurées dans l'arbre réel, qu'un
+// classifieur naïf accroché à la SOUS-CHAÎNE flaguerait à tort — et qui
+// forceraient alors une allowlist, c'est-à-dire précisément la liste tenue à la
+// main que ce cliquet existe pour supprimer :
+//   (a) DÉSTRUCTURATION — le nom apparaît hors de tout littéral retourné ;
+//   (b) POSITION DE VALEUR — `otherKey: scopeBearerId`, la clé n'est pas le nom ;
+//   (c) `where` NICHÉ — un filtre de lecture, pas une projection de réponse ;
+//   (d) ARGUMENT D'APPEL — un littéral passé à un service, jamais retourné.
+@Controller('fixture')
+export class CompliantController {
+  @Get('conforme')
+  async conforme() {
+    // (a) déstructuration
+    const { scopeBearerId, scopeBearer } = await this.ctx.forUser(me);
+
+    // (c) `where` niché : le nom est une VALEUR de filtre
+    const rows = await this.prisma.thing.findMany({
+      where: { ownerId: me.id, none: { otherKey: scopeBearerId, status: 'active' } },
+    });
+
+    // (d) argument d'appel : littéral consommé, jamais retourné
+    await this.analytics.overview({ otherKey: scopeBearerId ?? undefined, rows });
+
+    // Le littéral RETOURNÉ porte les DEUX champs : conforme.
+    return { data: rows, scopeBearerId, scopeBearer };
+  }
+
+  @Get('valeur-seulement')
+  async valeurSeulement() {
+    const { scopeBearerId } = await this.ctx.forUser(me);
+    // (b) position de VALEUR : la clé est `otherKey`, pas le nom jugé.
+    return { data: [], otherKey: scopeBearerId };
+  }
+
+  @Get('sans-portee-du-tout')
+  async sansPorteeDuTout() {
+    // Un endpoint qui n'émet aucune identité d'année n'est pas dans la classe.
+    return { data: [], count: 0 };
+  }
+}

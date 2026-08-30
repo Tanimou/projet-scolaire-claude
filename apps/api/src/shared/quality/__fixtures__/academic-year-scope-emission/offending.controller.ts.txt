@@ -1,0 +1,17 @@
+// FIXTURE — S-E03-16 / AC-4. Source SYNTHÉTIQUE, jamais un site réel.
+//
+// Les identifiants jugés sont DÉLIBÉRÉMENT synthétiques (`scopeBearerId` /
+// `scopeBearer`) : le classifieur reçoit ses noms en PARAMÈTRE (`PF-295`), donc
+// une fixture qui embarquerait la vraie clé serait à la fois inutile et un
+// futur faux positif pour tout gate qui marcherait cet arbre.
+//
+// FORME NUE : la propriété abrégée, écrite en clair, dans un littéral retourné
+// par une méthode portant un décorateur HTTP. DOIT être signalée.
+@Controller('fixture')
+export class OffendingController {
+  @Get('plain')
+  async plain() {
+    const { scopeBearerId } = await this.ctx.forUser(me);
+    return { data: [], count: 0, scopeBearerId };
+  }
+}

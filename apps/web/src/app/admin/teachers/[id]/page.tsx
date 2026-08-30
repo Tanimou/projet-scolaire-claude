@@ -1,3 +1,4 @@
+import type { AcademicYearScope } from '@pilotage/contracts';
 import {
   KpiCard,
   PageHeader,
@@ -78,6 +79,14 @@ interface TeacherDetail {
 interface TeacherLoad {
   teacherProfileId: string;
   activeAcademicYearId: string | null;
+  /**
+   * S-E03-16 : la réponse porte désormais la PORTÉE d'année complète à côté de
+   * son id. Cette page la REÇOIT et ne l'affiche pas dans cette tranche —
+   * déclaré, pas oublié : l'écran est déjà porté par un enseignant nommé, un
+   * troisième badge n'y ajouterait aucune preuve. Le type est aligné pour que
+   * le champ ne soit pas perdu en silence au prochain lecteur.
+   */
+  activeAcademicYear: AcademicYearScope | null;
   uniqueStudents: number;
   totalStudents: number;
   loadPct: number;

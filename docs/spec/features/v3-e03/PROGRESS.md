@@ -4,7 +4,25 @@
 **Owns** PF-04, PF-05, PF-12, PF-15, PF-20, PF-24, PF-36, PF-40, PF-50 · **Gates** G-TRUTH, G-PORTAL (this slice also G-TENANT, G-DNC)
 **Decisions** D-09 (canonical KPI definitions — `resolved` 2026-08-13, `ADR-041`)
 
-**Status (2026-08-29)** `in-progress` — **FOURTEEN slices landed, and there was none before 2026-08-25.**
+**Status (2026-08-30)** `in-progress` — **TWENTY slices landed plus `S-E03-16` under review = 21**, and there was
+none before 2026-08-25. **4 of the epic's 9 findings are closed**: `PF-20`, `PF-40`, `PF-24`, and now `PF-15`
+**entire**. ⚠ **This header read "FOURTEEN" for nine runs, and the prose slice-count further down this file is
+short by one** because `S-E03-12` (run 101) landed with no section here at all — see `PF-488` and § `S-E03-16`.
+**The only complete list of what this epic has landed is `git log main`**; the table in `bmad/roadmap.md` is now
+reconciled against it, this file is not.
+
+`S-E03-16` (run 106, 2026-08-30 — **`PF-15` CLOSED entire**, `ADR-090`; the staleness of the active academic year
+stops being computed and then thrown away at `SchoolContextService`, the one service every authenticated request of
+all four portals traverses. Re-measured on the container Postgres at the land pass: **both** tenants' `active` year
+has ENDED — by **56** days and by **786** — and no surface said so. Additive pass-through: `activeAcademicYearId` is
+preserved byte-for-byte, `activeAcademicYear` carries the row already in hand through one pure mapper, **zero new
+queries**, five HTTP emission sites — the fifth found by the **derived ratchet**, not by a grep. ⛔ Staleness is
+**REPORTED, never CHOSEN**: 0/2 tenants contain today, so any filter would blank all four portals. **NEEDS HUMAN
+REVIEW.** Its real weakness is named rather than glossed: **971 lines of proof were written and none were executed**
+(`PF-487`), and the `AC-6` live probe reads **`probe NOT EXECUTED`** because the running `api` image predates
+`main`'s HEAD by 1 h 54 (`PF-476`). Re-allocates `PF-328`'s containment half to **`PF-484`**; raises `PF-485`
+(parent and student carry no badge — the two portals that matter most), `PF-486`, `PF-487`, `PF-488`.
+See § `S-E03-16`).
 
 `S-E03-10b` (run 97, 2026-08-29 — **`PF-380`, `PF-382`, `PF-383` and `PF-386` claimed `closed` on remedies that are
 IN THE DIFF; `PF-24` ADVANCED and explicitly NOT closed**, `ADR-083`; the terminal-key convention gets its retention
@@ -2751,3 +2769,173 @@ d'en deviner un — est `PF-483`, en **P1** : le faux refus rencontré ici est b
 heuristique produit un **faux accord silencieux** dès que les options d'un helper coïncident avec
 des champs du modèle, et c'est un chemin par lequel la clôture de privilèges devient incomplète
 sans que rien ne rougisse.
+
+---
+
+## `S-E03-16` (run 106, 2026-08-30) — la vétusté de l'année active cesse d'être CALCULÉE PUIS JETÉE, au seul service que traversent les quatre portails — ⚠️ revue humaine requise
+
+**Findings** : `PF-15` **FERMÉE (entière)** · `PF-328` moitié containment **ré-allouée** en `PF-484` ·
+`PF-484`, `PF-485`, `PF-486`, `PF-487`, `PF-488` levées
+**ADR** : `ADR-090` · **Palier de preuve** : **B**, et son axe faible est nommé plus bas — *le mécanisme est
+dans l'arbre, il n'a pas été EXÉCUTÉ.*
+
+### Le défaut, en une phrase et il est mesuré
+
+`resolveActiveAcademicYear` DÉCORE chaque résolution — `name`, `startDate`, `endDate`, `status`,
+`viaFallback`, `containsReferenceDate`, `isStale`, `staleByDays`, `activeCount`. Puis
+`SchoolContextService`, **le** service que traverse chaque requête authentifiée des **quatre** portails,
+gardait `.id` et jetait tout le reste. La vétusté était donc *exposée au contrat et inexistante dans le
+système*.
+
+**Re-mesuré au land, sur la base du CONTENEUR** (`docker exec pilotage_postgres psql`, jamais
+`localhost:5432` qui est la base native vide) :
+
+| tenant | année | statut | fin | jours écoulés |
+|---|---|---|---|---|
+| `58d4ca12…` | `2025-2026` | **`active`** | 2026-07-05 | **56** |
+| `53fe06f3…` | `2023–2024` | **`active`** | 2024-07-05 | **786** |
+
+**0 sur 2** tenants ont une année active contenant aujourd'hui, et **aucune surface ne le disait**. Un
+enseignant ouvrant « Mes classes » lisait *« cette année »* à propos d'une année terminée depuis plus de
+deux ans.
+
+### La décision, et pourquoi elle est un PASSE-PLAT et non une résolution
+
+| ce qui bouge | ce qui NE bouge PAS |
+|---|---|
+| `activeAcademicYear` ajouté au contexte et aux **cinq** réponses HTTP | `activeAcademicYearId` **préservé à l'octet** — 45 sites de filtrage, 3 pages web intacts |
+| `toAcademicYearScope` — un mapper **pur**, champ par champ, `Date` → ISO `string` | **zéro requête ajoutée** : `ay` était déjà en main, seul `.id` en sortait |
+| un `AcademicYearScopeBadge` dans `packages/ui`, rendu **serveur** | `packages/ui` ne gagne **aucune** dépendance ; aucun `'use client'`, aucun hook |
+
+Trois choix méritent d'être relus plutôt que crus :
+
+1. **La projection est écrite champ par champ, pas en spread.** `ResolvedAcademicYear` porte `schoolId` ;
+   un spread l'aurait fait fuiter dans le contrat de fil sans que personne ne le décide.
+2. **`Date` ≠ `string`.** Un consommateur web important `ResolvedAcademicYear` tel quel typecheckerait
+   vert et appellerait `.toLocaleDateString()` sur une chaîne — `TypeError` à **chaque** requête, les deux
+   pages étant `force-dynamic`. Le DTO de fil est donc exactement ce que Nest sérialise.
+3. **`undefined` et `null` sont DEUX faits.** Champ absent (fenêtre de déploiement web-neuf/api-ancienne,
+   ou un `safe()` qui a avalé l'erreur) ⇒ *portée indisponible*. L'API a résolu et répond *aucune année
+   active* ⇒ `null`. Les écraser l'un sur l'autre rendrait un échec de lecture comme un fait métier —
+   exactement le défaut que `S-E03-2` a fermé sur le portail parent.
+
+**Les sites d'émission sont CINQ, pas quatre.** Le brief d'intake en nommait quatre ; le cinquième
+(`structure.controller.ts`, `cycle()`, un `return { ...cycle, … }`) était **caché derrière un spread** et
+n'a été trouvé ni par un grep ni par une relecture — il a été **imprimé par le cliquet dérivé**. C'est le
+meilleur argument disponible pour la règle « le corpus se dérive, il ne s'énumère pas ».
+
+### ⛔ La vétusté est RAPPORTÉE, jamais CHOISIE
+
+Rien dans la tranche ne filtre, ne trie, ne masque ni ne sélectionne sur `isStale` ou
+`containsReferenceDate` — et ce n'est pas une préférence de style : **0/2 tenants** contiennent
+aujourd'hui, donc un filtre viderait les quatre portails. Les seules lectures de ces champs sont des choix
+de **LIBELLÉ**. `ADR-070`, réaffirmé par `ADR-090 §D5`.
+
+### Ce qui a été EXÉCUTÉ, et ce qui ne l'a pas été — dit franchement
+
+| # | preuve | exécutée ? |
+|---|---|---|
+| 1 | `pnpm typecheck` | **OUI** — exit 0, 13/13 tâches turbo, 0 `error TS`. `git diff --check` exit 0 |
+| 2 | mesure DB du contrôle négatif (56 / 786 jours, sur le conteneur) | **OUI**, au land, table ci-dessus |
+| 3 | résolution runtime de `toAcademicYearScope` depuis le paquet **construit** | **OUI** — `require('@pilotage/contracts').toAcademicYearScope` → `function`. Le panel l'avait déclaré **P0 manquant** sur un `grep dist/index.js` ; la construction CJS ré-exporte via `__exportStar`, donc le nom du symbole n'y apparaît jamais. **La sonde était fausse, pas le paquet.** |
+| 4 | `school-context-year-scope.spec.ts` (415 l.) | **NON** |
+| 5 | `academic-year-scope-emission-gate.spec.ts` (556 l.) + ses 5 fixtures d'anti-vacuité | **NON** |
+| 6 | contrôle ROUGE du cliquet contre `origin/main` restauré | **NON** |
+| 7 | sonde live `AC-6` | **NON** |
+
+**`probe NOT EXECUTED — l'image `api` en cours d'exécution est `2026-08-29T21:14:08Z`, soit 1 h 54 PLUS
+VIEILLE que le HEAD de `main` (`2026-08-29T23:08:52Z`) ; toute sonde HTTP aurait mesuré un artefact
+antérieur au code.`** (`PF-476` qui récidive ; et `migrator` partage `Dockerfile.api`, donc reconstruire
+`api` seul est le piège `PF-479`, P0.) Le rebuild est l'affaire de la session orchestratrice sous le lock,
+jamais d'un agent — `GUARDRAILS §4`.
+
+**Les lignes 4, 5 et 6 sont la faiblesse réelle de cette tranche**, et elle est enregistrée en `PF-487` :
+971 lignes de preuve écrites, zéro ligne de preuve exécutée, sur un service traversé par chaque requête
+authentifiée des quatre portails. `landed: true` n'est pas `ran: true`.
+
+### `G-PORTAL` — c'est 2 portails sur 4, et le dire est une exigence
+
+| portail | badge | pourquoi |
+|---|---|---|
+| **ADMIN** | **OUI** (`/admin/school/structure`) | la surface où le désaccord est le plus visible |
+| **TEACHER** | **OUI** (`/teacher/classes`) | « mes classes » est une affirmation d'année |
+| **PARENT** | **NON** | aucune surface parent ne consomme un des cinq sites d'émission → `PF-485` |
+| **STUDENT** | **NON** | résout son année depuis `ADR-089` mais n'émet aucun objet de portée → `PF-485` |
+
+`admin/teachers/[id]` **reçoit** le champ et ne l'affiche pas : la page est déjà portée par un enseignant
+nommé. **Déclaré, pas oublié.** C'est la moitié du produit qui compte le plus — la promesse du cahier de
+charges est le tableau de bord PARENT — qui reste sans portée. `PF-485` n'est pas un détail de finition.
+
+### Relevé en passant, NON corrigé (RULE 0 clause 6)
+
+- **Le chemin `activeYear` du badge n'a AUCUN appelant.** La prop `activeYear`, le type
+  `ActiveAcademicYearRef`, la puce « hors année active » et la branche `offActiveYear` de
+  `academicYearScopeSentence` existent pour la divergence sélection/actif — et
+  `/admin/school/structure`, le **seul** site concerné, réécrit sa propre phrase à la main. Le mécanisme
+  partagé est mort-né et sa duplication vit à côté. À trancher au prochain passage : router la page par
+  la prop, **ou** supprimer la prop. Ne pas laisser les deux.
+- **Le garde `offActiveYear` a un trou sur la branche `null`** : `yearScope != null && …` teste la
+  nullité au lieu de la divergence, donc « aucune année active **mais** une année sélectionnée » tombe
+  dans la branche « portée de page » et imprime *« les chiffres de cette page peuvent être vides »*
+  au-dessus d'un arbre plein. Le test juste est `yearScope !== undefined && selectedYearId !== (yearScope?.id ?? null)`.
+- **La phrase `stale` INFÈRE au lieu de mesurer** : *« Aucune année plus récente n'a été ouverte »* est
+  déduit de `status='active'`, alors qu'une année `draft` plus récente est possible **et affichée par le
+  sélecteur juste en dessous**.
+- **`ACADEMIC_YEAR_SCOPE_TONE_HEXES` est une SECONDE liste tenue à la main** à côté des classes Tailwind
+  de `StatusBadge`, avec ses ratios de contraste énoncés en docblock — la dérive « deux listes à la main »
+  du run 59, réintroduite dans la tranche même dont le contrat cite le run 59. Le remède est mécanique :
+  `contrastRatio` et `WCAG_AA_NORMAL_TEXT` sont déjà exportés par `packages/ui/src/lib/subject-color.ts`
+  et trois cliquets existants importent déjà `packages/ui` depuis `apps/api/src/shared/quality/`. À noter
+  en même temps : les hexes sont la palette Tailwind **v3** alors que la pile est épinglée en **v4**
+  (OKLCH) — non arbitré ici.
+
+### État de l'épique après **vingt-et-une** tranches — et le compte de ce fichier était FAUX
+
+⚠ **La chaîne de comptage de ce fichier est décalée d'une unité depuis le run 102**, et la raison est
+précisément `PF-488` : `S-E03-2b` (run 99) a écrit *« après quinze tranches »*, ce qui était juste ; puis
+`S-E03-12` a été **livrée au run 101 sans jamais recevoir de section ici**, si bien que `S-E03-3`
+(run 102) a écrit *« après seize »* là où il fallait dix-sept, et `S-E03-13` *« après dix-sept »* là où il
+fallait dix-huit. Le compte réel, pris sur `git log main` et reporté ligne à ligne dans le tableau de
+`bmad/roadmap.md` : **20 tranches livrées, plus celle-ci = 21.** Ne pas re-dériver ce nombre depuis la
+prose ci-dessus ; c'est cette re-dérivation qui l'a cassé.
+
+**`PF-15` ferme entière** — la quatrième des 9 findings de la feuille de route (`PF-20`, `PF-40`, `PF-24`,
+`PF-15`). Son axe invariant **n'est pas un demi-`PF-15` caché** : il est ré-alloué en `PF-484`, une ligne
+distincte, `open`, avec sa raison mesurée. `PF-328` garde sa moitié multiplicité fermée (`S-E03-12`, index
+re-vérifié sur le conteneur ce jour) et perd sa moitié containment au profit de `PF-484`.
+
+Restent ouvertes : `PF-04` (aucun compte comparé à travers les quatre portails), `PF-05` (sur `PF-337`,
+l'axe des permissions), `PF-12` (deux axes, bloqués sur des arbitrages), `PF-36` (compteurs non
+re-mesurés), `PF-50` (avancée deux fois, résidu nommé à chaque fois).
+
+**Et une correction de registre qui vaut mieux qu'un chiffre :** ce land pass a trouvé **six** tranches
+livrées sans ligne dans `bmad/roadmap.md`, **une** tranche livrée (`S-E03-12`, run 101) sans section dans
+CE fichier, et un *« 3 fermées sur 9 »* qui a survécu huit runs à la fermeture de `PF-24`. Au 2026-08-30
+il n'existe **aucun fichier unique** d'où l'ensemble livré de l'épique puisse être lu — seulement
+`git log main`. C'est `PF-488`, et c'est la troisième occurrence de la même dérive.
+
+---
+
+## Next slice → **`S-E03-16b` — EXÉCUTER la preuve que `S-E03-16` a écrite, puis `PF-485`**
+
+1. **D'abord, et ce n'est pas une tranche : LANCER ce que le run 106 a écrit.** Les deux specs, le
+   contrôle ROUGE du cliquet contre `origin/main` restauré (il doit nommer **exactement** les cinq sites
+   d'émission et rien d'autre), et la sonde `AC-6` — **après** avoir vérifié que l'image `api` est plus
+   récente que le commit de merge, ce qu'elle n'était pas au land. Ici la seed **DISCRIMINE**
+   (contrairement au cas `PF-478`) : `isStale === true` et `staleByDays ≈ 56` sont une observation réelle.
+   **Contrôle positif obligatoire** : `activeAcademicYearId === activeAcademicYear.id` dans le CORPS — un
+   `200` nu n'affirme qu'une coïncidence (run 81). C'est `PF-487`, et c'est trois commandes.
+2. **`PF-485` — les deux portails qui n'ont PAS le badge sont les deux qui comptent le plus.** La
+   promesse du cahier de charges est le tableau de bord parent ; un parent lit aujourd'hui un bilan d'une
+   année terminée depuis 786 jours sans que rien ne le dise. Même forme de tranche, mais sur des endpoints
+   qui ne passent pas par `SchoolContextService` — donc un vrai diff, pas un copier-coller.
+3. **`PF-488` — armer un cliquet sur la dérive d'index.** Trois passes de land de suite ont ignoré la
+   consigne *« compte les lignes, jamais la prose »*. Une consigne qui échoue trois fois n'est pas une
+   consigne, c'est un gate manquant : une vérification dérivée (`git log main --grep` vs les lignes du
+   tableau) dans `shared/quality`, comme la douzaine qui tourne déjà.
+4. **`PF-486`** — le chemin d'ÉCRITURE de l'import porte l'id sans portée, et la valeur y est
+   **persistée**. Hors corpus du cliquet **par construction**.
+5. **Puis l'`epic-spec`**, désormais **quatorze** tranches en retard (`PF-387`, `PF-365`, `PF-370`).
+
+*(Même mise en garde que tous les pointeurs de ce fichier : une recommandation, pas un ordre de mission.
+Une désignation d'opérateur la surclasse — il y en a eu une au run 97.)*

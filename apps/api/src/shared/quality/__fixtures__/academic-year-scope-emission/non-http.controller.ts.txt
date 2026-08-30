@@ -1,0 +1,25 @@
+// FIXTURE — S-E03-16 / AC-4. Source SYNTHÉTIQUE, jamais un site réel.
+//
+// LA DISCRIMINATION EST STRUCTURELLE, PAS UNE ALLOWLIST.
+//
+// Le corpus est « suffixe `.controller.ts` » ET « méthode portant un décorateur
+// HTTP ». Ce fichier prouve la SECONDE moitié : un helper privé, ou une méthode
+// sans décorateur de route, retourne un littéral parfaitement contrevenant et
+// n'est PAS une réponse HTTP — donc pas dans la classe. C'est ce qui rend
+// inutile toute exemption écrite à la main pour les structures internes
+// (`packages/imports-core/src/caches.ts` est un AUTRE producteur, avec sa propre
+// forme, et il est hors corpus par CONSTRUCTION et non par pardon).
+//
+// Attendu : ZÉRO littéral reconnu.
+@Controller('fixture')
+export class NonHttpController {
+  private buildInternalCache() {
+    const scopeBearerId = this.cache.get('year');
+    return { tenantId: this.tenantId, scopeBearerId };
+  }
+
+  async notARoute() {
+    const { scopeBearerId } = await this.ctx.forUser(me);
+    return { data: [], scopeBearerId };
+  }
+}

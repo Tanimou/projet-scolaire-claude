@@ -58,7 +58,7 @@ export class StructureController {
     @Query('academicYearId') academicYearId?: string,
   ) {
     const me = await this.users.ensureUser(jwt);
-    const { schoolId, activeAcademicYearId } = await this.ctx.forUser(me);
+    const { schoolId, activeAcademicYearId, activeAcademicYear } = await this.ctx.forUser(me);
     const yearId = academicYearId ?? activeAcademicYearId;
 
     const [school, cycles, classes, subjects, totals] = await Promise.all([
@@ -227,6 +227,12 @@ export class StructureController {
     return {
       school,
       activeAcademicYearId,
+      // S-E03-16 / ADR-090 — la PORTÉE de l'année ACTIVE. Elle ne décrit PAS
+      // `selectedYearId` : la page structure porte un sélecteur d'année, et
+      // annoncer la vétusté de l'année active au-dessus des chiffres d'une
+      // AUTRE année serait deux portées contradictoires sur un écran (DNC-01).
+      // Le consommateur ne rend le badge que lorsque les deux coïncident.
+      activeAcademicYear,
       selectedYearId: yearId,
       cycles: tree,
       subjects,
@@ -255,7 +261,7 @@ export class StructureController {
   @RequiresPermission('schools.read')
   async cycle(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
-    const { activeAcademicYearId } = await this.ctx.forUser(me);
+    const { activeAcademicYearId, activeAcademicYear } = await this.ctx.forUser(me);
 
     const cycle = await this.prisma.cycle.findUnique({
       where: { id },
@@ -292,6 +298,8 @@ export class StructureController {
     });
     if (!cycle || cycle.tenantId !== me.tenantId) throw new NotFoundException();
 
-    return { ...cycle, activeAcademicYearId };
+    // S-E03-16 — le CINQUIÈME site d'émission. Le brief d'intake n'en nommait
+    // que quatre ; c'est le cliquet dérivé (AC-4) qui a imprimé celui-ci.
+    return { ...cycle, activeAcademicYearId, activeAcademicYear };
   }
 }

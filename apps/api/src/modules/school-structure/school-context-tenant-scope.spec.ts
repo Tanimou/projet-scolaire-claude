@@ -193,10 +193,22 @@ describe('S-E03-4 — `forTenant` remet le `tenantId` de l’appelant au résolv
     for (const call of academicYearCalls) {
       expect(call.where.tenantId).toBe(TENANT_A);
     }
+    // S-E03-16 — LA SEULE ligne de ce fichier que la tranche touche, et elle est
+    // déclarée plutôt que subie. AC-7 exigeait « vert SANS modification » ; c'est
+    // une PRÉMISSE FAUSSE, falsifiée par la sémantique de `toEqual`, qui est une
+    // égalité EXACTE : un champ ajouté au contexte la fait rougir par
+    // construction. Le champ ajouté est exactement ce qu'AC-1 impose, donc les
+    // deux critères ne sont pas conjointement satisfiables tels qu'écrits.
+    //
+    // L'assertion n'est pas AFFAIBLIE — elle reste une égalité exacte, portée
+    // sur la nouvelle forme exacte, et elle GAGNE l'accord des deux champs.
+    // Ce qui portait AC-7 (le `tenantId` requis, remis au résolveur, vérifié
+    // dans CHAQUE `where`) est intégralement au-dessus et n'a pas bougé.
     expect(ctx).toEqual({
       tenantId: TENANT_A,
       schoolId: SCHOOL_A,
       activeAcademicYearId: 'ay-a',
+      activeAcademicYear: expect.objectContaining({ id: 'ay-a', name: '2025-2026' }),
     });
   });
 

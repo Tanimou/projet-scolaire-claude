@@ -150,7 +150,7 @@ export class TeachersController {
   ) {
     const me = await this.users.ensureUser(jwt);
     const teacher = await this.teachers.ensureForUser(me);
-    const { activeAcademicYearId } = await this.ctx.forUser(me);
+    const { activeAcademicYearId, activeAcademicYear } = await this.ctx.forUser(me);
     const yearId = academicYearId ?? activeAcademicYearId;
 
     const items = await this.prisma.teachingAssignment.findMany({
@@ -183,7 +183,10 @@ export class TeachersController {
       },
       orderBy: [{ classSection: { gradeLevel: { orderIndex: 'asc' } } }, { classSection: { name: 'asc' } }, { subject: { name: 'asc' } }],
     });
-    return { data: items, teacherProfileId: teacher.id, activeAcademicYearId };
+    // S-E03-16 / ADR-090 — la PORTÉE à côté de l'id. Comme sur la page
+    // structure, elle décrit l'année ACTIVE et non `yearId` : le consommateur
+    // ne l'affiche que lorsque les deux coïncident (DNC-01).
+    return { data: items, teacherProfileId: teacher.id, activeAcademicYearId, activeAcademicYear };
   }
 
   /**
@@ -419,7 +422,7 @@ export class TeachersController {
   @RequiresPermission('teachers.read')
   async getLoad(@Param('id') id: string, @CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
-    const { schoolId, activeAcademicYearId } = await this.ctx.forUser(me);
+    const { schoolId, activeAcademicYearId, activeAcademicYear } = await this.ctx.forUser(me);
 
     // Vérifier que le profil enseignant appartient bien au tenant du demandeur
     const teacher = await this.prisma.teacherProfile.findUnique({ where: { id } });
@@ -495,6 +498,8 @@ export class TeachersController {
     return {
       teacherProfileId: id,
       activeAcademicYearId,
+      // S-E03-16 / ADR-090 — la PORTÉE voyage avec les chiffres de charge.
+      activeAcademicYear,
       uniqueStudents,
       totalStudents,
       loadPct,

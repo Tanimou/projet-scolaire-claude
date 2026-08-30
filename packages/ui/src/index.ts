@@ -142,6 +142,23 @@ export {
   type MfaAssuranceState,
   type MfaStatusBadgeProps,
 } from './components/MfaStatusBadge';
+// The canonical academic-year-SCOPE rendering — "which year do these numbers cover".
+// SIX states, ONE mapping. See the component's docblock for why `undefined` (the field
+// is ABSENT: rolling-deploy skew) and `null` (the API resolved and said: no active year)
+// are deliberately NOT the same state, why `last_day` has to exist at all given `@db.Date`
+// midnight bounds, and why staleness is structurally unusable as a filter from here.
+export {
+  AcademicYearScopeBadge,
+  academicYearScopeBadgeLabel,
+  academicYearScopeSentence,
+  academicYearScopeState,
+  academicYearStaleLabel,
+  ACADEMIC_YEAR_SCOPE_TONE_HEXES,
+  type AcademicYearScopeBadgeProps,
+  type AcademicYearScopeInput,
+  type AcademicYearScopeState,
+  type ActiveAcademicYearRef,
+} from './components/AcademicYearScopeBadge';
 export { DateCard, type DateCardProps, type DateCardTone } from './components/DateCard';
 export { Tabs, TabsList, TabsTrigger, TabsContent, type TabsProps } from './components/Tabs';
 export { SectionHeader, type SectionHeaderProps } from './components/SectionHeader';

@@ -41,7 +41,9 @@ export class SetupController {
   @ApiOkResponse({ description: 'Computed setup checklist for the admin dashboard' })
   async checklist(@CurrentJwt() jwt: KeycloakJwtPayload) {
     const me = await this.users.ensureUser(jwt);
-    const { schoolId, activeAcademicYearId } = await this.ctx.forTenant(me.tenantId);
+    const { schoolId, activeAcademicYearId, activeAcademicYear } = await this.ctx.forTenant(
+      me.tenantId,
+    );
 
     const [
       brandingCount,
@@ -130,6 +132,8 @@ export class SetupController {
       progress: Math.round((completed / steps.length) * 100),
       steps,
       activeAcademicYearId,
+      // S-E03-16 / ADR-090 — la PORTÉE voyage à côté de l'id, jamais à sa place.
+      activeAcademicYear,
     };
   }
 }

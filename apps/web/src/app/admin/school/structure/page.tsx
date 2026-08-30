@@ -1,3 +1,5 @@
+import type { AcademicYearScope } from '@pilotage/contracts';
+import { AcademicYearScopeBadge, academicYearScopeState } from '@pilotage/ui';
 import {
   Building2,
   ChevronRight,
@@ -55,6 +57,17 @@ interface StructureResponse {
     academicYears: Array<{ id: string; name: string; status: string; startDate: string; endDate: string }>;
   };
   activeAcademicYearId: string | null;
+  /**
+   * La PORTÉE de l'année ACTIVE de l'établissement (S-E03-16 / ADR-090) — nom,
+   * bornes, `isStale`, `staleByDays`. Elle décrit l'année active, PAS forcément
+   * l'année que cette page affiche : le sélecteur ci-dessous peut pointer
+   * ailleurs, et c'est `selectedYearId` qui porte les chiffres de l'arbre.
+   *
+   * ⛔ Aucune sélection, aucun filtre, aucun tri sur `isStale` ni sur
+   * `containsReferenceDate` : 0/2 tenants contiennent aujourd'hui (mesuré le
+   * 2026-08-30), filtrer viderait la page. La vétusté est RAPPORTÉE (ADR-070).
+   */
+  activeAcademicYear: AcademicYearScope | null;
   selectedYearId: string | null;
   cycles: CycleNode[];
   subjects: Array<{ id: string; code: string; name: string; color: string | null; defaultCoefficient: string }>;
@@ -86,7 +99,36 @@ export default async function StructurePage({
   const sp = await searchParams;
   const qs = sp.year ? `?academicYearId=${sp.year}` : '';
   const data = await api<StructureResponse>(`/api/v1/school/structure${qs}`, { cache: 'no-store' });
-  const activeYear = data.school.academicYears.find((y) => y.id === data.selectedYearId);
+  // Anciennement nommée `activeYear` — un nom faux : c'est l'année SÉLECTIONNÉE
+  // (`?year=`), celle dont l'arbre et les compteurs ci-dessous portent les
+  // chiffres. L'année ACTIVE de l'établissement est `data.activeAcademicYear`,
+  // et les deux ne coïncident pas dès qu'un admin clique une autre pastille.
+  const selectedYear = data.school.academicYears.find((y) => y.id === data.selectedYearId);
+
+  // La NUANCE compte, et elle n'est pas écrasée ici : `undefined`
+  // (champ absent — une `api` antérieure à S-E03-16 pendant la fenêtre de déploiement)
+  // et `null` (l'API a résolu et répond « aucune année active ») sont DEUX faits
+  // différents, et le badge les rend différemment. On ne les écrase donc pas l'un sur
+  // l'autre ici. Le seul cas normalisé est celui d'une lecture réussie.
+  const yearScope: AcademicYearScope | null | undefined = data.activeAcademicYear;
+  const scopeState = academicYearScopeState(yearScope);
+
+  /**
+   * ⚠ DNC-01 — le badge décrit l'année dont cette page affiche les chiffres, jamais une autre.
+   *
+   * Cette page a un SÉLECTEUR d'année : l'arbre, les compteurs et les taux de remplissage
+   * portent sur `selectedYearId`, qui n'est pas forcément l'année active. Poser
+   * « 2025-2026 · terminée il y a 56 jours » en tête d'un arbre qui montre 2023–2024
+   * mettrait deux portées contradictoires sur un même écran.
+   *
+   * On ne fabrique PAS la portée de l'année sélectionnée côté client : `isStale` et
+   * `containsReferenceDate` se recalculeraient sur une horloge de navigateur, c'est-à-dire
+   * une deuxième dérivation du fait unique que cette tranche existe pour arrêter de perdre.
+   * Quand la sélection s'écarte de l'année active, le badge quitte donc la position
+   * « portée de la page » et redescend à côté d'une phrase qui nomme explicitement les deux
+   * années — son sujet devient l'établissement, pas le tableau.
+   */
+  const offActiveYear = yearScope != null && data.selectedYearId !== yearScope.id;
 
   return (
     <PortalShell portal="admin">
@@ -97,6 +139,34 @@ export default async function StructurePage({
           Hiérarchie complète : <strong>école</strong> → <strong>cycles</strong> → <strong>niveaux</strong> → <strong>classes</strong> →{' '}
           <strong>élèves inscrits</strong>. Les coefficients de matières s&apos;appliquent par niveau.
         </p>
+      </div>
+
+      {/* La PORTÉE, juste sous le titre et AVANT tout chiffre : un lecteur d'écran
+          entend sur quelle année portent les nombres avant de les entendre. */}
+      <div className="mt-4">
+        {offActiveYear ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs text-slate-600">
+              Vous consultez <strong>{selectedYear?.name ?? 'une autre année'}</strong>. L&apos;année active
+              de l&apos;établissement :
+            </p>
+            <AcademicYearScopeBadge size="sm" year={yearScope} />
+          </div>
+        ) : (
+          <AcademicYearScopeBadge
+            year={yearScope}
+            variant={
+              scopeState === 'current' || scopeState === 'last_day' ? 'inline' : 'block'
+            }
+            action={
+              scopeState === 'stale' || scopeState === 'none' ? (
+                <Link className="font-bold accent-text hover:underline" href="/admin/academic-years">
+                  Ouvrir une année scolaire →
+                </Link>
+              ) : undefined
+            }
+          />
+        )}
       </div>
 
       {/* Year filter */}
@@ -131,7 +201,7 @@ export default async function StructurePage({
           icon={<GraduationCap className="h-4 w-4" />}
           label="Classes"
           value={data.stats.totalClasses}
-          hint={activeYear?.name}
+          hint={selectedYear?.name}
           tone="ink"
         />
         <Stat

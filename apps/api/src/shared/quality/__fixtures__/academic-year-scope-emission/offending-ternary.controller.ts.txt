@@ -1,0 +1,19 @@
+// FIXTURE — S-E03-16 / AC-4. Source SYNTHÉTIQUE, jamais un site réel.
+//
+// FORME TERNAIRE, et le point n'est pas la syntaxe : c'est qu'une SEULE des deux
+// branches contrevient. Un classifieur qui ne visiterait qu'une branche (ou qui
+// « OU-erait » les deux ensembles de clés) déclarerait ce site conforme parce
+// que l'AUTRE chemin porte la portée. Les deux branches sont des littéraux
+// retournés DISTINCTS et doivent être jugées séparément.
+//
+// Attendu : DEUX littéraux reconnus, UN SEUL signalé.
+@Controller('fixture')
+export class OffendingTernaryController {
+  @Get('branchy')
+  async branchy() {
+    const { scopeBearerId, scopeBearer } = await this.ctx.forUser(me);
+    return scopeBearer
+      ? { data: [], scopeBearerId, scopeBearer }
+      : { data: [], scopeBearerId };
+  }
+}

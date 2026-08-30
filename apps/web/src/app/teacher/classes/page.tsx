@@ -1,4 +1,11 @@
-import { EmptyState, KpiCard, PageHeader } from '@pilotage/ui';
+import type { AcademicYearScope } from '@pilotage/contracts';
+import {
+  AcademicYearScopeBadge,
+  EmptyState,
+  KpiCard,
+  PageHeader,
+  academicYearScopeState,
+} from '@pilotage/ui';
 import { BookOpen, GraduationCap, Layers, Users } from 'lucide-react';
 import type { Metadata } from 'next';
 
@@ -41,14 +48,44 @@ async function safe<T>(p: Promise<T>): Promise<T | null> {
   }
 }
 
+/**
+ * La PORTÉE d'année de cette page (S-E03-16 / ADR-090).
+ *
+ * `activeAcademicYearId` reste l'id nu que la page ignorait ; `activeAcademicYear`
+ * porte la résolution complète — nom, bornes, `isStale`, `staleByDays` — calculée
+ * UNE fois par `SchoolContextService` et jusqu'ici JETÉE.
+ *
+ * ⛔ Rien ici ne FILTRE, ne trie ni ne masque sur `isStale` ou
+ * `containsReferenceDate` : sur les données mesurées le 2026-08-30, AUCUNE des
+ * deux années actives ne contient aujourd'hui (56 et 786 jours après leur fin),
+ * donc sélectionner sur la vétusté viderait le portail. La vétusté est
+ * RAPPORTÉE, jamais CHOISIE (ADR-070, ADR-090). Les seules lectures de ces
+ * champs ci-dessous sont des choix de LIBELLÉ.
+ */
+interface AssignmentsResponse {
+  data: AssignmentRow[];
+  activeAcademicYearId: string | null;
+  activeAcademicYear: AcademicYearScope | null;
+}
+
 export default async function TeacherClassesPage() {
   const resp = await safe(
-    api<{ data: AssignmentRow[]; activeAcademicYearId: string | null }>(
-      '/api/v1/teachers/me/assignments',
-      { cache: 'no-store' },
-    ),
+    api<AssignmentsResponse>('/api/v1/teachers/me/assignments', { cache: 'no-store' }),
   );
   const assignments = resp?.data ?? [];
+
+  // TROIS cas, tenus distincts, parce que le badge les rend différemment :
+  //   • `undefined` — la lecture a ÉCHOUÉ (`safe()` avale l'`ApiError`) ou le champ
+  //     est absent (fenêtre de déploiement web-neuf / api-ancienne) ⇒ « portée
+  //     indisponible ». Un échec de lecture n'est jamais un fait métier.
+  //   • `null`      — l'API a résolu et répond « aucune année active ».
+  //   • un objet    — la portée résolue.
+  // Aucun de ces cas ne cache la moindre classe : la liste rendue est exactement
+  // celle d'avant cette tranche.
+  const yearScope: AcademicYearScope | null | undefined =
+    resp === null ? undefined : resp.activeAcademicYear;
+  const scopeState = academicYearScopeState(yearScope);
+  const yearName = yearScope?.name ?? null;
 
   // Group assignments by class section. We keep `primaryAssignmentId` (the first
   // teachingAssignment.id we see for this class) so the action buttons have a
@@ -108,8 +145,30 @@ export default async function TeacherClassesPage() {
           { label: 'Mes classes' },
         ]}
         title="Mes classes"
-        subtitle="Toutes les classes où vous intervenez cette année — cliquez pour la gradebook, la présence et le cahier de texte"
+        subtitle={
+          yearName
+            ? `Toutes les classes où vous intervenez sur l'année ${yearName} — cliquez pour la gradebook, la présence et le cahier de texte`
+            : 'Toutes les classes où vous intervenez — cliquez pour la gradebook, la présence et le cahier de texte'
+        }
       />
+
+      {/* UNE pastille, pas deux. La phrase de portée n'apparaît que quand elle apprend
+          quelque chose : sur une année en cours elle répète la pastille et devient du
+          bruit. Le renvoi est une PHRASE et non un lien — un enseignant n'ouvre pas une
+          année scolaire, coder ici l'action d'administration serait faux pour ce portail. */}
+      <div className="mt-3">
+        <AcademicYearScopeBadge
+          year={yearScope}
+          variant={scopeState === 'current' || scopeState === 'last_day' ? 'inline' : 'block'}
+          action={
+            scopeState === 'stale' || scopeState === 'none' ? (
+              <span className="text-slate-600">
+                Contactez l&apos;administration de l&apos;établissement.
+              </span>
+            ) : undefined
+          }
+        />
+      </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
@@ -117,7 +176,11 @@ export default async function TeacherClassesPage() {
           tone="blue"
           label="CLASSES"
           value={totalClasses}
-          scope="Classes où vous intervenez cette année."
+          scope={
+            yearName
+              ? `Classes où vous intervenez sur l'année ${yearName}.`
+              : 'Classes où vous intervenez.'
+          }
         />
         {/* `INSCRIPTIONS`, pas `ÉLÈVES` : la valeur est un `reduce(+)` d'effectifs.
             Une carte étiquetée « ÉLÈVES » ne doit jamais porter un cumul — la
@@ -154,10 +217,19 @@ export default async function TeacherClassesPage() {
 
       {classes.length === 0 ? (
         <section className="mt-6">
+          {/* Le diagnostic dépend de la PORTÉE, pas seulement du vide : « aucune
+              classe ne vous a été assignée » est faux quand la vraie cause est
+              qu'aucune année plus récente n'a été ouverte. On change le TEXTE,
+              jamais la visibilité — l'état vide s'affiche exactement dans les
+              mêmes cas qu'avant. */}
           <EmptyState
             icon={Users}
-            title="Aucune affectation pour cette année"
-            description="Aucune classe ne vous a été assignée. Contactez l'administration de l'établissement."
+            title={yearName ? `Aucune affectation sur l'année ${yearName}` : 'Aucune affectation'}
+            description={
+              scopeState === 'stale'
+                ? "Aucune classe ne vous a été assignée sur cette année, et aucune année plus récente n'a été ouverte. Contactez l'administration de l'établissement."
+                : "Aucune classe ne vous a été assignée. Contactez l'administration de l'établissement."
+            }
             tone="slate"
           />
         </section>

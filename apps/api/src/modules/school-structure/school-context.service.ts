@@ -1,5 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { resolveActiveAcademicYear } from '@pilotage/contracts';
+import {
+  type AcademicYearScope,
+  resolveActiveAcademicYear,
+  toAcademicYearScope,
+} from '@pilotage/contracts';
 
 import { prismaAcademicYearReader } from '../../shared/academic-year/prisma-academic-year-reader';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -13,14 +17,36 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
  *
  * Callers that already know the school can pass an explicit schoolId via `forSchool`.
  */
+
+/**
+ * S-E03-16 / `PF-15` / `ADR-090` — le contexte que traversent les QUATRE portails.
+ *
+ * `activeAcademicYearId` est PRÉSERVÉ À L'IDENTIQUE : c'est ce qui laisse les 45
+ * sites de filtrage et les 3 pages web intacts, et ce qui rend la tranche
+ * additive et révertible en une commande.
+ *
+ * `activeAcademicYear` est le MÊME fait, non jeté. Zéro requête supplémentaire :
+ * la ligne décorée était déjà en main à la ligne d'après, et seul `.id` en
+ * sortait. Un appelant qui ré-appellerait `resolveActiveAcademicYear` pour
+ * obtenir l'objet fabriquerait un N+1 là où il y a un simple passage de valeur.
+ */
+export interface SchoolContext {
+  tenantId: string;
+  schoolId: string;
+  /** Inchangé. Les 45 sites de filtrage lisent CE champ et ne bougent pas. */
+  activeAcademicYearId: string | null;
+  /**
+   * La PORTÉE complète, sérialisable telle quelle. `null` ⇔
+   * `activeAcademicYearId` est `null` — les deux champs sont toujours d'accord.
+   */
+  activeAcademicYear: AcademicYearScope | null;
+}
+
 @Injectable()
 export class SchoolContextService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async forTenant(
-    tenantId: string,
-    explicitSchoolId?: string,
-  ): Promise<{ tenantId: string; schoolId: string; activeAcademicYearId: string | null }> {
+  async forTenant(tenantId: string, explicitSchoolId?: string): Promise<SchoolContext> {
     let schoolId = explicitSchoolId ?? null;
 
     if (!schoolId) {
@@ -63,10 +89,20 @@ export class SchoolContextService {
       onAbsent: 'nullWhenNoActiveYear',
     });
 
+    // S-E03-16 / PF-15 / ADR-090 — la vétusté cesse d'être CALCULÉE PUIS JETÉE.
+    //
+    // Avant cette tranche, la ligne suivante ne gardait que `ay?.id` : `name`,
+    // `isStale`, `staleByDays`, `containsReferenceDate`, `viaFallback` et
+    // `activeCount` étaient décorés par le résolveur à chaque requête
+    // authentifiée des quatre portails, puis abandonnés ici.
+    //
+    // Ce n'est PAS une seconde résolution : `ay` est la ligne déjà en main,
+    // la conversion est un mapper PUR, et le nombre de requêtes est identique.
     return {
       tenantId,
       schoolId,
       activeAcademicYearId: ay?.id ?? null,
+      activeAcademicYear: ay ? toAcademicYearScope(ay) : null,
     };
   }
 
@@ -84,7 +120,7 @@ export class SchoolContextService {
     id: string;
     tenantId: string;
     preferences: unknown;
-  }): Promise<{ tenantId: string; schoolId: string; activeAcademicYearId: string | null }> {
+  }): Promise<SchoolContext> {
     const prefs = (user.preferences as Record<string, unknown> | null) ?? {};
     const preferred = typeof prefs.activeSchoolId === 'string' ? prefs.activeSchoolId : undefined;
     if (preferred) {

@@ -1,0 +1,16 @@
+// FIXTURE — S-E03-16 / AC-4. Source SYNTHÉTIQUE, jamais un site réel.
+//
+// FORME SPREAD, et elle est LOAD-BEARING : le cinquième site d'émission réel
+// (`structure.controller.ts`, `GET /structure/cycles/:id`) est EXACTEMENT
+// celui-ci — `return { ...cycle, activeAcademicYearId }`. Le brief d'intake n'en
+// nommait que quatre ; un classifieur qui ne suivrait pas les spreads sortirait
+// vert sur 4/5 et AURAIT L'AIR juste. DOIT être signalée.
+@Controller('fixture')
+export class OffendingSpreadController {
+  @Get(':id')
+  async detail(@Param('id') id: string) {
+    const { scopeBearerId } = await this.ctx.forUser(me);
+    const row = await this.prisma.thing.findUnique({ where: { id } });
+    return { ...row, scopeBearerId };
+  }
+}
